@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.6] - 2026-09-09
+
+An internal-only release: the second pass over the over-engineering audit's
+residue list, 22 verified cuts across 22 files, net 308 lines removed. No
+tool, CLI flag, environment variable, or wire payload changes shape; the
+only behaviour change is that an aborted `FS_ROOT_BOUNDARY` check now
+propagates the abort instead of silently dropping grant roots.
+
+### Removed
+
+- **Dead read knobs.** `ReadSpec`'s unreachable options (`skipBinary`,
+  per-spec encodings), the write-only `truncated` field on full reads, the
+  `ReadSpecCommon` intermediate, and a `ReadContentOptions` interface that
+  was byte-identical to `NormalizedBase` with a converter between them.
+  Range reads are now byte-bounded through one shape end to end.
+- **Duplicate regex work in search.** `search_text` no longer re-executes
+  the pattern to compute a match's column offset — `findLineMatches`
+  returns count and column from the single exec it already ran.
+- **A second pass over replaced files.** `replace_in_files` counted matches
+  with a separate `count()` call per file and re-detected MIME types with a
+  lossy utf-8 roundtrip; the matcher now counts inside its own `replace`
+  callback and reads the `mimeType` `readRaw` already computed.
+- **The `edit` regex cache.** Patterns are compiled per edit and freed in
+  `try/finally` — the cache reused a fixed 16 MB wasm heap across edits for
+  nothing a per-edit compile does not do correctly.
+- **Unreachable guards and flags.** `PathGuard`'s unfiltered-grant fallback
+  path, `cli.ts`'s `assertDirectory` wrapper, `index.ts`'s
+  `keepForceExitTimer` flag and its dead `shutdown_error` catch, the
+  try/catch around the `get-help` prompt body (nothing in it can throw),
+  `defaultValue` on `input_required` forms (no caller ever passed one),
+  `ResourceEntry.storedAt` (only `expiresAt` was ever read), and
+  `FsError`'s `path` getter (every `.path` reader reads `problem.path`).
+- **Single-use indirection.** `sensitive.ts`'s `CompiledPattern` interface,
+  `path-completer.ts`'s `getRootPrefix`, and `define.ts`'s optional
+  `ctx` fallback and `ToolCtx.authInfo` field.
+
+### Changed
+
+- `filterRootsWithin` resolves root containment with `Promise.all`, so an
+  aborted boundary check rejects instead of filtering every root out as
+  "within=false" — a late abort no longer reports a grant as outside the
+  boundary.
+- `stoppedReason` narrows to `'maxResults' | 'timeout'` on both search
+  tools, with the invariant documented at each `resolve()` site.
+
 ## [2.1.5] - 2026-09-06
 
 An internal-only release: the over-engineering audit, 39 verified cuts across
