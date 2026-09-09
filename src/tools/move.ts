@@ -389,7 +389,7 @@ function buildSummary(
   verb: 'move' | 'copy',
   results: readonly MoveItemResult[],
   failures: readonly MoveFailureItem[],
-  skipped: readonly string[] = [],
+  skipped: readonly string[],
 ): string {
   const successCount = results.length;
   const failCount = failures.length;

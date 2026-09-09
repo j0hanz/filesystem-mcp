@@ -11,7 +11,6 @@ interface ResourceEntry {
   name: string;
   mimeType: string;
   size: number;
-  storedAt: string;
   expiresAt: string;
   text: string;
 }
@@ -138,7 +137,6 @@ export class ResourceStore {
       name: params.name,
       mimeType: params.mimeType ?? 'text/plain',
       size: entryBytes,
-      storedAt: storedAt.toISOString(),
       expiresAt: new Date(storedAt.getTime() + ENTRY_TTL_MS).toISOString(),
       text: params.text,
     };

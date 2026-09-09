@@ -102,14 +102,8 @@ function collectAllowedRoots(
   return matches;
 }
 
-function getRootPrefix(currentValue: string): string {
-  const normalizedInput = toPosixPath(currentValue);
-  const slashIndex = normalizedInput.indexOf('/');
-  return (slashIndex === -1 ? normalizedInput : normalizedInput.slice(0, slashIndex)).toLowerCase();
-}
-
 function findRootPrefixMatches(currentValue: string, allowed: readonly string[]): string[] {
-  const rootPrefix = getRootPrefix(currentValue);
+  const rootPrefix = parseNamedRootInput(currentValue)?.rootName.toLowerCase() ?? '';
   if (!rootPrefix) return collectAllowedRoots(allowed, () => true);
   return collectAllowedRoots(allowed, (root) =>
     basename(root).toLowerCase().startsWith(rootPrefix),

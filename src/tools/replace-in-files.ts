@@ -19,7 +19,6 @@ import { buildFileResourceLink } from '../core/file-uri.js';
 import { truncateProgressPattern } from '../core/fmt.js';
 import type { GuardedFileSystem } from '../core/fs.js';
 import { DEFAULT_EXCLUDE_PATTERNS, globEntries } from '../core/glob.js';
-import { detectMimeFromContent } from '../core/mime.js';
 import { toPosixRelative } from '../core/path.js';
 import { escapeRegexLiteral } from '../core/primitives.js';
 import { readFileBufferWithLimit } from '../core/read.js';
@@ -164,8 +163,7 @@ function recordChangedFile(summary: ReplaceSummary, filePath: string, matchCount
 }
 
 interface ReplacementMatcher {
-  count(content: string): number;
-  replace(content: string, replacement: string): string;
+  replace(content: string, replacement: string): { content: string; matchCount: number };
   testBuffer(buffer: Buffer): boolean;
   /** Releases any compiled pattern this matcher owns. Idempotent. */
   dispose(): void;
@@ -223,25 +221,21 @@ function createRegexReplacementMatcher(
       regex.lastIndex = 0;
       return regex.test(buffer.toString('utf-8'));
     },
-    count(content: string): number {
+    replace(content: string, replacement: string): { content: string; matchCount: number } {
       regex.lastIndex = 0;
       let matchCount = 0;
-      let m: ReturnType<Regex['exec']>;
-      while ((m = regex.exec(content)) !== null) {
-        matchCount++;
-        // Treat an absent group 0 as zero-length: not bumping lastIndex here
-        // would spin forever.
-        if ((m[0]?.length ?? 0) === 0) regex.lastIndex++;
-      }
-      return matchCount;
-    },
-    replace(content: string, replacement: string): string {
-      regex.lastIndex = 0;
       // Only isRegex=true opts into $1/$& substitution. A literal search reaches
       // this matcher too (case-insensitive and wholeWord both need a regex), and
       // there the replacement must be inserted verbatim.
-      if (!expandReplacement) return content.replace(regex, () => replacement);
-      return content.replace(regex, (match: string, ...rest: unknown[]): string => {
+      if (!expandReplacement) {
+        const updated = content.replace(regex, () => {
+          matchCount++;
+          return replacement;
+        });
+        return { content: updated, matchCount };
+      }
+      const updated = content.replace(regex, (match: string, ...rest: unknown[]): string => {
+        matchCount++;
         // In ECMAScript/RE2, trailing arguments are [offset, input] or [offset, input, namedGroups].
         const named =
           rest.length >= 3 && typeof rest[rest.length - 3] === 'number'
@@ -258,6 +252,7 @@ function createRegexReplacementMatcher(
           named,
         );
       });
+      return { content: updated, matchCount };
     },
     dispose(): void {
       freeRegex(regex);
@@ -266,24 +261,19 @@ function createRegexReplacementMatcher(
 }
 
 function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher {
-  const patternLength = searchPattern.length;
   const searchBuffer = Buffer.from(searchPattern, 'utf8');
 
   return {
     testBuffer(buffer: Buffer): boolean {
       return buffer.indexOf(searchBuffer) !== -1;
     },
-    count(content: string): number {
+    replace(content: string, replacement: string): { content: string; matchCount: number } {
       let matchCount = 0;
-      let pos = content.indexOf(searchPattern);
-      while (pos !== -1) {
+      const updated = content.replaceAll(searchPattern, () => {
         matchCount++;
-        pos = content.indexOf(searchPattern, pos + patternLength);
-      }
-      return matchCount;
-    },
-    replace(content: string, replacement: string): string {
-      return content.replaceAll(searchPattern, () => replacement);
+        return replacement;
+      });
+      return { content: updated, matchCount };
     },
     dispose(): void {
       // no compiled pattern to release
@@ -315,7 +305,7 @@ function buildReplacementPlan(
   replacement: string,
   matcher: ReplacementMatcher,
 ): ReplacementPlan | undefined {
-  const matchCount = matcher.count(content);
+  const { content: updatedContent, matchCount } = matcher.replace(content, replacement);
   if (matchCount === 0) {
     return undefined;
   }
@@ -323,7 +313,7 @@ function buildReplacementPlan(
   return {
     matchCount,
     originalContent: content,
-    updatedContent: matcher.replace(content, replacement),
+    updatedContent,
   };
 }
 
@@ -614,11 +604,10 @@ async function handleSearchAndReplace(
     const fullPath = join(summary.root, primaryFilePath);
 
     try {
-      const { content: rawBuffer } = await ctx.fs.readRaw(fullPath, {
+      const { content: rawBuffer, mimeType } = await ctx.fs.readRaw(fullPath, {
         signal: ctx.signal,
       });
-      const mimeInfo = detectMimeFromContent(fullPath, rawBuffer.toString('utf-8'));
-      const link = buildFileResourceLink(fullPath, mimeInfo.mimeType, rawBuffer.length);
+      const link = buildFileResourceLink(fullPath, mimeType, rawBuffer.length);
       return { structured, link };
     } catch (error) {
       rethrowIfAborted(error);

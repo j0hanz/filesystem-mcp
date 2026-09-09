@@ -75,43 +75,13 @@ async function isProbablyBinary(
 }
 
 export type ReadSpec =
-  | {
-      kind: 'full';
-      encoding?: BufferEncoding;
-      maxSize?: number;
-      skipBinary?: boolean;
-      signal?: AbortSignal;
-    }
-  | {
-      kind: 'head';
-      lines: number;
-      encoding?: BufferEncoding;
-      maxSize?: number;
-      skipBinary?: boolean;
-      signal?: AbortSignal;
-    }
-  | {
-      kind: 'tail';
-      lines: number;
-      encoding?: BufferEncoding;
-      maxSize?: number;
-      skipBinary?: boolean;
-      signal?: AbortSignal;
-    }
-  | {
-      kind: 'range';
-      start: number;
-      end?: number;
-      encoding?: BufferEncoding;
-      maxSize?: number;
-      skipBinary?: boolean;
-      signal?: AbortSignal;
-    };
+  | { kind: 'full'; signal?: AbortSignal }
+  | { kind: 'head'; lines: number; signal?: AbortSignal }
+  | { kind: 'tail'; lines: number; signal?: AbortSignal }
+  | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
 
 interface NormalizedBase {
-  encoding: BufferEncoding;
   maxSize: number;
-  skipBinary: boolean;
   signal?: AbortSignal;
 }
 
@@ -121,15 +91,8 @@ type NormalizedSpec =
   | (NormalizedBase & { kind: 'tail'; lines: number })
   | (NormalizedBase & { kind: 'range'; start: number; end?: number });
 
-interface ReadContentOptions {
-  encoding: BufferEncoding;
-  maxSize: number;
-  signal?: AbortSignal;
-}
-
 interface PartialReadResult {
   content: string;
-  truncated: boolean;
   linesRead: number;
   hasMoreLines: boolean;
 }
@@ -137,7 +100,6 @@ interface PartialReadResult {
 export interface ReadFileResult {
   path: string;
   content: string;
-  truncated: boolean;
   totalLines?: number;
   readMode: ReadSpec['kind'];
   head?: number;
@@ -149,14 +111,8 @@ export interface ReadFileResult {
 }
 
 function buildBaseOptions(spec: ReadSpec): NormalizedBase {
-  if (spec.maxSize !== undefined) {
-    assertPositiveIntegerOption('maxSize', spec.maxSize, 'maxSize must be at least 1');
-  }
-  const maxTextFileSize = getMaxTextFileSize();
   return {
-    encoding: spec.encoding ?? 'utf-8',
-    maxSize: Math.min(spec.maxSize ?? maxTextFileSize, maxTextFileSize),
-    skipBinary: spec.skipBinary ?? false,
+    maxSize: getMaxTextFileSize(),
     ...(spec.signal ? { signal: spec.signal } : {}),
   };
 }
@@ -201,15 +157,6 @@ export function normalizeSpec(spec: ReadSpec): NormalizedSpec {
       return _exhaustive;
     }
   }
-}
-
-function buildReadContentOptions(normalized: NormalizedBase): ReadContentOptions {
-  const result: ReadContentOptions = {
-    encoding: normalized.encoding,
-    maxSize: normalized.maxSize,
-  };
-  if (normalized.signal) result.signal = normalized.signal;
-  return result;
 }
 
 export function createTooLargeError(
@@ -303,7 +250,7 @@ function stripCarriageReturn(line: string): string {
  */
 async function* readLinesBounded(
   handle: FileHandle,
-  options: ReadContentOptions,
+  options: NormalizedBase,
   filePath: string,
   startLine: number,
 ): AsyncGenerator<string, void, undefined> {
@@ -315,7 +262,7 @@ async function* readLinesBounded(
     ...(options.signal ? { signal: options.signal } : {}),
   });
 
-  const decoder = new StringDecoder(options.encoding);
+  const decoder = new StringDecoder('utf-8');
   let pending = '';
   let pendingBytes = 0;
   let lineNumber = 0;
@@ -386,7 +333,7 @@ async function readRangeContent(
   handle: FileHandle,
   startLine: number,
   endLine: number | undefined,
-  options: ReadContentOptions,
+  options: NormalizedBase,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -394,11 +341,10 @@ async function readRangeContent(
   const lines: string[] = [];
   let lineNumber = startLine - 1;
   let estimatedBytes = 0;
-  const newlineBytes = Buffer.byteLength('\n', options.encoding);
+  const newlineBytes = Buffer.byteLength('\n', 'utf-8');
   const stopAt = endLine ?? Number.POSITIVE_INFINITY;
 
   let hasMoreLines = false;
-  let stoppedByLimit = false;
 
   // Byte-bounded: an over-long line throws TOO_LARGE while still a partial
   // buffer, before it can be decoded into one huge string.
@@ -419,9 +365,8 @@ async function readRangeContent(
 
       lines.push(line);
 
-      estimatedBytes += Buffer.byteLength(line, options.encoding) + newlineBytes;
+      estimatedBytes += Buffer.byteLength(line, 'utf-8') + newlineBytes;
       if (estimatedBytes > options.maxSize) {
-        stoppedByLimit = true;
         hasMoreLines = await peekHasMore(iterator);
         break;
       }
@@ -437,7 +382,6 @@ async function readRangeContent(
 
   return {
     content: lines.join('\n'),
-    truncated: stoppedByLimit || hasMoreLines,
     linesRead: lines.length,
     hasMoreLines,
   };
@@ -446,7 +390,7 @@ async function readRangeContent(
 async function readTailContent(
   handle: FileHandle,
   tail: number,
-  options: ReadContentOptions,
+  options: NormalizedBase,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -456,13 +400,12 @@ async function readTailContent(
   if (fileSize === 0) {
     return {
       content: '',
-      truncated: false,
       linesRead: 0,
       hasMoreLines: false,
     };
   }
 
-  const encoding = options.encoding;
+  const encoding = 'utf-8';
   // Accumulate raw bytes from the end: decoding a chunk ending mid-codepoint
   // corrupts the trailing UTF-8 sequence into U+FFFD. 0x0A is single-byte and
   // never part of a multibyte sequence, so count newlines on the raw buffer and
@@ -537,7 +480,6 @@ async function readTailContent(
   const content = lines.join('\n');
   return {
     content,
-    truncated: hasMoreLines,
     linesRead: lines.length,
     hasMoreLines,
   };
@@ -545,13 +487,12 @@ async function readTailContent(
 
 async function readFullContent(
   handle: FileHandle,
-  encoding: BufferEncoding,
   maxSize: number,
   requestedPath: string,
   signal?: AbortSignal,
 ): Promise<{ content: string; totalLines: number }> {
   const buffer = await readFileBufferWithLimit(handle, maxSize, requestedPath, signal);
-  const content = buffer.toString(encoding);
+  const content = buffer.toString('utf-8');
   return { content, totalLines: countLines(content) };
 }
 
@@ -588,19 +529,17 @@ async function readHead(
   context: ReadModeContext,
   spec: Extract<NormalizedSpec, { kind: 'head' }>,
 ): Promise<ReadFileResult> {
-  const contentOptions = buildReadContentOptions(spec);
-  const { content, truncated, linesRead, hasMoreLines } = await readRangeContent(
+  const { content, linesRead, hasMoreLines } = await readRangeContent(
     context.handle,
     1,
     spec.lines,
-    contentOptions,
+    spec,
     context.filePath,
   );
 
   return {
     path: context.validPath,
     content,
-    truncated,
     readMode: 'head',
     head: spec.lines,
     linesRead,
@@ -612,19 +551,17 @@ async function readRange(
   context: ReadModeContext,
   spec: Extract<NormalizedSpec, { kind: 'range' }>,
 ): Promise<ReadFileResult> {
-  const contentOptions = buildReadContentOptions(spec);
-  const { content, truncated, linesRead, hasMoreLines } = await readRangeContent(
+  const { content, linesRead, hasMoreLines } = await readRangeContent(
     context.handle,
     spec.start,
     spec.end,
-    contentOptions,
+    spec,
     context.filePath,
   );
 
   return {
     path: context.validPath,
     content,
-    truncated,
     readMode: 'range',
     startLine: spec.start,
     ...(spec.end !== undefined ? { endLine: spec.end } : {}),
@@ -640,7 +577,6 @@ async function readFull(
   assertSizeWithinLimit(context.stats.size, spec.maxSize, context.filePath);
   const { content, totalLines } = await readFullContent(
     context.handle,
-    spec.encoding,
     spec.maxSize,
     context.filePath,
     spec.signal,
@@ -649,7 +585,6 @@ async function readFull(
   return {
     path: context.validPath,
     content,
-    truncated: false,
     totalLines,
     readMode: 'full',
     linesRead: totalLines,
@@ -661,18 +596,16 @@ async function readTail(
   context: ReadModeContext,
   spec: Extract<NormalizedSpec, { kind: 'tail' }>,
 ): Promise<ReadFileResult> {
-  const contentOptions = buildReadContentOptions(spec);
-  const { content, truncated, linesRead, hasMoreLines } = await readTailContent(
+  const { content, linesRead, hasMoreLines } = await readTailContent(
     context.handle,
     spec.lines,
-    contentOptions,
+    spec,
     context.validPath,
   );
 
   return {
     path: context.validPath,
     content,
-    truncated,
     readMode: 'tail',
     tail: spec.lines,
     linesRead,
@@ -715,9 +648,7 @@ export async function readNormalized(
 
   await using handle = await openReadableFileHandle(validPath, spec.signal);
 
-  if (spec.skipBinary) {
-    await assertNotBinary(validPath, filePath, handle, spec);
-  }
+  await assertNotBinary(validPath, filePath, handle, spec);
   spec.signal?.throwIfAborted();
 
   return await readByMode({ handle, validPath, filePath, stats, spec });

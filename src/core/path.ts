@@ -85,31 +85,16 @@ async function filterRootsWithin(
     return [];
   }
 
-  const results = await Promise.allSettled(
+  const results = await Promise.all(
     normalizedRoots.map((root) => isRootWithin(root, normalizedBounds, label, signal)),
   );
 
-  return normalizedRoots.filter((root, i) => {
-    const result = results[i];
-    if (result?.status === 'rejected') {
-      Logger.warn(`${label}: root check threw unexpectedly`, {
-        root,
-        error: String(result.reason),
-      });
-      return false;
-    }
-    return result?.status === 'fulfilled' && result.value;
-  });
+  return normalizedRoots.filter((_, i) => results[i]);
 }
 
 /** `path.relative` with forward slashes, so displayed paths match across platforms. */
 export function toPosixRelative(from: string, to: string): string {
   return toPosixPath(relative(from, to));
-}
-
-export interface AllowedDirectoriesState {
-  primary: string[];
-  expanded: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -174,10 +159,9 @@ async function expandAllowedDirectories(
 export async function resolveAllowedDirectoriesState(
   dirs: readonly string[],
   signal?: AbortSignal,
-): Promise<AllowedDirectoriesState> {
+): Promise<string[]> {
   const primary = normalizeAllowedDirectories(dirs);
-  const expanded = await expandAllowedDirectories(primary, signal);
-  return { primary, expanded };
+  return expandAllowedDirectories(primary, signal);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +180,7 @@ export async function resolveAllowedDirectoriesState(
  * tradeoff for a local, single-user filesystem server today.
  */
 export class PathGuard {
-  private allowedDirectoriesState: AllowedDirectoriesState | undefined;
+  private allowedDirectoriesState: string[] | undefined;
   private readonly sensitive = new SensitiveMatcher();
   /**
    * Directories added by an accepted access grant (R8) — from the tool
@@ -220,17 +204,14 @@ export class PathGuard {
   // stdio + InMemoryEventStore single-process model.
   #mutex = Promise.resolve();
 
-  readonly options: ServerOptions | undefined;
+  private readonly options: ServerOptions | undefined;
 
   constructor(options?: ServerOptions) {
     this.options = options;
   }
 
-  initialize(state: AllowedDirectoriesState): void {
-    this.allowedDirectoriesState = {
-      primary: [...new Set(state.primary)],
-      expanded: normalizeAllowedDirectories(state.expanded),
-    };
+  initialize(expanded: readonly string[]): void {
+    this.allowedDirectoriesState = normalizeAllowedDirectories(expanded);
   }
 
   isInitialized(): boolean {
@@ -255,7 +236,7 @@ export class PathGuard {
     if (!this.allowedDirectoriesState) {
       return [];
     }
-    return [...this.allowedDirectoriesState.expanded];
+    return [...this.allowedDirectoriesState];
   }
 
   isSensitive(filePath: string): boolean {
@@ -269,7 +250,7 @@ export class PathGuard {
    * directory pointing outside the sandbox would otherwise pass the lexical
    * containment check (fs.glob follows symlinks and yields external entries as
    * non-symlink dirents). validateExistingPathDetailed re-checks containment on
-   * the real path against this.allowedDirectoriesState.expanded (the guard's full
+   * the real path against this.allowedDirectoriesState (the guard's full
    * allowed set — a superset of the single-root `bounds` callers pass) and
    * re-checks sensitivity on the resolved target, throwing ACCESS_DENIED for
    * escapes/sensitive, which the catch below turns into a filter. Skippable
@@ -357,7 +338,7 @@ export class PathGuard {
     if (!this.allowedDirectoriesState || paths.length === 0) {
       return [];
     }
-    const allowedDirs = this.allowedDirectoriesState.expanded;
+    const allowedDirs = this.allowedDirectoriesState;
     const grantDirs: string[] = [];
     for (const requested of paths) {
       if (!requested) {
@@ -494,7 +475,7 @@ export class PathGuard {
     }
 
     const normalizedRequested = normalizePath(requestedPath);
-    const allowedDirs = this.allowedDirectoriesState.expanded;
+    const allowedDirs = this.allowedDirectoriesState;
 
     const accessDeniedHint =
       allowedDirs.length > 0
@@ -513,7 +494,7 @@ export class PathGuard {
 
     return {
       normalizedRequested,
-      allowedDirs: this.allowedDirectoriesState.expanded,
+      allowedDirs: this.allowedDirectoriesState,
       accessDeniedHint,
     };
   }
@@ -860,8 +841,9 @@ export class PathGuard {
 
     const combined = [...baseline, ...grantsToInclude];
     const nextState = await resolveAllowedDirectoriesState(combined, signal);
-    // Commit both fields together, after every await has resolved, so a
-    // rejecting recompute leaves the guard's previous, consistent view intact.
+    // Commit boundaries and the allowed set together, after every await has
+    // resolved, so a rejecting recompute leaves the guard's previous,
+    // consistent view intact.
     this.rootBoundaries = boundaries;
     this.initialize(nextState);
   }

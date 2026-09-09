@@ -5,7 +5,6 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { StopReasonTracker } from './concurrency.js';
-import type { StoppedReason } from './concurrency.js';
 import { globEntries, type GlobEntry } from './glob.js';
 import type { PathGuard } from './path.js';
 import { escapeRegexLiteral } from './primitives.js';
@@ -14,6 +13,8 @@ import { getMaxTextFileSize } from './util.js';
 interface SearchResult {
   file: string;
   line: number;
+  /** 0-indexed column of the first occurrence on the line. */
+  column: number;
   content: string;
   matchCount?: number;
 }
@@ -78,19 +79,25 @@ export function freeRegex(regex: Regex | undefined): void {
 }
 
 /**
- * Count non-overlapping occurrences of a global regex in a single line. Guards
- * zero-length matches (e.g. `a*`) so they cannot loop forever.
+ * Find non-overlapping occurrences of a global regex in a single line, reporting
+ * the first match's column alongside the count. Guards zero-length matches
+ * (e.g. `a*`) so they cannot loop forever.
  */
-function countLineMatches(regex: Regex, line: string): number {
+function findLineMatches(
+  regex: Regex,
+  line: string,
+): { count: number; column: number } | undefined {
   regex.lastIndex = 0;
   let count = 0;
+  let column = -1;
   let match: RE2ExecArray | null;
   while ((match = regex.exec(line)) !== null) {
+    if (column === -1) column = match.index;
     count++;
     if (match.index === regex.lastIndex) regex.lastIndex++; // advance past zero-length match
     if (count >= MAX_MATCHES_PER_LINE) break;
   }
-  return count;
+  return count > 0 ? { count, column } : undefined;
 }
 
 export interface SearchContentOptions {
@@ -123,7 +130,12 @@ export interface SearchContentOutcome {
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
-    stoppedReason?: StoppedReason;
+    /**
+     * `StoppedReason` narrowed to the stops these scans can produce: both call
+     * only `hitMaxResults`/`hitAbort` (see concurrency.ts) — never
+     * `hitMaxFiles`, which belongs to `replace_text`'s per-file cap.
+     */
+    stoppedReason?: 'maxResults' | 'timeout';
   };
 }
 
@@ -190,17 +202,18 @@ export async function searchContent(
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           if (line === undefined) continue;
-          // One scan per line: countLineMatches resets lastIndex itself, so it
+          // One scan per line: findLineMatches resets lastIndex itself, so it
           // doubles as the "does this line match" test.
-          const occurrences = countLineMatches(regex, line);
-          if (occurrences > 0) {
+          const found = findLineMatches(regex, line);
+          if (found) {
             matchedFile = true;
             matchingLines++;
             matches.push({
               file: entry.path,
               line: i + 1,
+              column: found.column,
               content: line,
-              matchCount: occurrences,
+              matchCount: found.count,
             });
             if (matches.length >= maxResults) break;
           }
@@ -221,7 +234,9 @@ export async function searchContent(
     const tracker = new StopReasonTracker();
     if (matches.length >= maxResults) tracker.hitMaxResults();
     if (counters.stoppedByAbort) tracker.hitAbort();
-    const stoppedReason = tracker.resolve();
+    // resolve() is StoppedReason | undefined, but this scan only records
+    // maxResults/timeout stops (see the summary type's narrowing note).
+    const stoppedReason = tracker.resolve() as 'maxResults' | 'timeout' | undefined;
 
     return {
       basePath: directory,
@@ -286,7 +301,8 @@ export async function searchFiles(
     filesScanned: number;
     truncated: boolean;
     skippedInaccessible: number;
-    stoppedReason?: StoppedReason;
+    /** Narrowed like SearchContentOutcome's — scans never hit `hitMaxFiles`. */
+    stoppedReason?: 'maxResults' | 'timeout';
   };
 }> {
   const maxResults = options.maxResults ?? 100;
@@ -320,7 +336,9 @@ export async function searchFiles(
   const tracker = new StopReasonTracker();
   if (results.length >= maxResults) tracker.hitMaxResults();
   if (counters.stoppedByAbort) tracker.hitAbort();
-  const stoppedReason = tracker.resolve();
+  // resolve() is StoppedReason | undefined, but this scan only records
+  // maxResults/timeout stops (see the summary type's narrowing note).
+  const stoppedReason = tracker.resolve() as 'maxResults' | 'timeout' | undefined;
 
   return {
     basePath: directory,

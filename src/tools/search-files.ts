@@ -176,8 +176,7 @@ async function handleSearchFiles(
           ...(result.summary.skippedInaccessible
             ? { skippedInaccessible: result.summary.skippedInaccessible }
             : {}),
-          ...(result.summary.stoppedReason !== undefined &&
-          result.summary.stoppedReason !== 'maxFiles'
+          ...(result.summary.stoppedReason !== undefined
             ? { stoppedReason: result.summary.stoppedReason }
             : {}),
         },

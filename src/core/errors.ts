@@ -317,8 +317,4 @@ export class FsError extends Error {
   get code(): ErrorCode {
     return this.problem.code;
   }
-
-  get path(): string | undefined {
-    return this.problem.path;
-  }
 }

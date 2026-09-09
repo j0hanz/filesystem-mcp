@@ -17,11 +17,6 @@ function normalizeForMatch(input: string): string {
   return toPosixPath(normalize(input)).toLowerCase();
 }
 
-interface CompiledPattern {
-  globs: readonly string[];
-  matchesPath: boolean;
-}
-
 interface CompiledPatternSet {
   pathGlobs: readonly string[];
   nameGlobs: readonly string[];
@@ -51,25 +46,16 @@ function compilePatternGlobs(normalizedPattern: string): readonly string[] {
   return Array.from(globs);
 }
 
-function compilePatterns(patterns: readonly string[]): CompiledPattern[] {
-  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
-  return deduped.map((pattern) => {
-    const normalized = normalizeForMatch(pattern);
-    const matchesPath = normalized.includes('/');
-    return {
-      globs: matchesPath ? compilePatternGlobs(normalized) : [normalized],
-      matchesPath,
-    };
-  });
-}
-
-function toPatternSet(patterns: readonly CompiledPattern[]): CompiledPatternSet {
+function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
   const pathGlobs = new Set<string>();
   const nameGlobs = new Set<string>();
 
-  for (const pattern of patterns) {
-    const target = pattern.matchesPath ? pathGlobs : nameGlobs;
-    for (const glob of pattern.globs) {
+  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
+  for (const pattern of deduped) {
+    const normalized = normalizeForMatch(pattern);
+    const matchesPath = normalized.includes('/');
+    const target = matchesPath ? pathGlobs : nameGlobs;
+    for (const glob of matchesPath ? compilePatternGlobs(normalized) : [normalized]) {
       target.add(glob);
     }
   }
@@ -161,7 +147,7 @@ export class SensitiveMatcher {
   private readonly patterns: CompiledPatternSet;
 
   constructor(patterns: readonly string[] = buildSensitivePatterns()) {
-    this.patterns = toPatternSet(compilePatterns(patterns));
+    this.patterns = toPatternSet(patterns);
   }
 
   isSensitive(filePath: string): boolean {

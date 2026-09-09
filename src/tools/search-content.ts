@@ -54,12 +54,6 @@ type SearchOutput = z.infer<typeof GrepOutputSchema>;
 type SearchMatchPayload = NonNullable<SearchOutput['matches']>[number];
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 
-interface SearchContext {
-  pattern: string;
-  matcher?: Regex;
-  caseSensitive: boolean;
-}
-
 interface SearchContentPageMetadata {
   readonly totalMatches: number;
   readonly filesScanned: number;
@@ -170,30 +164,7 @@ function searchContentOutput(
   };
 }
 
-function findColumnOffset(content: string, context: SearchContext): number | undefined {
-  if (context.matcher) {
-    context.matcher.lastIndex = 0;
-    const match = context.matcher.exec(content);
-    return match ? match.index : undefined;
-  }
-  if (context.caseSensitive) {
-    const idx = content.indexOf(context.pattern);
-    return idx >= 0 ? idx : undefined;
-  }
-  return undefined;
-}
-
-function buildSortedPayloads(
-  result: SearchResultValue,
-  args: SearchInput,
-  matcher: Regex | undefined,
-): SearchMatchPayload[] {
-  const context: SearchContext = {
-    pattern: args.searchPattern,
-    caseSensitive: args.caseSensitive,
-    ...(matcher ? { matcher } : {}),
-  };
-
+function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
   const relativeByFile = new Map<string, string>();
 
   const getRelativeFile = (file: string): string => {
@@ -205,17 +176,13 @@ function buildSortedPayloads(
     return rel;
   };
 
-  const payloads = result.matches.map((match): SearchMatchPayload => {
-    const column = findColumnOffset(match.content, context);
-
-    return {
-      file: getRelativeFile(match.file),
-      line: match.line,
-      ...(column !== undefined ? { column } : {}),
-      content: match.content,
-      matchCount: match.matchCount,
-    };
-  });
+  const payloads = result.matches.map((match): SearchMatchPayload => ({
+    file: getRelativeFile(match.file),
+    line: match.line,
+    column: match.column,
+    content: match.content,
+    matchCount: match.matchCount,
+  }));
 
   payloads.sort((l, r) => l.file.localeCompare(r.file) || l.line - r.line);
   return payloads;
@@ -326,7 +293,7 @@ async function handleSearchContent(
       // regexMatcher holds wasm memory re2-wasm never reclaims on its own.
       let items: SearchMatchPayload[];
       try {
-        items = buildSortedPayloads(result, scoped, regexMatcher);
+        items = buildSortedPayloads(result);
       } finally {
         freeRegex(regexMatcher);
       }
@@ -337,8 +304,7 @@ async function handleSearchContent(
           filesScanned: result.summary.filesScanned,
           ...(result.summary.filesMatched ? { filesMatched: result.summary.filesMatched } : {}),
           truncated: result.summary.truncated,
-          ...(result.summary.stoppedReason !== undefined &&
-          result.summary.stoppedReason !== 'maxFiles'
+          ...(result.summary.stoppedReason !== undefined
             ? { stoppedReason: result.summary.stoppedReason }
             : {}),
           ...(result.summary.skippedInaccessible

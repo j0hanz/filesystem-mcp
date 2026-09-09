@@ -41,7 +41,6 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
   shutdownStarted = true;
 
   process.exitCode = exitCode;
-  let keepForceExitTimer = true;
 
   const timer = setTimeout(() => {
     logRuntimeFailure(
@@ -75,13 +74,8 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
         logRuntimeFailure('shutdown_mcp_error', 'process', 'shutdown', error);
       }
     }
-    keepForceExitTimer = false;
-  } catch (error: unknown) {
-    logRuntimeFailure('shutdown_error', 'process', 'shutdown', error);
   } finally {
-    if (!keepForceExitTimer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 

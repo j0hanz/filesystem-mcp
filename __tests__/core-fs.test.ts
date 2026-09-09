@@ -42,7 +42,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(result.readMode, 'head');
       assert.strictEqual(result.head, 5);
       assert.strictEqual(result.linesRead, 5);
-      assert.strictEqual(result.truncated, true);
       assert.strictEqual(result.hasMoreLines, true);
       assert.strictEqual(result.content, 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5');
     });
@@ -78,7 +77,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       assert.strictEqual(result.readMode, 'full');
       assert.strictEqual(result.totalLines, 5);
-      assert.strictEqual(result.truncated, false);
       assert.strictEqual(result.hasMoreLines, false);
       assert.strictEqual(result.content, 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n');
     });

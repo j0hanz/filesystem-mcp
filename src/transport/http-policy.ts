@@ -285,7 +285,7 @@ export function bearerAuthMiddleware(
     if (isSecureApiKey(apiKey) && validateBearerAuthorization(apiKey, authHeader)) {
       // Forward the validated caller to the SDK pipeline: toNodeHandler reads
       // req.auth and passes it as the handler's pass-through authInfo, which the
-      // per-request factory receives and tool handlers read as ctx.http.authInfo.
+      // per-request factory receives on ctx.http.
       // `expiresAt` is deliberately omitted: a static API key has no expiry and
       // there is no `exp` claim or introspection response to read one from.
       // Populate it from the token if this ever moves to issued tokens.

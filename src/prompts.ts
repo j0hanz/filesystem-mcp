@@ -4,11 +4,10 @@ import type {
   PromptMessage,
   TextContent,
 } from '@modelcontextprotocol/server';
-import { completable, ProtocolError } from '@modelcontextprotocol/server';
+import { completable } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
 
-import { formatUnknownErrorMessage, fsErrorCode, hasErrorShape } from './core/errors.js';
 import { Logger } from './core/observability.js';
 import { buildSectionsRecord, INSTRUCTIONS_SUMMARY, renderSections } from './instructions.js';
 
@@ -66,33 +65,21 @@ export function registerPrompts(deps: PromptRegistrarDeps): void {
       }),
     },
     ({ topic }: { topic?: string | undefined }): GetPromptResult => {
-      try {
-        const lowerTopic = topic?.toLowerCase();
-        const section =
-          lowerTopic && Object.hasOwn(sections, lowerTopic) ? sections[lowerTopic] : undefined;
-        if (topic && !section) {
-          Logger.debug('get-help: unknown topic requested', { topic });
-        }
-        const text =
-          section ??
-          (topic
-            ? `Section '${topic}' not found. Available: ${topics.join(', ')}\n\n${instructions}`
-            : instructions);
-        return {
-          description: INSTRUCTIONS_SUMMARY,
-          messages: [userText(text)],
-        };
-      } catch (error) {
-        if (hasErrorShape(error, 'ProtocolError')) throw error;
-        const message = formatUnknownErrorMessage(error);
-        Logger.error(`Prompt handler failed: ${message}`, {
-          promptName: 'get-help',
-          error,
-        });
-        const protocolError = new ProtocolError(fsErrorCode(error), message);
-        protocolError.cause = error;
-        throw protocolError;
+      const lowerTopic = topic?.toLowerCase();
+      const section =
+        lowerTopic && Object.hasOwn(sections, lowerTopic) ? sections[lowerTopic] : undefined;
+      if (topic && !section) {
+        Logger.debug('get-help: unknown topic requested', { topic });
       }
+      const text =
+        section ??
+        (topic
+          ? `Section '${topic}' not found. Available: ${topics.join(', ')}\n\n${instructions}`
+          : instructions);
+      return {
+        description: INSTRUCTIONS_SUMMARY,
+        messages: [userText(text)],
+      };
     },
   );
 }

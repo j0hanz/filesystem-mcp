@@ -130,33 +130,21 @@ type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
 
 const READ_TOOL_LABEL = 'Read';
 
-interface ReadSpecCommon {
-  encoding: BufferEncoding;
-  maxSize: number;
-  skipBinary: true;
-  signal?: AbortSignal;
-}
-
 function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
-  const common: ReadSpecCommon = {
-    encoding: 'utf-8',
-    maxSize: getMaxTextFileSize(),
-    skipBinary: true,
-    ...(signal ? { signal } : {}),
-  };
+  const signalPart = signal ? { signal } : {};
   const { head, tail, startLine, endLine } = args;
 
-  if (head !== undefined) return { kind: 'head', lines: head, ...common };
-  if (tail !== undefined) return { kind: 'tail', lines: tail, ...common };
+  if (head !== undefined) return { kind: 'head', lines: head, ...signalPart };
+  if (tail !== undefined) return { kind: 'tail', lines: tail, ...signalPart };
   if (startLine !== undefined || endLine !== undefined) {
     return {
       kind: 'range',
       start: startLine ?? 1,
       ...(endLine !== undefined ? { end: endLine } : {}),
-      ...common,
+      ...signalPart,
     };
   }
-  return { kind: 'full', ...common };
+  return { kind: 'full', ...signalPart };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves

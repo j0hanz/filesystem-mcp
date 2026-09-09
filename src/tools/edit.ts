@@ -20,7 +20,6 @@ import {
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.js';
-import type { Regex } from '../core/search.js';
 import { compileRegex, freeRegex } from '../core/search.js';
 import type { ResourceStore } from '../core/store.js';
 import { isTotalFailure, runOverPaths } from './batch.js';
@@ -178,7 +177,6 @@ function findEditMatch(
   content: string,
   oldText: string,
   ignoreWhitespace: boolean,
-  regexCache?: Map<string, Regex>,
 ): TextRange | undefined {
   if (ignoreWhitespace) {
     // Make whitespace flexible (tolerate indentation/spacing differences)
@@ -191,26 +189,28 @@ function findEditMatch(
       .replace(/[^\S\n]*\n\s*/g, '[^\\S\\n]*\\n+[^\\S\\n]*')
       .replace(/(\w)[^\S\n]+(\w)/g, '$1[^\\S\\n]+$2')
       .replace(/[^\S\n]+/g, '[^\\S\\n]*');
-    let regex = regexCache?.get(pattern);
-    if (!regex) {
-      regex = compileRegex(pattern, { caseSensitive: true });
-      regexCache?.set(pattern, regex);
+    const regex = compileRegex(pattern, { caseSensitive: true });
+    try {
+      // The compiled regex is global, so lastIndex may point past a previous
+      // exec — reset before searching.
+      regex.lastIndex = 0;
+      const match = regex.exec(content);
+
+      if (match === null) return undefined;
+      // RE2ExecArray types group 0 as optional. A successful match always has it;
+      // an empty one would name a zero-length span, which cannot be replaced.
+      const matched = match[0];
+      if (matched === undefined || matched.length === 0) return undefined;
+
+      return {
+        startIndex: match.index,
+        length: matched.length,
+      };
+    } finally {
+      // The compiled pattern owns wasm memory re2-wasm never reclaims on its
+      // own; its lifetime is this one match.
+      freeRegex(regex);
     }
-    // The compiled regex is global and may come from the cache, so lastIndex
-    // still points past the previous edit's match — reset before searching.
-    regex.lastIndex = 0;
-    const match = regex.exec(content);
-
-    if (match === null) return undefined;
-    // RE2ExecArray types group 0 as optional. A successful match always has it;
-    // an empty one would name a zero-length span, which cannot be replaced.
-    const matched = match[0];
-    if (matched === undefined || matched.length === 0) return undefined;
-
-    return {
-      startIndex: match.index,
-      length: matched.length,
-    };
   }
 
   const index = content.indexOf(oldText);
@@ -346,25 +346,17 @@ function applyEdits(
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
-  const regexCache = ignoreWhitespace ? new Map<string, Regex>() : undefined;
 
-  try {
-    for (const edit of edits) {
-      const match = findEditMatch(newContent, edit.oldText, ignoreWhitespace, regexCache);
+  for (const edit of edits) {
+    const match = findEditMatch(newContent, edit.oldText, ignoreWhitespace);
 
-      if (!match) {
-        unmatchedEdits.push(edit.oldText);
-        continue;
-      }
-
-      newContent = replaceEditMatch(newContent, match, edit.newText);
-      appliedEdits += 1;
+    if (!match) {
+      unmatchedEdits.push(edit.oldText);
+      continue;
     }
-  } finally {
-    // Every cached pattern owns wasm memory re2-wasm never reclaims on its own,
-    // and the cache does not outlive this call.
-    for (const cached of regexCache?.values() ?? []) freeRegex(cached);
-    regexCache?.clear();
+
+    newContent = replaceEditMatch(newContent, match, edit.newText);
+    appliedEdits += 1;
   }
 
   // Compute the line range against the final content so earlier edits whose

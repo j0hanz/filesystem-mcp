@@ -240,9 +240,6 @@ export class GuardedFileSystem {
     }
     const { content } = await readFileWithStats(filePath, validPath, stats, {
       kind: 'full',
-      encoding: 'utf-8',
-      maxSize,
-      skipBinary: true,
       ...(options?.signal ? { signal: options.signal } : {}),
     });
     return { validPath, content, stats };

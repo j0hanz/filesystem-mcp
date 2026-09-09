@@ -55,8 +55,6 @@ export interface PendingInput {
    * instead of a boolean `confirm`. Each entry is a `{ value, title }` pair.
    */
   readonly choices?: readonly { value: string; title: string }[];
-  /** Preselected enum value (only meaningful with single-select `choices`). */
-  readonly defaultValue?: string;
   /**
    * When set with `choices`, the form offers a multi-select enum: `choice` is
    * a string array (`MultiSelectEnumSchema` shape) and the caller reads the
@@ -110,15 +108,14 @@ export const requestStateCodec: RequestStateCodec<PendingState> = {
 /**
  * Build a single-select enum confirmation input. The form renders a `choice`
  * field whose options are the titled `choices`; the caller reads the selection
- * with `readAcceptedChoice`. A `defaultValue` preselects one option.
+ * with `readAcceptedChoice`.
  */
 export function choiceInput(
   key: string,
   message: string,
   choices: readonly { value: string; title: string }[],
-  defaultValue?: string,
 ): PendingInput {
-  return { key, message, choices, ...(defaultValue !== undefined ? { defaultValue } : {}) };
+  return { key, message, choices };
 }
 
 /**
@@ -173,7 +170,6 @@ export async function buildInputRequired(
               choice: {
                 type: 'string' as const,
                 oneOf: input.choices.map((c) => ({ const: c.value, title: c.title })),
-                ...(input.defaultValue !== undefined ? { default: input.defaultValue } : {}),
               },
             },
             required: ['choice'],

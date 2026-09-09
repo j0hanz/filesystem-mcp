@@ -1,5 +1,4 @@
 import type {
-  AuthInfo,
   CallToolResult,
   ClientCapabilities,
   ContentBlock,
@@ -43,7 +42,6 @@ import { McpProgressSink, ProgressSession } from './progress.js';
 
 export interface ToolCtx {
   readonly signal: AbortSignal;
-  readonly authInfo?: AuthInfo;
   readonly _meta?: RequestMeta | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
@@ -141,18 +139,9 @@ export interface DefinedTool {
 }
 
 function toToolCtx(
-  ctx: ServerContext | undefined,
+  ctx: ServerContext,
   deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server'>,
 ): ToolCtx {
-  if (!ctx) {
-    const signal = new AbortController().signal;
-    return {
-      signal,
-      fs: new GuardedFileSystem(deps.pathGuard),
-      pageStore: deps.pageStore,
-      resourceStore: deps.resourceStore,
-    };
-  }
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
   // legacy connection fixed them at `initialize` and has no envelope at all.
@@ -173,7 +162,6 @@ function toToolCtx(
 
   return {
     signal: ctx.mcpReq.signal,
-    ...(ctx.http?.authInfo ? { authInfo: ctx.http.authInfo } : {}),
     ...(ctx.mcpReq._meta ? { _meta: ctx.mcpReq._meta } : {}),
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
@@ -189,13 +177,7 @@ function resolveProgressCtx<I extends z.ZodType, O extends z.ZodType>(
   def: ToolDef<I, O>,
   args: z.infer<I>,
 ): ProgressCtx {
-  if (!def.progress) return { label: def.title };
-  try {
-    return def.progress(args);
-  } catch (err: unknown) {
-    Logger.warn(`resolveProgressCtx: ${def.name}.progress threw: ${String(err)}`);
-    return { label: def.title };
-  }
+  return def.progress ? def.progress(args) : { label: def.title };
 }
 
 function composeSignal(base: AbortSignal, timeoutMs?: number): AbortSignal {

@@ -48,30 +48,22 @@ function validateCliPath(inputPath: string): void {
   }
 }
 
-function assertDirectory(stats: Stats, inputPath: string): void {
-  if (stats.isDirectory()) return;
-  throw new Error(`${inputPath} is not a directory`);
-}
-
 async function validateDirectoryPath(inputPath: string, allowMissing = false): Promise<string> {
   const normalized = normalizePath(inputPath);
 
+  let stats: Stats;
   try {
-    const stats = await stat(normalized);
-    assertDirectory(stats, inputPath);
-    return normalized;
+    stats = await stat(normalized);
   } catch (error) {
-    if (allowMissing) {
-      if (error instanceof Error && error.message.includes('is not a directory')) {
-        throw error;
-      }
-      return normalized;
-    }
+    if (allowMissing) return normalized;
     // Node's own message already names the syscall and the errno.
     throw new Error(`Cannot access directory ${inputPath}: ${formatUnknownErrorMessage(error)}`, {
       cause: error,
     });
   }
+
+  if (!stats.isDirectory()) throw new Error(`${inputPath} is not a directory`);
+  return normalized;
 }
 
 async function normalizeAndValidateDirs(
