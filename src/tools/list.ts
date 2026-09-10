@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { paginate } from '../core/cursor.js';
+import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
 import type { EntryType } from '../core/glob.js';
 import { DEFAULT_EXCLUDE_PATTERNS, globEntries, loadRootGitignore } from '../core/glob.js';
@@ -240,16 +240,6 @@ interface ListPageMetadata {
   readonly totalDirectories: number;
 }
 
-function listQueryKey(args: z.infer<typeof ListInputSchema>, path: string): string {
-  return JSON.stringify({
-    method: 'list',
-    path,
-    maxDepth: args.maxDepth,
-    includeHidden: args.includeHidden,
-    includeIgnored: args.includeIgnored,
-  });
-}
-
 function listOutput(
   entries: readonly CollectedEntry[],
   metadata: ListPageMetadata,
@@ -278,7 +268,13 @@ async function handleList(
 }> {
   const path = args.path;
   const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(path);
-  const queryKey = listQueryKey(args, resolvedPath);
+  const queryKey = pageQueryKey({
+    method: 'list',
+    path: resolvedPath,
+    maxDepth: args.maxDepth,
+    includeHidden: args.includeHidden,
+    includeIgnored: args.includeIgnored,
+  });
   const { resourceStore } = ctx;
 
   const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({

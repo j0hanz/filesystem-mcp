@@ -16,7 +16,12 @@ import {
 } from '../core/errors.js';
 import { joinRoster, pathLabel } from '../core/fmt.js';
 import type { FileType, GuardedFileSystem } from '../core/fs.js';
-import { choiceInput, pendingRoundTrip, readAcceptedChoice } from '../core/input-required.js';
+import {
+  choiceInput,
+  confirmKey,
+  pendingRoundTrip,
+  readAcceptedChoice,
+} from '../core/input-required.js';
 import { resolveEntryType } from '../core/primitives.js';
 import {
   defaultFalseBoolean,
@@ -267,7 +272,7 @@ async function executePlan(
   pendingSorted: readonly string[],
 ): Promise<{ item: DeletedItem } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
-    const key = `confirm_${pendingSorted.indexOf(plan.validPath)}`;
+    const key = confirmKey(pendingSorted.indexOf(plan.validPath));
     const choice = readAcceptedChoice(ctx.inputResponses, key);
     if (choice === 'skip') {
       return { skipped: true as const, path: plan.validPath };
@@ -337,7 +342,7 @@ async function handleDelete(
       buildInputs: (ps) =>
         ps.map((p, i) =>
           choiceInput(
-            `confirm_${i}`,
+            confirmKey(i),
             `Permanently delete "${p}" and all its contents? This cannot be undone.`,
             [
               { value: 'delete', title: 'Delete' },

@@ -1,7 +1,7 @@
 import * as z from 'zod/v4';
 
 import { SearchStoppedReasonSchema } from '../core/concurrency.js';
-import { paginate } from '../core/cursor.js';
+import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
 import { DEFAULT_EXCLUDE_PATTERNS } from '../core/glob.js';
@@ -98,21 +98,6 @@ interface SearchFilesPageMetadata {
   readonly stoppedReason?: z.infer<typeof SearchFilesOutputSchema>['stoppedReason'];
 }
 
-function searchFilesQueryKey(
-  args: z.infer<typeof SearchFilesInputSchema>,
-  basePath: string,
-): string {
-  return JSON.stringify({
-    method: 'find_files',
-    path: basePath,
-    pattern: args.pattern,
-    includeIgnored: args.includeIgnored,
-    includeHidden: args.includeHidden,
-    sortBy: args.sortBy,
-    maxDepth: args.maxDepth,
-  });
-}
-
 function searchFilesOutput(
   results: readonly SearchFileResult[],
   metadata: SearchFilesPageMetadata,
@@ -141,7 +126,15 @@ async function handleSearchFiles(
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = searchFilesQueryKey(args, requestedBasePath);
+  const queryKey = pageQueryKey({
+    method: 'find_files',
+    path: requestedBasePath,
+    pattern: args.pattern,
+    includeIgnored: args.includeIgnored,
+    includeHidden: args.includeHidden,
+    sortBy: args.sortBy,
+    maxDepth: args.maxDepth,
+  });
   const { resourceStore } = ctx;
 
   const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({

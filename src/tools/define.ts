@@ -27,6 +27,7 @@ import type { ProgressCtx } from '../core/fmt.js';
 import { plainMessage } from '../core/fmt.js';
 import { GuardedFileSystem } from '../core/fs.js';
 import {
+  confirmKey,
   multiSelectInput,
   pendingRoundTrip,
   readAcceptedConfirm,
@@ -315,7 +316,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
               ),
             ]
           : dirs.map((dir, i) => ({
-              key: `confirm_${i}`,
+              key: confirmKey(i),
               message: `Grant filesystem access to "${dir}"?`,
             })),
     });
@@ -333,12 +334,12 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     // (attacker-controlled inputResponses on re-entry). Only grant dirs that
     // were actually offered by precheckAccess — a value outside grantDirs is
     // ignored and fails closed in validateAccess. The single-select path reads
-    // `confirm_${i}` for `grantDirs[i]`, so the isSamePath filter is a no-op
+    // `confirmKey(i)` for `grantDirs[i]`, so the isSamePath filter is a no-op
     // there; it only bites for the multi-select array.
     const accepted = multi
       ? (readAcceptedMultiChoice(this.toolCtx.inputResponses, 'grant') ?? [])
       : grantDirs.filter((_dir, i) =>
-          readAcceptedConfirm(this.toolCtx.inputResponses, `confirm_${i}`),
+          readAcceptedConfirm(this.toolCtx.inputResponses, confirmKey(i)),
         );
     for (const dir of accepted) {
       if (!grantDirs.some((g) => isSamePath(g, dir))) continue;

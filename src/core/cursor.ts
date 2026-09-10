@@ -60,6 +60,19 @@ export interface PaginatedPage<T, M, R> extends Page<T, M> {
 }
 
 /**
+ * The single home of the pagination cache-key rule: `JSON.stringify` of a
+ * flat object whose `method` names the tool and whose remaining fields
+ * identify the query. The literal's field order fixes key stability;
+ * `method` keeps tool key spaces disjoint. Byte-identical to the three
+ * hand-written tool builders it replaces.
+ */
+export function pageQueryKey(
+  query: { readonly method: string; readonly path: string } & Record<string, unknown>,
+): string {
+  return JSON.stringify(query);
+}
+
+/**
  * The one replay-or-produce branch every paged tool runs. A cursor replays a
  * stored snapshot; without one, `produce` runs the query and its result is
  * snapshotted for later pages.

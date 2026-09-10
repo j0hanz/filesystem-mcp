@@ -17,7 +17,12 @@ import {
 import { joinRoster, pathLabel } from '../core/fmt.js';
 import { destExists } from '../core/fs.js';
 import type { GuardedFileSystem } from '../core/fs.js';
-import { choiceInput, pendingRoundTrip, readAcceptedChoice } from '../core/input-required.js';
+import {
+  choiceInput,
+  confirmKey,
+  pendingRoundTrip,
+  readAcceptedChoice,
+} from '../core/input-required.js';
 import {
   isPathInsideDirectory,
   isSamePath,
@@ -173,7 +178,7 @@ async function executeTransfer(
   pendingSorted: readonly string[],
 ): Promise<TransferExecResult> {
   if (plan.pending) {
-    const key = `confirm_${pendingSorted.indexOf(plan.validDest)}`;
+    const key = confirmKey(pendingSorted.indexOf(plan.validDest));
     const choice = readAcceptedChoice(ctx.inputResponses, key);
     if (choice === 'skip') {
       return { skipped: plan.pair.destination };
@@ -312,7 +317,7 @@ async function runTransfers(
       buildInputs: (dests) =>
         dests.map((dest, i) =>
           choiceInput(
-            `confirm_${i}`,
+            confirmKey(i),
             op === 'move'
               ? `"${dest}" already exists. Overwrite it?`
               : `Destination "${dest}" already exists. Overwrite it?`,

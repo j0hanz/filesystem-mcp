@@ -290,6 +290,17 @@ const ChoiceContent = z.object({ choice: z.string() });
 const MultiChoiceContent = z.object({ choice: z.array(z.string()) });
 
 /**
+ * Round-trip key for `pendingSorted[index]` — the single home of the
+ * `confirm_${i}` convention. The build side mints it with the map index; the
+ * read side re-derives it from the same sorted pending set the requestState
+ * binds (R9), so a format change lands here once instead of at six call
+ * sites.
+ */
+export function confirmKey(index: number): string {
+  return `confirm_${index}`;
+}
+
+/**
  * Read one pending item's boolean confirmation from a retried request's
  * `inputResponses`. Returns `true` only when the client explicitly accepted AND
  * the `confirm` field is `true`; every other outcome (decline, cancel, missing

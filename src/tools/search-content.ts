@@ -4,7 +4,7 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import { SearchStoppedReasonSchema } from '../core/concurrency.js';
-import { paginate } from '../core/cursor.js';
+import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode, FsError } from '../core/errors.js';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
 import { DEFAULT_EXCLUDE_PATTERNS } from '../core/glob.js';
@@ -232,20 +232,6 @@ async function resolveSearchScope(
   };
 }
 
-function searchContentQueryKey(args: SearchInput, requestedPath: string): string {
-  return JSON.stringify({
-    method: 'search_text',
-    path: requestedPath,
-    pattern: args.pattern,
-    searchPattern: args.searchPattern,
-    isRegex: args.isRegex,
-    includeHidden: args.includeHidden,
-    includeIgnored: args.includeIgnored,
-    caseSensitive: args.caseSensitive,
-    maxDepth: args.maxDepth,
-  });
-}
-
 async function handleSearchContent(
   args: SearchInput,
   ctx: ToolCtx,
@@ -256,7 +242,17 @@ async function handleSearchContent(
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = searchContentQueryKey(args, requestedPath);
+  const queryKey = pageQueryKey({
+    method: 'search_text',
+    path: requestedPath,
+    pattern: args.pattern,
+    searchPattern: args.searchPattern,
+    isRegex: args.isRegex,
+    includeHidden: args.includeHidden,
+    includeIgnored: args.includeIgnored,
+    caseSensitive: args.caseSensitive,
+    maxDepth: args.maxDepth,
+  });
   const { resourceStore } = ctx;
 
   const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>({
