@@ -149,14 +149,10 @@ function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
 // more behind, so a continuation cannot know the total without a second pass.
-function buildReadContinuation(result: {
-  path: string;
-  hasMoreLines?: boolean;
-  linesRead?: number;
-  startLine?: number;
-  endLine?: number;
-  head?: number;
-}): z.infer<typeof ContinuationSchema> | undefined {
+function buildReadContinuation(
+  result: ReadFileResult,
+  requestedPath: string,
+): z.infer<typeof ContinuationSchema> | undefined {
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
   const nextStart = (result.startLine ?? 1) + linesRead;
@@ -171,7 +167,7 @@ function buildReadContinuation(result: {
   const nextEnd = nextStart + chunkSize - 1;
   return {
     tool: 'read',
-    args: { path: result.path, startLine: nextStart, endLine: nextEnd },
+    args: { path: requestedPath, startLine: nextStart, endLine: nextEnd },
     hint: `More lines remain from ${String(nextStart)}. Read next chunk with these args.`,
   };
 }
@@ -200,7 +196,8 @@ async function collectFileBudget(
   maxSize: number,
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
 ): Promise<{
-  skippedBudget: Set<number>;
+  skippedResults: Map<number, PerPathResult<PerPathReadValue>>;
+  survivors: string[];
   known: Map<string, { validPath: string; stats: Stats }>;
 }> {
   const indexed = filePaths.map((path, index) => ({ path, index }));
@@ -239,54 +236,52 @@ async function collectFileBudget(
   }
 
   let total = 0;
-  const skippedBudget = new Set<number>();
-  for (let i = 0; i < filePaths.length; i += 1) {
-    const size = byIndex.get(i);
-    if (size === undefined) continue;
-    if (total + size > maxTotalSize) {
-      // Only mark files that were actually stat'd as too large for the batch
-      // budget. A file whose stat already failed (byIndex undefined) must fall
-      // through to survivors so its read surfaces the real error (NOT_FILE /
-      // permission) — not a misleading TOO_LARGE.
-      for (let j = i; j < filePaths.length; j += 1) {
-        if (byIndex.get(j) === undefined) continue;
-        skippedBudget.add(j);
-      }
-      break;
-    }
-    total += size;
-  }
-
-  return { skippedBudget, known };
-}
-
-function preFilterByBudget(
-  pathList: readonly string[],
-  budgetState: { skippedBudget: Set<number>; maxTotalSize: number },
-): { skippedResults: Map<number, PerPathResult<PerPathReadValue>>; survivors: string[] } {
   const skippedResults = new Map<number, PerPathResult<PerPathReadValue>>();
   const survivors: string[] = [];
-
-  for (let i = 0; i < pathList.length; i += 1) {
-    const path = pathList[i];
+  let overflowed = false;
+  for (let i = 0; i < filePaths.length; i += 1) {
+    const path = filePaths[i];
     if (path === undefined) continue;
-    if (budgetState.skippedBudget.has(i)) {
+    const size = byIndex.get(i);
+    if (overflowed) {
+      // Only files that were actually stat'd get the TOO_LARGE result; a failed
+      // stat falls through to survivors so its read surfaces the real error —
+      // not a misleading TOO_LARGE.
+      if (size !== undefined) {
+        skippedResults.set(i, {
+          path,
+          error: {
+            code: ErrorCode.TOO_LARGE,
+            message: `Skipped: combined estimated read would exceed maxTotalSize (${String(maxTotalSize)} bytes)`,
+            path,
+          },
+        });
+      } else {
+        survivors.push(path);
+      }
+      continue;
+    }
+    if (size === undefined) {
+      survivors.push(path);
+      continue;
+    }
+    if (total + size > maxTotalSize) {
+      overflowed = true;
       skippedResults.set(i, {
         path,
         error: {
           code: ErrorCode.TOO_LARGE,
-          message: `Skipped: combined estimated read would exceed maxTotalSize (${String(
-            budgetState.maxTotalSize,
-          )} bytes)`,
+          message: `Skipped: combined estimated read would exceed maxTotalSize (${String(maxTotalSize)} bytes)`,
           path,
         },
       });
       continue;
     }
+    total += size;
     survivors.push(path);
   }
 
-  return { skippedResults, survivors };
+  return { skippedResults, survivors, known };
 }
 
 function buildPerPathReadValue(
@@ -296,14 +291,7 @@ function buildPerPathReadValue(
   const mimeInfo = detectMimeFromContent(result.path, result.content);
   const continuation =
     result.hasMoreLines && result.readMode !== 'tail'
-      ? buildReadContinuation({
-          path: options.requestedPath,
-          hasMoreLines: true,
-          ...(result.linesRead !== undefined ? { linesRead: result.linesRead } : {}),
-          ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
-          ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
-          ...(result.head !== undefined ? { head: result.head } : {}),
-        })
+      ? buildReadContinuation(result, options.requestedPath)
       : undefined;
   const contentHash = options.includeHash
     ? createHash('sha256').update(result.content, 'utf-8').digest('hex')
@@ -444,12 +432,8 @@ export const READ_FILE = defineTool({
       const maxTextFileSize = getMaxTextFileSize();
       const budget = await collectFileBudget(pathList, defaultMaxTotalSize, maxTextFileSize, ctx);
       known = budget.known;
-      const filtered = preFilterByBudget(pathList, {
-        skippedBudget: budget.skippedBudget,
-        maxTotalSize: defaultMaxTotalSize,
-      });
-      skippedResults = filtered.skippedResults;
-      survivors = filtered.survivors;
+      skippedResults = budget.skippedResults;
+      survivors = budget.survivors;
     } else {
       pathList = [args.path ?? ''];
       survivors = [...pathList];

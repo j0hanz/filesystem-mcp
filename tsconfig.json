@@ -37,5 +37,5 @@
     "noEmitOnError": true
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "__tests__", "filesystem-tests"]
+  "exclude": ["dist", "node_modules", "__tests__"]
 }

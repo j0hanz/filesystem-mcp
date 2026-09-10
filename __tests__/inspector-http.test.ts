@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 
-import { cleanupTestRoot, createTestRoot } from './helpers.js';
-import { startInspectorHttp } from './inspector-fixtures.js';
+import {
+  bootHttpTest,
+  cleanupTestRoot,
+  createTestRoot,
+  type HttpTestContext,
+  TEST_API_KEY,
+} from './helpers.js';
 import { executeInspectorCli, inspectorSkipReason } from './inspector-harness.js';
 
 describe(
@@ -12,22 +15,18 @@ describe(
   { skip: inspectorSkipReason() },
   () => {
     let tmpDir: string;
-    let server: Server;
+    let http: HttpTestContext;
     let serverUrl: string;
-    const TEST_API_KEY = 'test-inspector-secret-key-xyz123';
 
     before(async () => {
       tmpDir = await createTestRoot();
-      server = await startInspectorHttp(0, [tmpDir], {
-        apiKey: TEST_API_KEY,
-      });
-      const port = (server.address() as AddressInfo).port;
-      serverUrl = `http://127.0.0.1:${port}/mcp`;
+      http = await bootHttpTest([tmpDir]);
+      serverUrl = http.base.href;
     });
 
     after(async () => {
-      if (server) {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (http) {
+        await http.close();
       }
       await cleanupTestRoot(tmpDir);
     });

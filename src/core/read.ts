@@ -14,15 +14,6 @@ const STREAM_CHUNK_SIZE = 64 * 1024;
 
 const READ_ONLY_FILE_FLAG = 'r';
 
-function assertPositiveIntegerOption(name: string, value: unknown, message?: string): void {
-  if (
-    value === undefined ||
-    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1)
-  )
-    return;
-  throw new FsError(ErrorCode.INVALID_INPUT, message ?? `${name} must be a positive integer`);
-}
-
 async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
   const handlePromise = fsOpen(filePath, READ_ONLY_FILE_FLAG);
   if (!signal) return handlePromise;
@@ -117,28 +108,6 @@ function buildBaseOptions(spec: ReadSpec): NormalizedBase {
   };
 }
 
-function normalizeRangeSpec(
-  spec: Extract<ReadSpec, { kind: 'range' }>,
-  base: NormalizedBase,
-): NormalizedSpec {
-  assertPositiveIntegerOption('start', spec.start, 'start must be at least 1');
-  if (spec.end !== undefined) {
-    assertPositiveIntegerOption('end', spec.end, 'end must be at least 1');
-    if (spec.end < spec.start) {
-      throw new FsError(
-        ErrorCode.INVALID_INPUT,
-        'end must be greater than or equal to start (default: 1)',
-      );
-    }
-  }
-  return {
-    ...base,
-    kind: 'range',
-    start: spec.start,
-    ...(spec.end !== undefined ? { end: spec.end } : {}),
-  };
-}
-
 export function normalizeSpec(spec: ReadSpec): NormalizedSpec {
   const base = buildBaseOptions(spec);
   spec.signal?.throwIfAborted();
@@ -146,10 +115,14 @@ export function normalizeSpec(spec: ReadSpec): NormalizedSpec {
   switch (spec.kind) {
     case 'head':
     case 'tail':
-      assertPositiveIntegerOption('lines', spec.lines, 'lines must be at least 1');
       return { ...base, kind: spec.kind, lines: spec.lines };
     case 'range':
-      return normalizeRangeSpec(spec, base);
+      return {
+        ...base,
+        kind: 'range',
+        start: spec.start,
+        ...(spec.end !== undefined ? { end: spec.end } : {}),
+      };
     case 'full':
       return { ...base, kind: 'full' };
     default: {

@@ -41,21 +41,6 @@ export type { FileHandle };
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
-export interface FileInfo {
-  readonly name: string;
-  readonly path: string;
-  readonly type: FileType;
-  readonly size: number;
-  readonly tokenEstimate?: number;
-  readonly created: Date;
-  readonly modified: Date;
-  readonly accessed: Date;
-  readonly permissions: string;
-  readonly isHidden: boolean;
-  readonly mimeType?: string;
-  readonly symlinkTarget?: string;
-}
-
 async function atomicWriteFile(
   filePath: string,
   content: string,

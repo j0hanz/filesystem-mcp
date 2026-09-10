@@ -315,7 +315,7 @@ export function bearerAuthMiddleware(
  * so loopback browser clients keep working; operators set
  * `FS_ALLOWED_ORIGINS` to allow remote clients on non-loopback
  * binds. An empty value reads as unset, matching how parseAllowedHostsEnv
- * treats an all-empty list. The same set is consulted by corsPreflightHandler
+ * treats an all-empty list. The same set is consulted by corsMiddleware
  * so a remote origin is reflected end-to-end in Access-Control-Allow-Origin.
  */
 export function computeAllowedOriginHostnames(originsEnv: string | undefined): string[] {
@@ -325,51 +325,35 @@ export function computeAllowedOriginHostnames(originsEnv: string | undefined): s
   return originsEnv ? splitCsvList(originsEnv) : localhostAllowedHostnames();
 }
 
-/**
- * Reflect a present Origin on the response if it is allowed — localhost, or
- * in the env-derived `FS_ALLOWED_ORIGINS` set — and avoid
- * emitting a wildcard fallback. Shared by the OPTIONS preflight and the real
- * POST response: `createMcpExpressApp`'s `allowedOrigins` only gates which
- * Origins are accepted, it never sets `Access-Control-Allow-Origin` on the
- * actual response, so without this a browser client would pass preflight and
- * then have the POST response body blocked by CORS.
- */
-function reflectAllowedOrigin(
-  req: Request,
-  res: Response,
-  allowedOriginHostnames: readonly string[],
-): void {
-  const origin = req.headers.origin;
-  if (origin && isOriginAllowed(origin, allowedOriginHostnames)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    // Key the response by Origin so a CDN/proxy caching one origin's response
-    // cannot replay it for a different origin (cache-poison).
-    res.header('Vary', 'Origin');
-  }
-}
-
-/** Mounted ahead of the `/mcp` handlers so every response — not just the
- * OPTIONS preflight — carries `Access-Control-Allow-Origin` for an allowed
- * Origin. */
-export function corsOriginMiddleware(allowedOriginHostnames: readonly string[]): RequestHandler {
+/** Mounted at the `/mcp` prefix: every response — not just the OPTIONS preflight —
+ * carries `Access-Control-Allow-Origin` for an allowed Origin (localhost, or in
+ * the env-derived `FS_ALLOWED_ORIGINS` set — no wildcard fallback), and the
+ * preflight answers only the exact endpoint. Reflection must happen here
+ * because `createMcpExpressApp`'s `allowedOrigins` only gates which Origins
+ * are accepted, it never sets `Access-Control-Allow-Origin` on the actual
+ * response, so without this a browser client would pass preflight and then
+ * have the POST response body blocked by CORS. Mounted at a prefix, Express
+ * rewrites `req.url` to the remainder, so `req.path` is mount-relative:
+ * `/` means `/mcp` and `/mcp/`
+ * — exactly what the old exact-path `app.options('/mcp')` route matched — while
+ * `/sub` stays a subpath and falls through to the same 404 it gets today, not a
+ * phantom preflight. The allow-list carries the SEP-2243 standard headers
+ * (`mcp-protocol-version`, `mcp-method`, `mcp-name`): SDK clients send all three
+ * on every modern request POST and `createMcpHandler` requires them (400 /
+ * -32020), so omitting them here would fail every browser preflight. */
+export function corsMiddleware(allowedOriginHostnames: readonly string[]): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
-    reflectAllowedOrigin(req, res, allowedOriginHostnames);
-    next();
-  };
-}
-
-/**
- * OPTIONS preflight for `/mcp`. The allow-list carries the SEP-2243 standard
- * headers (`mcp-protocol-version`, `mcp-method`, `mcp-name`): SDK clients send
- * all three on every modern request POST and `createMcpHandler` requires them
- * (400 / -32020), so omitting them here would fail every browser preflight —
- * and the HTTP leg is modern-only, so there is no legacy path to fall back to.
- * `mcp-session-id` is deliberately absent: it is 2025-era only and this
- * endpoint rejects legacy traffic.
- */
-export function corsPreflightHandler(allowedOriginHostnames: readonly string[]): RequestHandler {
-  return (req: Request, res: Response): void => {
-    reflectAllowedOrigin(req, res, allowedOriginHostnames);
+    const origin = req.headers.origin;
+    if (origin && isOriginAllowed(origin, allowedOriginHostnames)) {
+      res.header('Access-Control-Allow-Origin', origin);
+      // Key the response by Origin so a CDN/proxy caching one origin's response
+      // cannot replay it for a different origin (cache-poison).
+      res.header('Vary', 'Origin');
+    }
+    if (req.method !== 'OPTIONS' || req.path !== '/') {
+      next();
+      return;
+    }
     res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.header(
       'Access-Control-Allow-Headers',

@@ -47,47 +47,35 @@ const SHELL_METACHAR_RE = /[\n\r;|`]/;
 
 export const isBlank = (val: string): boolean => val.trim().length === 0;
 
+function refineSafeText(
+  label: string,
+  specific: (val: string) => string | undefined,
+): (val: string, ctx: z.RefinementCtx) => void {
+  return (val, ctx) => {
+    if (val.length === 0) return;
+    const issue = isBlank(val)
+      ? `${label} cannot be empty or whitespace-only`
+      : val.includes('\0')
+        ? `${label} cannot contain null bytes`
+        : (specific(val) ??
+          (SHELL_METACHAR_RE.test(val)
+            ? `${label} contains prohibited characters (newlines or shell metacharacters)`
+            : undefined));
+    if (issue !== undefined) {
+      ctx.addIssue({ code: 'custom', message: issue, fatal: true });
+    }
+  };
+}
+
 const PathBase = z
   .string()
   .min(1, { message: 'Path required' })
   .max(MAX_PATH_LENGTH, { message: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
-  .superRefine((val, ctx) => {
-    if (val.length === 0) {
-      return;
-    }
-    if (val.trim().length === 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Path cannot be empty or whitespace-only',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (val.includes('\0')) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Path cannot contain null bytes',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (val.includes('..')) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Directory traversal sequences ("..") are forbidden',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (SHELL_METACHAR_RE.test(val)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Path contains prohibited characters (newlines or shell metacharacters)',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-  })
+  .superRefine(
+    refineSafeText('Path', (val) =>
+      val.includes('..') ? 'Directory traversal sequences ("..") are forbidden' : undefined,
+    ),
+  )
   .describe('File or directory path inside an allowed workspace root.');
 
 export const OptionalPath = PathBase.optional();
@@ -97,43 +85,11 @@ export const SafeGlobPattern = z
   .string()
   .min(1, { message: 'Pattern required' })
   .max(1000, { message: 'Max 1000 chars' })
-  .superRefine((val, ctx) => {
-    if (val.length === 0) {
-      return;
-    }
-    if (val.trim().length === 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Pattern cannot be empty or whitespace-only',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (val.includes('\0')) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Pattern cannot contain null bytes',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (!isSafeGlobSyntax(val)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Invalid glob or unsafe path (absolute/.. forbidden)',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-    if (SHELL_METACHAR_RE.test(val)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Pattern contains prohibited characters (newlines or shell metacharacters)',
-        fatal: true,
-      });
-      return z.NEVER;
-    }
-  })
+  .superRefine(
+    refineSafeText('Pattern', (val) =>
+      isSafeGlobSyntax(val) ? undefined : 'Invalid glob or unsafe path (absolute/.. forbidden)',
+    ),
+  )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')
   .meta({ examples: ['**/*.ts', 'src/**/*.js', '*.{ts,tsx}'] });
 

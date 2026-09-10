@@ -1,7 +1,0 @@
-services:
-  filesystem-mcp:
-    build: .
-    stdin_open: true
-    volumes:
-      - ./:/projects/workspace:ro
-    command: ['--read-only', '/projects/workspace']

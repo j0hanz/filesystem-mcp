@@ -5,7 +5,7 @@ import { parse } from 'node:path';
 import * as z from 'zod/v4';
 
 import { ErrorCode, rethrowIfAborted } from '../core/errors.js';
-import type { FileInfo, GuardedFileSystem, Stats } from '../core/fs.js';
+import type { GuardedFileSystem, Stats } from '../core/fs.js';
 import { isHidden } from '../core/fs.js';
 import { detectMimeType } from '../core/mime.js';
 import { resolveEntryType } from '../core/primitives.js';
@@ -23,6 +23,8 @@ import type { PerPathResult } from './batch.js';
 import { isTotalFailure, runOverPaths } from './batch.js';
 import type { ToolCtx } from './define.js';
 import { defineTool } from './define.js';
+
+type FileInfo = z.infer<typeof FileInfoSchema>;
 
 const StatInputSchema = singleOrBatchPathsInput({});
 
@@ -71,9 +73,9 @@ function buildFileInfoResult(
     type: isSymlink ? 'symlink' : resolveEntryType(stats),
     size: stats.size,
     ...(tokenEstimate !== undefined ? { tokenEstimate } : {}),
-    created: stats.birthtime,
-    modified: stats.mtime,
-    accessed: stats.atime,
+    created: stats.birthtime.toISOString(),
+    modified: stats.mtime.toISOString(),
+    accessed: stats.atime.toISOString(),
     permissions: getPermissions(stats.mode),
     isHidden: isHidden(name),
     ...(mimeType !== undefined ? { mimeType } : {}),
@@ -98,21 +100,17 @@ async function getSymlinkTarget(
   }
 }
 
-interface FileInfoOptions {
-  signal?: AbortSignal | undefined;
-  fs: GuardedFileSystem;
-  log?: ToolCtx['log'] | undefined;
-}
-
-async function getFileInfo(filePath: string, options: FileInfoOptions): Promise<FileInfo> {
-  const { signal, fs, log } = options;
-  signal?.throwIfAborted();
+async function getFileInfo(
+  filePath: string,
+  { signal, fs, log }: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+): Promise<FileInfo> {
+  signal.throwIfAborted();
 
   const {
     requestedPath,
     isSymlink,
     stats: followedStats,
-  } = await fs.statDetailed(filePath, signal ? { signal } : undefined);
+  } = await fs.statDetailed(filePath, { signal });
 
   const { base: name, ext: rawExt } = parse(requestedPath);
   const mimeType = rawExt.length > 0 ? detectMimeType(requestedPath).mimeType : undefined;
@@ -123,7 +121,7 @@ async function getFileInfo(filePath: string, options: FileInfoOptions): Promise<
   let stats = followedStats;
   if (isSymlink) {
     try {
-      ({ stats } = await fs.lstat(requestedPath, signal ? { signal } : undefined));
+      ({ stats } = await fs.lstat(requestedPath, { signal }));
     } catch (error) {
       // A cancelled request is not a "link metadata unavailable" fallback.
       rethrowIfAborted(error);
@@ -162,30 +160,6 @@ function classifyTypeCounts(results: readonly PerPathResult<FileInfo>[]): {
   return { fileCount, dirCount };
 }
 
-function toStatPerPathPayload(r: PerPathResult<FileInfo>): z.infer<typeof StatPerPathSchema> {
-  if ('error' in r) {
-    return { path: r.path, error: r.error };
-  }
-  const info = r.value;
-  return {
-    path: r.path,
-    value: {
-      name: info.name,
-      path: info.path,
-      type: info.type,
-      size: info.size,
-      ...(info.tokenEstimate !== undefined ? { tokenEstimate: info.tokenEstimate } : {}),
-      created: info.created.toISOString(),
-      modified: info.modified.toISOString(),
-      accessed: info.accessed.toISOString(),
-      permissions: info.permissions,
-      isHidden: info.isHidden,
-      ...(info.mimeType !== undefined ? { mimeType: info.mimeType } : {}),
-      ...(info.symlinkTarget !== undefined ? { symlinkTarget: info.symlinkTarget } : {}),
-    },
-  };
-}
-
 export const GET_FILE_INFO = defineTool({
   name: 'stat',
   title: 'Get File Info',
@@ -216,17 +190,12 @@ export const GET_FILE_INFO = defineTool({
     const batch = await runOverPaths<undefined, FileInfo>(
       batchInput,
       ctx,
-      async ({ path }) =>
-        getFileInfo(path, {
-          fs: ctx.fs,
-          signal: ctx.signal,
-          log: ctx.log,
-        }),
+      async ({ path }) => getFileInfo(path, ctx),
       { defaultErrorCode: ErrorCode.NOT_FOUND },
     );
 
     const { fileCount, dirCount } = classifyTypeCounts(batch.results);
-    const perPathPayload = batch.results.map(toStatPerPathPayload);
+    const perPathPayload = batch.results;
 
     let resourceUri: string | undefined;
     const resources: ContentBlock[] = [];

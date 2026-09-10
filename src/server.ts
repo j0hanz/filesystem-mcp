@@ -6,7 +6,6 @@ import type {
 import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
-import { GuardedFileSystem } from './core/fs.js';
 import { requestStateCodec } from './core/input-required.js';
 import { Logger } from './core/observability.js';
 import { PageSnapshotStore } from './core/page-store.js';
@@ -32,9 +31,7 @@ const {
 export class FilesystemServerContext {
   public readonly mcp: McpServer;
   public readonly pathGuard: PathGuard;
-  public readonly fs: GuardedFileSystem;
   public readonly pages: PageSnapshotStore;
-  public readonly resources: ResourceStore;
   /** False when the store is shared across instances and outlives this one. */
   private readonly ownsPages: boolean;
   private readonly resourceDisposable?: { dispose(): void } | undefined;
@@ -44,15 +41,12 @@ export class FilesystemServerContext {
     mcp: McpServer,
     pathGuard: PathGuard,
     pages: PageSnapshotStore,
-    resources: ResourceStore,
     ownsPages: boolean,
     resourceDisposable?: { dispose(): void },
   ) {
     this.mcp = mcp;
     this.pathGuard = pathGuard;
-    this.fs = new GuardedFileSystem(pathGuard);
     this.pages = pages;
-    this.resources = resources;
     this.ownsPages = ownsPages;
     this.resourceDisposable = resourceDisposable;
   }
@@ -202,7 +196,6 @@ export async function createServer(
     server,
     pathGuard,
     pageStore,
-    resourceStore,
     extraDeps?.pageStore === undefined,
     resourceDisposable,
   );

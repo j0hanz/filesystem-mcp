@@ -3,7 +3,6 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 import { randomUUID } from 'node:crypto';
 
 import { ErrorCode, FsError } from './errors.js';
-import { Logger } from './observability.js';
 import { MIB } from './util.js';
 
 interface ResourceEntry {
@@ -69,29 +68,18 @@ export class ResourceStore {
   }
 
   private pruneExpiredEntries(now = Date.now()): boolean {
-    const toRemove: string[] = [];
+    const before = this.byUri.size;
     for (const entry of this.byUri.values()) {
-      if (isExpired(entry, now)) {
-        toRemove.push(entry.uri);
-      }
+      if (isExpired(entry, now)) this.removeEntry(entry.uri);
     }
-    for (const uri of toRemove) {
-      this.removeEntry(uri);
-    }
-    return toRemove.length > 0;
+    return this.byUri.size !== before;
   }
 
   private enforceLimits(): void {
-    while (this.byUri.size > MAX_ENTRIES) {
-      this.evictOldest();
-    }
-    while (this._totalBytes > MAX_TOTAL_BYTES) {
-      if (this.byUri.size === 0) {
-        Logger.error(
-          `[resource-store] enforceLimits invariant violation: totalBytes=${this._totalBytes} but entryCount=0`,
-        );
-        break;
-      }
+    while (
+      this.byUri.size > 0 &&
+      (this.byUri.size > MAX_ENTRIES || this._totalBytes > MAX_TOTAL_BYTES)
+    ) {
       this.evictOldest();
     }
   }

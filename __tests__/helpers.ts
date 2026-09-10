@@ -168,16 +168,16 @@ export async function createElicitationClientPair(
    * presents. Handlers that would ask for one must detect it and answer with a
    * tool error naming the way around it.
    */
-  options: { readOnly?: boolean; noElicitation?: boolean } = {},
+  options: { noElicitation?: boolean } = {},
 ): Promise<ElicitationTestContext> {
   const sharedRegistry = createWatcherRegistry();
-  const sharedPathGuard = new PathGuard({ cliAllowedDirs: allowedDirs, ...readOnlyOpts(options) });
+  const sharedPathGuard = new PathGuard({ cliAllowedDirs: allowedDirs });
   await sharedPathGuard.recomputeAllowedDirectories();
 
   const handler = createMcpHandler(
     async () => {
       const serverCtx = await createServer(
-        { cliAllowedDirs: allowedDirs, ...readOnlyOpts(options) },
+        { cliAllowedDirs: allowedDirs },
         { watcherRegistry: sharedRegistry, pathGuard: sharedPathGuard },
       );
       return serverCtx.mcp;
@@ -224,10 +224,7 @@ export interface TestHttpContext {
 }
 
 /** Create an in-process HTTP client/handler harness via createMcpHandler's handler.fetch. */
-export async function createTestHttpHarness(
-  allowedDirs: string[],
-  options: { readOnly?: boolean } = {},
-): Promise<TestHttpContext> {
+export async function createTestHttpHarness(allowedDirs: string[]): Promise<TestHttpContext> {
   const bus = new InMemoryServerEventBus();
   const sharedRegistry = createWatcherRegistry();
 
@@ -242,14 +239,8 @@ export async function createTestHttpHarness(
   const handler = createMcpHandler(
     async () => {
       const serverCtx = await createServer(
-        {
-          cliAllowedDirs: allowedDirs,
-          ...readOnlyOpts(options),
-        },
-        {
-          watcherRegistry: sharedRegistry,
-          notifier,
-        },
+        { cliAllowedDirs: allowedDirs },
+        { watcherRegistry: sharedRegistry, notifier },
       );
       return serverCtx.mcp;
     },

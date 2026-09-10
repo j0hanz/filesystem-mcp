@@ -10,7 +10,6 @@ import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.j
 import { DEFAULT_EXCLUDE_PATTERNS } from '../core/glob.js';
 import { Logger } from '../core/observability.js';
 import { toPosixRelative } from '../core/path.js';
-import { escapeRegexLiteral } from '../core/primitives.js';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -24,8 +23,8 @@ import {
   PositiveInt,
   SafeGlobPattern,
 } from '../core/schema.js';
-import type { Regex, SearchContentOptions } from '../core/search.js';
-import { compileRegex, freeRegex, searchContent } from '../core/search.js';
+import type { SearchContentOptions } from '../core/search.js';
+import { searchContent } from '../core/search.js';
 import type { JsonResourceResult } from '../core/store.js';
 import { putJsonResource } from '../core/store.js';
 import {
@@ -202,16 +201,6 @@ function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): Sea
   };
 }
 
-function createSearchMatcher(args: SearchInput): Regex | undefined {
-  if (args.isRegex) {
-    return compileRegex(args.searchPattern, { caseSensitive: args.caseSensitive });
-  }
-  if (!args.caseSensitive) {
-    return compileRegex(escapeRegexLiteral(args.searchPattern), { caseSensitive: false });
-  }
-  return undefined;
-}
-
 /**
  * `path` is documented as "file to search, or directory to search under", but
  * the scan itself only walks directories. A file path is therefore rewritten
@@ -277,26 +266,15 @@ async function handleSearchContent(
     pageSize: args.maxResults,
     produce: async () => {
       const { basePath, args: scoped } = await resolveSearchScope(args, ctx);
-      const regexMatcher = createSearchMatcher(scoped);
 
       const result = await searchContent(
         basePath,
         scoped.searchPattern,
         buildSearchContentOptions({ ...scoped, maxResults: MAX_SEARCH_RESULTS }, ctx.signal),
         ctx.fs.pathGuard,
-        // Same pattern, same flags as createSearchMatcher compiled above; pass it
-        // through so searchContent does not compile a second copy in re2-wasm's
-        // fixed 16 MB heap.
-        regexMatcher,
       );
 
-      // regexMatcher holds wasm memory re2-wasm never reclaims on its own.
-      let items: SearchMatchPayload[];
-      try {
-        items = buildSortedPayloads(result);
-      } finally {
-        freeRegex(regexMatcher);
-      }
+      const items = buildSortedPayloads(result);
       return {
         items,
         metadata: {

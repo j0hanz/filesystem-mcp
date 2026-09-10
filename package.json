@@ -27,20 +27,17 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "type-check:test": "tsc -p tsconfig.test.json",
-    "knip": "knip",
     "check:static": "npm run build && npm run type-check && npm run type-check:test && eslint . && prettier --check . && knip",
+    "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
-    "test": "node --test --import tsx \"__tests__/**/*.test.ts\"",
+    "test": "node --test --import tsx",
     "test:inspector": "node --test --import tsx \"__tests__/inspector-*.test.ts\"",
-    "inspector": "npm run build && npx -y @modelcontextprotocol/inspector node dist/index.js",
-    "tasks": "node scripts/tasks.mjs"
+    "inspector": "npm run build && npx -y @modelcontextprotocol/inspector node dist/index.js"
   },
   "keywords": [
     "mcp",

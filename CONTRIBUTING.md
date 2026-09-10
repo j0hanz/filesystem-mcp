@@ -18,33 +18,31 @@ How to set up, branch, and test.
 
 ## Running tests locally
 
-This project uses a thin task wrapper around the npm scripts and Node test runner:
+Tests run on Node's built-in test runner:
 
 ```bash
 # Run tests only
-node scripts/tasks.mjs test
+npm test
 ```
 
 Tests must pass before your PR is merged.
 
 ## PR checklist
 
-- [ ] Tests pass locally (`node scripts/tasks.mjs`)
+- [ ] Tests pass locally (`npm run check`)
 - [ ] No new console warnings or errors
 - [ ] Commit messages are clear and descriptive
-- [ ] Code follows the project's style guide (run `node scripts/tasks.mjs fix`)
+- [ ] Code follows the project's style guide (run `npm run fix`)
 - [ ] Related issues are referenced in the PR description
 
 ## Code style
 
-Use the task runner to check formatting and apply auto-fixes:
+Check formatting and apply auto-fixes:
 
 ```bash
-# Fix linting and formatting issues
-node scripts/tasks.mjs fix
+npm run fix
 
-# Full static analysis check without tests
-node scripts/tasks.mjs --quick
+npm run check:static
 ```
 
 ## Commit messages

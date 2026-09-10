@@ -296,23 +296,6 @@ interface ReplacementPlan {
   updatedContent: string;
 }
 
-function buildReplacementPlan(
-  content: string,
-  replacement: string,
-  matcher: ReplacementMatcher,
-): ReplacementPlan | undefined {
-  const { content: updatedContent, matchCount } = matcher.replace(content, replacement);
-  if (matchCount === 0) {
-    return undefined;
-  }
-
-  return {
-    matchCount,
-    originalContent: content,
-    updatedContent,
-  };
-}
-
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
   const { options, signal, summary } = ctx;
   const validPath = entryPath;
@@ -369,7 +352,9 @@ async function readReplacementPlan(
   const buffer = await readFileBufferWithLimit(fileHandle, maxFileSize, validPath, signal);
   if (!matcher.testBuffer(buffer)) return undefined;
 
-  return buildReplacementPlan(buffer.toString('utf-8'), replacement, matcher);
+  const originalContent = buffer.toString('utf-8');
+  const { content: updatedContent, matchCount } = matcher.replace(originalContent, replacement);
+  return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
 function maybeAppendPatchDiff(
@@ -510,13 +495,8 @@ async function handleSearchAndReplace(
 
   // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
   // gitignore filtering — it should always be processed as the one file named.
-  // The async generator matches globEntries' AsyncIterable contract; it needs
-  // no await (single yield), hence the disable.
-  const entries: AsyncIterable<{ path: string }> = singleFile
-    ? // eslint-disable-next-line @typescript-eslint/require-await
-      (async function* singleFileEntry() {
-        yield { path: singleFile };
-      })()
+  const entries: AsyncIterable<{ path: string }> | Iterable<{ path: string }> = singleFile
+    ? [{ path: singleFile }]
     : globEntries({
         cwd: root,
         pattern: effectivePattern,

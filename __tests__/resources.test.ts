@@ -654,7 +654,7 @@ describe('filesystem resource path completion', () => {
 
     // The partial is in the encoded form a prior suggestion would have had, so
     // this exercises the decode side too.
-    const suggestions = await fileContract.complete('path', encodeFileUriPath(join(root, 'has#')));
+    const suggestions = await fileContract.complete.path(encodeFileUriPath(join(root, 'has#')));
 
     // isSamePath, not ===: extractPath yields POSIX separators on every
     // platform and normalizePath lower-cases the Windows drive letter, so the

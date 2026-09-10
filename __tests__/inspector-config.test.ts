@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizePath } from '../src/core/path-utils.js';
 import { cleanupTestRoot, createTestRoot } from './helpers.js';
-import { createInspectorConfigFile } from './inspector-fixtures.js';
 import { executeInspectorCli, inspectorSkipReason } from './inspector-harness.js';
 
 describe(
@@ -25,12 +25,24 @@ describe(
 
       const rootUri = pathToFileURL(tmpDir).href;
 
-      await createInspectorConfigFile(configFile, SERVER_NAME, {
-        command: process.execPath,
-        args: ['--import', 'tsx', srcIndex, tmpDir],
-        protocolEra: 'modern',
-        roots: [{ uri: rootUri, name: 'dynamic-root' }],
-      });
+      await writeFile(
+        configFile,
+        JSON.stringify(
+          {
+            mcpServers: {
+              [SERVER_NAME]: {
+                command: process.execPath,
+                args: ['--import', 'tsx', srcIndex, tmpDir],
+                protocolEra: 'modern',
+                roots: [{ uri: rootUri, name: 'dynamic-root' }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
     });
 
     after(async () => {

@@ -1,5 +1,6 @@
 import type {
   CacheHint,
+  CompleteResourceTemplateCallback,
   McpServer,
   ReadResourceResult,
   Resource,
@@ -17,7 +18,6 @@ import {
   ResourceNotFoundError,
   ResourceTemplate,
   resourceUrlFromServerUrl,
-  UriTemplate,
 } from '@modelcontextprotocol/server';
 
 import type { FsError } from './core/errors.js';
@@ -140,11 +140,7 @@ interface StaticResourceContract extends BaseResourceContract {
 interface TemplateResourceContract extends BaseResourceContract {
   uriTemplate: string;
   uri?: never;
-  complete?: (
-    variable: string,
-    value: string,
-    ctx?: { arguments?: Record<string, string> },
-  ) => Promise<string[]> | string[];
+  complete?: { path: CompleteResourceTemplateCallback };
 }
 
 type ResourceContract = StaticResourceContract | TemplateResourceContract;
@@ -253,13 +249,14 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Resourc
       };
     },
 
-    async complete(variable, value) {
-      if (variable !== 'path') return [];
+    complete: {
       // Both ends speak the `{+path}` form (see encodeFileUriPath), not raw OS
       // paths: the partial arriving here is whatever this returned last, so the
       // decode mirrors the encode. An undecodable partial is matched as typed.
-      const suggestions = await completer.suggest(decodeFileUriPath(value) ?? value);
-      return suggestions.map(encodeFileUriPath);
+      path: async (value) => {
+        const suggestions = await completer.suggest(decodeFileUriPath(value) ?? value);
+        return suggestions.map(encodeFileUriPath);
+      },
     },
 
     subscribe(uri, notify) {
@@ -441,19 +438,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     if (contract.uriTemplate) {
       const template = new ResourceTemplate(contract.uriTemplate, {
         list: contract.list,
-        ...(contract.complete
-          ? {
-              complete: Object.fromEntries(
-                new UriTemplate(contract.uriTemplate).variableNames.map((varName) => [
-                  varName,
-                  (value: string, ctx?: { arguments?: Record<string, string> }) => {
-                    const completeFn = contract.complete;
-                    return completeFn ? completeFn(varName, value, ctx) : [];
-                  },
-                ]),
-              ),
-            }
-          : {}),
+        ...(contract.complete ? { complete: contract.complete } : {}),
       });
 
       server.registerResource(contract.name, template, config, wrapRead(contract));

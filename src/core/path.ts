@@ -1,9 +1,9 @@
 import type { Stats } from 'node:fs';
 import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { timedSignal, withAbort } from './concurrency.js';
+import { withAbort } from './concurrency.js';
 import { cli } from './config.js';
 import {
   ERRNO_MAP,
@@ -53,7 +53,6 @@ export interface ServerOptions {
 async function isRootWithin(
   normalizedRoot: string,
   bounds: readonly string[],
-  label: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
@@ -65,7 +64,7 @@ async function isRootWithin(
     if (isNotFoundErrno(error)) {
       return false;
     }
-    Logger.warn(`${label}: realpath failed unexpectedly`, {
+    Logger.warn('grantBoundary: realpath failed unexpectedly', {
       root: normalizedRoot,
       error: String(error),
     });
@@ -76,17 +75,13 @@ async function isRootWithin(
 async function filterRootsWithin(
   roots: readonly string[],
   bounds: readonly string[],
-  label: string,
   signal?: AbortSignal,
 ): Promise<string[]> {
   const normalizedBounds = normalizeAllowedDirectories(bounds);
   const normalizedRoots = roots.map(normalizePath);
-  if (normalizedRoots.length === 0) {
-    return [];
-  }
 
   const results = await Promise.all(
-    normalizedRoots.map((root) => isRootWithin(root, normalizedBounds, label, signal)),
+    normalizedRoots.map((root) => isRootWithin(root, normalizedBounds, signal)),
   );
 
   return normalizedRoots.filter((_, i) => results[i]);
@@ -132,36 +127,20 @@ export async function resolveRealPath(
   }
 }
 
-async function expandAllowedDirectories(
-  primaryDirs: readonly string[],
-  signal?: AbortSignal,
-): Promise<string[]> {
-  const realPaths = await Promise.all(primaryDirs.map((dir) => resolveRealPath(dir, signal)));
-
-  const expanded: string[] = [];
-  for (let i = 0; i < primaryDirs.length; i++) {
-    const primary = primaryDirs[i];
-    if (!primary) {
-      continue;
-    }
-
-    expanded.push(primary);
-
-    const real = realPaths[i];
-    if (real && !isSamePath(real, primary)) {
-      expanded.push(real);
-    }
-  }
-
-  return [...new Set(expanded)];
-}
-
 export async function resolveAllowedDirectoriesState(
   dirs: readonly string[],
   signal?: AbortSignal,
 ): Promise<string[]> {
   const primary = normalizeAllowedDirectories(dirs);
-  return expandAllowedDirectories(primary, signal);
+  const reals = await Promise.all(primary.map((dir) => resolveRealPath(dir, signal)));
+  return [
+    ...new Set(
+      primary.flatMap((dir, i) => {
+        const real = reals[i];
+        return real && !isSamePath(real, dir) ? [dir, real] : [dir];
+      }),
+    ),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -279,31 +258,25 @@ export class PathGuard {
     return details.resolvedPath as ValidatedPath;
   }
 
-  /** True when a normalized path equals its own filesystem root (`C:\`, `/`). */
-  private isFilesystemRoot(normalizedPath: string): boolean {
-    return isSamePath(normalizedPath, parse(normalizedPath).root);
-  }
-
   /**
-   * True when a grant must never admit `targetDir` — a bare filesystem root, or
-   * an unsafe path (home, /etc, C:\Windows, ...). Checked on the lexical path
-   * AND on the one it resolves to: `expandAllowedDirectories` pushes each root's
-   * realpath into the allowed set, so a lexical-only check let a symlink or
-   * junction aliasing $HOME/C:\Windows in under an innocuous name — and the
-   * confirmation prompt showed the alias, not the target. A target that cannot
-   * be resolved is judged lexically; it does not exist to escape into.
+   * True when a grant must never admit `targetDir` — an unsafe path (home,
+   * /etc, C:\Windows, ...). Checked on the lexical path AND on the one it
+   * resolves to: `resolveAllowedDirectoriesState` pushes each root's realpath
+   * into the allowed set, so a lexical-only check let a symlink or junction
+   * aliasing $HOME/C:\Windows in under an innocuous name — and the confirmation
+   * prompt showed the alias, not the target. A target that cannot be resolved
+   * is judged lexically; it does not exist to escape into.
    */
   private async isUnsafeGrantTarget(targetDir: string): Promise<boolean> {
-    const isRefused = (dir: string): boolean => this.isFilesystemRoot(dir) || isUnsafeCwdPath(dir);
     const normalized = normalizePath(targetDir);
-    if (isRefused(normalized)) return true;
+    if (isUnsafeCwdPath(normalized)) return true;
     let resolved: string;
     try {
       resolved = normalizePath(await realpath(normalized));
     } catch {
       return false;
     }
-    return !isSamePath(resolved, normalized) && isRefused(resolved);
+    return !isSamePath(resolved, normalized) && isUnsafeCwdPath(resolved);
   }
 
   /** Walk up from a blocked path to the closest existing ancestor directory. */
@@ -831,12 +804,12 @@ export class PathGuard {
 
     const baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
 
-    const signal = timedSignal(undefined, ROOTS_TIMEOUT_MS);
+    const signal = AbortSignal.timeout(ROOTS_TIMEOUT_MS);
     // FS_ROOT_BOUNDARY is the only filter grants answer to (see
     // `grantedDirectories`); without one they pass through as accepted.
     const grantsToInclude =
       boundaries.length > 0
-        ? await filterRootsWithin(this.grantedDirectories, boundaries, 'grantBoundary', signal)
+        ? await filterRootsWithin(this.grantedDirectories, boundaries, signal)
         : this.grantedDirectories;
 
     const combined = [...baseline, ...grantsToInclude];

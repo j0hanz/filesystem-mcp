@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
+import { GuardedFileSystem } from '../src/core/fs.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
 import type { FilesystemServerContext } from '../src/server.js';
@@ -18,10 +19,12 @@ import {
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
   let ctx: FilesystemServerContext;
+  let fs: GuardedFileSystem;
 
   before(async () => {
     tmpDir = await createTestRoot();
     ctx = await createTestServer([tmpDir]);
+    fs = new GuardedFileSystem(ctx.pathGuard);
   });
 
   after(async () => {
@@ -37,7 +40,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Read slicing & batch (TC-FUNC-002–006)', () => {
     it('TC-FUNC-002: readFile with head slicing returns first N lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_head.txt', 10);
-      const result = await ctx.fs.readFile(filePath, { kind: 'head', lines: 5 });
+      const result = await fs.readFile(filePath, { kind: 'head', lines: 5 });
 
       assert.strictEqual(result.readMode, 'head');
       assert.strictEqual(result.head, 5);
@@ -48,7 +51,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-003: readFile with tail slicing returns last N lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_tail.txt', 10);
-      const result = await ctx.fs.readFile(filePath, { kind: 'tail', lines: 3 });
+      const result = await fs.readFile(filePath, { kind: 'tail', lines: 3 });
 
       assert.strictEqual(result.readMode, 'tail');
       assert.strictEqual(result.tail, 3);
@@ -58,7 +61,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-004: readFile with line range returns specific lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_range.txt', 10);
-      const result = await ctx.fs.readFile(filePath, {
+      const result = await fs.readFile(filePath, {
         kind: 'range',
         start: 2,
         end: 4,
@@ -73,7 +76,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-006: readFile full returns entire content and line count', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_full.txt', 5);
-      const result = await ctx.fs.readFile(filePath, { kind: 'full' });
+      const result = await fs.readFile(filePath, { kind: 'full' });
 
       assert.strictEqual(result.readMode, 'full');
       assert.strictEqual(result.totalLines, 5);
@@ -86,7 +89,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('readEditableText returns validated path, content, and stats', async () => {
       const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');
 
-      const result = await ctx.fs.readEditableText(filePath);
+      const result = await fs.readEditableText(filePath);
 
       assert.strictEqual(result.validPath, normalizePath(filePath));
       assert.strictEqual(result.content, 'editable content');
@@ -102,7 +105,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
 
         await assert.rejects(
-          ctx.fs.readEditableText(filePath),
+          fs.readEditableText(filePath),
           (error) =>
             isFsError(error) &&
             error.code === ErrorCode.TOO_LARGE &&
@@ -119,7 +122,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 
       await assert.rejects(
-        ctx.fs.readEditableText(filePath),
+        fs.readEditableText(filePath),
         (error) =>
           isFsError(error) &&
           error.code === ErrorCode.INVALID_INPUT &&
@@ -131,23 +134,23 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Create nested & overwrite (TC-FUNC-010–011)', () => {
     it('TC-FUNC-010: writeFile in deep nested path after creating parent directories', async () => {
       const nestedPath = join(tmpDir, 'deep', 'nested', 'subfolder', 'file.txt');
-      await ctx.fs.mkdir(dirname(nestedPath), { recursive: true });
-      await ctx.fs.writeFile(nestedPath, 'deep nested content');
+      await fs.mkdir(dirname(nestedPath), { recursive: true });
+      await fs.writeFile(nestedPath, 'deep nested content');
 
-      const { content } = await ctx.fs.readRaw(nestedPath);
+      const { content } = await fs.readRaw(nestedPath);
       assert.strictEqual(content.toString('utf-8'), 'deep nested content');
     });
 
     it('TC-FUNC-011: writeFile overwriting existing file', async () => {
       const filePath = join(tmpDir, 'overwrite_target.txt');
-      await ctx.fs.writeFile(filePath, 'initial content');
+      await fs.writeFile(filePath, 'initial content');
 
-      const initialRead = await ctx.fs.readRaw(filePath);
+      const initialRead = await fs.readRaw(filePath);
       assert.strictEqual(initialRead.content.toString('utf-8'), 'initial content');
 
-      await ctx.fs.writeFile(filePath, 'overwritten content');
+      await fs.writeFile(filePath, 'overwritten content');
 
-      const overwrittenRead = await ctx.fs.readRaw(filePath);
+      const overwrittenRead = await fs.readRaw(filePath);
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
     });
   });
@@ -155,7 +158,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Stat metadata (TC-FUNC-031–034)', () => {
     it('TC-FUNC-031: statDetailed on a file returns stats and isSymlink=false', async () => {
       const filePath = await writeTestFile(tmpDir, 'stat_file.txt', 'stat metadata test');
-      const detail = await ctx.fs.statDetailed(filePath);
+      const detail = await fs.statDetailed(filePath);
 
       assert.strictEqual(detail.isSymlink, false);
       assert.strictEqual(detail.stats.isFile(), true);
@@ -165,9 +168,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-032: statDetailed on a dir returns stats.isDirectory()=true', async () => {
       const dirPath = join(tmpDir, 'stat_test_directory');
-      await ctx.fs.mkdir(dirPath);
+      await fs.mkdir(dirPath);
 
-      const detail = await ctx.fs.statDetailed(dirPath);
+      const detail = await fs.statDetailed(dirPath);
 
       assert.strictEqual(detail.isSymlink, false);
       assert.strictEqual(detail.stats.isDirectory(), true);
@@ -180,7 +183,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const controller = new AbortController();
       controller.abort(reason);
 
-      await assert.rejects(ctx.fs.lstat(filePath, { signal: controller.signal }), (error) => {
+      await assert.rejects(fs.lstat(filePath, { signal: controller.signal }), (error) => {
         assert.strictEqual(error, reason);
         return true;
       });
@@ -255,29 +258,29 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Delete guards (TC-FUNC-018–020)', () => {
     it('TC-FUNC-018: hasChildrenUnchecked distinguishes empty vs non-empty directories', async () => {
       const emptyDir = join(tmpDir, 'empty_dir_guard');
-      await ctx.fs.mkdir(emptyDir);
+      await fs.mkdir(emptyDir);
 
-      const emptyHasChildren = await ctx.fs.hasChildrenUnchecked(emptyDir);
+      const emptyHasChildren = await fs.hasChildrenUnchecked(emptyDir);
       assert.strictEqual(emptyHasChildren, false);
 
       const nonEmptyDir = join(tmpDir, 'non_empty_dir_guard');
-      await ctx.fs.mkdir(nonEmptyDir);
+      await fs.mkdir(nonEmptyDir);
       await writeTestFile(nonEmptyDir, 'child.txt', 'child content');
 
-      const nonEmptyHasChildren = await ctx.fs.hasChildrenUnchecked(nonEmptyDir);
+      const nonEmptyHasChildren = await fs.hasChildrenUnchecked(nonEmptyDir);
       assert.strictEqual(nonEmptyHasChildren, true);
     });
 
     it('TC-FUNC-019: rm with recursive=true removes non-empty directory', async () => {
       const dirToDelete = join(tmpDir, 'dir_to_delete');
-      await ctx.fs.mkdir(dirToDelete);
+      await fs.mkdir(dirToDelete);
       await writeTestFile(dirToDelete, 'file1.txt', 'f1');
       await writeTestFile(dirToDelete, 'sub/file2.txt', 'f2');
 
-      await ctx.fs.rm(dirToDelete, { recursive: true, force: true });
+      await fs.rm(dirToDelete, { recursive: true, force: true });
 
       await assert.rejects(
-        () => ctx.fs.stat(dirToDelete),
+        () => fs.stat(dirToDelete),
         (err: unknown) => {
           assert(isFsError(err));
           assert.strictEqual(err.code, ErrorCode.NOT_FOUND);

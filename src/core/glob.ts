@@ -180,17 +180,6 @@ export async function loadRootGitignore(
   return manager;
 }
 
-export function isIgnoredByGitignore(
-  matcher: GitignoreManager,
-  root: string,
-  absolutePath: string,
-  options: { isDirectory?: boolean } = {},
-): boolean {
-  const relativePath = relative(root, absolutePath);
-  if (relativePath.length === 0) return false;
-  return matcher.isIgnored(relativePath, Boolean(options.isDirectory));
-}
-
 interface GlobDirentLike extends DirentLike {
   name: string;
   parentPath?: string;
@@ -213,15 +202,12 @@ export interface GlobEntriesOptions {
   respectGitignore?: boolean;
 }
 
-type GlobMatch = string | GlobDirentLike;
-
 interface NormalizedGlob {
   cwd: string;
   patterns: readonly string[];
   exclude: readonly string[];
   suppressErrors: boolean;
   maxDepth?: number;
-  respectGitignore: boolean;
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
@@ -319,7 +305,6 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
     patterns,
     exclude: (options.excludePatterns ?? []).map(toPosixPath),
     suppressErrors: options.suppressErrors ?? false,
-    respectGitignore: options.respectGitignore ?? false,
   };
 
   if (options.maxDepth !== undefined) {
@@ -327,19 +312,6 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
   }
 
   return normalized;
-}
-
-function getRelativeDepth(relativePath: string): number {
-  const len = relativePath.length;
-  if (len === 0) return 0;
-  let count = 0;
-  for (let i = 0; i < len; i++) {
-    const code = relativePath.charCodeAt(i);
-    if (code === 47 || code === 92) {
-      count++;
-    }
-  }
-  return count;
 }
 
 function resolveDirentBase(cwd: string, parentPath: string | undefined): string {
@@ -359,7 +331,7 @@ function* processDirentMatch(
 
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);
-    if (getRelativeDepth(rel) > maxDepth) return;
+    if (rel.split(/[/\\]/u).length - 1 > maxDepth) return;
   }
 
   if (seen.has(absolutePath)) return;
@@ -373,23 +345,20 @@ function createExcludeFilter(
   cwd: string,
   excludePatterns: readonly string[],
   gitignoreMatcher?: GitignoreManager | null,
-): ((match: GlobMatch) => boolean) | readonly string[] {
+): ((match: GlobDirentLike) => boolean) | readonly string[] {
   if (!gitignoreMatcher) {
     return excludePatterns;
   }
 
-  return (match: GlobMatch) => {
-    const relPath =
-      typeof match === 'string'
-        ? match
-        : match.parentPath
-          ? relative(cwd, join(match.parentPath, match.name))
-          : match.name;
+  return (match: GlobDirentLike) => {
+    const relPath = match.parentPath
+      ? relative(cwd, join(match.parentPath, match.name))
+      : match.name;
 
     const posixRel = toPosixPath(relPath);
 
     // Gitignore check
-    const isDir = typeof match === 'string' ? false : match.isDirectory();
+    const isDir = match.isDirectory();
     if (gitignoreMatcher.isIgnored(posixRel, isDir)) {
       return true;
     }
@@ -410,16 +379,16 @@ async function* processGlobPattern(
   plan: NormalizedGlob,
   seen: Set<string>,
   onlyFiles: boolean,
-  excludeFunc: ((match: GlobMatch) => boolean) | readonly string[],
+  excludeFunc: ((match: GlobDirentLike) => boolean) | readonly string[],
 ): AsyncGenerator<GlobEntry> {
   const { cwd, maxDepth, suppressErrors } = plan;
-  let iterable: AsyncIterable<GlobMatch>;
+  let iterable: AsyncIterable<GlobDirentLike>;
   try {
     iterable = fsGlob(pattern, {
       cwd,
       exclude: excludeFunc,
       withFileTypes: true,
-    }) as AsyncIterable<GlobMatch>;
+    }) as AsyncIterable<GlobDirentLike>;
   } catch (error) {
     if (suppressErrors) return;
     throw error;
@@ -427,7 +396,7 @@ async function* processGlobPattern(
 
   try {
     for await (const match of iterable) {
-      yield* processDirentMatch(match as GlobDirentLike, cwd, maxDepth, seen, onlyFiles);
+      yield* processDirentMatch(match, cwd, maxDepth, seen, onlyFiles);
     }
   } catch (error) {
     if (!suppressErrors) throw error;

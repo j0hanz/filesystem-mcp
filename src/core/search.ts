@@ -175,7 +175,6 @@ export interface SearchContentOptions {
   respectGitignore?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
-  maxFileSize?: number;
   signal?: AbortSignal;
 }
 
@@ -205,27 +204,19 @@ export interface SearchContentOutcome {
   };
 }
 
-/**
- * Owns the compiled pattern's lifetime. Pass `precompiled` to skip compiling
- * here — the caller compiled the same pattern with the same flags and keeps
- * owning the {@link freeRegex} call in that case.
- */
 export async function searchContent(
   directory: string,
   pattern: string,
   options: SearchContentOptions,
   pathGuard: PathGuard,
-  precompiled?: Regex,
 ): Promise<SearchContentOutcome> {
-  const regex =
-    precompiled ??
-    compileRegex(options.isRegex ? pattern || '' : escapeRegexLiteral(pattern || ''), {
-      caseSensitive: Boolean(options.caseSensitive),
-    });
+  const regex = compileRegex(options.isRegex ? pattern || '' : escapeRegexLiteral(pattern || ''), {
+    caseSensitive: Boolean(options.caseSensitive),
+  });
   try {
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
-    const maxFileSize = options.maxFileSize ?? getMaxTextFileSize();
+    const maxFileSize = getMaxTextFileSize();
 
     const entries = globEntries({
       cwd: directory,
@@ -318,7 +309,7 @@ export async function searchContent(
       },
     };
   } finally {
-    if (precompiled === undefined) freeRegex(regex);
+    freeRegex(regex);
   }
 }
 

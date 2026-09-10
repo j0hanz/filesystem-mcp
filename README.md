@@ -420,12 +420,12 @@ filesystem-mcp --port 3000
 
 ## Scripts
 
-| Mode             | Command                          | Description                                          |
-| :--------------- | :------------------------------- | :--------------------------------------------------- |
-| Full check       | `node scripts/tasks.mjs`         | Run build, type check, lint, format, knip, and tests |
-| Auto-fix + check | `node scripts/tasks.mjs fix`     | Auto-fix formatting/linting and run the full check   |
-| Static only      | `node scripts/tasks.mjs --quick` | Run static analysis without tests                    |
-| Tests only       | `node scripts/tasks.mjs test`    | Run tests; accepts native `node --test` options      |
+| Mode             | Command                | Description                                          |
+| :--------------- | :--------------------- | :--------------------------------------------------- |
+| Full check       | `npm run check`        | Run build, type check, lint, format, knip, and tests |
+| Auto-fix + check | `npm run fix`          | Auto-fix formatting/linting and run the full check   |
+| Static only      | `npm run check:static` | Run static analysis without tests                    |
+| Tests only       | `npm test`             | Run tests; accepts native `node --test` options      |
 
 ## Security
 
@@ -444,7 +444,7 @@ filesystem-mcp --port 3000
 1. Fork the repository.
 2. Create a feature branch: `git checkout -b feat/your-feature`.
 3. Commit your changes with a clear message.
-4. Run `node scripts/tasks.mjs` to confirm tests, types, lint, formatting, and knip all pass.
+4. Run `npm run check` to confirm tests, types, lint, formatting, and knip all pass.
 5. Open a pull request.
 
 [![Contributors](https://contrib.rocks/image?repo=j0hanz/filesystem-mcp)](https://github.com/j0hanz/filesystem-mcp/graphs/contributors)

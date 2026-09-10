@@ -45,7 +45,7 @@ export interface PendingState {
 }
 
 /** One embedded form-mode confirmation, keyed within the call. */
-export interface PendingInput {
+interface PendingInput {
   /** Server-assigned key, unique within the `tools/call`. */
   readonly key: string;
   /** Human-readable prompt for this item. */
@@ -205,7 +205,7 @@ export async function buildInputRequired(
  * One home for the R9 binding check means a future fix cannot miss two of three
  * sites. The caller supplies `buildInputs` so only the prompt text varies.
  */
-export interface PendingRoundTripOpts {
+interface PendingRoundTripOpts {
   readonly op: PendingOp;
   readonly pending: readonly string[];
   readonly requestState: (() => PendingState | undefined) | undefined;

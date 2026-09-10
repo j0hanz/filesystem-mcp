@@ -54,25 +54,15 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
   timer.unref();
 
   try {
-    if (activeHttpServer) {
-      const server = activeHttpServer;
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((err) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-      } catch (error: unknown) {
-        logRuntimeFailure('shutdown_http_error', 'process', 'shutdown', error);
-      }
+    try {
+      await activeHttpServer?.[Symbol.asyncDispose]();
+    } catch (error: unknown) {
+      logRuntimeFailure('shutdown_http_error', 'process', 'shutdown', error);
     }
-    if (activeStdioHandle) {
-      try {
-        await activeStdioHandle.close();
-      } catch (error: unknown) {
-        logRuntimeFailure('shutdown_mcp_error', 'process', 'shutdown', error);
-      }
+    try {
+      await activeStdioHandle?.close();
+    } catch (error: unknown) {
+      logRuntimeFailure('shutdown_mcp_error', 'process', 'shutdown', error);
     }
   } finally {
     clearTimeout(timer);
@@ -80,38 +70,22 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  let allowedDirs: string[];
-  let allowCwd: boolean;
-  let port: number | undefined;
-  let readOnly: boolean;
-  let printConfig: boolean;
-  let json: boolean;
-  let httpHost: string | undefined;
-  let cliApiKey: string | undefined;
-
+  let parsed: Awaited<ReturnType<typeof parseArgs>>;
   try {
-    const parsed = await parseArgs();
-    allowedDirs = parsed.allowedDirs;
-    allowCwd = parsed.allowCwd;
-    port = parsed.port;
-    readOnly = parsed.readOnly;
-    printConfig = parsed.printConfig;
-    json = parsed.json;
-    httpHost = parsed.httpHost;
-    cliApiKey = parsed.apiKey;
+    parsed = await parseArgs();
   } catch (error: unknown) {
     if (error instanceof CliExitError) {
       if (error.message.length > 0) {
         logRuntimeFailure('cli_exit', 'startup', 'parse_args', error.message);
       }
-      process.exitCode = error.exitCode;
+      process.exitCode = 1;
       return;
     }
     throw error;
   }
+  const { allowedDirs, allowCwd, port, readOnly, printConfig, json, httpHost, apiKey } = parsed;
 
   if (printConfig) {
-    const apiKey = cliApiKey;
     await runPrintConfig({
       allowedDirs,
       allowCwd,
@@ -140,7 +114,7 @@ async function main(): Promise<void> {
   const serverOptions = { allowCwd, cliAllowedDirs: allowedDirs, readOnly };
   const runtimeConfig = {
     ...(httpHost !== undefined ? { httpHost } : {}),
-    ...(cliApiKey !== undefined ? { apiKey: cliApiKey } : {}),
+    ...(apiKey !== undefined ? { apiKey } : {}),
   };
 
   if (port !== undefined) {

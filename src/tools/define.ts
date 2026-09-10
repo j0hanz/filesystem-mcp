@@ -173,18 +173,6 @@ function toToolCtx(
   };
 }
 
-function resolveProgressCtx<I extends z.ZodType, O extends z.ZodType>(
-  def: ToolDef<I, O>,
-  args: z.infer<I>,
-): ProgressCtx {
-  return def.progress ? def.progress(args) : { label: def.title };
-}
-
-function composeSignal(base: AbortSignal, timeoutMs?: number): AbortSignal {
-  if (!timeoutMs) return base;
-  return AbortSignal.any([base, AbortSignal.timeout(timeoutMs)]);
-}
-
 /**
  * Claude Code — and any client that treats `structuredContent` as the canonical
  * model view — discards the `text` blocks when `structuredContent` is present,
@@ -218,7 +206,6 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   private readonly parsedArgs: z.infer<I>;
   private readonly toolCtx: ToolCtx;
 
-  #progressClosed = false;
   readonly #progressCtx: ProgressCtx;
   readonly #mcpSink?: McpProgressSink;
   readonly #progressSession: ProgressSession;
@@ -226,8 +213,10 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   constructor(toolName: string, ctx: ToolCtx, def: ToolDef<I, O>, parsedArgs: z.infer<I>) {
     this.def = def;
     this.parsedArgs = parsedArgs;
-    this.signal = composeSignal(ctx.signal, def.timeoutMs);
-    this.#progressCtx = resolveProgressCtx(def, parsedArgs);
+    this.signal = def.timeoutMs
+      ? AbortSignal.any([ctx.signal, AbortSignal.timeout(def.timeoutMs)])
+      : ctx.signal;
+    this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
     const token = ctx._meta?.progressToken;
     if (token !== undefined && ctx.sendNotification !== undefined) {
       this.#mcpSink = new McpProgressSink(toolName, token, ctx.sendNotification);
@@ -253,25 +242,12 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   }
 
   #tick(p: { current: number; total?: number }): void {
-    if (this.#progressClosed) return;
     const tickCtx: ProgressCtx = {
       ...this.#progressCtx,
       current: p.current,
       ...(p.total !== undefined ? { total: p.total } : {}),
     };
     this.#progressSession.set({ ...p, message: plainMessage('tick', tickCtx) });
-  }
-
-  async #closeWithDone(message: string): Promise<void> {
-    this.#progressClosed = true;
-    this.#progressSession.complete(message);
-    if (this.#mcpSink) await this.#mcpSink.flush();
-  }
-
-  async #closeWithFail(error: unknown, message: string): Promise<void> {
-    this.#progressClosed = true;
-    this.#progressSession.fail(error, message);
-    if (this.#mcpSink) await this.#mcpSink.flush();
   }
 
   async #flushProgress(): Promise<void> {
@@ -282,13 +258,15 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     const doneCtx: ProgressCtx = this.def.progressDone
       ? { ...this.#progressCtx, ...this.def.progressDone(this.parsedArgs, result) }
       : this.#progressCtx;
-    await this.#closeWithDone(plainMessage('done', doneCtx));
+    this.#progressSession.complete(plainMessage('done', doneCtx));
+    await this.#flushProgress();
   }
 
   private async failProgress(error: unknown): Promise<{ isError: true; content: ContentBlock[] }> {
     const errMsg = formatUnknownErrorMessage(error);
     const message = plainMessage('fail', { ...this.#progressCtx, error: errMsg });
-    await this.#closeWithFail(error, message);
+    this.#progressSession.fail(error, message);
+    await this.#flushProgress();
     const { text: errorText } = Problem.toText(
       error,
       this.def.defaultErrorCode ?? ErrorCode.UNKNOWN,
@@ -370,42 +348,30 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   }
 
   async execute(): Promise<CallToolResult | InputRequiredResult> {
-    const runTool = async (): Promise<CallToolResult | InputRequiredResult> => {
-      try {
-        // Access-grant pre-check before any filesystem touch (R7/R8/R9). A
-        // grant input_required short-circuits here (progress paused, not
-        // finished); an R9 mismatch throws, which this catch surfaces as an
-        // isError tool result like every other handler failure — not a raw
-        // JSON-RPC error (GRANT-1 impact #2).
-        const grantRequired = await this.precheckGrant();
-        if (grantRequired !== undefined) return grantRequired;
-        const result = await this.def.run(this.parsedArgs, this.toolCtx);
-        // input_required is a return value, not a completed call: the client
-        // retries the same tools/call carrying inputResponses, and this
-        // handler re-enters from the top. Skip the progress "done" close and
-        // return it verbatim — progress is paused, not finished.
-        if (isInputRequiredResult(result)) {
-          return result;
-        }
-        await this.completeProgress(result.structured);
-        return buildSuccessResponse(result);
-      } catch (error) {
-        return await this.failProgress(error);
-      } finally {
-        await this.#flushProgress();
+    try {
+      // Access-grant pre-check before any filesystem touch (R7/R8/R9). A
+      // grant input_required short-circuits here (progress paused, not
+      // finished); an R9 mismatch throws, which this catch surfaces as an
+      // isError tool result like every other handler failure — not a raw
+      // JSON-RPC error (GRANT-1 impact #2).
+      const grantRequired = await this.precheckGrant();
+      if (grantRequired !== undefined) return grantRequired;
+      const result = await this.def.run(this.parsedArgs, this.toolCtx);
+      // input_required is a return value, not a completed call: the client
+      // retries the same tools/call carrying inputResponses, and this
+      // handler re-enters from the top. Skip the progress "done" close and
+      // return it verbatim — progress is paused, not finished.
+      if (isInputRequiredResult(result)) {
+        return result;
       }
-    };
-
-    return runTool();
+      await this.completeProgress(result.structured);
+      return buildSuccessResponse(result);
+    } catch (error) {
+      return await this.failProgress(error);
+    } finally {
+      await this.#flushProgress();
+    }
   }
-}
-
-function createServerToolHandler<I extends z.ZodType, O extends z.ZodType>(
-  def: ToolDef<I, O>,
-  deps: ToolDeps,
-): (args: z.infer<I>, ctx: ServerContext) => Promise<CallToolResult | InputRequiredResult> {
-  return async (args, ctx) =>
-    new ToolExecutor<I, O>(def.name, toToolCtx(ctx, deps), def, args).execute();
 }
 
 /**
@@ -509,14 +475,14 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
     annotations: publishedAnnotations,
   };
 
-  const tool: DefinedTool = {
+  return {
     name: def.name,
     annotations: def.annotations,
 
     register(deps: ToolDeps): RegisteredTool {
-      return deps.server.registerTool(def.name, toolDefShape, createServerToolHandler(def, deps));
+      return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) =>
+        new ToolExecutor<I, O>(def.name, toToolCtx(ctx, deps), def, args).execute(),
+      );
     },
   };
-
-  return tool;
 }

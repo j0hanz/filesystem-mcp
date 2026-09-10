@@ -95,11 +95,7 @@ function collectAllowedRoots(
   allowed: readonly string[],
   predicate: (root: string) => boolean,
 ): string[] {
-  const matches: string[] = [];
-  for (const root of allowed) {
-    if (predicate(root)) matches.push(withDirectorySeparator(root));
-  }
-  return matches;
+  return allowed.filter(predicate).map(withDirectorySeparator);
 }
 
 function findRootPrefixMatches(currentValue: string, allowed: readonly string[]): string[] {
@@ -124,25 +120,14 @@ function findMatchingRoots(
   });
 }
 
-function sortCompletionMatches(matches: string[]): void {
-  const sepCode = sep.charCodeAt(0);
-  matches.sort((left, right) => {
-    const leftIsDir = left.charCodeAt(left.length - 1) === sepCode;
-    const rightIsDir = right.charCodeAt(right.length - 1) === sepCode;
-    if (leftIsDir && !rightIsDir) return -1;
-    if (!leftIsDir && rightIsDir) return 1;
-    return left.localeCompare(right);
-  });
-}
-
-function mergeCompletionMatches(...matchGroups: readonly (readonly string[])[]): string[] {
-  const uniqueMatches = new Set<string>();
-  for (const group of matchGroups) {
-    for (const match of group) uniqueMatches.add(match);
-  }
-  const merged = Array.from(uniqueMatches);
-  sortCompletionMatches(merged);
-  return merged;
+function mergeCompletionMatches(
+  dirMatches: readonly string[],
+  rootMatches: readonly string[],
+): string[] {
+  const isDir = (v: string): boolean => v.endsWith(sep);
+  return [...new Set([...dirMatches, ...rootMatches])].sort(
+    (left, right) => Number(isDir(right)) - Number(isDir(left)) || left.localeCompare(right),
+  );
 }
 
 async function findMatchesInDirectory(

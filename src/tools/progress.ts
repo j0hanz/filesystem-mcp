@@ -8,7 +8,7 @@ function reportDetachedError(toolName: string, context: string, error: unknown):
   Logger.emit('warning', `${toolName}: ${context} failed: ${message}`);
 }
 
-export type ProgressEvent =
+type ProgressEvent =
   | { kind: 'tick'; current: number; total?: number; message: string }
   | { kind: 'complete'; current: number; total?: number; message: string }
   | {

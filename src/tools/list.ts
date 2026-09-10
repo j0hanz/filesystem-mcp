@@ -4,16 +4,10 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { timedSignal } from '../core/concurrency.js';
 import { paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
 import type { EntryType } from '../core/glob.js';
-import {
-  DEFAULT_EXCLUDE_PATTERNS,
-  globEntries,
-  isIgnoredByGitignore,
-  loadRootGitignore,
-} from '../core/glob.js';
+import { DEFAULT_EXCLUDE_PATTERNS, globEntries, loadRootGitignore } from '../core/glob.js';
 import type { PathGuard } from '../core/path.js';
 import { toPosixRelative } from '../core/path.js';
 import { resolveEntryType } from '../core/primitives.js';
@@ -113,12 +107,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     const relPath = toPosixRelative(rootPath, entry.path);
     const name = basename(relPath);
 
-    if (
-      gitignoreMatcher &&
-      isIgnoredByGitignore(gitignoreMatcher, rootPath, entry.path, {
-        isDirectory: isDir,
-      })
-    ) {
+    if (gitignoreMatcher?.isIgnored(relPath, isDir)) {
       continue;
     }
     const accessible = await options.pathGuard.isEntryAccessible(entry.path);
@@ -303,7 +292,7 @@ async function handleList(
         maxDepth: args.maxDepth,
         includeHidden: args.includeHidden,
         includeIgnored: args.includeIgnored,
-        signal: timedSignal(ctx.signal, DEFAULT_SEARCH_TIMEOUT_MS),
+        signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(DEFAULT_SEARCH_TIMEOUT_MS)]),
         pathGuard: ctx.fs.pathGuard,
         entryCap: MAX_LIST_ENTRIES,
         ...(ctx.onProgress ? { onProgress: ctx.onProgress } : {}),

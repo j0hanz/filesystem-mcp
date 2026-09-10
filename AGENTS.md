@@ -5,17 +5,15 @@ over stdio and Streamable HTTP.
 
 ## Commands
 
-Run checks through the task runner, not the npm scripts:
-
 ```bash
-node scripts/tasks.mjs          # full repository check
-node scripts/tasks.mjs fix      # format and lint-fix, then validate
-node scripts/tasks.mjs --quick  # static checks only, no tests
-node scripts/tasks.mjs test     # Node test runner; accepts native test flags
+npm run check        # full repository check (static + tests)
+npm run fix          # format and lint-fix, then run the full check
+npm run check:static # static checks only, no tests
+npm test             # Node test runner; pass native flags after --
 ```
 
-The task runner is a thin cross-platform wrapper over the npm scripts and
-Node's built-in test runner.
+Tests run on Node's built-in test runner; `npm test --
+--test-name-pattern="resources"` filters like the old wrapper did.
 
 ## Releases
 

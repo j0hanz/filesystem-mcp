@@ -44,7 +44,7 @@ export class StopReasonTracker {
   }
 }
 
-export interface ParallelResult<R> {
+interface ParallelResult<R> {
   results: { index: number; value: R }[];
   errors: { index: number; error: Error }[];
 }
@@ -96,9 +96,10 @@ export async function processInParallel<T, R>(
   }
 
   await Promise.allSettled(workers);
-  // A deadline (timedSignal) hit during the run surfaces here as signal.reason
-  // — a TimeoutError — rather than a fresh AbortError, so callers see TIMEOUT,
-  // not CANCELLED. The per-item throws above are swallowed by allSettled.
+  // A deadline (AbortSignal.timeout) hit during the run surfaces here as
+  // signal.reason — a TimeoutError — rather than a fresh AbortError, so callers
+  // see TIMEOUT, not CANCELLED. The per-item throws above are swallowed by
+  // allSettled.
   signal?.throwIfAborted();
 
   results.sort((left, right) => left.index - right.index);
@@ -116,7 +117,7 @@ export async function processInParallel<T, R>(
  * reason — the loop breaks on the first that fires.
  */
 export async function processEntriesConcurrently(
-  entries: AsyncIterable<{ path: string }>,
+  entries: AsyncIterable<{ path: string }> | Iterable<{ path: string }>,
   options: {
     signal: AbortSignal | undefined;
     concurrency: number;
@@ -205,14 +206,4 @@ export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise
       signal.removeEventListener('abort', onAbort);
     }
   });
-}
-
-/**
- * `baseSignal` combined with a deadline. `AbortSignal.timeout`'s timer does not
- * hold the event loop open and is collected with the signal, so there is
- * nothing for callers to clean up.
- */
-export function timedSignal(baseSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  return baseSignal ? AbortSignal.any([baseSignal, deadline]) : deadline;
 }

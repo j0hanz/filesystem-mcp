@@ -5,7 +5,7 @@ import eslintConfigPrettier from 'eslint-config-prettier/flat';
 import tseslint from 'typescript-eslint';
 
 const sourceFiles = ['src/**/*.ts'];
-const testFiles = ['__tests__/**/*.ts', 'filesystem-tests/**/*.ts'];
+const testFiles = ['__tests__/**/*.ts'];
 const jsConfigFiles = ['**/*.js', '**/*.mjs'];
 
 // Dynamically filter builtin modules instead of hardcoding a massive array

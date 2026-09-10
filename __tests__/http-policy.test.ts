@@ -11,7 +11,7 @@ import {
   assertHttpHostPolicy,
   bearerAuthMiddleware,
   computeAllowedOriginHostnames,
-  corsPreflightHandler,
+  corsMiddleware,
   createRateLimiter,
   isAllowedLocalhostOrigin,
   isLoopbackHttpHost,
@@ -32,8 +32,7 @@ interface MockResponse {
   set(headers: Record<string, string>): MockResponse;
   status(code: number): MockResponse;
   json(body: unknown): MockResponse;
-  writeHead(code: number, headers?: Record<string, string>): MockResponse;
-  end(chunk?: string): MockResponse;
+  end(): MockResponse;
 }
 
 function createMockResponse(): Response & MockResponse {
@@ -62,19 +61,7 @@ function createMockResponse(): Response & MockResponse {
       this.ended = true;
       return this;
     },
-    writeHead(code: number, headers?: Record<string, string>) {
-      this.statusCode = code;
-      if (headers) {
-        for (const [k, v] of Object.entries(headers)) {
-          this.headers[k.toLowerCase()] = v;
-        }
-      }
-      return this;
-    },
-    end(chunk?: string) {
-      if (chunk !== undefined) {
-        this.body = chunk;
-      }
+    end() {
       this.ended = true;
       return this;
     },
@@ -87,6 +74,8 @@ function createMockRequest(
     headers?: Record<string, string | undefined>;
     ip?: string;
     remoteAddress?: string;
+    method?: string;
+    path?: string;
   } = {},
 ): Request {
   const headers = options.headers ?? {};
@@ -96,6 +85,8 @@ function createMockRequest(
     socket: {
       remoteAddress: options.remoteAddress ?? options.ip ?? '127.0.0.1',
     },
+    method: options.method,
+    path: options.path,
   } as unknown as Request;
 }
 
@@ -400,11 +391,13 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(isOriginAllowed('not-a-valid-url', ['app.example.com']), false);
     });
 
-    it('TC-SEC-031: corsPreflightHandler responds to OPTIONS requests with appropriate CORS headers', () => {
-      const handler = corsPreflightHandler(['app.example.com']);
+    it('TC-SEC-031: corsMiddleware responds to OPTIONS requests with appropriate CORS headers', () => {
+      const handler = corsMiddleware(['app.example.com']);
 
       // 1. Allowed localhost origin
       const reqLocalhost = createMockRequest({
+        method: 'OPTIONS',
+        path: '/',
         headers: { origin: 'http://localhost:3000' },
       });
       const resLocalhost = createMockResponse();
@@ -429,6 +422,8 @@ describe('HTTP Policy & Security', () => {
 
       // 2. Allowed remote origin
       const reqRemote = createMockRequest({
+        method: 'OPTIONS',
+        path: '/',
         headers: { origin: 'https://app.example.com' },
       });
       const resRemote = createMockResponse();
@@ -443,6 +438,8 @@ describe('HTTP Policy & Security', () => {
 
       // 3. Disallowed origin
       const reqDisallowed = createMockRequest({
+        method: 'OPTIONS',
+        path: '/',
         headers: { origin: 'https://attacker.com' },
       });
       const resDisallowed = createMockResponse();
@@ -454,13 +451,35 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(resDisallowed.headers['access-control-allow-methods'], 'POST, OPTIONS');
 
       // 4. Missing origin header
-      const reqNoOrigin = createMockRequest({ headers: {} });
+      const reqNoOrigin = createMockRequest({ method: 'OPTIONS', path: '/', headers: {} });
       const resNoOrigin = createMockResponse();
       handler(reqNoOrigin, resNoOrigin, () => {});
 
       assert.strictEqual(resNoOrigin.statusCode, 204);
       assert.strictEqual(resNoOrigin.headers['access-control-allow-origin'], undefined);
       assert.strictEqual(resNoOrigin.headers['vary'], undefined);
+
+      // 5. OPTIONS on a subpath falls through — the preflight stays on the exact
+      // endpoint; no phantom 204. Origin reflection still happens, same as the
+      // live corsMiddleware mount.
+      const reqSubpath = createMockRequest({
+        method: 'OPTIONS',
+        path: '/sub',
+        headers: { origin: 'http://localhost:3000' },
+      });
+      const resSubpath = createMockResponse();
+      let subpathNext = false;
+      handler(reqSubpath, resSubpath, () => {
+        subpathNext = true;
+      });
+      assert.strictEqual(subpathNext, true);
+      assert.strictEqual(resSubpath.ended, false);
+      assert.strictEqual(resSubpath.statusCode, undefined);
+      assert.strictEqual(resSubpath.headers['access-control-allow-methods'], undefined);
+      assert.strictEqual(
+        resSubpath.headers['access-control-allow-origin'],
+        'http://localhost:3000',
+      );
     });
   });
 

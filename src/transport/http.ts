@@ -2,11 +2,7 @@
 // per-request server factory, and listen-filter watcher gating on POST /mcp.
 import { createMcpExpressApp } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import type {
-  McpHttpHandler,
-  McpServerFactory,
-  ServerNotifier,
-} from '@modelcontextprotocol/server';
+import type { McpHttpHandler, ServerNotifier } from '@modelcontextprotocol/server';
 import {
   createMcpHandler,
   DEFAULT_REQUEST_TIMEOUT_MSEC,
@@ -38,8 +34,7 @@ import {
   assertHttpHostPolicy,
   bearerAuthMiddleware,
   computeAllowedOriginHostnames,
-  corsOriginMiddleware,
-  corsPreflightHandler,
+  corsMiddleware,
   createRateLimiter,
   JSONRPC_SERVER_ERROR,
   protectedResourceUrl,
@@ -80,35 +75,6 @@ function errorHandlerMiddleware(
   sendJsonRpcError(res, 500, ProtocolErrorCode.InternalError, 'Internal Server Error');
 }
 
-function makeHttpModernFactory(
-  options: ServerOptions,
-  getNotifier: () => ServerNotifier,
-  sharedRegistry: WatcherRegistry,
-  sharedPathGuard: PathGuard,
-  sharedStore: ResourceStore,
-  sharedPageStore: PageSnapshotStore,
-  apiKey: string | undefined,
-): McpServerFactory {
-  return async ({ era }) => {
-    const notifier = getNotifier();
-    const c = await createServer(options, {
-      watcherRegistry: sharedRegistry,
-      notifier,
-      pathGuard: sharedPathGuard,
-      resourceStore: sharedStore,
-      pageStore: sharedPageStore,
-      era,
-      ...(apiKey !== undefined ? { apiKey } : {}),
-    });
-    const previousOnClose = c.mcp.server.onclose;
-    c.mcp.server.onclose = () => {
-      previousOnClose?.();
-      c.disposeRuntimeState();
-    };
-    return c.mcp;
-  };
-}
-
 function setupExpressApp(
   httpHost: string,
   apiKey: string | undefined,
@@ -141,8 +107,7 @@ function setupExpressApp(
     );
   }
 
-  app.options('/mcp', corsPreflightHandler(allowedOriginHostnames));
-  app.use('/mcp', corsOriginMiddleware(allowedOriginHostnames));
+  app.use('/mcp', corsMiddleware(allowedOriginHostnames));
 
   // Unconditional: the spec's rate-limit MUST is not scoped to authenticated
   // binds. A keyless bind is loopback-only, so the cap is looser, not absent.
@@ -309,7 +274,7 @@ export async function startHttpServer(
   // builds a fresh McpServer per request so a per-request store would discard
   // it immediately.
   // Fires only from a tool call, which is long after `modernHandler` below is
-  // constructed, so reading it from the closure is safe (same as `getNotifier`).
+  // constructed, so reading it from the closure is safe.
   const sharedStore = new ResourceStore(() => {
     modernHandler.notify.resourcesChanged();
   });
@@ -326,15 +291,23 @@ export async function startHttpServer(
   await sharedPathGuard.recomputeAllowedDirectories();
 
   const modernHandler: McpHttpHandler = createMcpHandler(
-    makeHttpModernFactory(
-      options,
-      () => modernHandler.notify,
-      sharedRegistry,
-      sharedPathGuard,
-      sharedStore,
-      sharedPageStore,
-      apiKey,
-    ),
+    async ({ era }) => {
+      const c = await createServer(options, {
+        watcherRegistry: sharedRegistry,
+        notifier: modernHandler.notify,
+        pathGuard: sharedPathGuard,
+        resourceStore: sharedStore,
+        pageStore: sharedPageStore,
+        era,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+      });
+      const previousOnClose = c.mcp.server.onclose;
+      c.mcp.server.onclose = () => {
+        previousOnClose?.();
+        c.disposeRuntimeState();
+      };
+      return c.mcp;
+    },
     {
       legacy: 'reject',
       onerror: (error: Error) => {
@@ -371,35 +344,24 @@ export async function startHttpServer(
   };
   httpServer.on('error', onHttpServerError);
 
-  const originalClose = httpServer.close.bind(httpServer);
-  httpServer.close = function (callback?: (error?: Error) => void) {
+  const teardown = (): Promise<void> => {
     sharedRegistry.destroy();
     sharedPageStore.clear();
-    modernHandler
-      .close()
-      .then(() => {
-        originalClose(callback);
-      })
-      .catch((err: unknown) => {
-        Logger.error(
-          '[HTTP] Error closing handler during HTTP server close:',
-          formatUnknownErrorMessage(err),
-        );
-        originalClose(callback);
-      });
+    return modernHandler.close().catch((err: unknown) => {
+      Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
+    });
+  };
+  const originalClose = httpServer.close.bind(httpServer);
+  httpServer.close = function (callback?: (error?: Error) => void) {
+    void teardown().then(() => {
+      originalClose(callback);
+    });
     return httpServer;
   };
 
   return new Promise((resolve, reject) => {
     const onError = (err: Error) => {
-      sharedRegistry.destroy();
-      sharedPageStore.clear();
-      modernHandler.close().catch((closeErr: unknown) => {
-        Logger.error(
-          '[HTTP] Error closing handler on startup failure:',
-          formatUnknownErrorMessage(closeErr),
-        );
-      });
+      void teardown();
       reject(err);
     };
     httpServer.once('error', onError);

@@ -85,26 +85,21 @@ export async function paginate<T, M, R>(params: {
     return pageResult(decoded.snapshotId, decoded.offset, params.pageSize, snapshot);
   }
   const produced = await params.produce();
-  const incomplete = produced.items.length > params.pageSize || produced.truncated;
-  let first: Page<T, M>;
-  if (produced.items.length <= params.pageSize) {
-    first = {
-      page: produced.items,
-      metadata: produced.metadata,
-      nextCursor: undefined,
-      offset: 0,
-    };
-  } else {
-    const snapshotId = params.store.create({
-      queryKey: params.queryKey,
-      items: produced.items,
-      metadata: produced.metadata,
-    });
-    first = pageResult(snapshotId, 0, params.pageSize, {
-      items: produced.items,
-      metadata: produced.metadata,
-    });
-  }
+  const { items, metadata } = produced;
+  const incomplete = items.length > params.pageSize || produced.truncated;
+  const first: Page<T, M> =
+    items.length <= params.pageSize
+      ? { page: items, metadata, nextCursor: undefined, offset: 0 }
+      : pageResult(
+          params.store.create({
+            queryKey: params.queryKey,
+            items,
+            metadata,
+          }),
+          0,
+          params.pageSize,
+          { items, metadata },
+        );
   if (!incomplete || params.externalize === undefined) return first;
   return { ...first, resource: params.externalize(produced.items, produced.metadata) };
 }

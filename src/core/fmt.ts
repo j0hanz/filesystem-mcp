@@ -13,7 +13,7 @@ export interface ProgressCtx {
   error?: string;
 }
 
-export type Phase = 'tick' | 'done' | 'fail';
+type Phase = 'tick' | 'done' | 'fail';
 
 function buildBody(ctx: ProgressCtx, phase: Phase): string {
   const items: string[] = [];
@@ -136,29 +136,18 @@ export function pageTrailer(p: {
 // CLI color helpers
 // ---------------------------------------------------------------------------
 
-function isColorEnabled(): boolean {
-  return process.stdout.isTTY && !process.env['NO_COLOR'];
-}
-
 export function padEndVisible(s: string, width: number): string {
   const visible = stripVTControlCharacters(s).length;
   return visible >= width ? s : s + ' '.repeat(width - visible);
 }
 
-type Style = Parameters<typeof styleText>[0];
-
-/** Same palette as above, but only when stdout wants color. */
-function tint(format: Style, text: string): string {
-  return isColorEnabled() ? styleText(format, text) : text;
-}
-
 export const cliFmt = {
-  bold: (t: string) => tint('bold', t),
-  dim: (t: string) => tint('dim', t),
-  cyan: (t: string) => tint('cyan', t),
-  yellow: (t: string) => tint('yellow', t),
-  flag: (t: string) => tint('green', t),
-  placeholder: (t: string) => tint('yellow', t),
-  section: (t: string) => tint(['cyan', 'bold'], t),
-  bool: (v: boolean) => (v ? tint('green', 'true') : tint('red', 'false')),
+  bold: (t: string) => styleText('bold', t),
+  dim: (t: string) => styleText('dim', t),
+  cyan: (t: string) => styleText('cyan', t),
+  yellow: (t: string) => styleText('yellow', t),
+  flag: (t: string) => styleText('green', t),
+  placeholder: (t: string) => styleText('yellow', t),
+  section: (t: string) => styleText(['cyan', 'bold'], t),
+  bool: (v: boolean) => (v ? styleText('green', 'true') : styleText('red', 'false')),
 };

@@ -302,17 +302,18 @@ async function handleDelete(
     ctx.signal,
   );
 
-  const plans: DeletePlan[] = [];
-  const earlyFailures: DeleteFailure[] = [];
-  const earlyNoop: DeletedItem[] = [];
-  for (const { value: r } of planned.results) {
-    if (r.status === 'fail') earlyFailures.push(r.failure);
-    else if (r.status === 'noop') earlyNoop.push(r.item);
-    else plans.push(r.plan);
+  const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
+  const plans: { plan: DeletePlan; index: number }[] = [];
+  for (const { index, value: r } of planned.results) {
+    if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
+    else if (r.status === 'noop') out[index] = { path: r.item.path, value: { deleted: true } };
+    else plans.push({ plan: r.plan, index });
   }
   for (const { index, error } of planned.errors) {
-    const path = paths[index] ?? '(unknown)';
-    earlyFailures.push({ path, error: { code: ErrorCode.UNKNOWN, message: error.message } });
+    out[index] = {
+      path: paths[index] ?? '(unknown)',
+      error: { code: ErrorCode.UNKNOWN, message: error.message },
+    };
   }
 
   // Pending set: recursive + non-empty directories, sorted and de-duplicated.
@@ -320,7 +321,9 @@ async function handleDelete(
   // retried round recomputes it from the same args so a swapped retry (accept
   // for X, retry with Y) is rejected — the codec only proves the state was not
   // tampered, not that it matches the current request (R9).
-  const pendingSorted = [...new Set(plans.filter((p) => p.pending).map((p) => p.validPath))].sort();
+  const pendingSorted = [
+    ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
+  ].sort();
 
   if (pendingSorted.length > 0) {
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
@@ -349,44 +352,35 @@ async function handleDelete(
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    (plan) => executePlan(plan, args, ctx, pendingSorted),
+    ({ plan }) => executePlan(plan, args, ctx, pendingSorted),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
 
-  // Collect by path first, then emit in the caller's input order so
-  // `results[i]` lines up with `paths[i]` the way read/stat guarantee.
-  const byPath = new Map<string, DeletePerPathResult>();
-  const record = (path: string, entry: DeletePerPathResult): void => {
-    byPath.set(path, entry);
-  };
-  for (const n of earlyNoop) record(n.path, { path: n.path, value: { deleted: true } });
-  for (const f of earlyFailures) record(f.path, { path: f.path, error: f.error });
-  for (const { value: r } of executed.results) {
+  for (const { index, value: r } of executed.results) {
+    const slot = plans[index]?.index;
+    if (slot === undefined) continue;
     if ('skipped' in r) {
-      record(r.path, { path: r.path, value: { deleted: false } });
+      out[slot] = { path: r.path, value: { deleted: false } };
     } else if ('failure' in r) {
-      record(r.failure.path, { path: r.failure.path, error: r.failure.error });
+      out[slot] = { path: r.failure.path, error: r.failure.error };
     } else if (r.item.path) {
-      record(r.item.path, { path: r.item.path, value: { deleted: true } });
+      out[slot] = { path: r.item.path, value: { deleted: true } };
     }
   }
   for (const { index, error } of executed.errors) {
-    const plan = plans[index];
-    const path = plan?.validPath ?? '(unknown)';
-    record(path, {
-      path,
+    const slot = plans[index]?.index;
+    if (slot === undefined) continue;
+    out[slot] = {
+      path: paths[slot] ?? '(unknown)',
       error: { code: ErrorCode.UNKNOWN, message: error.message },
-    });
+    };
   }
 
-  // A plan's `validPath` is the resolved absolute path, so a requested relative
-  // path will not find itself in the map by name — fall back through the plan.
-  const planByRequested = new Map(plans.map((p) => [p.inputPath, p.validPath]));
-  const results: DeletePerPathResult[] = paths.map((requested) => {
-    const resolved = planByRequested.get(requested);
-    const entry =
-      byPath.get(requested) ?? (resolved !== undefined ? byPath.get(resolved) : undefined);
+  // Emit in the caller's input order so `results[i]` lines up with `paths[i]`
+  // the way read/stat guarantee.
+  const results: DeletePerPathResult[] = paths.map((requested, i) => {
+    const entry = out[i];
     return (
       entry ?? {
         path: requested,

@@ -18,7 +18,11 @@ import { joinRoster, pathLabel } from '../core/fmt.js';
 import { destExists } from '../core/fs.js';
 import type { GuardedFileSystem } from '../core/fs.js';
 import { choiceInput, pendingRoundTrip, readAcceptedChoice } from '../core/input-required.js';
-import { IS_CASE_INSENSITIVE_FS, isPathInsideDirectory, isSamePath } from '../core/path-utils.js';
+import {
+  isPathInsideDirectory,
+  isSamePath,
+  normalizeCaseForComparison,
+} from '../core/path-utils.js';
 import { defaultFalseBoolean, PerFileErrorSchema, RequiredPath } from '../core/schema.js';
 import { PARALLEL_CONCURRENCY } from '../core/util.js';
 import type { ToolCtx } from './define.js';
@@ -275,9 +279,7 @@ async function runTransfers(
   const seenDest = new Set<string>();
   const ready: TransferPlan[] = [];
   for (const candidate of candidates) {
-    const destKey = IS_CASE_INSENSITIVE_FS
-      ? candidate.validDest.toLowerCase()
-      : candidate.validDest;
+    const destKey = normalizeCaseForComparison(candidate.validDest);
     if (seenDest.has(destKey)) {
       failures.push(
         pairFailure(

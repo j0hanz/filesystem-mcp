@@ -21,30 +21,26 @@ import { registeredTools } from './tools/index.js';
 // ════════════════════════════════════════════════════════════
 
 export class CliExitError extends Error {
-  readonly exitCode: number;
-
-  constructor(message: string, exitCode: number) {
+  constructor(message: string) {
     super(message);
     this.name = 'CliExitError';
-    this.exitCode = exitCode;
   }
 }
 
 function validateCliPath(inputPath: string): void {
   if (inputPath.includes('\0')) {
-    throw new CliExitError('Path contains null bytes.', 1);
+    throw new CliExitError('Path contains null bytes.');
   }
 
   if (isWindowsDriveRelativePath(inputPath)) {
     throw new CliExitError(
       'Windows drive-relative paths are not allowed. Use C:\\path or C:/path instead of C:path.',
-      1,
     );
   }
 
   const reserved = getReservedDeviceNameForPath(inputPath);
   if (reserved) {
-    throw new CliExitError(`Windows reserved device name not allowed: ${reserved}.`, 1);
+    throw new CliExitError(`Windows reserved device name not allowed: ${reserved}.`);
   }
 }
 
@@ -101,7 +97,7 @@ function parsePortOption(raw: unknown): number | undefined {
   if (raw === undefined || raw === '') return undefined;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    throw new CliExitError(`Error: --port / FS_PORT must be an integer between 1 and 65535`, 1);
+    throw new CliExitError(`Error: --port / FS_PORT must be an integer between 1 and 65535`);
   }
   return n;
 }
@@ -155,41 +151,35 @@ export async function parseArgs(): Promise<{
       validateCliPath(positional);
     }
 
-    const vals = parsed.values as Record<string, unknown>;
+    const v = parsed.values;
     // `--http-host` and `--api-key` are returned to the caller and handed to
     // the server as config. Every other flag lands in the CLI-override store
     // (core/config.ts) — the one owner of the flag-beats-env rule — which deep
     // core readers (path, sensitive, observability, util) consult before
     // falling back to the operator's environment. Nothing writes process.env.
-    const httpHost =
-      typeof vals['http-host'] === 'string' ? vals['http-host'] : process.env['FS_HTTP_HOST'];
-    const apiKey =
-      typeof vals['api-key'] === 'string' ? vals['api-key'] : process.env['FS_API_KEY'];
-
-    if (typeof vals['log-level'] === 'string') cli.logLevel = vals['log-level'];
-    if (typeof vals['max-file-size'] === 'string') cli.maxFileSize = vals['max-file-size'];
-    if (typeof vals['root-boundary'] === 'string') cli.rootBoundary = vals['root-boundary'];
-    if (vals['allow-sensitive'] === true) cli.allowSensitive = true;
-    if (vals['walk-cwd'] === true) cli.allowCwdWalk = true;
-    if (vals['allow-missing-roots'] === true) cli.allowMissingRoots = true;
-    if (Array.isArray(vals['deny'])) {
-      const denyPatterns = vals['deny']
-        .filter((entry): entry is string => typeof entry === 'string')
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-      if (denyPatterns.length > 0) cli.denyPatterns = [...new Set(denyPatterns)];
+    const httpHost = v['http-host'] ?? process.env['FS_HTTP_HOST'];
+    const apiKey = v['api-key'] ?? process.env['FS_API_KEY'];
+    if (v['log-level'] !== undefined) cli.logLevel = v['log-level'];
+    if (v['max-file-size'] !== undefined) cli.maxFileSize = v['max-file-size'];
+    if (v['root-boundary'] !== undefined) cli.rootBoundary = v['root-boundary'];
+    if (v['allow-sensitive']) cli.allowSensitive = true;
+    if (v['walk-cwd']) cli.allowCwdWalk = true;
+    if (v['allow-missing-roots']) cli.allowMissingRoots = true;
+    if (v.deny !== undefined) {
+      const denyPatterns = [...new Set(v.deny.map((entry) => entry.trim()).filter(Boolean))];
+      if (denyPatterns.length > 0) cli.denyPatterns = denyPatterns;
     }
 
     const allowCwd =
-      (vals['allow-cwd'] as boolean) ||
-      (vals['walk-cwd'] as boolean) ||
+      v['allow-cwd'] ||
+      v['walk-cwd'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
-    const readOnly = (vals['read-only'] as boolean) || (vals['safe'] as boolean);
-    const printConfig = vals['print-config'] as boolean;
-    const json = vals['json'] as boolean;
-    const port = parsePortOption(parsed.values.port ?? process.env['FS_PORT']);
+    const readOnly = v['read-only'] || v.safe;
+    const printConfig = v['print-config'];
+    const json = v.json;
+    const port = parsePortOption(v.port ?? process.env['FS_PORT']);
     const allowMissingRoots =
-      (vals['allow-missing-roots'] as boolean) ||
+      v['allow-missing-roots'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
 
     let allowedDirs: string[] = [];
@@ -199,7 +189,7 @@ export async function parseArgs(): Promise<{
           ? await normalizeAndValidateDirs(parsed.positionals, allowMissingRoots)
           : [];
     } catch (error: unknown) {
-      throw new CliExitError(normalizeCliExitMessage(error), 1);
+      throw new CliExitError(normalizeCliExitMessage(error));
     }
 
     return {
@@ -217,7 +207,7 @@ export async function parseArgs(): Promise<{
       throw error;
     }
 
-    throw new CliExitError(normalizeCliExitMessage(error), 1);
+    throw new CliExitError(normalizeCliExitMessage(error));
   }
 }
 
