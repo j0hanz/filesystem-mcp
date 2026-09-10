@@ -20,7 +20,7 @@ import {
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.js';
-import { compileRegex, freeRegex } from '../core/search.js';
+import { compileRegex, execMatches, freeRegex } from '../core/search.js';
 import type { ResourceStore } from '../core/store.js';
 import { isTotalFailure, runOverPaths } from './batch.js';
 import { defineTool, type ToolCtx } from './define.js';
@@ -191,20 +191,15 @@ function findEditMatch(
       .replace(/[^\S\n]+/g, '[^\\S\\n]*');
     const regex = compileRegex(pattern, { caseSensitive: true });
     try {
-      // The compiled regex is global, so lastIndex may point past a previous
-      // exec — reset before searching.
-      regex.lastIndex = 0;
-      const match = regex.exec(content);
-
-      if (match === null) return undefined;
-      // RE2ExecArray types group 0 as optional. A successful match always has it;
-      // an empty one would name a zero-length span, which cannot be replaced.
-      const matched = match[0];
-      if (matched === undefined || matched.length === 0) return undefined;
+      // execMatches resets lastIndex and reports UTF-16 offsets; the raw RE2
+      // index counts code points and would splice off-by-one per emoji.
+      const { value: match } = execMatches(regex, content).next();
+      // A zero-length match names an empty span, which cannot be replaced.
+      if (match === undefined || match.text.length === 0) return undefined;
 
       return {
-        startIndex: match.index,
-        length: matched.length,
+        startIndex: match.start,
+        length: match.text.length,
       };
     } finally {
       // The compiled pattern owns wasm memory re2-wasm never reclaims on its

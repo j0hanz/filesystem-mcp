@@ -1159,6 +1159,57 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(content, 'QUX bar QUX\n');
   });
 
+  // RE2 reports offsets in code points; JS strings index in UTF-16 code units,
+  // so every astral character earlier in the file used to shift the splice by
+  // one and cut into surrounding text.
+  it('replace_text and edit splice correctly past astral characters', async () => {
+    const prefix = '# T\n\n> 🟢 a 🔺 b 📅 c\n\n';
+    const file = await writeTestFile(
+      tmpDir,
+      'emoji/rep.md',
+      `${prefix}Line with ALPHA and more.\n`,
+    );
+
+    for (const args of [
+      { caseSensitive: false, isRegex: false },
+      { caseSensitive: true, isRegex: false },
+      { caseSensitive: true, isRegex: true },
+      { caseSensitive: false, isRegex: false, wholeWord: true },
+    ]) {
+      await writeFile(file, `${prefix}Line with ALPHA and more.\n`);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: file, searchPattern: 'ALPHA', replacement: 'BETA', ...args },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(
+        await readFile(file, 'utf-8'),
+        `${prefix}Line with BETA and more.\n`,
+        `replace_text with ${JSON.stringify(args)}`,
+      );
+    }
+
+    await writeFile(file, `${prefix}Line with ALPHA and more.\n`);
+    const edited = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'with ALPHA and', newText: 'with BETA and' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(edited.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), `${prefix}Line with BETA and more.\n`);
+
+    // The reported column is a UTF-16 offset into the line, as `indexOf` gives.
+    const searched = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: join(tmpDir, 'emoji'), searchPattern: 'BETA' },
+    });
+    const sc = searched._meta as { matches?: { column: number }[] };
+    assert.strictEqual(sc.matches?.[0]?.column, 'Line with '.length);
+  });
+
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
     const result = await harness.client.callTool({
