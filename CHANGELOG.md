@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.7] - 2026-09-10
+
+A single-defect release: file corruption in `replace_text` on any file
+containing emoji. No tool, CLI flag, environment variable, or wire payload
+changes shape.
+
+### Fixed
+
+- **`replace_text` no longer corrupts files containing astral characters.**
+  re2-wasm reports `exec().index`, `lastIndex`, and the replace-callback
+  offset in code points, while every JS string operation indexes in UTF-16
+  code units. The two agree until the first astral character — most emoji —
+  past which every offset is short by one per surrogate pair, so RE2's own
+  `[Symbol.replace]` spliced into the middle of neighbouring words and
+  silently dropped characters while reporting success and a correct match
+  count. `edit` corrupted identically under `ignoreWhitespace: true`, and
+  `search_text` reported a column short by the same amount; the
+  case-sensitive literal paths of both were unaffected, matching on
+  `indexOf`. One `execMatches` generator in `core/search.ts` is now the
+  single owner of the conversion, and no caller reads `match.index` or
+  `regex.lastIndex` any more. It also owns the advance between matches,
+  which the wrapper computed by adding a UTF-16 length to a code-point
+  index — an emoji inside a match could skip the one after it. Reported in
+  [#24](https://github.com/j0hanz/filesystem-mcp/issues/24).
+- **`` $` `` and `$'` in a `replace_text` template resolve against the right
+  offset.** They slice the input around the match, and took the same
+  uncorrected offset the splice did.
+
 ## [2.1.6] - 2026-09-09
 
 An internal-only release: the second pass over the over-engineering audit's
