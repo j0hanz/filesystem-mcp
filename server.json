@@ -9,12 +9,12 @@
     "source": "github",
     "id": "1115057681"
   },
-  "version": "2.1.6",
+  "version": "2.1.7",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@j0hanz/filesystem-mcp",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -55,7 +55,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/j0hanz/filesystem-mcp:2.1.6",
+      "identifier": "ghcr.io/j0hanz/filesystem-mcp:2.1.7",
       "runtimeHint": "docker",
       "transport": {
         "type": "stdio"
