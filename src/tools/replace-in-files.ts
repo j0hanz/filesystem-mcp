@@ -35,7 +35,7 @@ import {
   SafeGlobPattern,
 } from '../core/schema.js';
 import type { Regex } from '../core/search.js';
-import { compileRegex, freeRegex } from '../core/search.js';
+import { compileRegex, execMatches, freeRegex } from '../core/search.js';
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
@@ -178,8 +178,8 @@ const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
  * `Invalid replacement string` on any `$` not followed by a substitution it
  * recognises (so a replacement of `$100` or a trailing `$` fails outright,
  * where `RegExp` inserts the `$` literally), and it renders an out-of-range
- * `$5` as `$4`. Passing a function to `String.replace` disables RE2's handling
- * entirely, which leaves this the single owner of the syntax.
+ * `$5` as `$4`. The matcher splices matches itself, so this is the single owner
+ * of the syntax.
  */
 function expandDollarTokens(
   template: string,
@@ -222,37 +222,33 @@ function createRegexReplacementMatcher(
       return regex.test(buffer.toString('utf-8'));
     },
     replace(content: string, replacement: string): { content: string; matchCount: number } {
-      regex.lastIndex = 0;
+      // Splicing by hand rather than through `String.replace(regex, …)`: RE2's
+      // own replacer indexes the JS string with the code-point offsets it
+      // reports, which lands the replacement short by one per astral character
+      // (most emoji) earlier in the file. execMatches reports UTF-16 offsets.
       let matchCount = 0;
-      // Only isRegex=true opts into $1/$& substitution. A literal search reaches
-      // this matcher too (case-insensitive and wholeWord both need a regex), and
-      // there the replacement must be inserted verbatim.
-      if (!expandReplacement) {
-        const updated = content.replace(regex, () => {
-          matchCount++;
-          return replacement;
-        });
-        return { content: updated, matchCount };
-      }
-      const updated = content.replace(regex, (match: string, ...rest: unknown[]): string => {
+      let updated = '';
+      let cursor = 0;
+      for (const match of execMatches(regex, content)) {
         matchCount++;
-        // In ECMAScript/RE2, trailing arguments are [offset, input] or [offset, input, namedGroups].
-        const named =
-          rest.length >= 3 && typeof rest[rest.length - 3] === 'number'
-            ? (rest.pop() as Record<string, string> | undefined)
-            : undefined;
-        const input = rest.pop() as string;
-        const offset = rest.pop() as number;
-        return expandDollarTokens(
-          replacement,
-          match,
-          rest as (string | undefined)[],
-          offset,
-          input,
-          named,
-        );
-      });
-      return { content: updated, matchCount };
+        // Only isRegex=true opts into $1/$& substitution. A literal search
+        // reaches this matcher too (case-insensitive and wholeWord both need a
+        // regex), and there the replacement must be inserted verbatim.
+        updated +=
+          content.slice(cursor, match.start) +
+          (expandReplacement
+            ? expandDollarTokens(
+                replacement,
+                match.text,
+                match.groups,
+                match.start,
+                content,
+                match.named,
+              )
+            : replacement);
+        cursor = match.end;
+      }
+      return { content: updated + content.slice(cursor), matchCount };
     },
     dispose(): void {
       freeRegex(regex);

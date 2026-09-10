@@ -78,23 +78,89 @@ export function freeRegex(regex: Regex | undefined): void {
   }
 }
 
+export interface RegexMatch {
+  /** The matched text. */
+  text: string;
+  /** Capture groups, 1-indexed in the pattern, 0-indexed here. */
+  groups: (string | undefined)[];
+  /** Named capture groups, when the pattern declares any. */
+  named: Record<string, string> | undefined;
+  /** Start offset in UTF-16 code units — usable with `String.prototype.slice`. */
+  start: number;
+  /** End offset in UTF-16 code units. */
+  end: number;
+}
+
+/** Code-point length of `text`, i.e. its UTF-16 length minus its surrogate pairs. */
+function codePointLength(text: string): number {
+  let length = 0;
+  for (let i = 0; i < text.length; i++) {
+    if ((text.charCodeAt(i) & 0xfc00) === 0xd800 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      i++;
+    }
+    length++;
+  }
+  return length;
+}
+
+/**
+ * Iterate a global pattern's non-overlapping matches with offsets JS can use.
+ *
+ * re2-wasm reports `index` and `lastIndex` in **code points**, while every JS
+ * string operation indexes in UTF-16 code units. The two agree only until the
+ * first astral character (most emoji), past which every offset is short by one
+ * per surrogate pair — slicing on the raw index cuts into the middle of
+ * neighbouring text. Its `lastIndex` bookkeeping is worse still: it adds the
+ * match's UTF-16 length to a code-point index, so an astral character inside a
+ * match can skip the next one. This is the single place that corrects both; no
+ * caller should read `match.index` or `regex.lastIndex` directly.
+ *
+ * Zero-length matches (e.g. `a*`) advance by one code point so they cannot loop
+ * forever. The regex is global and shared across calls, so `lastIndex` is reset
+ * on entry.
+ */
+export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, undefined> {
+  regex.lastIndex = 0;
+  // Cursor into `text`, carried forward across matches: RE2 reports them in
+  // ascending order, so the walk is O(text) in total rather than per match.
+  let cursorCp = 0;
+  let cursorU16 = 0;
+  let match: RE2ExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    while (cursorCp < match.index && cursorU16 < text.length) {
+      const isPair =
+        (text.charCodeAt(cursorU16) & 0xfc00) === 0xd800 &&
+        (text.charCodeAt(cursorU16 + 1) & 0xfc00) === 0xdc00;
+      cursorU16 += isPair ? 2 : 1;
+      cursorCp++;
+    }
+    const matched = match[0] ?? '';
+    const start = cursorU16;
+    yield {
+      text: matched,
+      groups: match.slice(1),
+      named: match.groups,
+      start,
+      end: start + matched.length,
+    };
+    // Own the advance rather than trusting the wrapper's mixed-unit arithmetic.
+    regex.lastIndex = match.index + (matched.length === 0 ? 1 : codePointLength(matched));
+  }
+}
+
 /**
  * Find non-overlapping occurrences of a global regex in a single line, reporting
- * the first match's column alongside the count. Guards zero-length matches
- * (e.g. `a*`) so they cannot loop forever.
+ * the first match's column alongside the count.
  */
 function findLineMatches(
   regex: Regex,
   line: string,
 ): { count: number; column: number } | undefined {
-  regex.lastIndex = 0;
   let count = 0;
   let column = -1;
-  let match: RE2ExecArray | null;
-  while ((match = regex.exec(line)) !== null) {
-    if (column === -1) column = match.index;
+  for (const match of execMatches(regex, line)) {
+    if (column === -1) column = match.start;
     count++;
-    if (match.index === regex.lastIndex) regex.lastIndex++; // advance past zero-length match
     if (count >= MAX_MATCHES_PER_LINE) break;
   }
   return count > 0 ? { count, column } : undefined;
