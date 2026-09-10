@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.8] - 2026-09-10
+
+An internal-only release: the third pass over the over-engineering audit,
+46 verified cuts across 47 files, net 605 lines removed. No tool, CLI
+flag, environment variable, or wire payload changes shape; the OPTIONS
+preflight stays endpoint-exact and still fires ahead of the rate limiter
+and bearer auth.
+
+### Removed
+
+- **Three CORS middlewares collapsed into one.**
+  `reflectAllowedOrigin`, `corsOriginMiddleware`, and
+  `corsPreflightHandler` are one `corsMiddleware`: origin reflection on
+  every request, preflight answered only on the exact mount-relative `/`
+  (so `OPTIONS /mcp/sub` keeps falling through to its 404), via a single
+  `app.use('/mcp', ...)` mount.
+- **The HTTP per-request factory indirection.**
+  `makeHttpModernFactory` and its `getNotifier` getter are inlined into
+  `startHttpServer`, and process shutdown disposes the server through
+  `http.Server`'s own `Symbol.asyncDispose` instead of a hand-rolled
+  close-promise.
+- **Dead exports across core and tools.** `timedSignal` (the
+  `AbortSignal.timeout` pass-through it wrapped), `isIgnoredByGitignore`,
+  `createSearchMatcher`, `toStatPerPathPayload`, `preFilterByBudget`,
+  `buildReplacementPlan`, `getRelativeDepth` (inlined to one comparison),
+  `isFilesystemRoot` (subsumed by the `isUnsafeCwdPath` root check), the
+  `FileInfo` interface, and `server.ts`'s never-read `ctx.fs`/`ctx.resources`
+  fields.
+- **The delete reassembly's by-path map.** `delete_file` phase 2 writes
+  results back by index into the preallocated result array; the
+  `byPath`/plan-by-requested bookkeeping is gone.
+- **Progress plumbing in `define.ts`.** The tick guard,
+  `closeWithDone`/`closeWithFail`, and `composeSignal` — the timeout
+  composes through `AbortSignal.any`, and `ProgressSession.complete/fail`
+  are called where the removed wrappers stood.
+- **Task-runner residue.** `scripts/tasks.mjs` is deleted — the npm
+  scripts it wrapped are the documented surface now — and with it
+  `docker-compose.yml`, whose only remaining job was referencing the old
+  wrapper.
+- **Test scaffolding nobody used.** `__tests__/inspector-fixtures.ts` (its
+  two exports duplicated by `bootHttpTest` and a direct `writeFile`),
+  `MockResponse.writeHead` and the `end(chunk)` body, and the `readOnly`
+  options no caller ever passed to `createElicitationClientPair` or
+  `createTestHttpHarness`.
+
+### Changed
+
+- `cli.ts` reads `util.parseArgs` values through their inferred type
+  (dot access for the plain-named flags), and `CliExitError` carries no
+  exit-code parameter — every construction site already exited 1.
+- `core/store.ts` prunes expired entries in one loop and enforces size
+  limits in one `while`; the second pass and the unreachable-state
+  `Logger.error` are gone.
+- README, AGENTS.md, and CONTRIBUTING.md document `npm run check` /
+  `npm test` directly; CI invokes the same scripts.
+
 ## [2.1.7] - 2026-09-10
 
 A single-defect release: file corruption in `replace_text` on any file
