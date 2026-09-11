@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-11
+
+Six architecture-audit findings land together, plus a correctness fix the
+review of them turned up. No tool name, input schema, output schema, or
+annotation changes shape. Two behaviors change deliberately and one bug in
+file exclusion is fixed — see below before upgrading if you parse the `list`
+text block or rely on `--log-level` to silence startup warnings.
+
+### Fixed
+
+- **Ignored files and directories could survive a walk.** Node's `fs.glob`
+  drops a rejected entry when `exclude` is an array of patterns, but when it
+  is a function it only prunes descent — it still yields the rejected entry
+  itself, and any rejected entry below the top level. The internal filter
+  returns an array when no `.gitignore` is found and a function when one is,
+  so the mere presence of a `.gitignore` anywhere under the root silently
+  changed which entries survived. In practice `find_files`, `search_text` and
+  `replace_text` returned nested gitignored files — a `*.log` rule dropped
+  `drop.log` but kept `sub/drop2.log`. The predicate is now re-applied before
+  an entry is yielded, so both forms agree.
+- **The `.gitignore` pre-walk ignores cancellation.** The discovery pass that
+  collects `.gitignore` files prunes only `node_modules`, `.git`, `.hg` and
+  `.svn` — not `dist`, `target` or `vendor` — so on a large tree it ran
+  uninterruptibly and outside the calling tool's own timeout. It now receives
+  the caller's `AbortSignal`.
+
+### Changed
+
+- **`list` reports its position on every page.** The text block now carries
+  the same `// showing 1-20 of 57 entries.` trailer the other paged tools
+  emit, including on the final page, which previously shipped a bare tree and
+  read as the complete answer. The cursor moves into that line as
+  `Next page: list {"cursor":"..."}`; the old bare `nextCursor: <value>` line
+  is gone, and `_meta.nextCursor` is unchanged. The first-page resource
+  pointer is now a plain `full tree at <uri>` line.
+- **Invalid-setting warnings are no longer silenced by `--log-level`.** A
+  rejected value for `FS_MAX_FILE_SIZE`, `FS_MAX_READ_MANY_BYTES`,
+  `FS_SEARCH_TIMEOUT_MS`, `FS_MAX_WATCHERS`, `FS_MAX_REQUEST_BYTES`,
+  `FS_RATE_LIMIT_RPM` or `FS_KEEPALIVE_TIMEOUT_MS` used to print through the
+  logger, so `--log-level=error` hid it while the same typo in
+  `FS_ALLOW_SENSITIVE` or `FS_LOG_LEVEL` still printed. All of them now reach
+  stderr once per setting, regardless of level.
+- **`list` prunes ignored directories during the walk** instead of
+  enumerating everything and filtering afterwards, so the contents of an
+  ignored directory are never visited.
+- Five tool modules and seven export constants renamed to the wire name they
+  register (`search-text.ts`/`SEARCH_TEXT`, `find-files.ts`/`FIND_FILES`,
+  `replace-text.ts`/`REPLACE_TEXT`, `list-roots.ts`/`LIST_ROOTS`,
+  `delete.ts`/`DELETE`, plus `STAT` and `READ`). Internal only — every
+  `name:` string on the wire is byte-identical.
+
+### Removed
+
+- **The `excludePatterns` walk option.** It only ever received the default
+  exclude list or an empty array, always selected by the same boolean that
+  set `respectGitignore`, so the two fields encoded one decision. One
+  `skipIgnored` flag now selects both, and `glob.ts` owns what it means. See
+  [ADR-001](docs/adr/001-one-skipignored-flag-owns-both-exclusion-rules.md).
+- **The `FilesystemServerContext` class.** It is the interface it already was
+  to every consumer; two of its five constructor arguments fed fields only
+  its own dispose read.
+- **Two of three copies of the invalid-setting warning.** `primitives.ts`
+  owns it now, which also removes `util.ts`'s only dependency on
+  `observability.ts`.
+
+### Added
+
+- `docs/adr/` and its first record, fixing why a walk's exclusion rules are
+  one flag rather than two fields, and what that costs.
+
 ## [2.1.8] - 2026-09-10
 
 An internal-only release: the third pass over the over-engineering audit,
