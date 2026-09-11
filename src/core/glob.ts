@@ -63,7 +63,7 @@ async function loadGitignoreFiles(
   );
 }
 
-export class GitignoreManager {
+class GitignoreManager {
   private matchers = new Map<string, Ignore>();
 
   addMatcher(dir: string, matcher: Ignore): void {
@@ -169,7 +169,7 @@ export class GitignoreManager {
   }
 }
 
-export async function loadRootGitignore(
+async function loadRootGitignore(
   root: string,
   signal?: AbortSignal,
 ): Promise<GitignoreManager | null> {
@@ -193,13 +193,15 @@ export interface GlobEntry {
 export interface GlobEntriesOptions {
   cwd: string;
   pattern: string;
-  excludePatterns?: readonly string[];
   includeHidden?: boolean;
   baseNameMatch?: boolean;
   maxDepth?: number;
   onlyFiles?: boolean;
   suppressErrors?: boolean;
-  respectGitignore?: boolean;
+  /** Skip what a walk should not surface: DEFAULT_EXCLUDE_PATTERNS and .gitignore. */
+  skipIgnored?: boolean;
+  /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
+  signal?: AbortSignal;
 }
 
 interface NormalizedGlob {
@@ -303,7 +305,7 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
   const normalized: NormalizedGlob = {
     cwd,
     patterns,
-    exclude: (options.excludePatterns ?? []).map(toPosixPath),
+    exclude: options.skipIgnored ? DEFAULT_EXCLUDE_PATTERNS.map(toPosixPath) : [],
     suppressErrors: options.suppressErrors ?? false,
   };
 
@@ -396,6 +398,10 @@ async function* processGlobPattern(
 
   try {
     for await (const match of iterable) {
+      // A function `exclude` only prunes descent in fs.glob — it still yields
+      // the rejected dirent itself, and any rejected entry below the top level.
+      // An array `exclude` drops both. Re-apply the predicate so the two agree.
+      if (typeof excludeFunc === 'function' && excludeFunc(match)) continue;
       yield* processDirentMatch(match, cwd, maxDepth, seen, onlyFiles);
     }
   } catch (error) {
@@ -408,8 +414,8 @@ async function* processGlobPattern(
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
   let gitignoreMatcher: GitignoreManager | null = null;
-  if (options.respectGitignore) {
-    gitignoreMatcher = await loadRootGitignore(options.cwd);
+  if (options.skipIgnored) {
+    gitignoreMatcher = await loadRootGitignore(options.cwd, options.signal);
   }
 
   const plan = normalizeGlobOptions(options);
@@ -422,7 +428,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
   }
 }
 
-export const DEFAULT_EXCLUDE_PATTERNS = [
+const DEFAULT_EXCLUDE_PATTERNS = [
   '**/node_modules',
   '**/node_modules/**',
   '**/dist',

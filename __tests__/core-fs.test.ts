@@ -7,6 +7,7 @@ import { ErrorCode, isFsError } from '../src/core/errors.js';
 import { GuardedFileSystem } from '../src/core/fs.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
+import { getDefaultReadManyMaxTotalSize } from '../src/core/util.js';
 import type { FilesystemServerContext } from '../src/server.js';
 import {
   cleanupTestRoot,
@@ -200,11 +201,11 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       const searchDir = join(tmpDir, 'search_dir');
 
-      const tsResults = await searchFiles(searchDir, '**/*.ts', [], {}, ctx.pathGuard);
+      const tsResults = await searchFiles(searchDir, '**/*.ts', {}, ctx.pathGuard);
       assert.strictEqual(tsResults.results.length, 3);
       assert.ok(tsResults.results.every((r) => r.path.endsWith('.ts')));
 
-      const txtResults = await searchFiles(searchDir, '**/*.txt', [], {}, ctx.pathGuard);
+      const txtResults = await searchFiles(searchDir, '**/*.txt', {}, ctx.pathGuard);
       assert.strictEqual(txtResults.results.length, 2);
       assert.ok(txtResults.results.every((r) => r.path.endsWith('.txt')));
     });
@@ -214,13 +215,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await writeTestFile(tmpDir, 'sort_dir/aaa/omega.ts', '// o');
 
       const sortDir = join(tmpDir, 'sort_dir');
-      const byName = await searchFiles(sortDir, '**/*.ts', [], { sortBy: 'name' }, ctx.pathGuard);
+      const byName = await searchFiles(sortDir, '**/*.ts', { sortBy: 'name' }, ctx.pathGuard);
       assert.deepStrictEqual(
         byName.results.map((r) => basename(r.path)),
         ['alpha.ts', 'omega.ts'],
       );
 
-      const byPath = await searchFiles(sortDir, '**/*.ts', [], {}, ctx.pathGuard);
+      const byPath = await searchFiles(sortDir, '**/*.ts', {}, ctx.pathGuard);
       assert.deepStrictEqual(
         byPath.results.map((r) => basename(r.path)),
         ['omega.ts', 'alpha.ts'],
@@ -287,6 +288,51 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
           return true;
         },
       );
+    });
+  });
+
+  describe('Invalid setting warnings (TC-FUNC-019b)', () => {
+    it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', () => {
+      const priorLevel = process.env['FS_LOG_LEVEL'];
+      const priorBytes = process.env['FS_MAX_READ_MANY_BYTES'];
+      const realError = console.error;
+      const collected: string[] = [];
+
+      process.env['FS_LOG_LEVEL'] = 'error';
+      process.env['FS_MAX_READ_MANY_BYTES'] = 'not-a-number';
+      console.error = (...args: unknown[]) => {
+        collected.push(args.map(String).join(' '));
+      };
+
+      try {
+        const first = getDefaultReadManyMaxTotalSize();
+        const second = getDefaultReadManyMaxTotalSize();
+
+        assert.strictEqual(first, 512 * 1024, 'falls back to the documented default');
+        assert.strictEqual(second, first);
+
+        const warnings = collected.filter((line) =>
+          line.includes('Invalid FS_MAX_READ_MANY_BYTES value'),
+        );
+        // Once per (setting, value), not once per call — and it reaches stderr
+        // despite FS_LOG_LEVEL=error, which used to suppress this one warning
+        // while leaving FS_ALLOW_SENSITIVE and FS_LOG_LEVEL typos visible.
+        assert.strictEqual(
+          warnings.length,
+          1,
+          `expected one warning, got ${JSON.stringify(collected)}`,
+        );
+        assert.match(
+          warnings[0] ?? '',
+          /^\[warning\] Invalid FS_MAX_READ_MANY_BYTES value: not-a-number \(must be 10240-104857600\)\. Using default: 524288$/,
+        );
+      } finally {
+        console.error = realError;
+        if (priorLevel === undefined) delete process.env['FS_LOG_LEVEL'];
+        else process.env['FS_LOG_LEVEL'] = priorLevel;
+        if (priorBytes === undefined) delete process.env['FS_MAX_READ_MANY_BYTES'];
+        else process.env['FS_MAX_READ_MANY_BYTES'] = priorBytes;
+      }
     });
   });
 });

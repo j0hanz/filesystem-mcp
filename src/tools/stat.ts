@@ -160,7 +160,7 @@ function classifyTypeCounts(results: readonly PerPathResult<FileInfo>[]): {
   return { fileCount, dirCount };
 }
 
-export const GET_FILE_INFO = defineTool({
+export const STAT = defineTool({
   name: 'stat',
   title: 'Get File Info',
   description:

@@ -14,7 +14,7 @@ const RootsOutputSchema = z.strictObject({
     .describe('How to configure roots; present only when there are none to list'),
 });
 
-export const LIST_ALLOWED_DIRECTORIES = defineTool({
+export const LIST_ROOTS = defineTool({
   name: 'list_roots',
   title: 'Workspace Roots',
   description:

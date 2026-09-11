@@ -384,7 +384,7 @@ async function readOnePath(
   });
 }
 
-export const READ_FILE = defineTool({
+export const READ = defineTool({
   name: 'read',
   title: 'Read File',
   description:

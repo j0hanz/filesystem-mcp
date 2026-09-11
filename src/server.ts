@@ -28,35 +28,10 @@ const {
   homepage: SERVER_HOMEPAGE,
 } = packageJson;
 
-export class FilesystemServerContext {
-  public readonly mcp: McpServer;
-  public readonly pathGuard: PathGuard;
-  public readonly pages: PageSnapshotStore;
-  /** False when the store is shared across instances and outlives this one. */
-  private readonly ownsPages: boolean;
-  private readonly resourceDisposable?: { dispose(): void } | undefined;
-  private cleanedUp = false;
-
-  constructor(
-    mcp: McpServer,
-    pathGuard: PathGuard,
-    pages: PageSnapshotStore,
-    ownsPages: boolean,
-    resourceDisposable?: { dispose(): void },
-  ) {
-    this.mcp = mcp;
-    this.pathGuard = pathGuard;
-    this.pages = pages;
-    this.ownsPages = ownsPages;
-    this.resourceDisposable = resourceDisposable;
-  }
-
-  disposeRuntimeState(): void {
-    if (this.cleanedUp) return;
-    this.cleanedUp = true;
-    if (this.ownsPages) this.pages.clear();
-    this.resourceDisposable?.dispose();
-  }
+export interface FilesystemServerContext {
+  readonly mcp: McpServer;
+  readonly pathGuard: PathGuard;
+  disposeRuntimeState(): void;
 }
 
 export async function createServer(
@@ -192,11 +167,17 @@ export async function createServer(
   registerPrompts(deps);
   registerTools(deps);
 
-  return new FilesystemServerContext(
-    server,
+  // False when the store is shared across instances and outlives this one.
+  const ownsPages = extraDeps?.pageStore === undefined;
+  let cleanedUp = false;
+  return {
+    mcp: server,
     pathGuard,
-    pageStore,
-    extraDeps?.pageStore === undefined,
-    resourceDisposable,
-  );
+    disposeRuntimeState() {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      if (ownsPages) pageStore.clear();
+      resourceDisposable.dispose();
+    },
+  };
 }

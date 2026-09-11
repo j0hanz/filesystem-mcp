@@ -4,20 +4,20 @@ import {
   MAX_SEARCH_RESULTS,
 } from './core/util.js';
 import {
-  GET_FILE_INFO,
+  FIND_FILES,
   LIST,
-  LIST_ALLOWED_DIRECTORIES,
+  LIST_ROOTS,
   MUTATING_TOOL_NAMES,
-  READ_FILE,
-  SEARCH_CONTENT,
-  SEARCH_FILES,
+  READ,
+  SEARCH_TEXT,
+  STAT,
 } from './tools/index.js';
 
 function buildToolsOverview(readOnly: boolean): string {
   const rows: [string, string[]][] = [
-    ['Navigate', [LIST_ALLOWED_DIRECTORIES.name, LIST.name, SEARCH_FILES.name]],
-    ['Inspect', [GET_FILE_INFO.name, SEARCH_CONTENT.name]],
-    ['Read', [READ_FILE.name]],
+    ['Navigate', [LIST_ROOTS.name, LIST.name, FIND_FILES.name]],
+    ['Inspect', [STAT.name, SEARCH_TEXT.name]],
+    ['Read', [READ.name]],
   ];
 
   // Under --read-only the mutating tools are never registered, so advertising
@@ -49,9 +49,9 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
     guidelines: [
       'Guidelines:',
       '```',
-      `root_access: ${LIST_ALLOWED_DIRECTORIES.name} lists configured or accepted roots; every other tool is scoped to them.`,
+      `root_access: ${LIST_ROOTS.name} lists configured or accepted roots; every other tool is scoped to them.`,
       'modern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.',
-      `path_resolution: Confirm a path with ${LIST.name} or ${SEARCH_FILES.name} before acting on it.`,
+      `path_resolution: Confirm a path with ${LIST.name} or ${FIND_FILES.name} before acting on it.`,
       '```',
     ].join('\n'),
     tools_overview: [
@@ -63,20 +63,20 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
     constraints: [
       'Constraints:',
       '```',
-      `allowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call ${LIST_ALLOWED_DIRECTORIES.name} to read the current set.`,
+      `allowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call ${LIST_ROOTS.name} to read the current set.`,
       'legacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.',
       'sensitive_paths: Sensitive file paths (.env, *.pem, *id_rsa*) are denied by default.',
       `enforced_limits: max file size ${maxFileMb} MB, file search cap ${MAX_SEARCH_RESULTS} results, content search cap ${DEFAULT_SEARCH_CONTENT_RESULTS} matches.`,
       'ephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.',
-      'pagination: nextCursor appears in the text (list) or _meta (find_files, search_text) and is backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
+      'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
       '```',
     ].join('\n'),
     error_recovery: [
       'Error Recovery:',
       '```',
-      `ACCESS_DENIED: Run ${LIST_ALLOWED_DIRECTORIES.name}; configure a missing startup root or retry a concrete path and approve the grant.`,
-      `NOT_FOUND: Run ${LIST.name} or ${SEARCH_FILES.name} to verify the path.`,
-      `TOO_LARGE: Use ${READ_FILE.name} with head/tail or startLine/endLine, or split across several calls.`,
+      `ACCESS_DENIED: Run ${LIST_ROOTS.name}; configure a missing startup root or retry a concrete path and approve the grant.`,
+      `NOT_FOUND: Run ${LIST.name} or ${FIND_FILES.name} to verify the path.`,
+      `TOO_LARGE: Use ${READ.name} with head/tail or startLine/endLine, or split across several calls.`,
       'TIMEOUT: Reduce scope, depth, or maxResults.',
       'INVALID_INPUT: Re-read the tool schema in tools/list.',
       '```',

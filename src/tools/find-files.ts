@@ -4,7 +4,6 @@ import { SearchStoppedReasonSchema } from '../core/concurrency.js';
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
-import { DEFAULT_EXCLUDE_PATTERNS } from '../core/glob.js';
 import { toPosixRelative } from '../core/path.js';
 import {
   CursorSchema,
@@ -144,22 +143,15 @@ async function handleSearchFiles(
     pageSize: args.maxResults,
     produce: async () => {
       const basePath = await ctx.fs.pathGuard.validateExistingDirectory(requestedBasePath);
-      const excludePatterns = args.includeIgnored ? [] : DEFAULT_EXCLUDE_PATTERNS;
-      const searchOptions: Parameters<typeof searchFiles>[3] = {
+      const searchOptions: Parameters<typeof searchFiles>[2] = {
         maxResults: MAX_SEARCH_RESULTS,
         includeHidden: args.includeHidden,
         sortBy: args.sortBy,
-        respectGitignore: !args.includeIgnored,
+        skipIgnored: !args.includeIgnored,
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
         signal: ctx.signal,
       };
-      const result = await searchFiles(
-        basePath,
-        args.pattern,
-        excludePatterns,
-        searchOptions,
-        ctx.fs.pathGuard,
-      );
+      const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
       return {
         items: buildRelativeResults(result.basePath, result.results),
         metadata: {
@@ -194,7 +186,7 @@ async function handleSearchFiles(
   };
 }
 
-export const SEARCH_FILES = defineTool({
+export const FIND_FILES = defineTool({
   name: 'find_files',
   title: 'Find Files',
   description:

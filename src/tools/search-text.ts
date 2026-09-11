@@ -7,7 +7,6 @@ import { SearchStoppedReasonSchema } from '../core/concurrency.js';
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode, FsError } from '../core/errors.js';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
-import { DEFAULT_EXCLUDE_PATTERNS } from '../core/glob.js';
 import { Logger } from '../core/observability.js';
 import { toPosixRelative } from '../core/path.js';
 import {
@@ -190,12 +189,11 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
 function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): SearchContentOptions {
   return {
     includeHidden: args.includeHidden,
-    excludePatterns: args.includeIgnored ? [] : DEFAULT_EXCLUDE_PATTERNS,
     filePattern: args.pattern ?? '**/*',
     caseSensitive: args.caseSensitive,
     isRegex: args.isRegex,
     maxResults: args.maxResults,
-    respectGitignore: !args.includeIgnored,
+    skipIgnored: !args.includeIgnored,
     ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
     ...(signal ? { signal } : {}),
   };
@@ -314,7 +312,7 @@ async function handleSearchContent(
   };
 }
 
-export const SEARCH_CONTENT = defineTool({
+export const SEARCH_TEXT = defineTool({
   name: 'search_text',
   title: 'Search Content',
   description:

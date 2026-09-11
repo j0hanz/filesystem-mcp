@@ -1,4 +1,5 @@
 import { cli } from './config.js';
+import { warnInvalidSetting } from './primitives.js';
 
 export type LoggingLevel =
   'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency';
@@ -25,9 +26,7 @@ function parseLogLevel(raw: string | undefined): LoggingLevel {
   // `warn` is the common short form; the canonical RFC 5424 level is `warning`.
   if (raw === 'warn') return 'warning';
   if (isLoggingLevel(raw)) return raw;
-  console.error(
-    `[warning] Invalid FS_LOG_LEVEL value: ${raw} (must be ${LEVEL_ORDER.join('|')}). Using default: info`,
-  );
+  warnInvalidSetting('FS_LOG_LEVEL', raw, LEVEL_ORDER.join('|'), 'info');
   return 'info';
 }
 
