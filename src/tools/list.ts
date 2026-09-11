@@ -6,8 +6,9 @@ import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
+import { pageTrailer } from '../core/fmt.js';
 import type { EntryType } from '../core/glob.js';
-import { DEFAULT_EXCLUDE_PATTERNS, globEntries, loadRootGitignore } from '../core/glob.js';
+import { globEntries } from '../core/glob.js';
 import type { PathGuard } from '../core/path.js';
 import { toPosixRelative } from '../core/path.js';
 import { resolveEntryType } from '../core/primitives.js';
@@ -76,10 +77,6 @@ function compareEntries(a: CollectedEntry, b: CollectedEntry): number {
 }
 
 async function collect(rootPath: string, options: CollectOptions): Promise<CollectResult> {
-  const gitignoreMatcher = options.includeIgnored
-    ? null
-    : await loadRootGitignore(rootPath, options.signal);
-
   const entries: CollectedEntry[] = [];
   let scanned = 0;
   let totalEntries = 0;
@@ -89,7 +86,8 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   for await (const entry of globEntries({
     cwd: rootPath,
     pattern: '**/*',
-    excludePatterns: options.includeIgnored ? [] : DEFAULT_EXCLUDE_PATTERNS,
+    skipIgnored: !options.includeIgnored,
+    signal: options.signal,
     includeHidden: options.includeHidden,
     baseNameMatch: false,
     // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
@@ -103,13 +101,9 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     options.onProgress?.({ current: scanned });
 
     const entryType: EntryType = resolveEntryType(entry.dirent);
-    const isDir = entryType === 'directory';
     const relPath = toPosixRelative(rootPath, entry.path);
     const name = basename(relPath);
 
-    if (gitignoreMatcher?.isIgnored(relPath, isDir)) {
-      continue;
-    }
     const accessible = await options.pathGuard.isEntryAccessible(entry.path);
     if (!accessible) continue;
 
@@ -264,6 +258,7 @@ async function handleList(
 ): Promise<{
   structured: z.infer<typeof ListOutputSchema>;
   markdown: string;
+  offset: number;
   link?: ContentBlock;
 }> {
   const path = args.path;
@@ -325,6 +320,7 @@ async function handleList(
   return {
     structured: listOutput(paged.page, paged.metadata, paged.nextCursor, paged.resource?.entry.uri),
     markdown: renderMarkdown(basename(paged.metadata.path), [...paged.page]),
+    offset: paged.offset,
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }
@@ -355,22 +351,24 @@ export const LIST = defineTool({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, markdown, link } = await handleList(args, ctx);
-    // The tree is what the model reads; nextCursor and the full-list URI used
-    // to reach it only through the structured half, which now ships as _meta.
-    // Both ride the text so paging needs no second lookup.
-    const trailer: string[] = [];
-    if (structured.nextCursor !== undefined) {
-      trailer.push(`nextCursor: ${structured.nextCursor}`);
-    }
-    if (structured.resourceUri !== undefined) {
-      trailer.push(
-        `${String(structured.entryCount)} of ${String(structured.totalEntries)} entries shown; full tree at ${structured.resourceUri}`,
-      );
-    }
+    const { structured, markdown, offset, link } = await handleList(args, ctx);
+    // The tree is what the model reads, so position and the full-list URI ride
+    // the text too — paging needs no second lookup. `pageTrailer` is the one
+    // owner of that line, and it owes it on the last page as much as the first.
+    const text =
+      markdown +
+      pageTrailer({
+        offset,
+        shown: structured.entryCount,
+        total: structured.totalEntries,
+        noun: 'entries',
+        tool: 'list',
+        nextCursor: structured.nextCursor,
+      }) +
+      (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
     return {
       structured,
-      text: trailer.length > 0 ? `${markdown}\n\n${trailer.join('\n')}` : markdown,
+      text,
       ...(link ? { resources: [link] } : {}),
     };
   },

@@ -731,6 +731,54 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(s2.resourceUri, undefined, 'later pages never carry the URI');
   });
 
+  it('TC-FUNC-075b: list prunes an ignored directory and everything under it', async () => {
+    const sub = join(tmpDir, 'gitignore_walk_dir');
+    // Nested one level on purpose: fs.glob's function `exclude` drops a
+    // rejected entry at the top level but not below it, so a top-level fixture
+    // passes even when the walk leaks the ignored directory itself.
+    await mkdir(join(sub, 'a', 'skipme', 'deep'), { recursive: true });
+    await writeFile(join(sub, '.gitignore'), 'skipme/\n');
+    await writeFile(join(sub, 'kept.txt'), 'k');
+    await writeFile(join(sub, 'a', 'skipme', 'deep', 'buried.txt'), 'b');
+
+    // maxDepth must reach the nested file: the tool's default is 1, top-level only.
+    const pruned = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxDepth: 4 },
+    });
+    const prunedText = firstTextBlock(pruned).text ?? '';
+    assert.match(prunedText, /kept\.txt/);
+    // The directory AND its children stay out: the walk prunes, it does not
+    // enumerate then filter, so `buried.txt` is never visited.
+    assert.doesNotMatch(prunedText, /skipme/);
+    assert.doesNotMatch(prunedText, /buried\.txt/);
+
+    const all = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxDepth: 4, includeIgnored: true },
+    });
+    const allText = firstTextBlock(all).text ?? '';
+    assert.match(allText, /kept\.txt/);
+    assert.match(allText, /buried\.txt/);
+  });
+
+  it('TC-FUNC-075c: find_files drops a gitignored file below the top level', async () => {
+    const sub = join(tmpDir, 'gitignore_file_dir');
+    await mkdir(join(sub, 'nested'), { recursive: true });
+    await writeFile(join(sub, '.gitignore'), '*.log\n');
+    await writeFile(join(sub, 'nested', 'keep.txt'), 'k');
+    await writeFile(join(sub, 'nested', 'drop.log'), 'd');
+
+    const result = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: sub, pattern: '**/*' },
+    });
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /keep\.txt/);
+    // A nested match the exclude predicate rejects must not survive the walk.
+    assert.doesNotMatch(text, /drop\.log/);
+  });
+
   it('TC-FUNC-075: list text carries nextCursor', async () => {
     const sub = join(tmpDir, 'cursor_text_dir');
     await mkdir(sub, { recursive: true });
@@ -741,8 +789,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: sub, maxEntries: 2 },
     });
     const firstText = firstTextBlock(first).text ?? '';
-    const match = /^nextCursor: (\S+)$/m.exec(firstText);
-    assert.ok(match, `first page text should carry a nextCursor line: ${firstText}`);
+    const match = /^\/\/ showing 1-2 of 4 entries\. Next page: list \{"cursor":"([^"]+)"\}$/m.exec(
+      firstText,
+    );
+    assert.ok(match, `first page text should carry its position and cursor: ${firstText}`);
     const cursor = match[1];
     // The model passes back verbatim what it read, so the two must agree.
     assert.strictEqual(cursor, (first._meta as { nextCursor?: string }).nextCursor);
@@ -752,7 +802,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: sub, maxEntries: 2, cursor },
     });
     const secondText = firstTextBlock(second).text ?? '';
-    assert.ok(!/^nextCursor: /m.test(secondText), 'last page advertises no next page');
+    // The last page carries no cursor and still owes its position, or a
+    // two-row tail reads as the whole answer.
+    assert.match(secondText, /^\/\/ showing 3-4 of 4 entries\.$/m);
+    assert.doesNotMatch(secondText, /Next page/);
   });
 
   it('TC-FUNC-063b: list pages are stable and query-bound', async () => {

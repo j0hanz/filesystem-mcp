@@ -1,28 +1,10 @@
 import { availableParallelism } from 'node:os';
 
 import { cli } from './config.js';
-import { Logger } from './observability.js';
+import { warnInvalidSetting } from './primitives.js';
 
 const KIB = 1024;
 export const MIB = 1024 * KIB;
-
-const loggedWarns = new Set<string>();
-
-function logInvalidEnvValue(
-  envVar: string,
-  value: string,
-  expected: string,
-  defaultValue: number | boolean,
-): void {
-  const key = `${envVar}:${value}:${expected}`;
-  if (loggedWarns.has(key)) {
-    return;
-  }
-  loggedWarns.add(key);
-  Logger.warn(
-    `Invalid ${envVar} value: ${value} (must be ${expected}). Using default: ${String(defaultValue)}`,
-  );
-}
 
 export function parseEnvInt(
   envVar: string,
@@ -54,7 +36,7 @@ function parseIntSetting(
     parsed < min ||
     parsed > max
   ) {
-    logInvalidEnvValue(name, value, `${String(min)}-${String(max)}`, defaultValue);
+    warnInvalidSetting(name, value, `${String(min)}-${String(max)}`, defaultValue);
     return defaultValue;
   }
   return parsed;

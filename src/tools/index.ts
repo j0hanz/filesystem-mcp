@@ -5,33 +5,33 @@ import type { PathGuard } from '../core/path.js';
 import type { ResourceStore } from '../core/store.js';
 import { CREATE } from './create.js';
 import type { DefinedTool } from './define.js';
-import { DELETE_FILE } from './delete-file.js';
+import { DELETE } from './delete.js';
 import { DIFF } from './diff.js';
 import { EDIT } from './edit.js';
+import { FIND_FILES } from './find-files.js';
+import { LIST_ROOTS } from './list-roots.js';
 import { LIST } from './list.js';
 import { MOVE } from './move.js';
 import { PATCH } from './patch.js';
-import { READ_FILE } from './read.js';
-import { SEARCH_AND_REPLACE } from './replace-in-files.js';
-import { LIST_ALLOWED_DIRECTORIES } from './roots.js';
-import { SEARCH_CONTENT } from './search-content.js';
-import { SEARCH_FILES } from './search-files.js';
-import { GET_FILE_INFO } from './stat.js';
+import { READ } from './read.js';
+import { REPLACE_TEXT } from './replace-text.js';
+import { SEARCH_TEXT } from './search-text.js';
+import { STAT } from './stat.js';
 
 export const ALL_TOOLS = [
   CREATE,
-  DELETE_FILE,
+  DELETE,
   DIFF,
   EDIT,
   LIST,
   MOVE,
   PATCH,
-  READ_FILE,
-  SEARCH_AND_REPLACE,
-  LIST_ALLOWED_DIRECTORIES,
-  SEARCH_CONTENT,
-  SEARCH_FILES,
-  GET_FILE_INFO,
+  READ,
+  REPLACE_TEXT,
+  LIST_ROOTS,
+  SEARCH_TEXT,
+  FIND_FILES,
+  STAT,
 ] as const;
 
 export const MUTATING_TOOL_NAMES = new Set(
@@ -48,7 +48,7 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 // Only the read-only tools are named individually: the mutating six are no
 // longer listed by hand anywhere, so their names reach callers through
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
-export { LIST, LIST_ALLOWED_DIRECTORIES, READ_FILE, SEARCH_CONTENT, SEARCH_FILES, GET_FILE_INFO };
+export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, STAT };
 
 interface ToolRegistrarDeps {
   readonly server: McpServer;

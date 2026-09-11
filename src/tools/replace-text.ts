@@ -18,7 +18,7 @@ import {
 import { buildFileResourceLink } from '../core/file-uri.js';
 import { truncateProgressPattern } from '../core/fmt.js';
 import type { GuardedFileSystem } from '../core/fs.js';
-import { DEFAULT_EXCLUDE_PATTERNS, globEntries } from '../core/glob.js';
+import { globEntries } from '../core/glob.js';
 import { toPosixRelative } from '../core/path.js';
 import { escapeRegexLiteral } from '../core/primitives.js';
 import { readFileBufferWithLimit } from '../core/read.js';
@@ -500,9 +500,9 @@ async function handleSearchAndReplace(
     : globEntries({
         cwd: root,
         pattern: effectivePattern,
-        excludePatterns: args.includeIgnored ? [] : DEFAULT_EXCLUDE_PATTERNS,
         includeHidden: args.includeHidden,
-        respectGitignore: !args.includeIgnored,
+        skipIgnored: !args.includeIgnored,
+        signal: ctx.signal,
         baseNameMatch: true,
         onlyFiles: true,
         suppressErrors: true,
@@ -599,7 +599,7 @@ async function handleSearchAndReplace(
   return { structured };
 }
 
-export const SEARCH_AND_REPLACE = defineTool({
+export const REPLACE_TEXT = defineTool({
   name: 'replace_text',
   title: 'Search and Replace',
   description:

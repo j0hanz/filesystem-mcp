@@ -401,7 +401,7 @@ async function handleDelete(
   };
 }
 
-export const DELETE_FILE = defineTool({
+export const DELETE = defineTool({
   name: 'delete',
   title: 'Delete File',
   description:

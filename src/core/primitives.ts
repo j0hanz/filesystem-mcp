@@ -23,7 +23,27 @@ export function resolveEntryType(dirent: DirentLike): EntryType {
   return 'other';
 }
 
-const warnedFlagValues = new Set<string>();
+const warnedSettings = new Set<string>();
+
+/**
+ * Warn once per (setting, value) that a configured value was rejected, and say
+ * what was used instead. console.error, not Logger: this module stays
+ * dependency-free to avoid import cycles, and a startup misconfiguration is
+ * worth printing even when the operator asked for errors only.
+ */
+export function warnInvalidSetting(
+  name: string,
+  value: string,
+  expected: string,
+  fallback: string | number | boolean,
+): void {
+  const key = `${name}:${value}`;
+  if (warnedSettings.has(key)) return;
+  warnedSettings.add(key);
+  console.error(
+    `[warning] Invalid ${name} value: ${value} (must be ${expected}). Using default: ${String(fallback)}`,
+  );
+}
 
 /**
  * Parse a boolean env flag: `true`/`1` enable, `false`/`0`/empty disable.
@@ -35,15 +55,7 @@ export function parseTrueEnvFlag(value: string | undefined, name?: string): bool
   const trimmed = value.trim().toLowerCase();
   if (trimmed === 'true' || trimmed === '1') return true;
   if (name && trimmed !== '' && trimmed !== 'false' && trimmed !== '0') {
-    const key = `${name}:${trimmed}`;
-    if (!warnedFlagValues.has(key)) {
-      warnedFlagValues.add(key);
-      // console.error, not Logger: this module stays dependency-free to avoid
-      // import cycles (same precedent as parseLogLevel in observability.ts).
-      console.error(
-        `[warning] Invalid ${name} value: ${value} (must be "true" or "1"). Using default: false`,
-      );
-    }
+    warnInvalidSetting(name, value, '"true" or "1"', false);
   }
   return false;
 }

@@ -259,7 +259,6 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 ```text
 filesystem-mcp/
 ├── __tests__/        Test suites
-├── scripts/          Build and task utilities
 ├── src/
 │   ├── core/         Path guarding, filesystem abstraction, concurrency, observability
 │   ├── tools/        Tool definitions and registration
@@ -280,7 +279,7 @@ the narrow dependency contract it consumes.
 | `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots       |
 | `src/core/fs.ts`      | `GuardedFileSystem` — guarded filesystem facade                |
 | `src/tools/define.ts` | Tool registration and execution framework                      |
-| `src/tools/batch.ts`  | Batch helpers (runOverPaths, normalizeBatchItems)              |
+| `src/tools/batch.ts`  | Batch helpers (runOverPaths, isTotalFailure)                   |
 | `src/server.ts`       | Builds shared dependencies and invokes the three registrars    |
 | `src/transport.ts`    | Owns stdio and Streamable HTTP setup around the server factory |
 

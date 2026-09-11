@@ -171,8 +171,7 @@ export interface SearchContentOptions {
   isRegex?: boolean;
   maxResults?: number;
   filePattern?: string;
-  excludePatterns?: string[];
-  respectGitignore?: boolean;
+  skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
   signal?: AbortSignal;
@@ -221,9 +220,9 @@ export async function searchContent(
     const entries = globEntries({
       cwd: directory,
       pattern: options.filePattern ?? '**/*',
-      excludePatterns: options.excludePatterns ?? [],
       includeHidden: Boolean(options.includeHidden),
-      respectGitignore: Boolean(options.respectGitignore),
+      skipIgnored: Boolean(options.skipIgnored),
+      ...(options.signal ? { signal: options.signal } : {}),
       maxDepth: options.maxDepth ?? 100,
       suppressErrors: true,
     });
@@ -340,12 +339,11 @@ async function* guardedEntries(
 export async function searchFiles(
   directory: string,
   pattern: string,
-  excludePatterns: string[],
   options: {
     maxResults?: number;
     includeHidden?: boolean;
     sortBy?: 'name' | 'path';
-    respectGitignore?: boolean;
+    skipIgnored?: boolean;
     maxDepth?: number;
     signal?: AbortSignal;
   },
@@ -366,9 +364,9 @@ export async function searchFiles(
   const entries = globEntries({
     cwd: directory,
     pattern,
-    excludePatterns,
     includeHidden: Boolean(options.includeHidden),
-    respectGitignore: Boolean(options.respectGitignore),
+    skipIgnored: Boolean(options.skipIgnored),
+    ...(options.signal ? { signal: options.signal } : {}),
     maxDepth: options.maxDepth ?? 100,
     suppressErrors: true,
   });
