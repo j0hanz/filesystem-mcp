@@ -1,6 +1,6 @@
 {
   "name": "@j0hanz/filesystem-mcp",
-  "version": "2.1.8",
+  "version": "2.2.0",
   "mcpName": "io.github.j0hanz/filesystem-mcp",
   "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files.",
   "author": "j0hanz",
