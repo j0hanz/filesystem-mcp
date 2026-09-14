@@ -91,6 +91,14 @@ const GrepInputSchema = z.strictObject({
     .optional()
     .default(DEFAULT_SEARCH_CONTENT_RESULTS)
     .describe('Maximum number of matching lines to return per page'),
+  context: z
+    .uint32()
+    .max(10)
+    .optional()
+    .default(0)
+    .describe(
+      'Lines of context to return either side of each match, like grep -C (default: 0, max: 10)',
+    ),
   maxDepth: maxDepthField(),
   cursor: CursorSchema,
 });
@@ -104,6 +112,14 @@ const GrepOutputSchema = z.strictObject({
         column: NonNegInt.optional().describe('0-indexed column offset of the match start'),
         content: z.string().describe('Full text of the matching line'),
         matchCount: NonNegInt.optional().describe('Number of pattern occurrences on this line'),
+        before: z
+          .array(z.string())
+          .optional()
+          .describe('Lines immediately before the match; present when context > 0'),
+        after: z
+          .array(z.string())
+          .optional()
+          .describe('Lines immediately after the match; present when context > 0'),
       }),
     )
     .describe('Flat list of matches sorted by file path then line number'),
@@ -135,6 +151,49 @@ const GrepOutputSchema = z.strictObject({
     ),
   nextCursor: NextCursorSchema,
 });
+
+function matchRow(m: SearchMatchPayload): string {
+  return `${m.file}:${String(m.line)}: ${m.content}`;
+}
+
+/**
+ * grep -C layout: `file-line- text` for a context line, `--` between groups
+ * that are not adjacent. Every match's window lands in a per-file line map
+ * where a match wins over context, so a line two windows share prints once,
+ * and as a match when it is one. The maps iterate in line order without a
+ * sort: matches arrive sorted, each window is contiguous, and setting an
+ * existing key keeps its slot. Without context the rows are the bare match
+ * lines, byte-identical to before the option existed.
+ */
+function renderRows(matches: readonly SearchMatchPayload[], withContext: boolean): string[] {
+  if (!withContext) return matches.map(matchRow);
+  const byFile = new Map<string, Map<number, string>>();
+  for (const m of matches) {
+    const lines = byFile.get(m.file) ?? new Map<number, string>();
+    byFile.set(m.file, lines);
+    const setContext = (n: number, text: string): void => {
+      if (!lines.has(n)) lines.set(n, `${m.file}-${String(n)}- ${text}`);
+    };
+    const before = m.before ?? [];
+    before.forEach((text, k) => {
+      setContext(m.line - before.length + k, text);
+    });
+    lines.set(m.line, matchRow(m));
+    (m.after ?? []).forEach((text, k) => {
+      setContext(m.line + 1 + k, text);
+    });
+  }
+  const rows: string[] = [];
+  for (const lines of byFile.values()) {
+    let prev: number | undefined;
+    for (const [n, row] of lines) {
+      if (prev === undefined ? rows.length > 0 : n > prev + 1) rows.push('--');
+      rows.push(row);
+      prev = n;
+    }
+  }
+  return rows;
+}
 
 function buildSearchMatchDetail(totalMatches: number, filesMatched: number): string {
   const matchDetail = formatCount(totalMatches, 'match', 'matches');
@@ -180,6 +239,8 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
     column: match.column,
     content: match.content,
     matchCount: match.matchCount,
+    ...(match.before !== undefined ? { before: match.before } : {}),
+    ...(match.after !== undefined ? { after: match.after } : {}),
   }));
 
   payloads.sort((l, r) => l.file.localeCompare(r.file) || l.line - r.line);
@@ -194,6 +255,7 @@ function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): Sea
     isRegex: args.isRegex,
     maxResults: args.maxResults,
     skipIgnored: !args.includeIgnored,
+    context: args.context,
     ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
     ...(signal ? { signal } : {}),
   };
@@ -250,6 +312,7 @@ async function handleSearchContent(
     includeIgnored: args.includeIgnored,
     caseSensitive: args.caseSensitive,
     maxDepth: args.maxDepth,
+    context: args.context,
   });
   const { resourceStore } = ctx;
 
@@ -318,6 +381,7 @@ export const SEARCH_TEXT = defineTool({
   description:
     'Search file contents by text or regex (grep-style). Returns matching lines with file path, ' +
     '1-indexed line number and 0-indexed column offset. ' +
+    'Set context=N to also return N lines either side of each match (grep -C). ' +
     'Scope to specific file types with pattern (e.g. **/*.ts). ' +
     'Set includeHidden=true to include dotfiles. Use find_files to search by filename instead.',
   input: GrepInputSchema,
@@ -340,7 +404,7 @@ export const SEARCH_TEXT = defineTool({
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
     const { structured, offset, total, link } = await handleSearchContent(args, ctx);
-    const rows = structured.matches.map((m) => `${m.file}:${String(m.line)}: ${m.content}`);
+    const rows = renderRows(structured.matches, args.context > 0);
     const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
     const text =
       body +

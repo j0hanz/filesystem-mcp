@@ -17,6 +17,9 @@ interface SearchResult {
   column: number;
   content: string;
   matchCount?: number;
+  /** Up to `context` lines either side of the match; absent when context is 0. */
+  before?: string[];
+  after?: string[];
 }
 
 export type Regex = RE2;
@@ -174,6 +177,8 @@ export interface SearchContentOptions {
   skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
+  /** Lines of context to carry either side of each match; 0 (default) carries none. */
+  context?: number;
   signal?: AbortSignal;
 }
 
@@ -216,6 +221,7 @@ export async function searchContent(
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const maxFileSize = getMaxTextFileSize();
+    const context = options.context ?? 0;
 
     const entries = globEntries({
       cwd: directory,
@@ -254,6 +260,9 @@ export async function searchContent(
       try {
         const content = await readFile(entry.path, { encoding: 'utf-8', signal: options.signal });
         const lines = content.split('\n');
+        // A trailing newline splits into a phantom empty last element; context
+        // must not report it as a line the file has.
+        const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
         let matchedFile = false;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -270,6 +279,12 @@ export async function searchContent(
               column: found.column,
               content: line,
               matchCount: found.count,
+              ...(context > 0
+                ? {
+                    before: lines.slice(Math.max(0, i - context), i),
+                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)),
+                  }
+                : {}),
             });
             if (matches.length >= maxResults) break;
           }

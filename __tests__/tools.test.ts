@@ -1553,6 +1553,96 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
   });
 
+  it('search_text context returns surrounding lines and renders them grep-style once', async () => {
+    const dir = join(tmpDir, 'grep_context');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'import x\nNEEDLE one\nconst y\nNEEDLE two\n}\nfiller\n');
+    await writeFile(join(dir, 'b.txt'), 'foo\nNEEDLE\nbar\n');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const structured = result._meta as {
+      matches?: { file: string; line: number; before?: string[]; after?: string[] }[];
+    };
+    assert.deepStrictEqual(
+      structured.matches?.map((m) => [m.file, m.line, m.before, m.after]),
+      [
+        ['a.txt', 2, ['import x'], ['const y']],
+        ['a.txt', 4, ['const y'], ['}']],
+        ['b.txt', 2, ['foo'], ['bar']],
+      ],
+    );
+    assert.ok(
+      (firstTextBlock(result).text ?? '').startsWith(
+        [
+          'a.txt-1- import x',
+          'a.txt:2: NEEDLE one',
+          'a.txt-3- const y',
+          'a.txt:4: NEEDLE two',
+          'a.txt-5- }',
+          '--',
+          'b.txt-1- foo',
+          'b.txt:2: NEEDLE',
+          'b.txt-3- bar',
+        ].join('\n'),
+      ),
+      firstTextBlock(result).text,
+    );
+
+    const plain = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'NEEDLE' },
+    });
+    const plainStructured = plain._meta as { matches?: Record<string, unknown>[] };
+    assert.ok(plainStructured.matches?.every((m) => !('before' in m) && !('after' in m)));
+  });
+
+  it('search_text context: a match beats context on a shared line and stops at the last line', async () => {
+    const dir = join(tmpDir, 'grep_context_adjacent');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'c.txt'), 'x\nNEEDLE a\nNEEDLE b\n');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const structured = result._meta as {
+      matches?: { line: number; before?: string[]; after?: string[] }[];
+    };
+    assert.deepStrictEqual(
+      structured.matches?.map((m) => [m.line, m.before, m.after]),
+      [
+        [2, ['x'], ['NEEDLE b']],
+        [3, ['NEEDLE a'], []],
+      ],
+    );
+    assert.strictEqual(
+      firstTextBlock(result).text,
+      ['c.txt-1- x', 'c.txt:2: NEEDLE a', 'c.txt:3: NEEDLE b'].join('\n'),
+    );
+  });
+
+  it('search_text rejects a cursor minted under a different context', async () => {
+    const file = await writeTestFile(tmpDir, 'search_ctx_cursor.txt', 'NEEDLE a\nNEEDLE b\n');
+    const first = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1 },
+    });
+    const cursor = (first._meta as { nextCursor?: string }).nextCursor;
+    assert.ok(cursor);
+
+    const replay = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1, context: 1, cursor },
+    });
+    assert.strictEqual(replay.isError, true);
+    assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
+  });
+
   it('search_text externalizes the full match list on the first page only', async () => {
     const lines = Array.from({ length: 120 }, (_, i) => `NEEDLE line ${String(i)}`);
     const file = await writeTestFile(tmpDir, 'search_first_page.txt', `${lines.join('\n')}\n`);

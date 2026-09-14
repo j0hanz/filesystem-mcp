@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`search_text` returns context lines.** `context: N` (0 to 10, default 0)
+  carries N lines either side of each match, like `grep -C`. Each match gains
+  `before` and `after` string arrays, present only when `context` is greater
+  than 0, and the text block switches to grep's layout: `file:line: text` for a
+  match, `file-line- text` for a context line, `--` between groups that are
+  not adjacent. A line two windows share prints once, as a match when it is
+  one. Context lines are not matches: `totalMatches`, `maxResults` and paging
+  count matching lines as before, and a cursor minted under one `context`
+  value is rejected under another. With `context` unset the output is
+  byte-identical to 2.2.0.
+
 ### Changed
 
 - **`edit` refuses an `oldText` that matches more than once.** It used to
