@@ -40,9 +40,10 @@ export function invalidCursor(): FsError {
  * slice a stored array instead of re-scanning and re-sorting the filesystem.
  *
  * ponytail: bounded by snapshot count and TTL, not by bytes — 32 x 20,000
- * `list` entries or 32 x 10,000 `search_text` matches, order of a few hundred MB
- * held for 60s, and the HTTP leg shares one store so any caller can drive it.
- * If that shows up as memory pressure, meter bytes the way `ResourceStore` does.
+ * `list` entries or 32 x 10,000 `search_text` matches, each match retaining up
+ * to 20 more line strings at `context: 10`, order of a few hundred MB held for
+ * 60s, and the HTTP leg shares one store so any caller can drive it. If that
+ * shows up as memory pressure, meter bytes the way `ResourceStore` does.
  */
 export class PageSnapshotStore {
   private readonly byId = new Map<string, StoredPageSnapshot>();
