@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`edit` refuses an `oldText` that matches more than once.** It used to
+  splice the first occurrence and report success, so an `oldText` without
+  enough surrounding context silently changed a block the caller may not have
+  meant. The edit now fails with `INVALID_INPUT` and writes nothing, naming
+  the edit, how many places matched, and the first five lines they sit on
+  (`edits[0]: oldText matches 3 places (lines 2, 4, 6)`). Edits apply in
+  order, so once an earlier edit in the same call has applied, the message
+  says the lines are `after earlier edits`. This holds under `dryRun` and
+  `ignoreWhitespace`, and a second occurrence counts even when it overlaps the
+  first. A call that relied on first-match now fails — add surrounding lines
+  to `oldText`, or use `replace_text` with `caseSensitive: true` to change
+  every occurrence. In `files` mode only the ambiguous file fails.
+
 ## [2.2.0] - 2026-09-11
 
 Six architecture-audit findings land together, plus a correctness fix the
