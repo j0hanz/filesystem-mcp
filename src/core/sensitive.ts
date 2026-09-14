@@ -66,8 +66,9 @@ function globToRegExp(glob: string): RegExp {
         const close = segment.indexOf(']', j + 1);
         const body = close === -1 ? '' : segment.slice(j + 1, close);
         if (body.length > 0) {
-          // Pass a character class through, flipping glob '!' negation to '^'.
-          source += `[${body.replace(/^!/u, '^')}]`;
+          // Pass a character class through, flipping glob '!' negation to '^'
+          // and escaping backslashes so no body can make new RegExp throw.
+          source += `[${body.replace(/^!/u, '^').replace(/\\/gu, '\\\\')}]`;
           j = close;
         } else {
           source += escapeRegExp(char);
