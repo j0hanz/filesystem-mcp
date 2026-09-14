@@ -286,6 +286,125 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(content, 'modified content');
   });
 
+  // An oldText that occurs more than once used to edit the first occurrence and
+  // report success, so the wrong block changed silently.
+  it('edit rejects an oldText that matches more than once, dry run included', async () => {
+    const original = 'a\nfoo\nb\nfoo\nc\nfoo\n';
+    const file = await writeTestFile(tmpDir, 'ambiguous/literal.txt', original);
+
+    for (const dryRun of [false, true]) {
+      const result = await harness.client.callTool({
+        name: 'edit',
+        arguments: { path: file, edits: [{ oldText: 'foo', newText: 'bar' }], dryRun },
+      });
+      assert.strictEqual(result.isError, true, `dryRun=${String(dryRun)}`);
+      const error = failedSummary(result)?.results?.[0]?.error;
+      assert.strictEqual(error?.code, 'INVALID_INPUT');
+      assert.match(error?.message ?? '', /3 places \(lines 2, 4, 6\)/u);
+      assert.strictEqual(await readFile(file, 'utf-8'), original);
+    }
+  });
+
+  it('edit counts overlapping occurrences of oldText as ambiguous', async () => {
+    const file = await writeTestFile(tmpDir, 'ambiguous/overlap.txt', 'ababab\n');
+    for (const ignoreWhitespace of [false, true]) {
+      const result = await harness.client.callTool({
+        name: 'edit',
+        arguments: { path: file, edits: [{ oldText: 'abab', newText: 'X' }], ignoreWhitespace },
+      });
+      assert.strictEqual(result.isError, true, `ignoreWhitespace=${String(ignoreWhitespace)}`);
+      assert.match(
+        failedSummary(result)?.results?.[0]?.error?.message ?? '',
+        /2 places \(line 1\)/u,
+      );
+      assert.strictEqual(await readFile(file, 'utf-8'), 'ababab\n');
+    }
+  });
+
+  // Leading whitespace in the flexible pattern matches from any column of the
+  // indentation, which is the same occurrence, not a second one.
+  it('edit with ignoreWhitespace applies a unique indented oldText', async () => {
+    const file = await writeTestFile(tmpDir, 'ambiguous/indented.txt', 'f() {\n    run();\n}\n');
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: '  run();', newText: '  go();' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n  go();\n}\n');
+  });
+
+  it('edit names the ambiguous edit and flags lines shifted by earlier edits', async () => {
+    const original = 'x\nfoo\nfoo\n';
+    const file = await writeTestFile(tmpDir, 'ambiguous/index.txt', original);
+
+    const shifted = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [
+          { oldText: 'x\n', newText: 'y\nz\n' },
+          { oldText: 'foo', newText: 'bar' },
+        ],
+      },
+    });
+    assert.match(
+      failedSummary(shifted)?.results?.[0]?.error?.message ?? '',
+      /^edits\[1\]: oldText matches 2 places after earlier edits \(lines 3, 4\)/u,
+    );
+
+    // An earlier edit that matched nothing changed nothing, so the lines are the file's own.
+    const unshifted = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [
+          { oldText: 'missing', newText: 'y' },
+          { oldText: 'foo', newText: 'bar' },
+        ],
+      },
+    });
+    assert.match(
+      failedSummary(unshifted)?.results?.[0]?.error?.message ?? '',
+      /^edits\[1\]: oldText matches 2 places \(lines 2, 3\)/u,
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), original);
+  });
+
+  it('edit lists at most five matched lines', async () => {
+    const file = await writeTestFile(tmpDir, 'ambiguous/many.txt', 'foo\n'.repeat(6));
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'foo', newText: 'bar' }] },
+    });
+    assert.match(
+      failedSummary(result)?.results?.[0]?.error?.message ?? '',
+      /6 places \(lines 1, 2, 3, 4, 5, \.\.\.\)/u,
+    );
+  });
+
+  it('edit with ignoreWhitespace rejects an oldText that matches more than once', async () => {
+    const original = 'if (x) {\n  run();\n}\nif (x) {\n    run();\n}\n';
+    const file = await writeTestFile(tmpDir, 'ambiguous/whitespace.txt', original);
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'if (x) {\nrun();', newText: 'if (y) {\nrun();' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(
+      failedSummary(result)?.results?.[0]?.error?.message ?? '',
+      /2 places \(lines 1, 4\)/u,
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), original);
+  });
+
   it('TC-FUNC-015: Read non-existent file returns error in per-path results', async () => {
     const missing = join(tmpDir, 'missing.txt');
     const result = await harness.client.callTool({

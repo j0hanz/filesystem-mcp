@@ -34,7 +34,7 @@ const EditSpecSchema = z
         message: 'oldText cannot be empty or whitespace-only',
       })
       .describe(
-        'Exact literal text to locate in the file. Must include 3-5 lines of context to ensure uniqueness and avoid matching the wrong block.',
+        'Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.',
       )
       .meta({ examples: ['const x = 1;', 'function oldName('] }),
     newText: z
@@ -173,11 +173,31 @@ interface EditResult {
   lineRange?: [number, number];
 }
 
-function findEditMatch(
-  content: string,
-  oldText: string,
-  ignoreWhitespace: boolean,
-): TextRange | undefined {
+const MAX_REPORTED_MATCH_LINES = 5;
+
+interface EditMatches {
+  /** The first match; undefined when oldText matches nothing. */
+  first: TextRange | undefined;
+  count: number;
+  /** UTF-16 start offsets of the first {@link MAX_REPORTED_MATCH_LINES} matches. */
+  starts: number[];
+}
+
+/**
+ * Where `oldText` matches. `count` is non-overlapping occurrences, except that a
+ * lone match with a second one overlapping it counts two (`abab` in `ababab`),
+ * since either is a span the caller could have meant — the count is exact only
+ * when it answers "once or not". Only the count and the first few starts are
+ * kept: a short oldText in a large file can match millions of times.
+ */
+function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
+  const found: EditMatches = { first: undefined, count: 0, starts: [] };
+  const add = (startIndex: number, length: number): void => {
+    found.first ??= { startIndex, length };
+    found.count += 1;
+    if (found.starts.length < MAX_REPORTED_MATCH_LINES) found.starts.push(startIndex);
+  };
+
   if (ignoreWhitespace) {
     // Make whitespace flexible (tolerate indentation/spacing differences)
     // without letting it cross line boundaries: a whitespace run that contains
@@ -193,30 +213,72 @@ function findEditMatch(
     try {
       // execMatches resets lastIndex and reports UTF-16 offsets; the raw RE2
       // index counts code points and would splice off-by-one per emoji.
-      const { value: match } = execMatches(regex, content).next();
-      // A zero-length match names an empty span, which cannot be replaced.
-      if (match === undefined || match.text.length === 0) return undefined;
-
-      return {
-        startIndex: match.start,
-        length: match.text.length,
+      const scan = (from: number): void => {
+        for (const match of execMatches(regex, from === 0 ? content : content.slice(from))) {
+          // A zero-length match names an empty span, which cannot be replaced.
+          if (match.text.length > 0) add(from + match.start, match.text.length);
+          if (from > 0) return;
+        }
       };
+      scan(0);
+      // execMatches resumes past each match, so a second match overlapping the
+      // first is never reported; look once more from just past its first
+      // non-whitespace character. Starting inside the leading whitespace would
+      // re-find the same occurrence, since the pattern's leading run is `*`. The
+      // pattern carries no anchors, so matching a suffix finds the same spans.
+      if (found.count === 1 && found.first) {
+        const { startIndex, length } = found.first;
+        const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
+        scan(afterCodePoint(content, startIndex + lead));
+      }
     } finally {
       // The compiled pattern owns wasm memory re2-wasm never reclaims on its
-      // own; its lifetime is this one match.
+      // own; its lifetime is this one search.
       freeRegex(regex);
     }
+    return found;
   }
 
-  const index = content.indexOf(oldText);
-  if (index === -1) {
-    return undefined;
+  // Non-overlapping, so the scan stays linear on repetitive content; the one
+  // overlap that matters — a second match inside the only one — is checked after.
+  for (
+    let i = content.indexOf(oldText);
+    i !== -1;
+    i = content.indexOf(oldText, i + oldText.length)
+  ) {
+    add(i, oldText.length);
   }
+  if (found.count === 1 && found.first) {
+    const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
+    if (overlap !== -1) add(overlap, oldText.length);
+  }
+  return found;
+}
 
-  return {
-    startIndex: index,
-    length: oldText.length,
-  };
+/** The UTF-16 offset just past the code point at `index`, so a surrogate pair is never split. */
+function afterCodePoint(content: string, index: number): number {
+  return index + ((content.codePointAt(index) ?? 0) > 0xffff ? 2 : 1);
+}
+
+function ambiguousEditError(
+  content: string,
+  found: EditMatches,
+  editIndex: number,
+  shifted: boolean,
+): FsError {
+  const lines = [
+    ...new Set(found.starts.map((start) => content.slice(0, start).split('\n').length)),
+  ];
+  const label = lines.length === 1 ? 'line' : 'lines';
+  const more = found.count > found.starts.length ? ', ...' : '';
+  // Offsets come from the content as earlier edits in this call left it, which
+  // is not the file the caller read once one of them has applied.
+  const where = shifted ? ' after earlier edits' : '';
+  return new FsError(
+    ErrorCode.INVALID_INPUT,
+    `edits[${String(editIndex)}]: oldText matches ${String(found.count)} places${where} ` +
+      `(${label} ${lines.join(', ')}${more}). Add surrounding lines so it matches once.`,
+  );
 }
 
 function replaceEditMatch(content: string, match: TextRange, newText: string): string {
@@ -342,15 +404,19 @@ function applyEdits(
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
 
-  for (const edit of edits) {
-    const match = findEditMatch(newContent, edit.oldText, ignoreWhitespace);
+  for (const [index, edit] of edits.entries()) {
+    const found = findEditMatches(newContent, edit.oldText, ignoreWhitespace);
 
-    if (!match) {
+    // A second match is an error rather than a pick: splicing the first would
+    // edit a block the caller may not have meant and still report success.
+    if (found.count > 1) throw ambiguousEditError(newContent, found, index, appliedEdits > 0);
+
+    if (!found.first) {
       unmatchedEdits.push(edit.oldText);
       continue;
     }
 
-    newContent = replaceEditMatch(newContent, match, edit.newText);
+    newContent = replaceEditMatch(newContent, found.first, edit.newText);
     appliedEdits += 1;
   }
 
@@ -463,7 +529,8 @@ export const EDIT = defineTool({
   description:
     'Apply sequential literal string replacements to one or more files (max 5 files per call). ' +
     'Modes: single-file { path, edits } or per-file { files: [{ path, edits }] }. ' +
-    'oldText must match file content exactly; include 3-5 lines of surrounding context to ensure uniqueness. ' +
+    'oldText must match file content exactly and only once; include 3-5 lines of surrounding context, ' +
+    'or the edit fails listing the lines it matched. ' +
     'Set dryRun=true to preview diffs without writing. ' +
     'For glob-based bulk regex replacement across many files, use replace_text instead.',
   input: EditFileInputSchema,
