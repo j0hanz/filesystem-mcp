@@ -124,7 +124,15 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '*id_dsa*',
 ] as const;
 
-function buildSensitivePatterns(): readonly string[] {
+// Built-ins and operator-supplied deny entries live in separate tiers because
+// they answer to different relief switches: an allow entry (FS_ALLOWLIST /
+// --allow) can lift a built-in hit, but never an explicit deny.
+interface DenyTiers {
+  builtin: readonly string[];
+  operator: readonly string[];
+}
+
+function buildDenyTiers(): DenyTiers {
   const allowSensitive =
     cli.allowSensitive ?? parseTrueEnvFlag(process.env['FS_ALLOW_SENSITIVE'], 'FS_ALLOW_SENSITIVE');
   const envValue = process.env['FS_DENYLIST'];
@@ -137,28 +145,59 @@ function buildSensitivePatterns(): readonly string[] {
   const flagDenylist = cli.denyPatterns ?? [];
   // FS_ALLOW_SENSITIVE suppresses built-ins only; deny entries (env and --deny)
   // always apply. Set-dedupe so a pattern in both sources matches once.
-  return [
-    ...(allowSensitive ? [] : DEFAULT_SENSITIVE_PATTERNS),
-    ...new Set([...envDenylist, ...flagDenylist]),
-  ];
+  return {
+    builtin: allowSensitive ? [] : DEFAULT_SENSITIVE_PATTERNS,
+    operator: [...new Set([...envDenylist, ...flagDenylist])],
+  };
 }
 
-export class SensitiveMatcher {
-  private readonly patterns: CompiledPatternSet;
+function buildAllowPatterns(): readonly string[] {
+  const envValue = process.env['FS_ALLOWLIST'];
+  const envAllowlist = envValue
+    ? envValue
+        .split(/[,\n]/u)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0)
+    : [];
+  const flagAllowlist = cli.allowPatterns ?? [];
+  return [...new Set([...envAllowlist, ...flagAllowlist])];
+}
 
-  constructor(patterns: readonly string[] = buildSensitivePatterns()) {
-    this.patterns = toPatternSet(patterns);
+const EMPTY_PATTERN_SET: CompiledPatternSet = { pathGlobs: [], nameGlobs: [] };
+
+export class SensitiveMatcher {
+  private readonly builtin: CompiledPatternSet;
+  private readonly operator: CompiledPatternSet;
+  private readonly allow: CompiledPatternSet;
+
+  // An explicit pattern list (tests, custom guards) is one relievable tier;
+  // the default construction splits built-ins from operator-supplied
+  // FS_DENYLIST/--deny entries, which allow entries can never lift.
+  constructor(patterns?: readonly string[], allow?: readonly string[]) {
+    if (patterns !== undefined || allow !== undefined) {
+      this.builtin = toPatternSet(patterns ?? []);
+      this.operator = EMPTY_PATTERN_SET;
+      this.allow = toPatternSet(allow ?? []);
+    } else {
+      const tiers = buildDenyTiers();
+      this.builtin = toPatternSet(tiers.builtin);
+      this.operator = toPatternSet(tiers.operator);
+      this.allow = toPatternSet(buildAllowPatterns());
+    }
   }
 
   isSensitive(filePath: string): boolean {
-    if (this.patterns.pathGlobs.length === 0 && this.patterns.nameGlobs.length === 0) {
-      return false;
-    }
     const pathToCheck = IS_WINDOWS ? stripAlternateDataStreams(filePath) : filePath;
     const normalizedPath = normalizeForMatch(pathToCheck);
-    return (
-      matchesAnyGlob(this.patterns.pathGlobs, normalizedPath) ||
-      matchesAnyGlob(this.patterns.nameGlobs, posix.basename(normalizedPath))
-    );
+    const name = posix.basename(normalizedPath);
+    const matches = (set: CompiledPatternSet): boolean =>
+      matchesAnyGlob(set.pathGlobs, normalizedPath) || matchesAnyGlob(set.nameGlobs, name);
+
+    // Explicit deny entries (FS_DENYLIST/--deny) always apply.
+    if (matches(this.operator)) return true;
+    if (!matches(this.builtin)) return false;
+    // A built-in hit is lifted only by an allow entry that matches the same
+    // normalized candidate — a pattern that matches nothing relieves nothing.
+    return !matches(this.allow);
   }
 }

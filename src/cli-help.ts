@@ -55,6 +55,10 @@ const OPTIONS_HELP: HelpRow[] = [
   { flags: '--walk-cwd', desc: 'Walk up from CWD to find a project root; implies --allow-cwd' },
   { flags: '--deny <pattern>', desc: 'Block paths matching this pattern; repeatable' },
   {
+    flags: '--allow <pattern>',
+    desc: 'Exempt a pattern from the built-in sensitive denylist; repeatable (env: FS_ALLOWLIST)',
+  },
+  {
     flags: '--allow-missing-roots',
     desc: 'Start even if configured allowed directories do not exist',
   },
@@ -87,6 +91,10 @@ const ENV_HELP: HelpRow[] = [
     desc: 'Walk up from CWD to find a project root ("true" or "1" enables this)',
   },
   { flags: 'FS_DENYLIST', desc: 'Paths/patterns to block, comma-separated' },
+  {
+    flags: 'FS_ALLOWLIST',
+    desc: 'Patterns exempted from the built-in sensitive denylist, comma-separated; --deny/FS_DENYLIST still win',
+  },
   {
     flags: 'FS_ALLOW_MISSING_ROOTS',
     desc: 'Start even if configured allowed directories do not exist ("true" or "1" enables this)',

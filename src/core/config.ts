@@ -31,6 +31,8 @@ export interface CliOverrides {
   allowMissingRoots?: boolean;
   /** `--deny` entries (merged with DENYLIST by the reader) */
   denyPatterns?: readonly string[];
+  /** `--allow` entries (merged with FS_ALLOWLIST by the reader; relieve built-ins only) */
+  allowPatterns?: readonly string[];
 }
 
 /** Written once by cli.ts; an absent key means "not set on the command line". */
