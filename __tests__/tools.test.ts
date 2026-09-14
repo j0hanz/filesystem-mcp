@@ -154,6 +154,83 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await assert.rejects(access(outside), 'the denied file must not exist');
   });
 
+  it('TC-FUNC-009e: create with append:true appends to an existing file', async () => {
+    const file = await writeTestFile(tmpDir, 'append_target.txt', 'first\n');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'second\n', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'first\nsecond\n');
+  });
+
+  it('TC-FUNC-009f: create with append:true creates a missing file', async () => {
+    const file = join(tmpDir, 'append_new.txt');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'born from append\n', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'born from append\n');
+  });
+
+  it('TC-FUNC-009g: append result reports whole-file size and line count', async () => {
+    // Seed 2 lines, append an unterminated third: result must describe the
+    // file on disk (5 bytes, 3 lines), not the appended chunk (1 byte, 1 line).
+    const file = await writeTestFile(tmpDir, 'append_meta.txt', 'a\nb\n');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'c', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const structured = result.structuredContent as {
+      files?: { size?: number; lineCount?: number; modified?: string }[];
+    };
+    const entry = structured.files?.[0];
+    assert.strictEqual(entry?.size, 5);
+    assert.strictEqual(entry?.lineCount, 3);
+    assert.match(entry?.modified ?? '', /^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('TC-FUNC-009h: create batch mixes append and overwrite entries', async () => {
+    const appendFile = await writeTestFile(tmpDir, 'batch_append.txt', 'keep\n');
+    const overwriteFile = await writeTestFile(tmpDir, 'batch_overwrite.txt', 'discard\n');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: {
+        files: [
+          { path: appendFile, content: 'kept\n', append: true },
+          { path: overwriteFile, content: 'replaced\n' },
+        ],
+      },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(appendFile, 'utf-8'), 'keep\nkept\n');
+    assert.strictEqual(await readFile(overwriteFile, 'utf-8'), 'replaced\n');
+  });
+
+  it('TC-FUNC-009i: append succeeds on a file larger than max-file-size', async () => {
+    // A >10 MiB file cannot pass through read/edit (TOO_LARGE), but appending
+    // one line must still work — the bytes never enter model context.
+    const oversize = 11 * 1024 * 1024;
+    const file = join(tmpDir, 'append_oversize.log');
+    await writeFile(file, Buffer.alloc(oversize, 0x61));
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'x\n', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const structured = result.structuredContent as { files?: { size?: number }[] };
+    assert.strictEqual(structured.files?.[0]?.size, oversize + 2);
+    const content = await readFile(file, 'utf-8');
+    assert.ok(content.endsWith('x\n'));
+  });
+
   it('TC-FUNC-009d: move reports isError when every requested move was denied', async () => {
     const source = join(tmpDir, 'movable.txt');
     await writeFile(source, 'body');

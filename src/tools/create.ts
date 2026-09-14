@@ -5,7 +5,14 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import { ErrorCode } from '../core/errors.js';
-import { buildWrittenFileMeta } from '../core/file-uri.js';
+import {
+  buildFileResourceLink,
+  buildFileResourceUri,
+  buildWrittenFileMeta,
+  type WrittenFileMeta,
+} from '../core/file-uri.js';
+import { countFileLines, type Stats } from '../core/fs.js';
+import { detectMimeFromContent } from '../core/mime.js';
 import {
   FileKind,
   IsoDateTime,
@@ -25,6 +32,12 @@ const CreateFileItemSchema = z.strictObject({
       message: 'Content exceeds maximum allowed text file size',
     })
     .describe('Text content to write, verbatim.'),
+  append: z
+    .boolean()
+    .optional()
+    .describe(
+      'Append the content to the end of the file instead of overwriting; creates the file if it does not exist',
+    ),
 });
 
 const CreateFileResultSchema = z.strictObject({
@@ -66,7 +79,8 @@ export const CREATE = defineTool({
   description:
     'Create one or more files (max 100), writing or overwriting content and creating parent directories as needed. ' +
     'Pass files: [{ path, content }] — there is no single-path form. ' +
-    'Silently overwrites existing files — read first if you need to preserve existing content.',
+    'Silently overwrites existing files — read first if you need to preserve existing content. ' +
+    'Set append: true on an entry to add to the end of an existing file (created if missing) instead of overwriting.',
   input: CreateInputSchema,
   output: CreateOutputSchema,
   annotations: {
@@ -78,7 +92,7 @@ export const CREATE = defineTool({
   accessPaths: (args) => args.files.map((f) => f.path),
   run: async (args, ctx) => {
     const batch = await runOverPaths<
-      { content: string },
+      { content: string; append?: boolean | undefined },
       { file: CreateFileResult; resourceLink?: ContentBlock }
     >(
       { files: args.files },
@@ -88,13 +102,45 @@ export const CREATE = defineTool({
 
         await ctx.fs.mkdir(dirname(path), { recursive: true });
 
-        const { validPath } = await ctx.fs.writeFile(path, content, {
-          encoding: 'utf-8',
-          signal: ctx.signal,
-        });
-
-        const { stats: fileStats } = await ctx.fs.stat(path, { signal: ctx.signal });
-        const meta = buildWrittenFileMeta(validPath, content, ctx.resourceStore);
+        // Overwrite: file content == `content`, so content-derived meta is
+        // exact and the atomic temp+rename write protects the existing mode.
+        // Append: the resulting file is everything that was there plus
+        // `content`, so size/created/modified come from a real post-append
+        // stat and the line count streams the file — reading a multi-GB log
+        // back just to count its lines is the round-trip append exists to
+        // avoid. MIME is sniffed from the appended chunk, which is exact for
+        // the text files appending is for.
+        let validPath: string;
+        let meta: WrittenFileMeta;
+        let fileStats: Stats;
+        if (override?.append) {
+          const appended = await ctx.fs.appendFile(path, content, {
+            encoding: 'utf-8',
+            signal: ctx.signal,
+          });
+          const statted = await ctx.fs.stat(path, { signal: ctx.signal });
+          const mimeInfo = detectMimeFromContent(appended.validPath, content);
+          validPath = appended.validPath;
+          fileStats = statted.stats;
+          meta = {
+            size: statted.stats.size,
+            lineCount: await countFileLines(appended.validPath, ctx.signal),
+            mimeType: mimeInfo.mimeType,
+            kind: mimeInfo.kind,
+            resourceUri: buildFileResourceUri(appended.validPath),
+            resourceLink: ctx.resourceStore
+              ? buildFileResourceLink(appended.validPath, mimeInfo.mimeType, statted.stats.size)
+              : undefined,
+          };
+        } else {
+          const written = await ctx.fs.writeFile(path, content, {
+            encoding: 'utf-8',
+            signal: ctx.signal,
+          });
+          validPath = written.validPath;
+          fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
+          meta = buildWrittenFileMeta(written.validPath, content, ctx.resourceStore);
+        }
 
         const file: CreateFileResult = {
           path: validPath,
