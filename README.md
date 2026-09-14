@@ -231,14 +231,14 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 #### Write
 
-| Tool           | Description                                                                                       |
-| :------------- | :------------------------------------------------------------------------------------------------ |
-| `create`       | Create one or more files, overwriting existing content and creating parent directories as needed. |
-| `edit`         | Apply sequential literal string replacements to one or more files (max 5 per call).               |
-| `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.      |
-| `delete`       | Permanently delete one or more files or directories. This action is irreversible.                 |
-| `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                     |
-| `patch`        | Apply a single-file unified diff and write the result.                                            |
+| Tool           | Description                                                                                                                                                                                       |
+| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `create`       | Create one or more files, overwriting existing content and creating parent directories as needed. `append: true` adds to the end of an existing file (created if missing) instead of overwriting. |
+| `edit`         | Apply sequential literal string replacements to one or more files (max 5 per call).                                                                                                               |
+| `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.                                                                                                      |
+| `delete`       | Permanently delete one or more files or directories. This action is irreversible.                                                                                                                 |
+| `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                                                                                                                     |
+| `patch`        | Apply a single-file unified diff and write the result.                                                                                                                                            |
 
 ### Resources
 

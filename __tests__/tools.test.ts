@@ -2,7 +2,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -239,10 +239,41 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
 
     assert.notStrictEqual(result.isError, true);
-    const structured = result.structuredContent as { files?: { size?: number }[] };
-    assert.strictEqual(structured.files?.[0]?.size, oversize + 2);
+    const structured = result.structuredContent as {
+      files?: { size?: number; resourceUri?: string }[];
+    };
+    const entry = structured.files?.[0];
+    assert.strictEqual(entry?.size, oversize + 2);
+    // The store serves resourceUri via readRaw, which rejects over-cap files
+    // with TOO_LARGE — an unservable link must not be advertised at all.
+    assert.strictEqual(entry?.resourceUri, undefined);
     const content = await readFile(file, 'utf-8');
     assert.ok(content.endsWith('x\n'));
+  });
+
+  it('TC-FUNC-009l: an append whose metadata reads fail still reports success', async (t) => {
+    // A POSIX write-only (0222) file appends fine but cannot be opened 'r',
+    // so the sample/line-count reads throw: the append is the commit point
+    // and a reported failure would invite a retry that appends twice.
+    if (process.platform === 'win32') return t.skip('POSIX-only 0222 append target');
+
+    const file = join(tmpDir, 'append_write_only.txt');
+    await writeFile(file, 'seed\n');
+    await chmod(file, 0o222);
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'tail\n', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const structured = result.structuredContent as { files?: { lineCount?: number }[] };
+    assert.strictEqual(
+      structured.files?.[0]?.lineCount,
+      0,
+      'unreadable metadata degrades to lineCount 0, not a failed append',
+    );
+    await chmod(file, 0o644);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'seed\ntail\n');
   });
 
   it('TC-FUNC-009k: append result MIME comes from the resulting file, not the appended chunk', async () => {

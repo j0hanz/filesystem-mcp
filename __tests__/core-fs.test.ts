@@ -327,6 +327,25 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const terminatedPath = await writeTestFile(tmpDir, 'count_lines_term.txt', 'a\nb\n');
       assert.strictEqual(await countFileLines(terminatedPath), 2);
     });
+
+    it('TC-FUNC-052e: countFileLines counts LF only — a CRLF file is not double-counted', async () => {
+      // Guards against a CR-counting "fix" for old-Mac files: every line is
+      // terminated by a CR too, so counting both terminators doubles the
+      // line count of the CRLF text files this server runs against on Windows.
+      const filePath = await writeTestFile(tmpDir, 'count_lines_crlf.txt', 'a\r\nb\r\nc');
+
+      assert.strictEqual(await countFileLines(filePath), 3);
+    });
+
+    it('TC-FUNC-053: appendFile to a non-regular file is rejected before the open', async () => {
+      // 'a' on a FIFO blocks POSIX until a reader appears, unabortable; a
+      // directory is the cross-platform stand-in for "target is not a file".
+      await assert.rejects(fs.appendFile(tmpDir, 'nope\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.NOT_FILE);
+        return true;
+      });
+    });
   });
 
   describe('Stat metadata (TC-FUNC-031–034)', () => {

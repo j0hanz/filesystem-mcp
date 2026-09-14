@@ -89,7 +89,11 @@ export interface WrittenFileMeta {
   lineCount: number;
   mimeType: string;
   kind: FileKind;
-  resourceUri: string;
+  /**
+   * Undefined when the resulting file exceeds the text-size cap: the store
+   * serves the URI via readRaw, which would reject it with TOO_LARGE.
+   */
+  resourceUri: string | undefined;
   /** Undefined when no resource store is configured — nothing to link into. */
   resourceLink: ContentBlock | undefined;
 }

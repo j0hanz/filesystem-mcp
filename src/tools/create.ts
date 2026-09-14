@@ -4,7 +4,7 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode } from '../core/errors.js';
+import { ErrorCode, formatUnknownErrorMessage } from '../core/errors.js';
 import {
   buildFileResourceLink,
   buildFileResourceUri,
@@ -13,6 +13,7 @@ import {
 } from '../core/file-uri.js';
 import { countFileLines, type Stats } from '../core/fs.js';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.js';
+import { Logger } from '../core/observability.js';
 import {
   FileKind,
   IsoDateTime,
@@ -48,7 +49,10 @@ const CreateFileResultSchema = z.strictObject({
   kind: FileKind.describe('Broad file kind: text, binary, image, audio, or pdf'),
   resourceUri: z
     .string()
-    .describe('Resource URI pointing to the created file content in the resource store'),
+    .optional()
+    .describe(
+      'Resource URI pointing to the created file content in the resource store; omitted when the resulting file exceeds the text-size cap, which the store would reject',
+    ),
   created: IsoDateTime.describe('File creation timestamp (ISO 8601 UTC)'),
   modified: IsoDateTime.describe('File last-modification timestamp (ISO 8601 UTC)'),
 });
@@ -117,24 +121,51 @@ export const CREATE = defineTool({
             encoding: 'utf-8',
             signal: ctx.signal,
           });
-          const statted = await ctx.fs.stat(path, { signal: ctx.signal });
-          // Sniff the resulting file's leading bytes, not the appended chunk:
-          // text appended to a binary file is still a binary file.
-          const sample = await ctx.fs.readLeadingSample(path, MIME_SAMPLE_SIZE, {
-            signal: ctx.signal,
-          });
-          const mimeInfo = detectMimeFromContent(appended.validPath, sample);
           validPath = appended.validPath;
+          // The append is the commit point: the bytes are on disk, so
+          // everything below is best-effort RESULT METADATA, not part of the
+          // write. It runs unwired to ctx.signal, and a metadata failure
+          // degrades the result instead of failing it — either would report
+          // the append as failed and a client retry would append twice.
+          const statted = await ctx.fs.stat(path);
           fileStats = statted.stats;
+          let mimeType: string;
+          let kind: FileKind;
+          let lineCount: number;
+          try {
+            // Sniff the resulting file's leading bytes, not the appended
+            // chunk: text appended to a binary file is still a binary file.
+            const sample = await ctx.fs.readLeadingSample(path, MIME_SAMPLE_SIZE);
+            const mimeInfo = detectMimeFromContent(appended.validPath, sample);
+            mimeType = mimeInfo.mimeType;
+            kind = mimeInfo.kind;
+            lineCount = await countFileLines(appended.validPath);
+          } catch (error) {
+            Logger.warn(
+              `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
+            );
+            // A POSIX mode-0222 file appends fine but cannot be opened 'r';
+            // fall back to the chunk for MIME (an approximation) and report
+            // the line count as unknown-as-zero rather than fail the append.
+            const mimeInfo = detectMimeFromContent(appended.validPath, content);
+            mimeType = mimeInfo.mimeType;
+            kind = mimeInfo.kind;
+            lineCount = 0;
+          }
+          // The resource store serves this URI via readRaw, which rejects
+          // files over the text-size cap with TOO_LARGE — never advertise a
+          // link the store deterministically cannot serve.
+          const servable = statted.stats.size <= getMaxTextFileSize();
           meta = {
             size: statted.stats.size,
-            lineCount: await countFileLines(appended.validPath, ctx.signal),
-            mimeType: mimeInfo.mimeType,
-            kind: mimeInfo.kind,
-            resourceUri: buildFileResourceUri(appended.validPath),
-            resourceLink: ctx.resourceStore
-              ? buildFileResourceLink(appended.validPath, mimeInfo.mimeType, statted.stats.size)
-              : undefined,
+            lineCount,
+            mimeType,
+            kind,
+            resourceUri: servable ? buildFileResourceUri(appended.validPath) : undefined,
+            resourceLink:
+              servable && ctx.resourceStore
+                ? buildFileResourceLink(appended.validPath, mimeType, statted.stats.size)
+                : undefined,
           };
         } else {
           const written = await ctx.fs.writeFile(path, content, {

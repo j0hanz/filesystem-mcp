@@ -35,8 +35,32 @@ interface CompiledPatternSet {
 // literal, and dot-leading segments match like any other.
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Character classes can carry '{', '}' and ',' as members, so every scanner
+// below must skip a class's interior. classEnd returns the index of the ']'
+// closing the class opened at openIdx, or -1 when unclosed (then '[' is a
+// literal, matching globToRegExp's fallback). A ']' right after '[' or the
+// '!' negation is a literal member, per glob syntax.
+function classEnd(glob: string, openIdx: number): number {
+  let i = openIdx + 1;
+  if (glob[i] === '!') i++;
+  if (glob[i] === ']') i++;
+  while (i < glob.length && glob[i] !== ']') i++;
+  return i < glob.length ? i : -1;
+}
+
 function expandBraces(glob: string): string[] {
-  const open = glob.indexOf('{');
+  // First '{' outside any [...] class.
+  let open = -1;
+  for (let i = 0; i < glob.length; i++) {
+    const char = glob[i] ?? '';
+    if (char === '[') {
+      const end = classEnd(glob, i);
+      if (end !== -1) i = end;
+    } else if (char === '{') {
+      open = i;
+      break;
+    }
+  }
   if (open === -1) return [glob];
   // Pair the outer '{' with ITS matching '}' — indexOf would grab the inner
   // group's closer and produce garbage like 'data/x}/secret'. Then split the
@@ -45,6 +69,13 @@ function expandBraces(glob: string): string[] {
   let close = -1;
   for (let i = open; i < glob.length; i++) {
     const char = glob[i] ?? '';
+    if (char === '[') {
+      const end = classEnd(glob, i);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
     if (char === '{') depth++;
     else if (char === '}') {
       depth--;
@@ -63,6 +94,13 @@ function expandBraces(glob: string): string[] {
   depth = 0;
   for (let i = 0; i < body.length; i++) {
     const char = body[i] ?? '';
+    if (char === '[') {
+      const end = classEnd(body, i);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
     if (char === '{') depth++;
     else if (char === '}') depth--;
     else if (char === ',' && depth === 0) {
@@ -113,8 +151,10 @@ function globToRegExp(glob: string): RegExp {
   // parent, exactly as matchesGlob's globstar did. '$' is strict in
   // JavaScript (it matches end-of-input only, unlike PCRE's, which also
   // matches before a final newline), so an exact-name pattern can never
-  // match a '.env\n' lookalike.
-  return new RegExp(`^/?${source}$`, 'u');
+  // match a '.env\n' lookalike. The 's' flag makes the terminal-`**` `.`
+  // match newlines too: filenames can contain them, and a deny ending in
+  // '/**' must not fail open on 'secrets/plan\nnotes'.
+  return new RegExp(`^/?${source}$`, 'su');
 }
 
 function isWindowsAbsolutePosixPath(normalizedPattern: string): boolean {
@@ -230,15 +270,22 @@ interface DenyTiers {
   operator: readonly string[];
 }
 
-// Split an env pattern list on commas and newlines at brace depth 0 only, so
-// a documented brace alternative like '*.{pem,key}' survives as one pattern
-// instead of tearing into '*.{pem' and 'key}'.
+// Split an env pattern list on commas and newlines at brace depth 0 only and
+// outside any [...] class, so documented syntax like '*.{pem,key}' or
+// 'x[1,2].env' survives as one pattern instead of tearing apart.
 function splitPatternList(value: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
   for (let i = 0; i < value.length; i++) {
     const char = value[i] ?? '';
+    if (char === '[') {
+      const end = classEnd(value, i);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
     if (char === '{') depth++;
     else if (char === '}') depth = Math.max(0, depth - 1);
     else if (depth === 0 && (char === ',' || char === '\n')) {

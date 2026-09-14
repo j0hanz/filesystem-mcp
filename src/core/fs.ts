@@ -234,16 +234,40 @@ export class GuardedFileSystem {
   ): Promise<{ validPath: string }> {
     const { encoding = 'utf-8', signal } = options;
     const validPath = await resolveForWrite(this.pathGuard, filePath);
+    // Non-regular targets must be rejected before the open: 'a' on a FIFO
+    // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
+    // the call would hang unabortable and pin its concurrency slot. The
+    // overwrite path can't hang — it writes a temp file and renames over.
+    // resolveForWrite has already resolved any symlink to its target, so the
+    // lstat here doubles as the new-vs-existing probe for the cleanup below.
+    let existed = true;
+    try {
+      assertFileStats(validPath, await fsLstat(validPath));
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+      existed = false;
+    }
     // fs.promises.appendFile takes no signal, so a withAbort race would
     // report failure while the append still lands — a client retry then
     // appends twice. A handle opened with 'a' gets a genuinely abortable
-    // FileHandle.writeFile instead, same as the writeFile path. The signal
-    // check precedes the open too: 'a' on a missing target CREATES it, so an
-    // aborted call must not leave a new empty file behind.
+    // FileHandle.writeFile instead, same as the writeFile path. 'a' on a
+    // missing target CREATES it, so: check the signal before the open, and
+    // if the call then fails after creating the file, remove what it made —
+    // an aborted or errored call must not leave a phantom file behind.
     signal?.throwIfAborted();
     const handle = await fsOpen(validPath, 'a');
     try {
+      signal?.throwIfAborted();
       await handle.writeFile(content, { encoding, signal });
+    } catch (error) {
+      if (!existed) {
+        await fsUnlink(validPath).catch((unlinkError: unknown) => {
+          Logger.warn(
+            `Failed to remove newly created ${validPath} after a failed append: ${formatUnknownErrorMessage(unlinkError)}`,
+          );
+        });
+      }
+      throw error;
     } finally {
       await handle.close();
     }
