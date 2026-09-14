@@ -130,6 +130,29 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
           error.message === 'Binary file detected.',
       );
     });
+
+    // Issue #11: the 512-byte binary probe must not reject a multi-byte
+    // character cut by the sample boundary, but must still reject a byte that
+    // no continuation can make valid.
+    it('binary probe accepts UTF-8 split at the sample boundary', async () => {
+      for (const [name, text] of [
+        ['split-cjk.md', '我'.repeat(171)],
+        ['split-emoji.txt', `${'a'.repeat(510)}${'😀'.repeat(4)}`],
+        ['split-latin.txt', `${'a'.repeat(511)}${'é'.repeat(4)}`],
+      ] as const) {
+        const filePath = join(tmpDir, name);
+        await writeFile(filePath, text);
+        assert.strictEqual((await fs.readFile(filePath, { kind: 'full' })).content, text, name);
+        assert.strictEqual((await fs.readEditableText(filePath)).content, text, name);
+      }
+
+      const invalid = join(tmpDir, 'split-invalid.txt');
+      await writeFile(invalid, Buffer.concat([Buffer.alloc(511, 0x61), Buffer.from([0xc0, 0x61])]));
+      await assert.rejects(
+        fs.readFile(invalid, { kind: 'full' }),
+        (error) => isFsError(error) && error.message === 'Binary file detected.',
+      );
+    });
   });
 
   describe('Create nested & overwrite (TC-FUNC-010–011)', () => {
