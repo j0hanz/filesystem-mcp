@@ -25,6 +25,8 @@ import { getMaxTextFileSize } from '../core/util.js';
 import { isTotalFailure, runOverPaths } from './batch.js';
 import { defineTool } from './define.js';
 
+const EPOCH = new Date(0);
+
 const CreateFileItemSchema = z.strictObject({
   path: RequiredPath.describe('Absolute path where the file will be created'),
   content: z
@@ -172,9 +174,8 @@ export const CREATE = defineTool({
                 ? buildFileResourceLink(appended.validPath, mimeType, size)
                 : undefined,
           };
-          const epoch = new Date(0);
-          created = (stats?.birthtime ?? epoch).toISOString();
-          modified = (stats?.mtime ?? epoch).toISOString();
+          created = (stats?.birthtime ?? EPOCH).toISOString();
+          modified = (stats?.mtime ?? EPOCH).toISOString();
         } else {
           const written = await ctx.fs.writeFile(path, content, {
             encoding: 'utf-8',

@@ -10,7 +10,6 @@ import { cli } from './config.js';
 import { IS_WINDOWS, isAlpha, parseTrueEnvFlag, toPosixPath } from './primitives.js';
 
 const CHAR_COLON = 58;
-const CHAR_FORWARD_SLASH = 47;
 
 function normalizeForMatch(input: string): string {
   // Always lowercase for case-insensitive denylist matching on all platforms.
@@ -166,33 +165,17 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^/?${source}$`, 'su');
 }
 
-function isWindowsAbsolutePosixPath(normalizedPattern: string): boolean {
-  return (
-    normalizedPattern.length >= 3 &&
-    normalizedPattern.charCodeAt(1) === CHAR_COLON &&
-    normalizedPattern.charCodeAt(2) === CHAR_FORWARD_SLASH &&
-    isAlpha(normalizedPattern.charCodeAt(0))
-  );
-}
-
 function compilePatternGlobs(normalizedPattern: string): readonly string[] {
-  const globs = new Set<string>([normalizedPattern]);
-
   // A leading '/' (POSIX-absolute) is rooted like a Windows drive path:
   // aliasing '/abs/secret' as '**/abs/secret' would also match
-  // 'other/abs/secret', and on the allow side that is over-relief.
+  // 'other/abs/secret', and on the allow side that is over-relief. The
+  // drive-letter regex is safe on [a-z] because normalizeForMatch lowercased.
   const isRooted =
     normalizedPattern.startsWith('/') ||
     normalizedPattern.startsWith('**/') ||
-    isWindowsAbsolutePosixPath(normalizedPattern);
-  if (!isRooted) {
-    const withoutRoot = normalizedPattern.replace(/^\/+/, '');
-    if (withoutRoot) {
-      globs.add(`**/${withoutRoot}`);
-    }
-  }
-
-  return Array.from(globs);
+    /^[a-z]:\//u.test(normalizedPattern);
+  const withoutRoot = isRooted ? '' : normalizedPattern.replace(/^\/+/, '');
+  return withoutRoot ? [normalizedPattern, `**/${withoutRoot}`] : [normalizedPattern];
 }
 
 function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
@@ -219,13 +202,7 @@ function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
 }
 
 function matchesAnyGlob(globs: readonly RegExp[], candidate: string): boolean {
-  if (globs.length === 0) return false;
-
-  for (const glob of globs) {
-    if (glob.test(candidate)) return true;
-  }
-
-  return false;
+  return globs.some((glob) => glob.test(candidate));
 }
 
 // Strip NTFS alternate-data-stream suffixes (the ":stream" after a segment)
@@ -279,10 +256,6 @@ const DEFAULT_SENSITIVE_PATTERNS = [
 // Built-ins and operator-supplied deny entries live in separate tiers because
 // they answer to different relief switches: an allow entry (FS_ALLOWLIST /
 // --allow) can lift a built-in hit, but never an explicit deny.
-interface DenyTiers {
-  builtin: readonly string[];
-  operator: readonly string[];
-}
 
 // Split an env pattern list on commas and newlines at brace depth 0 only and
 // outside any [...] class, so documented syntax like '*.{pem,key}' or
@@ -324,7 +297,7 @@ function splitPatternList(value: string): string[] {
   return parts.map((t) => t.trim()).filter((t) => t.length > 0);
 }
 
-function buildDenyTiers(): DenyTiers {
+function buildDenyTiers(): { builtin: readonly string[]; operator: readonly string[] } {
   const allowSensitive =
     cli.allowSensitive ?? parseTrueEnvFlag(process.env['FS_ALLOW_SENSITIVE'], 'FS_ALLOW_SENSITIVE');
   const envDenylist = process.env['FS_DENYLIST']

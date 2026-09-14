@@ -72,11 +72,9 @@ export async function processInParallel<T, R>(
 
   const next = async (): Promise<void> => {
     while (nextIndex < itemCount) {
-      try {
-        signal?.throwIfAborted();
-      } catch (error) {
+      if (signal?.aborted) {
         truncated = true;
-        throw error;
+        signal.throwIfAborted();
       }
 
       const index = nextIndex;
