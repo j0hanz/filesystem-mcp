@@ -526,6 +526,28 @@ describe('Security (P0)', () => {
       const negated = new SensitiveMatcher(['[!]].env']);
       assert.strictEqual(negated.isSensitive('x.env'), true);
       assert.strictEqual(negated.isSensitive('].env'), false);
+      // '[^].env': '^' is a literal member (glob negation is '!' only) —
+      // unescaped it would become the JS any-character class and match
+      // 'x.env' too, over-relieving on the allow side.
+      const caret = new SensitiveMatcher(['[^].env']);
+      assert.strictEqual(caret.isSensitive('^.env'), true);
+      assert.strictEqual(caret.isSensitive('x.env'), false);
+    });
+
+    it('TC-ALLOW-022: an unbalanced brace in an env list drops only itself', () => {
+      // '{bad, secrets/**' has no closing brace; the brace-aware split must
+      // not swallow every separator behind it into one bogus literal and
+      // silently drop the real 'secrets/**' deny.
+      withEnv({ FS_DENYLIST: '{bad, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const unmatchedOpen = new SensitiveMatcher();
+        assert.strictEqual(unmatchedOpen.isSensitive('/r/secrets/plan'), true);
+        assert.strictEqual(unmatchedOpen.isSensitive('/r/public/plan'), false);
+      });
+      withEnv({ FS_DENYLIST: 'x}, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const strayClose = new SensitiveMatcher();
+        assert.strictEqual(strayClose.isSensitive('/r/secrets/plan'), true);
+        assert.strictEqual(strayClose.isSensitive('/r/public/plan'), false);
+      });
     });
 
     it('TC-ALLOW-020: absolute patterns stay rooted — no **/ alias over-relief', () => {

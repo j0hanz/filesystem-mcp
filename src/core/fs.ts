@@ -274,6 +274,11 @@ export class GuardedFileSystem {
     }
     try {
       signal?.throwIfAborted();
+      // Ceiling: an append is not transactional, so an abort landing
+      // mid-write can leave a prefix of the content on disk. Unwiring the
+      // signal would trade that for a silently-completed write; a client
+      // that retries is double-appending either way, so the abortable
+      // write stays.
       await handle.writeFile(content, { encoding, signal });
     } catch (error) {
       if (created) {

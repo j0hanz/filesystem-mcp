@@ -136,12 +136,14 @@ function globToRegExp(glob: string): RegExp {
         if (close !== -1) {
           // Pass the class through, flipping glob '!' negation to '^' and
           // escaping backslashes so no body can make new RegExp throw. A
-          // leading ']' must be escaped too or the 'u' flag parses '[]a]'
-          // as an empty class followed by stray literals.
+          // leading ']' must be escaped or the 'u' flag parses '[]a]' as an
+          // empty class followed by stray literals; a leading '^' is a
+          // literal member (glob negation is '!' only), unescaped it would
+          // negate the class and relieve more than the operator named.
           let body = segment.slice(j + 1, close).replace(/\\/gu, '\\\\');
           const negated = body.startsWith('!');
           if (negated) body = body.slice(1);
-          if (body.startsWith(']')) body = `\\${body}`;
+          if (body.startsWith(']') || body.startsWith('^')) body = `\\${body}`;
           source += `[${negated ? '^' : ''}${body}]`;
           j = close;
         } else {
@@ -286,9 +288,15 @@ interface DenyTiers {
 // outside any [...] class, so documented syntax like '*.{pem,key}' or
 // 'x[1,2].env' survives as one pattern instead of tearing apart.
 function splitPatternList(value: string): string[] {
+  const naive = (): string[] =>
+    value
+      .split(/,|\n/u)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
+  let unbalanced = false;
   for (let i = 0; i < value.length; i++) {
     const char = value[i] ?? '';
     if (char === '[') {
@@ -299,12 +307,19 @@ function splitPatternList(value: string): string[] {
       }
     }
     if (char === '{') depth++;
-    else if (char === '}') depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (char === ',' || char === '\n')) {
+    else if (char === '}') {
+      if (depth === 0) unbalanced = true;
+      else depth--;
+    } else if (depth === 0 && (char === ',' || char === '\n')) {
       parts.push(value.slice(start, i));
       start = i + 1;
     }
   }
+  // An unbalanced brace would swallow every separator behind it into one
+  // bogus literal pattern and silently drop the real entries — '{bad,
+  // secrets/**' must not lose 'secrets/**'. A typo'd brace costs the brace
+  // pattern only: fall back to the naive split.
+  if (unbalanced || depth !== 0) return naive();
   parts.push(value.slice(start));
   return parts.map((t) => t.trim()).filter((t) => t.length > 0);
 }
