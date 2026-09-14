@@ -166,14 +166,13 @@ export async function parseArgs(): Promise<{
     if (v['allow-sensitive']) cli.allowSensitive = true;
     if (v['walk-cwd']) cli.allowCwdWalk = true;
     if (v['allow-missing-roots']) cli.allowMissingRoots = true;
-    if (v.deny !== undefined) {
-      const denyPatterns = [...new Set(v.deny.map((entry) => entry.trim()).filter(Boolean))];
-      if (denyPatterns.length > 0) cli.denyPatterns = denyPatterns;
-    }
-    if (v.allow !== undefined) {
-      const allowPatterns = [...new Set(v.allow.map((entry) => entry.trim()).filter(Boolean))];
-      if (allowPatterns.length > 0) cli.allowPatterns = allowPatterns;
-    }
+    const patternList = (entries: readonly string[] | undefined): readonly string[] => [
+      ...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean)),
+    ];
+    const denyPatterns = patternList(v.deny);
+    if (denyPatterns.length > 0) cli.denyPatterns = denyPatterns;
+    const allowPatterns = patternList(v.allow);
+    if (allowPatterns.length > 0) cli.allowPatterns = allowPatterns;
 
     const allowCwd =
       v['allow-cwd'] ||

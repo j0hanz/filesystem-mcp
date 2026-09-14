@@ -119,36 +119,21 @@ export function isHidden(name: string): boolean {
   return name.startsWith('.');
 }
 
-const CHAR_LF = 10;
-const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
-
 /**
- * Line count for a file on disk, streaming in 64 KiB chunks so an
- * arbitrarily large file (one append's result metadata) costs bounded memory.
- * Matches read.ts's countLines: a trailing newline does not open a new line,
- * an unterminated final line counts, an empty file is 0.
+ * Line count for a file on disk, streaming so an arbitrarily large file (one
+ * append's result metadata) costs bounded memory. FileHandle.readLines yields
+ * exactly read.ts's countLines semantics: a trailing newline does not open a
+ * new line, an unterminated final line counts, an empty file is 0.
  */
 export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
   const handle = await fsOpen(filePath, 'r');
   try {
-    let newlines = 0;
-    let lastByte = 0;
-    let totalBytes = 0;
-    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
-    for (;;) {
+    let lines = 0;
+    for await (const _line of handle.readLines()) {
       signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      totalBytes += bytesRead;
-      for (let i = 0; i < bytesRead; i++) {
-        const byte = chunk[i] ?? 0;
-        if (byte === CHAR_LF) newlines++;
-        lastByte = byte;
-      }
+      lines++;
     }
-    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
-    // content and must count as an unterminated final line, not "empty".
-    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
+    return lines;
   } finally {
     await handle.close();
   }
