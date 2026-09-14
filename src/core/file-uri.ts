@@ -6,6 +6,7 @@ import { detectMimeFromContent } from './mime.js';
 import { countLines } from './read.js';
 import type { FileKind } from './schema.js';
 import type { ResourceStore } from './store.js';
+import { getMaxTextFileSize } from './util.js';
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,
 // the path→URI encoder, the URI→path decoder, the link blocks built from them,
@@ -109,14 +110,18 @@ export function buildWrittenFileMeta(
 ): WrittenFileMeta {
   const size = Buffer.byteLength(content, 'utf-8');
   const mimeInfo = detectMimeFromContent(validPath, content);
+  // An edit or patch can push a readable file past the text-size cap; the
+  // store serves the URI via readRaw, which would reject it with TOO_LARGE.
+  const servable = size <= getMaxTextFileSize();
   return {
     size,
     lineCount: countLines(content),
     mimeType: mimeInfo.mimeType,
     kind: mimeInfo.kind,
-    resourceUri: buildFileResourceUri(validPath),
-    resourceLink: resourceStore
-      ? buildFileResourceLink(validPath, mimeInfo.mimeType, size)
-      : undefined,
+    resourceUri: servable ? buildFileResourceUri(validPath) : undefined,
+    resourceLink:
+      resourceStore && servable
+        ? buildFileResourceLink(validPath, mimeInfo.mimeType, size)
+        : undefined,
   };
 }

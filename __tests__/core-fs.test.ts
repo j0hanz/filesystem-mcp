@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
+import { buildWrittenFileMeta } from '../src/core/file-uri.js';
 import { countFileLines, GuardedFileSystem } from '../src/core/fs.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
@@ -345,6 +346,20 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         assert.strictEqual(err.code, ErrorCode.NOT_FILE);
         return true;
       });
+    });
+
+    it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap', () => {
+      // An edit or patch can push a readable file past the text-size cap;
+      // a resourceUri the store's readRaw would reject with TOO_LARGE must
+      // never be advertised.
+      const huge = 'x'.repeat(10 * 1024 * 1024 + 1);
+      const meta = buildWrittenFileMeta(join(tmpDir, 'huge.txt'), huge, undefined);
+      assert.strictEqual(meta.size, huge.length);
+      assert.strictEqual(meta.resourceUri, undefined);
+      assert.strictEqual(meta.resourceLink, undefined);
+
+      const small = buildWrittenFileMeta(join(tmpDir, 'small.txt'), 'hi', undefined);
+      assert.ok(small.resourceUri, 'under the cap the URI is advertised');
     });
   });
 

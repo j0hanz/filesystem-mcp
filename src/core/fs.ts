@@ -254,13 +254,29 @@ export class GuardedFileSystem {
     // missing target CREATES it, so: check the signal before the open, and
     // if the call then fails after creating the file, remove what it made —
     // an aborted or errored call must not leave a phantom file behind.
+    // The pre-open lstat only proves the file was missing a moment ago:
+    // 'ax' makes creation exclusive, so a racer that created it in between
+    // fails EEXIST, reopens plainly, and never claims cleanup rights over
+    // the winner's file.
     signal?.throwIfAborted();
-    const handle = await fsOpen(validPath, 'a');
+    let created = false;
+    let handle: FileHandle;
+    if (existed) {
+      handle = await fsOpen(validPath, 'a');
+    } else {
+      try {
+        handle = await fsOpen(validPath, 'ax');
+        created = true;
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
+        handle = await fsOpen(validPath, 'a');
+      }
+    }
     try {
       signal?.throwIfAborted();
       await handle.writeFile(content, { encoding, signal });
     } catch (error) {
-      if (!existed) {
+      if (created) {
         await fsUnlink(validPath).catch((unlinkError: unknown) => {
           Logger.warn(
             `Failed to remove newly created ${validPath} after a failed append: ${formatUnknownErrorMessage(unlinkError)}`,

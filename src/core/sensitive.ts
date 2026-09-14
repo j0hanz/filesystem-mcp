@@ -130,12 +130,19 @@ function globToRegExp(glob: string): RegExp {
       } else if (char === '?') {
         source += '[^/]';
       } else if (char === '[') {
-        const close = segment.indexOf(']', j + 1);
-        const body = close === -1 ? '' : segment.slice(j + 1, close);
-        if (body.length > 0) {
-          // Pass a character class through, flipping glob '!' negation to '^'
-          // and escaping backslashes so no body can make new RegExp throw.
-          source += `[${body.replace(/^!/u, '^').replace(/\\/gu, '\\\\')}]`;
+        // Same classEnd rule the scanners use: a ']' right after '[' (or
+        // after the '!' negation) is a literal member, not the closer.
+        const close = classEnd(segment, j);
+        if (close !== -1) {
+          // Pass the class through, flipping glob '!' negation to '^' and
+          // escaping backslashes so no body can make new RegExp throw. A
+          // leading ']' must be escaped too or the 'u' flag parses '[]a]'
+          // as an empty class followed by stray literals.
+          let body = segment.slice(j + 1, close).replace(/\\/gu, '\\\\');
+          const negated = body.startsWith('!');
+          if (negated) body = body.slice(1);
+          if (body.startsWith(']')) body = `\\${body}`;
+          source += `[${negated ? '^' : ''}${body}]`;
           j = close;
         } else {
           source += escapeRegExp(char);
@@ -169,8 +176,13 @@ function isWindowsAbsolutePosixPath(normalizedPattern: string): boolean {
 function compilePatternGlobs(normalizedPattern: string): readonly string[] {
   const globs = new Set<string>([normalizedPattern]);
 
+  // A leading '/' (POSIX-absolute) is rooted like a Windows drive path:
+  // aliasing '/abs/secret' as '**/abs/secret' would also match
+  // 'other/abs/secret', and on the allow side that is over-relief.
   const isRooted =
-    normalizedPattern.startsWith('**/') || isWindowsAbsolutePosixPath(normalizedPattern);
+    normalizedPattern.startsWith('/') ||
+    normalizedPattern.startsWith('**/') ||
+    isWindowsAbsolutePosixPath(normalizedPattern);
   if (!isRooted) {
     const withoutRoot = normalizedPattern.replace(/^\/+/, '');
     if (withoutRoot) {

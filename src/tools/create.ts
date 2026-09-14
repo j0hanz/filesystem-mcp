@@ -115,7 +115,8 @@ export const CREATE = defineTool({
         // round-trip append exists to avoid.
         let validPath: string;
         let meta: WrittenFileMeta;
-        let fileStats: Stats;
+        let created: string;
+        let modified: string;
         if (override?.append) {
           const appended = await ctx.fs.appendFile(path, content, {
             encoding: 'utf-8',
@@ -126,16 +127,19 @@ export const CREATE = defineTool({
           // everything below is best-effort RESULT METADATA, not part of the
           // write. It runs unwired to ctx.signal, and a metadata failure
           // degrades the result instead of failing it — either would report
-          // the append as failed and a client retry would append twice.
-          const statted = await ctx.fs.stat(path);
-          fileStats = statted.stats;
+          // the append as failed and a client retry would append twice. The
+          // stat covers the committed validPath, never the input path: a
+          // symlink there could have been swapped between write and stat,
+          // and the result must describe the file the bytes landed in.
+          let stats: Stats | undefined;
           let mimeType: string;
           let kind: FileKind;
-          let lineCount: number;
+          let lineCount = 0;
           try {
+            stats = (await ctx.fs.stat(appended.validPath)).stats;
             // Sniff the resulting file's leading bytes, not the appended
             // chunk: text appended to a binary file is still a binary file.
-            const sample = await ctx.fs.readLeadingSample(path, MIME_SAMPLE_SIZE);
+            const sample = await ctx.fs.readLeadingSample(appended.validPath, MIME_SAMPLE_SIZE);
             const mimeInfo = detectMimeFromContent(appended.validPath, sample);
             mimeType = mimeInfo.mimeType;
             kind = mimeInfo.kind;
@@ -150,30 +154,36 @@ export const CREATE = defineTool({
             const mimeInfo = detectMimeFromContent(appended.validPath, content);
             mimeType = mimeInfo.mimeType;
             kind = mimeInfo.kind;
-            lineCount = 0;
           }
           // The resource store serves this URI via readRaw, which rejects
           // files over the text-size cap with TOO_LARGE — never advertise a
-          // link the store deterministically cannot serve.
-          const servable = statted.stats.size <= getMaxTextFileSize();
+          // link the store deterministically cannot serve. A failed stat
+          // leaves the size unknown, so nothing is advertised either.
+          const servable = stats !== undefined && stats.size <= getMaxTextFileSize();
+          const size = stats?.size ?? 0;
           meta = {
-            size: statted.stats.size,
+            size,
             lineCount,
             mimeType,
             kind,
             resourceUri: servable ? buildFileResourceUri(appended.validPath) : undefined,
             resourceLink:
               servable && ctx.resourceStore
-                ? buildFileResourceLink(appended.validPath, mimeType, statted.stats.size)
+                ? buildFileResourceLink(appended.validPath, mimeType, size)
                 : undefined,
           };
+          const epoch = new Date(0);
+          created = (stats?.birthtime ?? epoch).toISOString();
+          modified = (stats?.mtime ?? epoch).toISOString();
         } else {
           const written = await ctx.fs.writeFile(path, content, {
             encoding: 'utf-8',
             signal: ctx.signal,
           });
           validPath = written.validPath;
-          fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
+          const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
+          created = fileStats.birthtime.toISOString();
+          modified = fileStats.mtime.toISOString();
           meta = buildWrittenFileMeta(written.validPath, content, ctx.resourceStore);
         }
 
@@ -184,8 +194,8 @@ export const CREATE = defineTool({
           mimeType: meta.mimeType,
           kind: meta.kind,
           resourceUri: meta.resourceUri,
-          created: fileStats.birthtime.toISOString(),
-          modified: fileStats.mtime.toISOString(),
+          created,
+          modified,
         };
 
         return meta.resourceLink ? { file, resourceLink: meta.resourceLink } : { file };

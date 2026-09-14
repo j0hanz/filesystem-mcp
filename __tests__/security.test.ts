@@ -513,5 +513,49 @@ describe('Security (P0)', () => {
         },
       );
     });
+
+    it('TC-ALLOW-019: a leading ] in a class is a literal member', () => {
+      // '[]a].env' has members ']' and 'a' — classEnd keeps the leading ']'
+      // and the regex translation must escape it, or the 'u' flag parses
+      // '[]a]' as an empty class plus stray literals and the deny fails open.
+      const bracket = new SensitiveMatcher(['[]a].env']);
+      assert.strictEqual(bracket.isSensitive('].env'), true);
+      assert.strictEqual(bracket.isSensitive('a.env'), true);
+      assert.strictEqual(bracket.isSensitive('b.env'), false);
+      // '[!]].env': negated class of ']' — matches anything except ']'.
+      const negated = new SensitiveMatcher(['[!]].env']);
+      assert.strictEqual(negated.isSensitive('x.env'), true);
+      assert.strictEqual(negated.isSensitive('].env'), false);
+    });
+
+    it('TC-ALLOW-020: absolute patterns stay rooted — no **/ alias over-relief', () => {
+      // '/abs/secret' must not gain the '**/abs/secret' unrooted alias: that
+      // matches 'other/abs/secret' too, and on the allow side it relieves
+      // files the operator never named.
+      withEnv({ FS_DENYLIST: '/abs/secret', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const deny = new SensitiveMatcher();
+        assert.strictEqual(deny.isSensitive('/abs/secret'), true);
+        assert.strictEqual(deny.isSensitive('/x/abs/secret'), false);
+      });
+      withEnv({ FS_ALLOWLIST: '/r/ok.pem' }, () => {
+        const allow = new SensitiveMatcher();
+        assert.strictEqual(allow.isSensitive('/r/ok.pem'), false);
+        assert.strictEqual(allow.isSensitive('/x/r/ok.pem'), true);
+        assert.strictEqual(allow.isSensitive('/r/other.pem'), true);
+      });
+    });
+
+    it('TC-ALLOW-021: mid-pattern ** matches zero or more whole segments', () => {
+      // 'secrets/**/credentials' denies secrets/credentials and any depth of
+      // subdirectory under secrets/ — the globstar consumes its separator,
+      // so no double slash may sneak into the compiled regex.
+      withEnv({ FS_DENYLIST: 'secrets/**/credentials', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('/r/secrets/credentials'), true);
+        assert.strictEqual(matcher.isSensitive('/r/secrets/a/credentials'), true);
+        assert.strictEqual(matcher.isSensitive('/r/secrets/a/b/credentials'), true);
+        assert.strictEqual(matcher.isSensitive('/r/credentials'), false);
+      });
+    });
   });
 });
