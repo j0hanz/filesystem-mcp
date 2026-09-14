@@ -12,7 +12,7 @@ import {
   type WrittenFileMeta,
 } from '../core/file-uri.js';
 import { countFileLines, type Stats } from '../core/fs.js';
-import { detectMimeFromContent } from '../core/mime.js';
+import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.js';
 import {
   FileKind,
   IsoDateTime,
@@ -106,10 +106,9 @@ export const CREATE = defineTool({
         // exact and the atomic temp+rename write protects the existing mode.
         // Append: the resulting file is everything that was there plus
         // `content`, so size/created/modified come from a real post-append
-        // stat and the line count streams the file — reading a multi-GB log
-        // back just to count its lines is the round-trip append exists to
-        // avoid. MIME is sniffed from the appended chunk, which is exact for
-        // the text files appending is for.
+        // stat, MIME from the resulting file's leading bytes, and the line
+        // count streams the file — reading a multi-GB log back whole is the
+        // round-trip append exists to avoid.
         let validPath: string;
         let meta: WrittenFileMeta;
         let fileStats: Stats;
@@ -119,7 +118,12 @@ export const CREATE = defineTool({
             signal: ctx.signal,
           });
           const statted = await ctx.fs.stat(path, { signal: ctx.signal });
-          const mimeInfo = detectMimeFromContent(appended.validPath, content);
+          // Sniff the resulting file's leading bytes, not the appended chunk:
+          // text appended to a binary file is still a binary file.
+          const sample = await ctx.fs.readLeadingSample(path, MIME_SAMPLE_SIZE, {
+            signal: ctx.signal,
+          });
+          const mimeInfo = detectMimeFromContent(appended.validPath, sample);
           validPath = appended.validPath;
           fileStats = statted.stats;
           meta = {

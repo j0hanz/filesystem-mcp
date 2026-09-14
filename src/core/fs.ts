@@ -119,21 +119,39 @@ export function isHidden(name: string): boolean {
   return name.startsWith('.');
 }
 
+const CHAR_LF = 10;
+const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+
 /**
- * Line count for a file on disk, streaming so an arbitrarily large file (one
- * append's result metadata) costs bounded memory. FileHandle.readLines yields
- * exactly read.ts's countLines semantics: a trailing newline does not open a
- * new line, an unterminated final line counts, an empty file is 0.
+ * Line count for a file on disk, counting newline bytes in fixed 64 KiB
+ * chunks so an arbitrarily large file (one append's result metadata) costs
+ * bounded memory. NOT FileHandle.readLines: it decodes each physical line
+ * whole, so a multi-GB single-line log OOMs the server after the append has
+ * already landed — a reported failure invites a retry that appends twice.
+ * Matches read.ts's countLines semantics: a trailing newline does not open
+ * a new line, an unterminated final line counts, an empty file is 0.
  */
 export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
   const handle = await fsOpen(filePath, 'r');
   try {
-    let lines = 0;
-    for await (const _line of handle.readLines()) {
+    let newlines = 0;
+    let lastByte = 0;
+    let totalBytes = 0;
+    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+    for (;;) {
       signal?.throwIfAborted();
-      lines++;
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === CHAR_LF) newlines++;
+        lastByte = byte;
+      }
     }
-    return lines;
+    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+    // content and must count as an unterminated final line, not "empty".
+    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
   } finally {
     await handle.close();
   }
@@ -148,7 +166,7 @@ export class GuardedFileSystem {
 
   async stat(
     filePath: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), options?.signal);
@@ -227,6 +245,28 @@ export class GuardedFileSystem {
       await handle.close();
     }
     return { validPath };
+  }
+
+  /**
+   * Leading bytes of a file, for MIME sniffing without loading the whole
+   * file — an append's result must describe the resulting file (which may be
+   * a multi-GB log), not the chunk that was appended.
+   */
+  async readLeadingSample(
+    filePath: string,
+    size: number,
+    options: { signal?: AbortSignal | undefined } = {},
+  ): Promise<Buffer> {
+    const { validPath } = await this.stat(filePath, options);
+    const handle = await fsOpen(validPath, 'r');
+    try {
+      options.signal?.throwIfAborted();
+      const buffer = Buffer.alloc(size);
+      const { bytesRead } = await handle.read(buffer, 0, size, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<{ validPath: string }> {

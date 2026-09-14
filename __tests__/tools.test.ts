@@ -245,6 +245,26 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(content.endsWith('x\n'));
   });
 
+  it('TC-FUNC-009k: append result MIME comes from the resulting file, not the appended chunk', async () => {
+    // Seed an extensionless binary file, append text: the result must still
+    // report binary — text appended to a binary file does not make it text.
+    const file = join(tmpDir, 'append_binary_seed');
+    await writeFile(file, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'plain text tail', append: true }] },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const structured = result.structuredContent as {
+      files?: { kind?: string; mimeType?: string; size?: number }[];
+    };
+    const entry = structured.files?.[0];
+    assert.strictEqual(entry?.kind, 'binary');
+    assert.strictEqual(entry?.mimeType, 'application/octet-stream');
+    assert.strictEqual(entry?.size, 4 + 'plain text tail'.length);
+  });
+
   it('TC-FUNC-009d: move reports isError when every requested move was denied', async () => {
     const source = join(tmpDir, 'movable.txt');
     await writeFile(source, 'body');

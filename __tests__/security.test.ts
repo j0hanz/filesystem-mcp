@@ -412,5 +412,30 @@ describe('Security (P0)', () => {
         assert.strictEqual(matcher.isSensitive('//server/share/public/readme.txt'), false);
       });
     });
+
+    it('TC-ALLOW-014: brace alternatives in env lists survive the comma split', (t) => {
+      // '*.{pem,key}' is one pattern, not '*.{pem' + 'key}' — the depth-0
+      // split must not tear a documented brace group apart.
+      withEnv(
+        t,
+        { FS_ALLOWLIST: '*.{pem,key}, .env.example', FS_ALLOW_SENSITIVE: undefined },
+        () => {
+          const matcher = new SensitiveMatcher();
+          assert.strictEqual(matcher.isSensitive('server.pem'), false);
+          assert.strictEqual(matcher.isSensitive('server.key'), false);
+          assert.strictEqual(matcher.isSensitive('.env.example'), false);
+          assert.strictEqual(
+            matcher.isSensitive('.env'),
+            true,
+            'relief stays scoped to the listed patterns',
+          );
+        },
+      );
+      withEnv(t, { FS_DENYLIST: '*.{pem,key}', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('server.pem'), true);
+        assert.strictEqual(matcher.isSensitive('server.key'), true);
+      });
+    });
   });
 });

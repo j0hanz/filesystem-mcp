@@ -227,15 +227,31 @@ interface DenyTiers {
   operator: readonly string[];
 }
 
+// Split an env pattern list on commas and newlines at brace depth 0 only, so
+// a documented brace alternative like '*.{pem,key}' survives as one pattern
+// instead of tearing into '*.{pem' and 'key}'.
+function splitPatternList(value: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i] ?? '';
+    if (char === '{') depth++;
+    else if (char === '}') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (char === ',' || char === '\n')) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts.map((t) => t.trim()).filter((t) => t.length > 0);
+}
+
 function buildDenyTiers(): DenyTiers {
   const allowSensitive =
     cli.allowSensitive ?? parseTrueEnvFlag(process.env['FS_ALLOW_SENSITIVE'], 'FS_ALLOW_SENSITIVE');
-  const envValue = process.env['FS_DENYLIST'];
-  const envDenylist = envValue
-    ? envValue
-        .split(/[,\n]/u)
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0)
+  const envDenylist = process.env['FS_DENYLIST']
+    ? splitPatternList(process.env['FS_DENYLIST'])
     : [];
   const flagDenylist = cli.denyPatterns ?? [];
   // FS_ALLOW_SENSITIVE suppresses built-ins only; deny entries (env and --deny)
@@ -247,12 +263,8 @@ function buildDenyTiers(): DenyTiers {
 }
 
 function buildAllowPatterns(): readonly string[] {
-  const envValue = process.env['FS_ALLOWLIST'];
-  const envAllowlist = envValue
-    ? envValue
-        .split(/[,\n]/u)
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0)
+  const envAllowlist = process.env['FS_ALLOWLIST']
+    ? splitPatternList(process.env['FS_ALLOWLIST'])
     : [];
   const flagAllowlist = cli.allowPatterns ?? [];
   return [...new Set([...envAllowlist, ...flagAllowlist])];

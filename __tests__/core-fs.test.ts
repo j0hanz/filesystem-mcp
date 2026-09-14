@@ -257,6 +257,19 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(await countFileLines(filePath), 2);
     });
 
+    it('TC-FUNC-052d: a single physical line larger than the read buffer counts as 1 line', async () => {
+      // Regression guard for the readLines() rewrite: FileHandle.readLines
+      // decodes each physical line whole, so this ~200 KiB no-newline file
+      // OOMs a multi-GB version of itself. The byte counter must not.
+      const filePath = await writeTestFile(
+        tmpDir,
+        'count_lines_huge_line.txt',
+        'x'.repeat(200 * 1024),
+      );
+
+      assert.strictEqual(await countFileLines(filePath), 1);
+    });
+
     it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {
       const envPath = join(tmpDir, '.env');
       await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
