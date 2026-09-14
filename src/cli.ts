@@ -120,6 +120,7 @@ const CLI_PARSER_CONFIG = {
     'max-file-size': { type: 'string' },
     'walk-cwd': { type: 'boolean', default: false },
     deny: { type: 'string', multiple: true },
+    allow: { type: 'string', multiple: true },
     'allow-missing-roots': { type: 'boolean', default: false },
   },
   strict: true,
@@ -168,6 +169,10 @@ export async function parseArgs(): Promise<{
     if (v.deny !== undefined) {
       const denyPatterns = [...new Set(v.deny.map((entry) => entry.trim()).filter(Boolean))];
       if (denyPatterns.length > 0) cli.denyPatterns = denyPatterns;
+    }
+    if (v.allow !== undefined) {
+      const allowPatterns = [...new Set(v.allow.map((entry) => entry.trim()).filter(Boolean))];
+      if (allowPatterns.length > 0) cli.allowPatterns = allowPatterns;
     }
 
     const allowCwd =

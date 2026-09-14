@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, type TestContext } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
 import type { PathGuard } from '../src/core/path.js';
@@ -207,6 +207,135 @@ describe('Security (P0)', () => {
       // or the exact-name patterns are bypassed.
       assert.strictEqual(matcher.isSensitive('.env '), true, '".env " should be caught as ".env"');
       assert.strictEqual(matcher.isSensitive('.env.'), true, '".env." should be caught as ".env"');
+    });
+  });
+
+  describe('SensitiveMatcher allow-list relief (--allow / FS_ALLOWLIST)', () => {
+    // Pin env vars for the duration of one test and restore them after.
+    // FS_ALLOW_SENSITIVE is always pinned so a developer machine running
+    // with it set cannot flip these assertions.
+    const withEnv = (
+      t: TestContext,
+      vars: Record<string, string | undefined>,
+      run: () => void,
+    ): void => {
+      const saved: Record<string, string | undefined> = {};
+      for (const [name, value] of Object.entries(vars)) {
+        saved[name] = process.env[name];
+        // Reflect over `delete`: unset must mean the key is gone entirely.
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+      t.after(() => {
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) Reflect.deleteProperty(process.env, name);
+          else process.env[name] = value;
+        }
+      });
+      run();
+    };
+
+    it('TC-ALLOW-001: an allow pattern relieves only the built-ins it matches', () => {
+      const matcher = new SensitiveMatcher(['.env', '.env.*'], ['.env.example']);
+      assert.strictEqual(
+        matcher.isSensitive('.env.example'),
+        false,
+        'allow entry should lift the .env.* hit on .env.example',
+      );
+      assert.strictEqual(matcher.isSensitive('.env'), true, '.env itself stays sensitive');
+    });
+
+    it('TC-ALLOW-002: FS_ALLOWLIST relieves built-ins via the default construction', (t) => {
+      withEnv(t, { FS_ALLOWLIST: '.env.example, dev.pem', FS_ALLOW_SENSITIVE: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('.env.example'), false);
+        assert.strictEqual(matcher.isSensitive('dev.pem'), false);
+        assert.strictEqual(matcher.isSensitive('.env'), true);
+        assert.strictEqual(
+          matcher.isSensitive('server.pem'),
+          true,
+          'allow relief is per-pattern, not a global switch',
+        );
+        assert.strictEqual(
+          matcher.isSensitive('.env.development'),
+          true,
+          'allow is exact-pattern, not prefix-wide',
+        );
+      });
+    });
+
+    it('TC-ALLOW-003: FS_DENYLIST entries are never relieved by an allow pattern', (t) => {
+      withEnv(
+        t,
+        {
+          FS_DENYLIST: '.env.example',
+          FS_ALLOWLIST: '.env.example',
+          FS_ALLOW_SENSITIVE: undefined,
+        },
+        () => {
+          const matcher = new SensitiveMatcher();
+          assert.strictEqual(
+            matcher.isSensitive('.env.example'),
+            true,
+            'explicit deny always beats allow',
+          );
+        },
+      );
+    });
+
+    it('TC-ALLOW-004: Windows spellings of an allowed name stay relieved; denied names stay denied', (t) => {
+      if (process.platform !== 'win32') {
+        t.skip('ADS stripping and trailing-dot trim are Windows-only');
+        return;
+      }
+      const matcher = new SensitiveMatcher(['.env', '.env.*'], ['.env.example']);
+      assert.strictEqual(
+        matcher.isSensitive('.env.example '),
+        false,
+        'trailing-space spelling strips to the allowed name',
+      );
+      assert.strictEqual(
+        matcher.isSensitive('.env.example:stream'),
+        false,
+        'ADS spelling strips to the allowed name',
+      );
+      assert.strictEqual(
+        matcher.isSensitive('.env '),
+        true,
+        'trailing-space spelling of .env still denied',
+      );
+      assert.strictEqual(
+        matcher.isSensitive('.env:stream'),
+        true,
+        'ADS spelling of .env still denied',
+      );
+    });
+
+    it('TC-ALLOW-005: a typo in the allow pattern fails closed', (t) => {
+      withEnv(t, { FS_ALLOWLIST: 'env.example', FS_ALLOW_SENSITIVE: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(
+          matcher.isSensitive('.env.example'),
+          true,
+          'a non-matching allow pattern must not relieve anything',
+        );
+      });
+    });
+
+    it('TC-ALLOW-006: without an allow list the built-ins apply exactly as before', (t) => {
+      withEnv(t, { FS_ALLOWLIST: undefined, FS_ALLOW_SENSITIVE: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('.env.example'), true);
+        assert.strictEqual(matcher.isSensitive('.env'), true);
+      });
+    });
+
+    it('TC-ALLOW-007: FS_ALLOW_SENSITIVE still suppresses all built-ins regardless of allow entries', (t) => {
+      withEnv(t, { FS_ALLOW_SENSITIVE: '1', FS_ALLOWLIST: '.env.example' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('.env'), false);
+        assert.strictEqual(matcher.isSensitive('.env.example'), false);
+      });
     });
   });
 });
