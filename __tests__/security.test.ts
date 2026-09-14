@@ -388,5 +388,29 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('server.key'), true);
       assert.strictEqual(matcher.isSensitive('server.crt'), false);
     });
+
+    it('TC-ALLOW-012: nested brace groups expand every alternative', () => {
+      const matcher = new SensitiveMatcher(['data/{x,{y,z}}/secret']);
+      assert.strictEqual(matcher.isSensitive('/root/data/x/secret'), true);
+      assert.strictEqual(matcher.isSensitive('/root/data/y/secret'), true);
+      assert.strictEqual(matcher.isSensitive('/root/data/z/secret'), true);
+      assert.strictEqual(matcher.isSensitive('/root/data/w/secret'), false);
+    });
+
+    it('TC-ALLOW-013: path-tier patterns still match UNC-style double-slash roots', (t) => {
+      withEnv(t, { FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(
+          matcher.isSensitive('//server/share/.aws/credentials'),
+          true,
+          'builtin path-tier deny must match a UNC allowed root',
+        );
+      });
+      withEnv(t, { FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('//server/share/secrets/.env'), true);
+        assert.strictEqual(matcher.isSensitive('//server/share/public/readme.txt'), false);
+      });
+    });
   });
 });

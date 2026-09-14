@@ -14,7 +14,10 @@ const CHAR_FORWARD_SLASH = 47;
 
 function normalizeForMatch(input: string): string {
   // Always lowercase for case-insensitive denylist matching on all platforms.
-  return toPosixPath(normalize(input)).toLowerCase();
+  // normalize() preserves the double leading slash of UNC paths
+  // (//server/share/...) on Windows; collapse it to one so the compiled
+  // patterns — which carry no leading slash — still match their segments.
+  return toPosixPath(normalize(input)).toLowerCase().replace(/^\/+/u, '/');
 }
 
 interface CompiledPatternSet {
@@ -35,14 +38,40 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 function expandBraces(glob: string): string[] {
   const open = glob.indexOf('{');
   if (open === -1) return [glob];
-  const close = glob.indexOf('}', open);
+  // Pair the outer '{' with ITS matching '}' — indexOf would grab the inner
+  // group's closer and produce garbage like 'data/x}/secret'. Then split the
+  // body on depth-0 commas so nested groups stay intact for the recursion.
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < glob.length; i++) {
+    const char = glob[i] ?? '';
+    if (char === '{') depth++;
+    else if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
   if (close === -1) return [glob];
   const prefix = glob.slice(0, open);
   const suffix = glob.slice(close + 1);
-  return glob
-    .slice(open + 1, close)
-    .split(',')
-    .flatMap((part) => expandBraces(`${prefix}${part}${suffix}`));
+  const body = glob.slice(open + 1, close);
+  const parts: string[] = [];
+  let start = 0;
+  depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i] ?? '';
+    if (char === '{') depth++;
+    else if (char === '}') depth--;
+    else if (char === ',' && depth === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts.flatMap((part) => expandBraces(`${prefix}${part}${suffix}`));
 }
 
 function globToRegExp(glob: string): RegExp {
