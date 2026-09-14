@@ -374,6 +374,11 @@ filesystem-mcp /path/to/project1 /path/to/project2
 | `--print-config`          | `false` | Print the active configuration and exit (use `--json` for machine-readable output)                                                    |
 | `--json`                  | `false` | Output `--print-config` as JSON                                                                                                       |
 
+`--deny` and `--allow` patterns support `*` (any run within a segment),
+`**` (any run of segments), `?`, `[...]` classes, and `{a,b}` alternation.
+Dot-leading (hidden) names match like any other — `secrets/**` denies
+`secrets/.env`, `*id_rsa*` denies `.id_rsa`.
+
 #### Environment variables
 
 All boolean variables accept `true` or `1` to enable and `false`, `0`, or

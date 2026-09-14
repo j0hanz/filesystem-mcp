@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
-  appendFile as fsAppendFile,
   chmod as fsChmod,
   cp as fsCp,
   lstat as fsLstat,
@@ -134,18 +133,22 @@ export async function countFileLines(filePath: string, signal?: AbortSignal): Pr
   try {
     let newlines = 0;
     let lastByte = 0;
+    let totalBytes = 0;
     const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
     for (;;) {
       signal?.throwIfAborted();
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
+      totalBytes += bytesRead;
       for (let i = 0; i < bytesRead; i++) {
         const byte = chunk[i] ?? 0;
         if (byte === CHAR_LF) newlines++;
         lastByte = byte;
       }
     }
-    return lastByte === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
+    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+    // content and must count as an unterminated final line, not "empty".
+    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
   } finally {
     await handle.close();
   }
@@ -228,9 +231,16 @@ export class GuardedFileSystem {
   ): Promise<{ validPath: string }> {
     const { encoding = 'utf-8', signal } = options;
     const validPath = await resolveForWrite(this.pathGuard, filePath);
-    // appendFile's option type omits `signal` (writeFile's has it), so the
-    // abort check rides withAbort instead — the same guard stat() uses.
-    await withAbort(fsAppendFile(validPath, content, { encoding }), signal);
+    // fs.promises.appendFile takes no signal, so a withAbort race would
+    // report failure while the append still lands — a client retry then
+    // appends twice. A handle opened with 'a' gets a genuinely abortable
+    // FileHandle.writeFile instead, same as the writeFile path.
+    const handle = await fsOpen(validPath, 'a');
+    try {
+      await handle.writeFile(content, { encoding, signal });
+    } finally {
+      await handle.close();
+    }
     return { validPath };
   }
 

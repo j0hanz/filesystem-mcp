@@ -154,6 +154,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await assert.rejects(access(outside), 'the denied file must not exist');
   });
 
+  it('TC-FUNC-009j: create with append:true on a sensitive file is denied', async () => {
+    const envPath = join(tmpDir, '.env');
+    await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: envPath, content: 'LEAKED=1\n', append: true }] },
+    });
+
+    assert.strictEqual(result.isError, true);
+    const structured = result.structuredContent as { failures?: { error?: { code?: string } }[] };
+    assert.strictEqual(structured.failures?.[0]?.error?.code, 'ACCESS_DENIED');
+    assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
+  });
+
   it('TC-FUNC-009e: create with append:true appends to an existing file', async () => {
     const file = await writeTestFile(tmpDir, 'append_target.txt', 'first\n');
     const result = await harness.client.callTool({

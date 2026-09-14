@@ -18,8 +18,70 @@ function normalizeForMatch(input: string): string {
 }
 
 interface CompiledPatternSet {
-  pathGlobs: readonly string[];
-  nameGlobs: readonly string[];
+  pathGlobs: readonly RegExp[];
+  nameGlobs: readonly RegExp[];
+}
+
+// posix.matchesGlob runs with dot:false semantics and does not honor a dot
+// option at all (verified on Node 24): '*' and '**' never match dot-leading
+// path segments, so a deny of `secrets/**` silently let `secrets/.env`
+// through — fail-open against exactly the hidden files this list exists to
+// guard. Compile our own matcher instead. Supported metacharacters: '*'
+// (any run within a segment), '**' (any run of whole segments), '?' (one
+// char), '[...]' classes, and '{a,b}' alternation; everything else is
+// literal, and dot-leading segments match like any other.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function expandBraces(glob: string): string[] {
+  const open = glob.indexOf('{');
+  if (open === -1) return [glob];
+  const close = glob.indexOf('}', open);
+  if (close === -1) return [glob];
+  const prefix = glob.slice(0, open);
+  const suffix = glob.slice(close + 1);
+  return glob
+    .slice(open + 1, close)
+    .split(',')
+    .flatMap((part) => expandBraces(`${prefix}${part}${suffix}`));
+}
+
+function globToRegExp(glob: string): RegExp {
+  const segments = glob.split('/');
+  let source = '';
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i] ?? '';
+    const last = i === segments.length - 1;
+    if (segment === '**') {
+      source += last ? '(?:.*)?' : '(?:[^/]+/)*';
+      continue;
+    }
+    for (let j = 0; j < segment.length; j++) {
+      const char = segment[j] ?? '';
+      if (char === '*') {
+        while (segment[j + 1] === '*') j++;
+        source += '[^/]*';
+      } else if (char === '?') {
+        source += '[^/]';
+      } else if (char === '[') {
+        const close = segment.indexOf(']', j + 1);
+        const body = close === -1 ? '' : segment.slice(j + 1, close);
+        if (body.length > 0) {
+          // Pass a character class through, flipping glob '!' negation to '^'.
+          source += `[${body.replace(/^!/u, '^')}]`;
+          j = close;
+        } else {
+          source += escapeRegExp(char);
+        }
+      } else {
+        source += escapeRegExp(char);
+      }
+    }
+    if (!last) source += '/';
+  }
+  // Candidates are absolute paths but patterns carry no leading '/', so the
+  // anchor optionally eats the root slash — `**/` then reaches from any
+  // parent, exactly as matchesGlob's globstar did.
+  return new RegExp(`^/?${source}$`, 'u');
 }
 
 function isWindowsAbsolutePosixPath(normalizedPattern: string): boolean {
@@ -47,16 +109,19 @@ function compilePatternGlobs(normalizedPattern: string): readonly string[] {
 }
 
 function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
-  const pathGlobs = new Set<string>();
-  const nameGlobs = new Set<string>();
+  const pathGlobs = new Set<RegExp>();
+  const nameGlobs = new Set<RegExp>();
 
   const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
   for (const pattern of deduped) {
     const normalized = normalizeForMatch(pattern);
     const matchesPath = normalized.includes('/');
     const target = matchesPath ? pathGlobs : nameGlobs;
-    for (const glob of matchesPath ? compilePatternGlobs(normalized) : [normalized]) {
-      target.add(glob);
+    const globs = matchesPath ? compilePatternGlobs(normalized) : [normalized];
+    for (const glob of globs) {
+      for (const expanded of expandBraces(glob)) {
+        target.add(globToRegExp(expanded));
+      }
     }
   }
 
@@ -66,11 +131,11 @@ function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
   };
 }
 
-function matchesAnyGlob(globs: readonly string[], candidate: string): boolean {
+function matchesAnyGlob(globs: readonly RegExp[], candidate: string): boolean {
   if (globs.length === 0) return false;
 
   for (const glob of globs) {
-    if (posix.matchesGlob(candidate, glob)) return true;
+    if (glob.test(candidate)) return true;
   }
 
   return false;

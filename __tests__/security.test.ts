@@ -337,5 +337,56 @@ describe('Security (P0)', () => {
         assert.strictEqual(matcher.isSensitive('.env.example'), false);
       });
     });
+
+    it('TC-ALLOW-008: wildcard denies match hidden files (dot segments match like any other)', (t) => {
+      withEnv(t, { FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(
+          matcher.isSensitive('/root/secrets/.env'),
+          true,
+          'operator wildcard deny must catch dot-leading segments',
+        );
+        assert.strictEqual(matcher.isSensitive('/root/secrets/.npmrc'), true);
+        assert.strictEqual(matcher.isSensitive('/root/secrets/readme.txt'), true);
+        assert.strictEqual(matcher.isSensitive('/root/public/.env'), false);
+      });
+      withEnv(t, { FS_DENYLIST: '**', FS_ALLOW_SENSITIVE: '1' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('/root/.htpasswd'), true);
+      });
+    });
+
+    it('TC-ALLOW-009: built-in star patterns deny dot-leading basenames', (t) => {
+      withEnv(t, { FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('.id_rsa'), true, '*id_rsa* must match .id_rsa');
+        assert.strictEqual(matcher.isSensitive('.key'), true, '*.key must match .key');
+        assert.strictEqual(matcher.isSensitive('server.pem'), true);
+      });
+    });
+
+    it('TC-ALLOW-010: wildcard allow relief reaches hidden files', (t) => {
+      withEnv(t, { FS_ALLOWLIST: 'fixtures/**', FS_ALLOW_SENSITIVE: undefined }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(
+          matcher.isSensitive('/r/fixtures/.env.example'),
+          false,
+          'wildcard allow must relieve dot-leading segments too',
+        );
+        assert.strictEqual(matcher.isSensitive('/r/fixtures/dev.pem'), false);
+        assert.strictEqual(
+          matcher.isSensitive('/r/other/.env.example'),
+          true,
+          'relief is still scoped to the allow pattern',
+        );
+      });
+    });
+
+    it('TC-ALLOW-011: brace alternation in deny patterns still expands', () => {
+      const matcher = new SensitiveMatcher(['*.{pem,key}']);
+      assert.strictEqual(matcher.isSensitive('server.pem'), true);
+      assert.strictEqual(matcher.isSensitive('server.key'), true);
+      assert.strictEqual(matcher.isSensitive('server.crt'), false);
+    });
   });
 });

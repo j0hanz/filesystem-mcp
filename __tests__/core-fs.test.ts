@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, stat, writeFile } from 'node:fs/promises';
+import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -245,10 +245,52 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('TC-FUNC-052a: countFileLines matches countLines across the buffer boundary', async () => {
       // >64 KiB so the counter crosses its read-buffer boundary, with the
       // final line left unterminated to exercise the last-byte rule.
-      const lines = Array.from({ length: 3000 }, (_, i) => `line-${String(i)}`);
+      const lines = Array.from({ length: 12000 }, (_, i) => `line-${String(i)}`);
       const filePath = await writeTestFile(tmpDir, 'count_lines_big.txt', lines.join('\n'));
 
       assert.strictEqual(await countFileLines(filePath), lines.length);
+    });
+
+    it('TC-FUNC-052c: a NUL final byte counts as an unterminated line, not an empty file', async () => {
+      const filePath = await writeTestFile(tmpDir, 'count_lines_nul.txt', 'x\n\0');
+
+      assert.strictEqual(await countFileLines(filePath), 2);
+    });
+
+    it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {
+      const envPath = join(tmpDir, '.env');
+      await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
+
+      await assert.rejects(fs.appendFile(envPath, 'LEAKED=1\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      // Verify with plain node fs — the guarded read would block on .env too.
+      assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
+    });
+
+    it('TC-FUNC-049c: appendFile through an in-root symlink to a sensitive file is denied', async (t) => {
+      const target = await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
+      const linkPath = join(tmpDir, 'env_link');
+      if (!(await trySymlink(target, linkPath, () => t.skip('symlink not permitted'), 'file')))
+        return;
+
+      await assert.rejects(fs.appendFile(linkPath, 'LEAKED=1\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      assert.strictEqual(await readFile(target, 'utf-8'), 'SECRET=1\n');
+    });
+
+    it('TC-FUNC-047b: appendFile with an aborted signal writes nothing', async () => {
+      const filePath = await writeTestFile(tmpDir, 'append_abort.txt', 'stable\n');
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(fs.appendFile(filePath, 'discarded\n', { signal: controller.signal }));
+      assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), 'stable\n');
     });
 
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
