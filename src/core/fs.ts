@@ -41,13 +41,12 @@ export type { FileHandle };
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
-async function atomicWriteFile(
-  filePath: string,
-  content: string,
-  pathGuard: PathGuard,
-  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
-): Promise<{ validPath: string }> {
-  const { encoding = 'utf-8', signal } = options;
+/**
+ * validatePathForWrite + symlink resolution: a write aimed at a link must land
+ * on its revalidated target, not create a new file beside the link. ENOENT is
+ * the normal new-file case, so it falls through with the original path.
+ */
+async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<string> {
   let validPath = await pathGuard.validatePathForWrite(filePath);
 
   try {
@@ -62,6 +61,18 @@ async function atomicWriteFile(
       throw error;
     }
   }
+
+  return validPath;
+}
+
+async function atomicWriteFile(
+  filePath: string,
+  content: string,
+  pathGuard: PathGuard,
+  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+): Promise<{ validPath: string }> {
+  const { encoding = 'utf-8', signal } = options;
+  const validPath = await resolveForWrite(pathGuard, filePath);
 
   const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -108,6 +119,44 @@ export function isHidden(name: string): boolean {
   return name.startsWith('.');
 }
 
+const CHAR_LF = 10;
+const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Line count for a file on disk, counting newline bytes in fixed 64 KiB
+ * chunks so an arbitrarily large file (one append's result metadata) costs
+ * bounded memory. NOT FileHandle.readLines: it decodes each physical line
+ * whole, so a multi-GB single-line log OOMs the server after the append has
+ * already landed — a reported failure invites a retry that appends twice.
+ * Matches read.ts's countLines semantics: a trailing newline does not open
+ * a new line, an unterminated final line counts, an empty file is 0.
+ */
+export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
+  const handle = await fsOpen(filePath, 'r');
+  try {
+    let newlines = 0;
+    let lastByte = 0;
+    let totalBytes = 0;
+    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+    for (;;) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === CHAR_LF) newlines++;
+        lastByte = byte;
+      }
+    }
+    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+    // content and must count as an unterminated final line, not "empty".
+    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
+  } finally {
+    await handle.close();
+  }
+}
+
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
 
@@ -117,7 +166,7 @@ export class GuardedFileSystem {
 
   async stat(
     filePath: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), options?.signal);
@@ -170,6 +219,102 @@ export class GuardedFileSystem {
     options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     return atomicWriteFile(filePath, content, this.pathGuard, options);
+  }
+
+  /**
+   * Append to the existing file (created if missing). Deliberately NOT the
+   * atomicWriteFile temp+rename dance: the rename would swap in a fresh inode,
+   * and the whole point of appending is to extend the file that's already
+   * there — inode and mode survive by construction.
+   */
+  async appendFile(
+    filePath: string,
+    content: string,
+    options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+  ): Promise<{ validPath: string }> {
+    const { encoding = 'utf-8', signal } = options;
+    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    // Non-regular targets must be rejected before the open: 'a' on a FIFO
+    // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
+    // the call would hang unabortable and pin its concurrency slot. The
+    // overwrite path can't hang — it writes a temp file and renames over.
+    // resolveForWrite has already resolved any symlink to its target, so the
+    // lstat here doubles as the new-vs-existing probe for the cleanup below.
+    let existed = true;
+    try {
+      assertFileStats(validPath, await fsLstat(validPath));
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+      existed = false;
+    }
+    // fs.promises.appendFile takes no signal, so a withAbort race would
+    // report failure while the append still lands — a client retry then
+    // appends twice. A handle opened with 'a' gets a genuinely abortable
+    // FileHandle.writeFile instead, same as the writeFile path. 'a' on a
+    // missing target CREATES it, so: check the signal before the open, and
+    // if the call then fails after creating the file, remove what it made —
+    // an aborted or errored call must not leave a phantom file behind.
+    // The pre-open lstat only proves the file was missing a moment ago:
+    // 'ax' makes creation exclusive, so a racer that created it in between
+    // fails EEXIST, reopens plainly, and never claims cleanup rights over
+    // the winner's file.
+    signal?.throwIfAborted();
+    let created = false;
+    let handle: FileHandle;
+    if (existed) {
+      handle = await fsOpen(validPath, 'a');
+    } else {
+      try {
+        handle = await fsOpen(validPath, 'ax');
+        created = true;
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
+        handle = await fsOpen(validPath, 'a');
+      }
+    }
+    try {
+      signal?.throwIfAborted();
+      // Ceiling: an append is not transactional, so an abort landing
+      // mid-write can leave a prefix of the content on disk. Unwiring the
+      // signal would trade that for a silently-completed write; a client
+      // that retries is double-appending either way, so the abortable
+      // write stays.
+      await handle.writeFile(content, { encoding, signal });
+    } catch (error) {
+      if (created) {
+        await fsUnlink(validPath).catch((unlinkError: unknown) => {
+          Logger.warn(
+            `Failed to remove newly created ${validPath} after a failed append: ${formatUnknownErrorMessage(unlinkError)}`,
+          );
+        });
+      }
+      throw error;
+    } finally {
+      await handle.close();
+    }
+    return { validPath };
+  }
+
+  /**
+   * Leading bytes of a file, for MIME sniffing without loading the whole
+   * file — an append's result must describe the resulting file (which may be
+   * a multi-GB log), not the chunk that was appended.
+   */
+  async readLeadingSample(
+    filePath: string,
+    size: number,
+    options: { signal?: AbortSignal | undefined } = {},
+  ): Promise<Buffer> {
+    const { validPath } = await this.stat(filePath, options);
+    const handle = await fsOpen(validPath, 'r');
+    try {
+      options.signal?.throwIfAborted();
+      const buffer = Buffer.alloc(size);
+      const { bytesRead } = await handle.read(buffer, 0, size, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<{ validPath: string }> {

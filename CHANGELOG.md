@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--allow <pattern>` / `FS_ALLOWLIST`: scoped relief from the built-in
+  sensitive-file denylist.** Each entry is a glob following the documented
+  `--deny` syntax (`*`, `**`, `?`, `[...]` classes, `{a,b}` alternation;
+  comma- or newline-separated in the env form). An allow entry lifts only the
+  built-in patterns it matches — `--allow dev.pem` exempts that one file
+  while every other `.pem` stays denied. Explicit operator denies
+  (`--deny` / `FS_DENYLIST`) are never relieved: deny always beats allow,
+  fail-closed. A matching allow for a builtin hit that turns out to be a
+  typo'd or non-matching pattern relieves nothing.
+- **`create` entries accept `append: true`.** The entry adds its content to
+  the end of the named file (created if missing) instead of overwriting —
+  appending to a multi-GB log never reads it back through model context.
+  The result describes the resulting file: size and timestamps from a real
+  post-append stat, MIME sniffed from the file's leading bytes, line count
+  streamed in bounded memory, and no `resourceUri` when the file exceeds the
+  text-size cap the resource store would reject. The append is the commit
+  point: a metadata read failure (a POSIX write-only file, say) degrades the
+  reported line count rather than failing the append, so a retry cannot
+  double-append.
+
 - **`search_text` returns context lines.** `context: N` (0 to 10, default 0)
   carries N lines either side of each match, like `grep -C`. Each match gains
   `before` and `after` string arrays, present only when `context` is greater
@@ -22,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Deny/allow glob matching is no longer fail-open on hidden files.**
+  `posix.matchesGlob` runs with `dot:false` semantics on Node 24, so a deny
+  like `secrets/**` silently let `secrets/.env` through. The denylist now
+  compiles its own matcher: `*` and `**` match dot-leading names like any
+  other, a terminal `**` matches paths containing newlines, and `{`, `}`
+  and `,` inside a `[...]` character class are class members, not brace
+  syntax. UNC roots (`//server/share/...`) and NTFS alternate-data-stream
+  spellings are matched as their plain path.
 - **`edit` refuses an `oldText` that matches more than once.** It used to
   splice the first occurrence and report success, so an `oldText` without
   enough surrounding context silently changed a block the caller may not have

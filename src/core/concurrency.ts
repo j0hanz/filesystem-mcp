@@ -64,10 +64,18 @@ export async function processInParallel<T, R>(
   signal?.throwIfAborted();
 
   let nextIndex = 0;
+  // Set when a worker saw the signal fire before an item ran — the only
+  // shape in which the batch is genuinely incomplete. The annotation
+  // matters: without it control-flow analysis keeps the `false` narrowing
+  // from the initializer and cannot see the closure assignment.
+  let truncated = false as boolean;
 
   const next = async (): Promise<void> => {
     while (nextIndex < itemCount) {
-      signal?.throwIfAborted();
+      if (signal?.aborted) {
+        truncated = true;
+        signal.throwIfAborted();
+      }
 
       const index = nextIndex;
       nextIndex += 1;
@@ -77,8 +85,11 @@ export async function processInParallel<T, R>(
       }
 
       try {
+        // No abort check after the processor: once an item has run, its
+        // result is real work that a write caller may have committed to
+        // disk. Discarding it here would report a finished append as
+        // failed, and a client retry would append twice.
         const value = await processor(item);
-        signal?.throwIfAborted();
         results.push({ index, value });
       } catch (error) {
         errors.push({
@@ -97,10 +108,13 @@ export async function processInParallel<T, R>(
 
   await Promise.allSettled(workers);
   // A deadline (AbortSignal.timeout) hit during the run surfaces here as
-  // signal.reason — a TimeoutError — rather than a fresh AbortError, so callers
-  // see TIMEOUT, not CANCELLED. The per-item throws above are swallowed by
-  // allSettled.
-  signal?.throwIfAborted();
+  // signal.reason — a TimeoutError — rather than a fresh AbortError, so
+  // callers see TIMEOUT, not CANCELLED. Only a run that actually skipped
+  // items reports the abort: a deadline firing after the last item
+  // finished leaves a complete batch, and returning it beats telling the
+  // caller that committed writes failed. The per-item throws above are
+  // swallowed by allSettled.
+  if (truncated) signal?.throwIfAborted();
 
   results.sort((left, right) => left.index - right.index);
   return { results, errors };

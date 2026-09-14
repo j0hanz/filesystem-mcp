@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { GuardedFileSystem } from '../src/core/fs.js';
+import { buildWrittenFileMeta } from '../src/core/file-uri.js';
+import { countFileLines, GuardedFileSystem } from '../src/core/fs.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
 import { getDefaultReadManyMaxTotalSize } from '../src/core/util.js';
@@ -13,6 +14,7 @@ import {
   cleanupTestRoot,
   createTestRoot,
   createTestServer,
+  trySymlink,
   writeNLineFile,
   writeTestFile,
 } from './helpers.js';
@@ -176,6 +178,188 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       const overwrittenRead = await fs.readRaw(filePath);
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
+    });
+  });
+
+  describe('Append (TC-FUNC-047–052)', () => {
+    it('TC-FUNC-047: appendFile creates a missing file with the content', async () => {
+      const filePath = join(tmpDir, 'append_missing.txt');
+      const { validPath } = await fs.appendFile(filePath, 'created by append\n');
+
+      const { content } = await fs.readRaw(validPath);
+      assert.strictEqual(content.toString('utf-8'), 'created by append\n');
+    });
+
+    it('TC-FUNC-048: appendFile appends to an existing file', async () => {
+      const filePath = await writeTestFile(tmpDir, 'append_existing.txt', 'first\n');
+      await fs.appendFile(filePath, 'second\n');
+
+      const { content } = await fs.readRaw(filePath);
+      assert.strictEqual(content.toString('utf-8'), 'first\nsecond\n');
+    });
+
+    it('TC-FUNC-049: appendFile keeps the existing inode and mode', async (t) => {
+      // Windows stat cannot represent 0600 (chmod only toggles the readonly
+      // bit), and its st_ino is not guaranteed stable across handles. POSIX
+      // proves the no-temp-rename design; Windows gets it by construction —
+      // fs.appendFile never creates a replacement file.
+      if (process.platform === 'win32') return t.skip('POSIX-only inode/mode assertions');
+
+      const filePath = await writeTestFile(tmpDir, 'append_inode_mode.txt', 'secret\n');
+      await chmod(filePath, 0o600);
+      const before = await stat(filePath);
+
+      await fs.appendFile(filePath, 'more\n');
+
+      const after = await stat(filePath);
+      assert.strictEqual(after.ino, before.ino);
+      assert.strictEqual(after.mode & 0o777, 0o600);
+      const { content } = await fs.readRaw(filePath);
+      assert.strictEqual(content.toString('utf-8'), 'secret\nmore\n');
+    });
+
+    it('TC-FUNC-050: appendFile follows an in-root symlink to its target', async (t) => {
+      const target = await writeTestFile(tmpDir, 'append_link_target.txt', 't\n');
+      const linkPath = join(tmpDir, 'append_link.txt');
+      if (!(await trySymlink(target, linkPath, () => t.skip('symlink not permitted'), 'file')))
+        return;
+
+      await fs.appendFile(linkPath, 'appended\n');
+
+      const { content } = await fs.readRaw(target);
+      assert.strictEqual(content.toString('utf-8'), 't\nappended\n');
+    });
+
+    it('TC-FUNC-051: appendFile through an out-of-root symlink is denied', async (t) => {
+      const outside = join(dirname(tmpDir), 'fsmcp_append_outside_target.txt');
+      const linkPath = join(tmpDir, 'append_escape_link.txt');
+      if (!(await trySymlink(outside, linkPath, () => t.skip('symlink not permitted'), 'file')))
+        return;
+
+      await assert.rejects(fs.appendFile(linkPath, 'nope'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+    });
+
+    it('TC-FUNC-052a: countFileLines matches countLines across the buffer boundary', async () => {
+      // >64 KiB so the counter crosses its read-buffer boundary, with the
+      // final line left unterminated to exercise the last-byte rule.
+      const lines = Array.from({ length: 12000 }, (_, i) => `line-${String(i)}`);
+      const filePath = await writeTestFile(tmpDir, 'count_lines_big.txt', lines.join('\n'));
+
+      assert.strictEqual(await countFileLines(filePath), lines.length);
+    });
+
+    it('TC-FUNC-052c: a NUL final byte counts as an unterminated line, not an empty file', async () => {
+      const filePath = await writeTestFile(tmpDir, 'count_lines_nul.txt', 'x\n\0');
+
+      assert.strictEqual(await countFileLines(filePath), 2);
+    });
+
+    it('TC-FUNC-052d: a single physical line larger than the read buffer counts as 1 line', async () => {
+      // Regression guard for the readLines() rewrite: FileHandle.readLines
+      // decodes each physical line whole, so this ~200 KiB no-newline file
+      // OOMs a multi-GB version of itself. The byte counter must not.
+      const filePath = await writeTestFile(
+        tmpDir,
+        'count_lines_huge_line.txt',
+        'x'.repeat(200 * 1024),
+      );
+
+      assert.strictEqual(await countFileLines(filePath), 1);
+    });
+
+    it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {
+      const envPath = join(tmpDir, '.env');
+      await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
+
+      await assert.rejects(fs.appendFile(envPath, 'LEAKED=1\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      // Verify with plain node fs — the guarded read would block on .env too.
+      assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
+    });
+
+    it('TC-FUNC-049c: appendFile through an in-root symlink to a sensitive file is denied', async (t) => {
+      const target = await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
+      const linkPath = join(tmpDir, 'env_link');
+      if (!(await trySymlink(target, linkPath, () => t.skip('symlink not permitted'), 'file')))
+        return;
+
+      await assert.rejects(fs.appendFile(linkPath, 'LEAKED=1\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      assert.strictEqual(await readFile(target, 'utf-8'), 'SECRET=1\n');
+    });
+
+    it('TC-FUNC-047b: appendFile with an aborted signal writes nothing', async () => {
+      const filePath = await writeTestFile(tmpDir, 'append_abort.txt', 'stable\n');
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(fs.appendFile(filePath, 'discarded\n', { signal: controller.signal }));
+      assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), 'stable\n');
+    });
+
+    it('TC-FUNC-047c: an aborted append to a missing file creates nothing', async () => {
+      // 'a' mode creates the target on open; the abort check must precede the
+      // open or a rejected call still leaves a new empty file behind.
+      const filePath = join(tmpDir, 'append_abort_missing.txt');
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(fs.appendFile(filePath, 'nope\n', { signal: controller.signal }));
+      await assert.rejects(stat(filePath), (err: unknown) => {
+        assert(isFsError(err) || (err as NodeJS.ErrnoException).code === 'ENOENT');
+        return true;
+      });
+    });
+
+    it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
+      const emptyPath = await writeTestFile(tmpDir, 'count_lines_empty.txt', '');
+      assert.strictEqual(await countFileLines(emptyPath), 0);
+
+      const terminatedPath = await writeTestFile(tmpDir, 'count_lines_term.txt', 'a\nb\n');
+      assert.strictEqual(await countFileLines(terminatedPath), 2);
+    });
+
+    it('TC-FUNC-052e: countFileLines counts LF only — a CRLF file is not double-counted', async () => {
+      // Guards against a CR-counting "fix" for old-Mac files: every line is
+      // terminated by a CR too, so counting both terminators doubles the
+      // line count of the CRLF text files this server runs against on Windows.
+      const filePath = await writeTestFile(tmpDir, 'count_lines_crlf.txt', 'a\r\nb\r\nc');
+
+      assert.strictEqual(await countFileLines(filePath), 3);
+    });
+
+    it('TC-FUNC-053: appendFile to a non-regular file is rejected before the open', async () => {
+      // 'a' on a FIFO blocks POSIX until a reader appears, unabortable; a
+      // directory is the cross-platform stand-in for "target is not a file".
+      await assert.rejects(fs.appendFile(tmpDir, 'nope\n'), (err: unknown) => {
+        assert(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.NOT_FILE);
+        return true;
+      });
+    });
+
+    it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap', () => {
+      // An edit or patch can push a readable file past the text-size cap;
+      // a resourceUri the store's readRaw would reject with TOO_LARGE must
+      // never be advertised.
+      const huge = 'x'.repeat(10 * 1024 * 1024 + 1);
+      const meta = buildWrittenFileMeta(join(tmpDir, 'huge.txt'), huge, undefined);
+      assert.strictEqual(meta.size, huge.length);
+      assert.strictEqual(meta.resourceUri, undefined);
+      assert.strictEqual(meta.resourceLink, undefined);
+
+      const small = buildWrittenFileMeta(join(tmpDir, 'small.txt'), 'hi', undefined);
+      assert.ok(small.resourceUri, 'under the cap the URI is advertised');
     });
   });
 

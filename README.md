@@ -231,14 +231,14 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 #### Write
 
-| Tool           | Description                                                                                       |
-| :------------- | :------------------------------------------------------------------------------------------------ |
-| `create`       | Create one or more files, overwriting existing content and creating parent directories as needed. |
-| `edit`         | Apply sequential literal string replacements to one or more files (max 5 per call).               |
-| `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.      |
-| `delete`       | Permanently delete one or more files or directories. This action is irreversible.                 |
-| `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                     |
-| `patch`        | Apply a single-file unified diff and write the result.                                            |
+| Tool           | Description                                                                                                                                                                                       |
+| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `create`       | Create one or more files, overwriting existing content and creating parent directories as needed. `append: true` adds to the end of an existing file (created if missing) instead of overwriting. |
+| `edit`         | Apply sequential literal string replacements to one or more files (max 5 per call).                                                                                                               |
+| `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.                                                                                                      |
+| `delete`       | Permanently delete one or more files or directories. This action is irreversible.                                                                                                                 |
+| `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                                                                                                                     |
+| `patch`        | Apply a single-file unified diff and write the result.                                                                                                                                            |
 
 ### Resources
 
@@ -354,24 +354,30 @@ filesystem-mcp /path/to/project1 /path/to/project2
 
 #### CLI flags
 
-| Flag                      | Default | Purpose                                                                            |
-| :------------------------ | :------ | :--------------------------------------------------------------------------------- |
-| `[dirs...]`               | —       | One or more allowed root directories (positional)                                  |
-| `--allow-cwd`             | `false` | Also allow the current working directory as a root                                 |
-| `--walk-cwd`              | `false` | Walk up from CWD to find a project root; implies `--allow-cwd`                     |
-| `--allow-missing-roots`   | `false` | Start even if configured allowed directories do not exist                          |
-| `--port <n>`              | —       | Enable Streamable HTTP transport on the given port (env: `FS_PORT`)                |
-| `--http-host <host>`      | —       | HTTP server bind address (env: `FS_HTTP_HOST`)                                     |
-| `--api-key <key>`         | —       | Require this API key on HTTP requests (env: `FS_API_KEY`)                          |
-| `--read-only`             | `false` | Disable write tools: `create`, `edit`, `delete`, `move`, `patch`, `replace_text`   |
-| `--safe`                  | `false` | Alias for `--read-only`                                                            |
-| `--deny <pattern>`        | —       | Block paths matching this pattern; repeatable                                      |
-| `--allow-sensitive`       | `false` | Allow access to sensitive system paths (env: `FS_ALLOW_SENSITIVE`)                 |
-| `--root-boundary <path>`  | —       | Require all allowed roots to fall under this path (env: `FS_ROOT_BOUNDARY`)        |
-| `--max-file-size <bytes>` | —       | Maximum file size for reads in bytes (env: `FS_MAX_FILE_SIZE`)                     |
-| `--log-level <level>`     | `info`  | RFC 5424 log level, `debug` through `emergency` (env: `FS_LOG_LEVEL`)              |
-| `--print-config`          | `false` | Print the active configuration and exit (use `--json` for machine-readable output) |
-| `--json`                  | `false` | Output `--print-config` as JSON                                                    |
+| Flag                      | Default | Purpose                                                                                                                               |
+| :------------------------ | :------ | :------------------------------------------------------------------------------------------------------------------------------------ |
+| `[dirs...]`               | —       | One or more allowed root directories (positional)                                                                                     |
+| `--allow-cwd`             | `false` | Also allow the current working directory as a root                                                                                    |
+| `--walk-cwd`              | `false` | Walk up from CWD to find a project root; implies `--allow-cwd`                                                                        |
+| `--allow-missing-roots`   | `false` | Start even if configured allowed directories do not exist                                                                             |
+| `--port <n>`              | —       | Enable Streamable HTTP transport on the given port (env: `FS_PORT`)                                                                   |
+| `--http-host <host>`      | —       | HTTP server bind address (env: `FS_HTTP_HOST`)                                                                                        |
+| `--api-key <key>`         | —       | Require this API key on HTTP requests (env: `FS_API_KEY`)                                                                             |
+| `--read-only`             | `false` | Disable write tools: `create`, `edit`, `delete`, `move`, `patch`, `replace_text`                                                      |
+| `--safe`                  | `false` | Alias for `--read-only`                                                                                                               |
+| `--deny <pattern>`        | —       | Block paths matching this pattern; repeatable                                                                                         |
+| `--allow <pattern>`       | —       | Exempt a pattern from the built-in sensitive denylist; repeatable (env: `FS_ALLOWLIST`). Does not lift `--deny`/`FS_DENYLIST` entries |
+| `--allow-sensitive`       | `false` | Allow access to sensitive system paths (env: `FS_ALLOW_SENSITIVE`)                                                                    |
+| `--root-boundary <path>`  | —       | Require all allowed roots to fall under this path (env: `FS_ROOT_BOUNDARY`)                                                           |
+| `--max-file-size <bytes>` | —       | Maximum file size for reads in bytes (env: `FS_MAX_FILE_SIZE`)                                                                        |
+| `--log-level <level>`     | `info`  | RFC 5424 log level, `debug` through `emergency` (env: `FS_LOG_LEVEL`)                                                                 |
+| `--print-config`          | `false` | Print the active configuration and exit (use `--json` for machine-readable output)                                                    |
+| `--json`                  | `false` | Output `--print-config` as JSON                                                                                                       |
+
+`--deny` and `--allow` patterns support `*` (any run within a segment),
+`**` (any run of segments), `?`, `[...]` classes, and `{a,b}` alternation.
+Dot-leading (hidden) names match like any other — `secrets/**` denies
+`secrets/.env`, `*id_rsa*` denies `.id_rsa`.
 
 #### Environment variables
 
@@ -387,6 +393,7 @@ Flags take precedence when both are set.
 | `FS_ALLOW_MISSING_ROOTS`      | Start even if configured directories do not exist (mirrors `--allow-missing-roots`).                                                                                                   |
 | `FS_ALLOW_SENSITIVE`          | Allow access to sensitive system paths (mirrors `--allow-sensitive`).                                                                                                                  |
 | `FS_DENYLIST`                 | Comma-separated list of paths or patterns to block (mirrors `--deny`).                                                                                                                 |
+| `FS_ALLOWLIST`                | Comma-separated patterns exempted from the built-in sensitive denylist (mirrors `--allow`). Never lifts `FS_DENYLIST`/`--deny` entries.                                                |
 | `FS_MAX_FILE_SIZE`            | Maximum file size for reads in bytes (mirrors `--max-file-size`).                                                                                                                      |
 | `FS_LOG_LEVEL`                | RFC 5424 log level: `debug`, `info`, `notice`, `warn`/`warning`, `error`, `critical`, `alert`, or `emergency` (mirrors `--log-level`).                                                 |
 | `FS_PORT`                     | Start the Streamable HTTP transport on this port; unset = stdio (mirrors `--port`).                                                                                                    |
