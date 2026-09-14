@@ -306,6 +306,20 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), 'stable\n');
     });
 
+    it('TC-FUNC-047c: an aborted append to a missing file creates nothing', async () => {
+      // 'a' mode creates the target on open; the abort check must precede the
+      // open or a rejected call still leaves a new empty file behind.
+      const filePath = join(tmpDir, 'append_abort_missing.txt');
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(fs.appendFile(filePath, 'nope\n', { signal: controller.signal }));
+      await assert.rejects(stat(filePath), (err: unknown) => {
+        assert(isFsError(err) || (err as NodeJS.ErrnoException).code === 'ENOENT');
+        return true;
+      });
+    });
+
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
       const emptyPath = await writeTestFile(tmpDir, 'count_lines_empty.txt', '');
       assert.strictEqual(await countFileLines(emptyPath), 0);

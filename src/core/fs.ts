@@ -237,7 +237,10 @@ export class GuardedFileSystem {
     // fs.promises.appendFile takes no signal, so a withAbort race would
     // report failure while the append still lands — a client retry then
     // appends twice. A handle opened with 'a' gets a genuinely abortable
-    // FileHandle.writeFile instead, same as the writeFile path.
+    // FileHandle.writeFile instead, same as the writeFile path. The signal
+    // check precedes the open too: 'a' on a missing target CREATES it, so an
+    // aborted call must not leave a new empty file behind.
+    signal?.throwIfAborted();
     const handle = await fsOpen(validPath, 'a');
     try {
       await handle.writeFile(content, { encoding, signal });

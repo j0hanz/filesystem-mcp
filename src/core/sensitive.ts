@@ -110,7 +110,10 @@ function globToRegExp(glob: string): RegExp {
   }
   // Candidates are absolute paths but patterns carry no leading '/', so the
   // anchor optionally eats the root slash — `**/` then reaches from any
-  // parent, exactly as matchesGlob's globstar did.
+  // parent, exactly as matchesGlob's globstar did. '$' is strict in
+  // JavaScript (it matches end-of-input only, unlike PCRE's, which also
+  // matches before a final newline), so an exact-name pattern can never
+  // match a '.env\n' lookalike.
   return new RegExp(`^/?${source}$`, 'u');
 }
 
