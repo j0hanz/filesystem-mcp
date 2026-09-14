@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
+  appendFile as fsAppendFile,
   chmod as fsChmod,
   cp as fsCp,
   lstat as fsLstat,
@@ -41,13 +42,12 @@ export type { FileHandle };
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
-async function atomicWriteFile(
-  filePath: string,
-  content: string,
-  pathGuard: PathGuard,
-  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
-): Promise<{ validPath: string }> {
-  const { encoding = 'utf-8', signal } = options;
+/**
+ * validatePathForWrite + symlink resolution: a write aimed at a link must land
+ * on its revalidated target, not create a new file beside the link. ENOENT is
+ * the normal new-file case, so it falls through with the original path.
+ */
+async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<string> {
   let validPath = await pathGuard.validatePathForWrite(filePath);
 
   try {
@@ -62,6 +62,18 @@ async function atomicWriteFile(
       throw error;
     }
   }
+
+  return validPath;
+}
+
+async function atomicWriteFile(
+  filePath: string,
+  content: string,
+  pathGuard: PathGuard,
+  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+): Promise<{ validPath: string }> {
+  const { encoding = 'utf-8', signal } = options;
+  const validPath = await resolveForWrite(pathGuard, filePath);
 
   const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -106,6 +118,37 @@ async function atomicWriteFile(
 
 export function isHidden(name: string): boolean {
   return name.startsWith('.');
+}
+
+const CHAR_LF = 10;
+const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Line count for a file on disk, streaming in 64 KiB chunks so an
+ * arbitrarily large file (one append's result metadata) costs bounded memory.
+ * Matches read.ts's countLines: a trailing newline does not open a new line,
+ * an unterminated final line counts, an empty file is 0.
+ */
+export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
+  const handle = await fsOpen(filePath, 'r');
+  try {
+    let newlines = 0;
+    let lastByte = 0;
+    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+    for (;;) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === CHAR_LF) newlines++;
+        lastByte = byte;
+      }
+    }
+    return lastByte === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
+  } finally {
+    await handle.close();
+  }
 }
 
 export class GuardedFileSystem {
@@ -170,6 +213,25 @@ export class GuardedFileSystem {
     options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     return atomicWriteFile(filePath, content, this.pathGuard, options);
+  }
+
+  /**
+   * Append to the existing file (created if missing). Deliberately NOT the
+   * atomicWriteFile temp+rename dance: the rename would swap in a fresh inode,
+   * and the whole point of appending is to extend the file that's already
+   * there — inode and mode survive by construction.
+   */
+  async appendFile(
+    filePath: string,
+    content: string,
+    options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+  ): Promise<{ validPath: string }> {
+    const { encoding = 'utf-8', signal } = options;
+    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    // appendFile's option type omits `signal` (writeFile's has it), so the
+    // abort check rides withAbort instead — the same guard stat() uses.
+    await withAbort(fsAppendFile(validPath, content, { encoding }), signal);
+    return { validPath };
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<{ validPath: string }> {
