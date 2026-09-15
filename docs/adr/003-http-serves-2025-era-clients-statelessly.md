@@ -39,7 +39,7 @@ A probe against the installed SDK (2.0.0) connecting a 2025-era `Client` (no
   lease is never delivered anywhere and is never cleaned up by the normal
   unsubscribe path.
 - Each legacy request builds a fresh `McpServer` from the factory — the
-  probe's five calls logged `era` as `legacy` five times, one instance per
+  probe logged `era` as `legacy` on every factory run, one instance per
   request, torn down through `onclose` after each exchange.
 
 So the SDK's stateless fallback gets the read/list/search surface right for
@@ -112,10 +112,10 @@ not found` and no watcher lease is ever taken on a per-request instance
 - `listChanged` notifications (tools, prompts, resources) have nowhere to
   go on a legacy HTTP connection either, for the same reason — there is no
   standing connection to notify.
-- Each legacy HTTP request now costs one full factory run
-  (`createServer`), same as every modern request already does; this was
-  already true under `'reject'` for the handshake itself, just never
-  reached past it.
+- Each legacy HTTP request now costs one factory run (`createServer`), the
+  same cost every modern request already pays; under `'reject'` a legacy
+  request was refused before any instance was built, so this is new load,
+  bounded by the existing rate limiter.
 - The rate limiter and auth layer (`http-policy.ts`) are era-blind and
   unchanged: they count `initialize` (and every other request) per
   session/IP exactly as before, so a legacy client's lack of a session
