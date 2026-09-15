@@ -9,6 +9,7 @@ import type {
   McpServer,
   Notification,
   RegisteredTool,
+  RequestId,
   RequestMeta,
   RequestStateAccessor,
   ServerContext,
@@ -18,6 +19,7 @@ import {
   CLIENT_CAPABILITIES_META_KEY,
   fromJsonSchema,
   isInputRequiredResult,
+  TRACEPARENT_META_KEY,
 } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
@@ -33,7 +35,7 @@ import {
   readAcceptedConfirm,
   readAcceptedMultiChoice,
 } from '../core/input-required.js';
-import { Logger } from '../core/observability.js';
+import { Logger, sanitizeLogField } from '../core/observability.js';
 import type { LoggingLevel } from '../core/observability.js';
 import type { PageSnapshotStore } from '../core/page-store.js';
 import { isSamePath } from '../core/path-utils.js';
@@ -44,6 +46,10 @@ import { McpProgressSink, ProgressSession } from './progress.js';
 export interface ToolCtx {
   readonly signal: AbortSignal;
   readonly _meta?: RequestMeta | undefined;
+  /** The JSON-RPC id of the `tools/call` this context serves; prefixes every log line. */
+  readonly requestId: RequestId;
+  /** W3C trace context the client put in `_meta`, when it did; rides the log prefix. */
+  readonly traceparent?: string | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
@@ -85,6 +91,7 @@ interface ToolDeps {
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
+  readonly era?: 'legacy' | 'modern';
 }
 
 interface RunResult<T> {
@@ -141,7 +148,7 @@ export interface DefinedTool {
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server'>,
+  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
 ): ToolCtx {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -159,11 +166,22 @@ function toToolCtx(
   const clientCapabilities =
     (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined) ??
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only source of client capabilities on a legacy connection, where no envelope exists.
-    deps.server.server.getClientCapabilities();
+    deps.server.server.getClientCapabilities() ??
+    // A legacy instance that never saw `initialize` is the HTTP leg's
+    // per-request serving (`createMcpHandler` with `legacy: 'stateless'`):
+    // there is no return path for a server-to-client request, so read the
+    // client as having declared nothing. The `input_required` flows then
+    // answer with their named workaround instead of the SDK's generic refusal.
+    // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+    (deps.era === 'legacy' ? {} : undefined);
 
   return {
     signal: ctx.mcpReq.signal,
     ...(ctx.mcpReq._meta ? { _meta: ctx.mcpReq._meta } : {}),
+    requestId: ctx.mcpReq.id,
+    ...(typeof ctx.mcpReq._meta?.[TRACEPARENT_META_KEY] === 'string'
+      ? { traceparent: ctx.mcpReq._meta[TRACEPARENT_META_KEY] }
+      : {}),
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
@@ -233,8 +251,16 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       signal: this.signal,
       log: (level: LoggingLevel, data: unknown, logger?: string) => {
         const msg = typeof data === 'string' ? data : String(data);
+        // `[req <id>]` first so one grep finds every line of one call; the
+        // traceparent rides along only when the client sent one. Both are
+        // client-supplied, so they pass through `sanitizeLogField`: a control
+        // character in a JSON-RPC id or a traceparent would forge log lines.
+        const trace = ctx.traceparent ? ` ${sanitizeLogField(ctx.traceparent)}` : '';
         const prefix = logger ? `[${logger}] ` : '';
-        Logger.emit(level, `${prefix}${msg}`);
+        Logger.emit(
+          level,
+          `[req ${sanitizeLogField(String(ctx.requestId))}${trace}] ${prefix}${msg}`,
+        );
       },
       onProgress: (p) => {
         this.#tick(p);
@@ -312,7 +338,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
               multiSelectInput(
                 'grant',
                 'Grant filesystem access to these directories? Select the ones to allow.',
-                dirs.map((d) => ({ value: d, title: d })),
+                dirs,
               ),
             ]
           : dirs.map((dir, i) => ({

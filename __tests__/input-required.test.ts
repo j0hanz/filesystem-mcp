@@ -140,6 +140,10 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
+    const request = r.inputRequests['confirm_0'] as {
+      params?: { requestedSchema?: { properties?: { confirm?: { type?: string } } } };
+    };
+    assert.strictEqual(request.params?.requestedSchema?.properties?.confirm?.type, 'boolean');
   });
 
   it('8. readAcceptedConfirm accept-true -> true', () => {
@@ -172,10 +176,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     );
   });
 
-  const overwriteSkipChoices = [
-    { value: 'overwrite', title: 'Overwrite' },
-    { value: 'skip', title: 'Skip' },
-  ];
+  const overwriteSkipChoices = ['overwrite', 'skip'] as const;
 
   it('10. buildInputRequired with choiceInput returns InputRequiredResult with requestState', async () => {
     const r = await buildInputRequired({ op: 'copy', paths: ['/dst'] }, [
@@ -190,6 +191,13 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
+    const request = r.inputRequests['confirm_0'] as {
+      params?: { requestedSchema?: { properties?: { choice?: { enum?: string[] } } } };
+    };
+    assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.enum, [
+      'overwrite',
+      'skip',
+    ]);
   });
 
   it('11. readAcceptedChoice accept-skip -> "skip"', () => {
@@ -233,10 +241,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     );
   });
 
-  const grantChoices = [
-    { value: '/dir/a', title: '/dir/a' },
-    { value: '/dir/b', title: '/dir/b' },
-  ];
+  const grantChoices = ['/dir/a', '/dir/b'] as const;
 
   it('16. buildInputRequired with multiSelectInput returns InputRequiredResult', async () => {
     const r = await buildInputRequired({ op: 'grant', paths: ['/dir/a', '/dir/b'] }, [
@@ -246,6 +251,15 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests);
     assert.ok(r.inputRequests['grant'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
+    const request = r.inputRequests['grant'] as {
+      params?: {
+        requestedSchema?: { properties?: { choice?: { items?: { enum?: string[] } } } };
+      };
+    };
+    assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.items?.enum, [
+      '/dir/a',
+      '/dir/b',
+    ]);
   });
 
   it('17. readAcceptedMultiChoice accept-array -> array', () => {

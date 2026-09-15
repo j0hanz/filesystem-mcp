@@ -344,10 +344,7 @@ async function handleDelete(
           choiceInput(
             confirmKey(i),
             `Permanently delete "${p}" and all its contents? This cannot be undone.`,
-            [
-              { value: 'delete', title: 'Delete' },
-              { value: 'skip', title: 'Skip' },
-            ],
+            ['delete', 'skip'],
           ),
         ),
     });

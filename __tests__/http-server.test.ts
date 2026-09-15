@@ -228,7 +228,7 @@ describe('Real HTTP Server integration', () => {
     }
   });
 
-  it('4. Legacy 2025 initialize request is rejected under pure modern v2', async () => {
+  it('4. Legacy 2025 initialize over HTTP is served statelessly', async () => {
     const r = await fetch(base, {
       method: 'POST',
       headers: {
@@ -247,10 +247,10 @@ describe('Real HTTP Server integration', () => {
         },
       }),
     });
-    assert.strictEqual(r.status, 400);
-    const body = (await r.json()) as { error?: { code?: number } };
-    assert.ok(body.error, 'response must contain a JSON-RPC error object');
-    assert.strictEqual(typeof body.error.code, 'number', 'error must include a numeric code');
+    assert.strictEqual(r.status, 200);
+    const text = await r.text();
+    assert.match(text, /"serverInfo"/);
+    assert.match(text, /filesystem-mcp/);
   });
 
   it('5. POST /mcp with an oversized body -> 413', async () => {

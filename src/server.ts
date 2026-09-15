@@ -75,9 +75,13 @@ export async function createServer(
   // `resources.subscribe` stays advertised on both eras: the verb itself is
   // 2025-only, but with enforceStrictCapabilities the SDK also gates outbound
   // `notifications/resources/updated` — which the modern `subscriptions/listen`
-  // stream delivers — on this same capability bit.
+  // stream delivers — on this same capability bit. The one exception is a
+  // legacy instance on the HTTP leg (era 'legacy' with a notifier): it serves
+  // one request, registers no subscribe handler (resources.ts) and sends no
+  // updates, so advertising the verb would invite a call it answers -32601.
+  const legacyHttp = extraDeps?.era === 'legacy' && extraDeps.notifier !== undefined;
   const capabilities = {
-    resources: { subscribe: true, listChanged: true },
+    resources: { subscribe: !legacyHttp, listChanged: true },
     tools: {},
     prompts: {},
     completions: {},

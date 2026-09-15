@@ -51,10 +51,10 @@ interface PendingInput {
   /** Human-readable prompt for this item. */
   readonly message: string;
   /**
-   * When set, the form offers a titled single-select enum (`choice` field)
-   * instead of a boolean `confirm`. Each entry is a `{ value, title }` pair.
+   * When set, the form offers a single-select enum (`choice` field) over
+   * these values instead of a boolean `confirm`.
    */
-  readonly choices?: readonly { value: string; title: string }[];
+  readonly choices?: readonly string[];
   /**
    * When set with `choices`, the form offers a multi-select enum: `choice` is
    * a string array (`MultiSelectEnumSchema` shape) and the caller reads the
@@ -107,13 +107,13 @@ export const requestStateCodec: RequestStateCodec<PendingState> = {
 
 /**
  * Build a single-select enum confirmation input. The form renders a `choice`
- * field whose options are the titled `choices`; the caller reads the selection
- * with `readAcceptedChoice`.
+ * field whose options are the offered `choices`; the caller reads the
+ * selection with `readAcceptedChoice`.
  */
 export function choiceInput(
   key: string,
   message: string,
-  choices: readonly { value: string; title: string }[],
+  choices: readonly string[],
 ): PendingInput {
   return { key, message, choices };
 }
@@ -127,7 +127,7 @@ export function choiceInput(
 export function multiSelectInput(
   key: string,
   message: string,
-  choices: readonly { value: string; title: string }[],
+  choices: readonly string[],
 ): PendingInput {
   return {
     key,
@@ -135,6 +135,30 @@ export function multiSelectInput(
     choices,
     multi: true,
   };
+}
+
+// Response shapes handed to the SDK's schema-aware `acceptedContent` overload:
+// it returns `undefined` for a missing key, a decline/cancel, a non-elicit
+// response, AND a payload that fails validation — one call covers every refusal
+// case the readers below used to hand-check. `buildInputRequired` reuses
+// `ConfirmContent` as the no-choices form schema (below), so these sit above it.
+const ConfirmContent = z.object({ confirm: z.boolean() });
+const ChoiceContent = z.object({ choice: z.string() });
+const MultiChoiceContent = z.object({ choice: z.array(z.string()) });
+
+/**
+ * The form the client renders for one pending input, as the Zod schema the
+ * SDK converts to the elicitation wire shape. A boolean `confirm` when no
+ * choices are offered; otherwise a `choice` enum over the offered values,
+ * wrapped in an array for multi-select so the client may accept a subset.
+ * The offered lists are never empty by construction (single-select always
+ * offers two literals; multi-select only runs with two or more grant dirs),
+ * so no empty-array guard is added.
+ */
+function requestedSchemaFor(input: PendingInput): z.ZodObject {
+  if (!input.choices) return ConfirmContent;
+  const value = z.enum(input.choices);
+  return z.object({ choice: input.multi ? z.array(value) : value });
 }
 
 /**
@@ -148,40 +172,9 @@ export async function buildInputRequired(
 ): Promise<InputRequiredResult> {
   const inputRequests: Record<string, InputRequest> = {};
   for (const input of inputs) {
-    const requestedSchema = input.choices
-      ? input.multi
-        ? {
-            // Multi-select enum (matches MultiSelectEnumSchema): `choice` is a
-            // string array; the client may accept a subset of the offered dirs.
-            type: 'object' as const,
-            properties: {
-              choice: {
-                type: 'array' as const,
-                items: {
-                  anyOf: input.choices.map((c) => ({ const: c.value, title: c.title })),
-                },
-              },
-            },
-            required: ['choice'],
-          }
-        : {
-            type: 'object' as const,
-            properties: {
-              choice: {
-                type: 'string' as const,
-                oneOf: input.choices.map((c) => ({ const: c.value, title: c.title })),
-              },
-            },
-            required: ['choice'],
-          }
-      : {
-          type: 'object' as const,
-          properties: { confirm: { type: 'boolean' as const, title: 'Confirm' } },
-          required: ['confirm'],
-        };
     inputRequests[input.key] = inputRequired.elicit({
       message: input.message,
-      requestedSchema,
+      requestedSchema: requestedSchemaFor(input),
     });
   }
   const requestState = await requestStateCodec.mint({
@@ -283,14 +276,6 @@ export async function pendingRoundTrip(
   }
   return undefined;
 }
-
-// Response shapes handed to the SDK's schema-aware `acceptedContent` overload:
-// it returns `undefined` for a missing key, a decline/cancel, a non-elicit
-// response, AND a payload that fails validation — one call covers every refusal
-// case the readers below used to hand-check.
-const ConfirmContent = z.object({ confirm: z.boolean() });
-const ChoiceContent = z.object({ choice: z.string() });
-const MultiChoiceContent = z.object({ choice: z.array(z.string()) });
 
 /**
  * Round-trip key for `pendingSorted[index]` — the single home of the

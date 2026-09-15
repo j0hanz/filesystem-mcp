@@ -17,8 +17,11 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { isNodeError } from '../src/core/errors.js';
+import { PageSnapshotStore } from '../src/core/page-store.js';
 import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.js';
+import { ResourceStore } from '../src/core/store.js';
 import { createWatcherRegistry } from '../src/core/watcher-registry.js';
+import type { WatcherRegistry } from '../src/core/watcher-registry.js';
 import { createServer } from '../src/server.js';
 import type { FilesystemServerContext } from '../src/server.js';
 import { ALL_TOOLS } from '../src/tools/index.js';
@@ -220,11 +223,15 @@ export async function createElicitationClientPair(
 export interface TestHttpContext {
   client: Client;
   handler: ReturnType<typeof createMcpHandler>;
+  registry: WatcherRegistry;
   close: () => Promise<void>;
 }
 
 /** Create an in-process HTTP client/handler harness via createMcpHandler's handler.fetch. */
-export async function createTestHttpHarness(allowedDirs: string[]): Promise<TestHttpContext> {
+export async function createTestHttpHarness(
+  allowedDirs: string[],
+  options: { legacy?: 'stateless' | 'reject' } = {},
+): Promise<TestHttpContext> {
   const bus = new InMemoryServerEventBus();
   const sharedRegistry = createWatcherRegistry();
 
@@ -236,15 +243,30 @@ export async function createTestHttpHarness(allowedDirs: string[]): Promise<Test
       bus.publish({ kind: 'resource_updated', uri });
     },
   };
+  // One store for the whole harness, mirroring http.ts's sharedStore/
+  // sharedPageStore: createMcpHandler builds a fresh McpServer per request in
+  // both eras, so a per-request store would discard an externalized result
+  // before a follow-up resources/read (or a legacy request, which never
+  // shares an instance at all) could see it.
+  const sharedStore = new ResourceStore(() => {
+    notifier.resourcesChanged();
+  });
+  const sharedPageStore = new PageSnapshotStore();
   const handler = createMcpHandler(
-    async () => {
+    async ({ era }) => {
       const serverCtx = await createServer(
         { cliAllowedDirs: allowedDirs },
-        { watcherRegistry: sharedRegistry, notifier },
+        {
+          watcherRegistry: sharedRegistry,
+          notifier,
+          era,
+          resourceStore: sharedStore,
+          pageStore: sharedPageStore,
+        },
       );
       return serverCtx.mcp;
     },
-    { bus, legacy: 'reject' },
+    { bus, legacy: options.legacy ?? 'stateless' },
   );
 
   const transport = new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
@@ -261,6 +283,7 @@ export async function createTestHttpHarness(allowedDirs: string[]): Promise<Test
   return {
     client,
     handler,
+    registry: sharedRegistry,
     close: async () => {
       await client.close();
       await handler.close();
