@@ -156,7 +156,8 @@ only while at least one client is subscribed to a URI — and stop it when
 nobody is — cannot do so today. There is nothing to hang the start/stop on:
 
 ```ts
-import { McpServer, ResourceTemplate, serveStdio } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 
 const server = new McpServer({ name: 'demo', version: '1.0.0' });
 
