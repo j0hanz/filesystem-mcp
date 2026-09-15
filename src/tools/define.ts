@@ -91,6 +91,7 @@ interface ToolDeps {
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
+  readonly era?: 'legacy' | 'modern';
 }
 
 interface RunResult<T> {
@@ -147,7 +148,7 @@ export interface DefinedTool {
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server'>,
+  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
 ): ToolCtx {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -164,8 +165,15 @@ function toToolCtx(
   const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
   const clientCapabilities =
     (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined) ??
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only source of client capabilities on a legacy connection, where no envelope exists. sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
-    deps.server.server.getClientCapabilities();
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only source of client capabilities on a legacy connection, where no envelope exists.
+    deps.server.server.getClientCapabilities() ??
+    // A legacy instance that never saw `initialize` is the HTTP leg's
+    // per-request serving (`createMcpHandler` with `legacy: 'stateless'`):
+    // there is no return path for a server-to-client request, so read the
+    // client as having declared nothing. The `input_required` flows then
+    // answer with their named workaround instead of the SDK's generic refusal.
+    // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+    (deps.era === 'legacy' ? {} : undefined);
 
   return {
     signal: ctx.mcpReq.signal,

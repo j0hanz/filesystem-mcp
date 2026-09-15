@@ -92,6 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first. A call that relied on first-match now fails — add surrounding lines
   to `oldText`, or use `replace_text` with `caseSensitive: true` to change
   every occurrence. In `files` mode only the ambiguous file fails.
+- **The HTTP endpoint serves 2025-era clients.** `--port` mode used to answer
+  a client that opened with the 2025 `initialize` handshake with HTTP 400; it
+  now serves each such request from a fresh server instance, the SDK's
+  stateless legacy posture. Reads, listings, searches, edits, prompts, cached
+  results and pagination work unchanged. What a stateless request cannot do
+  answers with a named way forward: a confirmation round-trip (recursive
+  delete, overwrite, out-of-root grant) returns the same tool error a client
+  without elicitation gets, and `resources/subscribe` is refused rather than
+  accepted onto an instance that no longer exists. Modern clients are
+  unaffected. See `docs/adr/003`.
 
 ## [2.2.0] - 2026-09-11
 

@@ -23,7 +23,7 @@ Filesystem-MCP is a [Model Context Protocol](https://modelcontextprotocol.io) se
 | **Path guarding**      | Every path is validated against allowed roots; `.env`, `*.pem`, `*id_rsa*` and similar patterns are denied |
 | **Filesystem tools**   | Navigate, inspect, read, and write across all major file operations                                        |
 | **Batch operations**   | Most tools accept `path`, `paths[]`, or `files[]` for parallel execution                                   |
-| **Dual transport**     | stdio by default; `--port` enables Streamable HTTP                                                         |
+| **Dual transport**     | stdio by default; `--port` enables Streamable HTTP for both 2025-era and 2026-07-28 clients                |
 | **File subscriptions** | Resource subscriptions push change notifications when watched files update                                 |
 | **Regex safety**       | RE2 in all search tools: linear-time matching, so no pattern can ReDoS the server                          |
 
@@ -297,6 +297,11 @@ workspace roots. They can add access after startup by calling a tool with a
 concrete path and approving the elicitation-backed grant. `list_roots` reports
 the roots already configured or accepted; it cannot discover an unknown
 workspace by itself.
+
+Over HTTP, 2025-era clients are served statelessly: tools, resources and
+prompts work, but confirmations (recursive delete, overwrite, access grants)
+and file subscriptions need a 2026-07-28 client or stdio, and answer with a
+message saying so.
 
 ### Recommended global recipes
 
