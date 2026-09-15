@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docs/adr/002`, recording that the three 2025-era-only paths (legacy
+  `roots/list` seeding, `resources/subscribe`, the deprecated client
+  capabilities accessor) are removed together at a dated trigger, and marking
+  each site with `sunset(SEP-2577)` so the removal is one grep.
 - **`--allow <pattern>` / `FS_ALLOWLIST`: scoped relief from the built-in
   sensitive-file denylist.** Each entry is a glob following the documented
   `--deny` syntax (`*`, `**`, `?`, `[...]` classes, `{a,b}` alternation;

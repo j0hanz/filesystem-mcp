@@ -164,7 +164,7 @@ function toToolCtx(
   const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
   const clientCapabilities =
     (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined) ??
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only source of client capabilities on a legacy connection, where no envelope exists.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only source of client capabilities on a legacy connection, where no envelope exists. sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
     deps.server.server.getClientCapabilities();
 
   return {

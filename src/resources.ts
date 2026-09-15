@@ -453,6 +453,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
   // server answers `-32601 Method not found` for them, so registering these
   // handlers on a modern-era instance would dispatch to code no request can
   // reach.
+  // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
   if (deps.era !== 'modern') {
     server.server.assertCanSetRequestHandler('resources/subscribe');
     server.server.assertCanSetRequestHandler('resources/unsubscribe');
