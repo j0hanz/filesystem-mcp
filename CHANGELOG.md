@@ -42,6 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`create` asks before replacing an existing file.** It used to overwrite
+  silently, the one write tool with no guard on existing content: `edit` needs
+  `oldText` to match, `patch` needs its hunk context, `move` and `delete`
+  already confirm. An entry whose path exists now takes the same
+  `input_required` round-trip as a `move` onto an existing destination: the
+  call writes nothing and returns one Overwrite/Skip prompt per existing file;
+  the client retries with the answers, Overwrite replaces the file, Skip lands
+  its path in a new `skipped` output array and counts as work done, not a
+  failure. A path that did not exist when the prompt went out but does on the
+  retry fails closed. Set `overwrite: true` on an entry to replace it without
+  the prompt — the same bypass copy has — and `append: true` entries never
+  prompt, since an append destroys nothing. A client without the elicitation
+  capability gets a tool error naming those two ways forward. A call that
+  relied on the silent overwrite now prompts, or errors on such a client — add
+  `overwrite: true`.
+
 - **Deny/allow glob matching is no longer fail-open on hidden files.**
   `posix.matchesGlob` runs with `dot:false` semantics on Node 24, so a deny
   like `secrets/**` silently let `secrets/.env` through. The denylist now

@@ -31,7 +31,7 @@ import { ErrorCode, FsError } from './errors.js';
 import { Logger } from './observability.js';
 
 /** The destructive operation a pending confirmation authorizes. */
-type PendingOp = 'delete' | 'move' | 'copy' | 'grant';
+type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 
 /**
  * Integrity-protected state minted into an `input_required` result and echoed
@@ -233,6 +233,9 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
   copy:
     'Overwriting an existing destination needs a confirmation this client cannot show. ' +
     'Pass overwrite=true to replace it without confirming, or copy to a path that does not exist yet.',
+  create:
+    'Overwriting an existing file needs a confirmation this client cannot show. ' +
+    'Pass overwrite: true on that entry to replace it without confirming, append: true to add to it, or read it and use edit.',
   grant:
     'Granting access to a directory outside the allowed roots needs a confirmation this client cannot show. ' +
     'Call list_roots and use a path under one of the roots it returns.',
