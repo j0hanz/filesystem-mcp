@@ -312,7 +312,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
               multiSelectInput(
                 'grant',
                 'Grant filesystem access to these directories? Select the ones to allow.',
-                dirs.map((d) => ({ value: d, title: d })),
+                dirs,
               ),
             ]
           : dirs.map((dir, i) => ({

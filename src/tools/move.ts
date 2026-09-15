@@ -321,10 +321,7 @@ async function runTransfers(
             op === 'move'
               ? `"${dest}" already exists. Overwrite it?`
               : `Destination "${dest}" already exists. Overwrite it?`,
-            [
-              { value: 'overwrite', title: 'Overwrite' },
-              { value: 'skip', title: 'Skip' },
-            ],
+            ['overwrite', 'skip'],
           ),
         ),
     });

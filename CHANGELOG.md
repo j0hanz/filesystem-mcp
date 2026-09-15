@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Confirmation forms offer plain enums.** The `input_required` forms for
+  overwrite, delete and access-grant confirmations used to carry each option
+  as a titled `oneOf`/`anyOf` entry; they now carry a plain `enum` of the same
+  values, built by the SDK from one Zod schema per form. A client that rendered
+  the per-option title now renders the value — `overwrite`, `skip`, `delete`,
+  or the directory path — which is what the title already said.
 - **`create` asks before replacing an existing file.** It used to overwrite
   silently, the one write tool with no guard on existing content: `edit` needs
   `oldText` to match, `patch` needs its hunk context, `move` and `delete`

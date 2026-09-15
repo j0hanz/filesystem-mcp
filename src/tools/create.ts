@@ -153,8 +153,8 @@ export const CREATE = defineTool({
         buildInputs: (paths) =>
           paths.map((target, i) =>
             choiceInput(confirmKey(i), `"${target}" already exists. Overwrite it?`, [
-              { value: 'overwrite', title: 'Overwrite' },
-              { value: 'skip', title: 'Skip' },
+              'overwrite',
+              'skip',
             ]),
           ),
       });
