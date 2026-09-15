@@ -35,7 +35,7 @@ import {
   readAcceptedConfirm,
   readAcceptedMultiChoice,
 } from '../core/input-required.js';
-import { Logger } from '../core/observability.js';
+import { Logger, sanitizeLogField } from '../core/observability.js';
 import type { LoggingLevel } from '../core/observability.js';
 import type { PageSnapshotStore } from '../core/page-store.js';
 import { isSamePath } from '../core/path-utils.js';
@@ -252,10 +252,15 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       log: (level: LoggingLevel, data: unknown, logger?: string) => {
         const msg = typeof data === 'string' ? data : String(data);
         // `[req <id>]` first so one grep finds every line of one call; the
-        // traceparent rides along only when the client sent one.
-        const trace = ctx.traceparent ? ` ${ctx.traceparent}` : '';
+        // traceparent rides along only when the client sent one. Both are
+        // client-supplied, so they pass through `sanitizeLogField`: a control
+        // character in a JSON-RPC id or a traceparent would forge log lines.
+        const trace = ctx.traceparent ? ` ${sanitizeLogField(ctx.traceparent)}` : '';
         const prefix = logger ? `[${logger}] ` : '';
-        Logger.emit(level, `[req ${String(ctx.requestId)}${trace}] ${prefix}${msg}`);
+        Logger.emit(
+          level,
+          `[req ${sanitizeLogField(String(ctx.requestId))}${trace}] ${prefix}${msg}`,
+        );
       },
       onProgress: (p) => {
         this.#tick(p);

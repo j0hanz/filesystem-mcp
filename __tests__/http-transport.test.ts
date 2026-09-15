@@ -169,6 +169,11 @@ describe('HTTP 2025-era (legacy) clients', () => {
     const filePath = await writeTestFile(tmpDir, 'legacy_watch.txt', 'x');
     const uri = buildFileResourceUri(filePath);
 
+    assert.notStrictEqual(
+      legacy.getServerCapabilities()?.resources?.subscribe,
+      true,
+      'a stateless legacy instance must not advertise resources/subscribe',
+    );
     await assert.rejects(legacy.subscribeResource({ uri }));
     assert.strictEqual(
       harness.registry.size(),

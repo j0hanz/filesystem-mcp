@@ -20,7 +20,6 @@ import {
   readAcceptedChoice,
 } from '../core/input-required.js';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.js';
-import { Logger } from '../core/observability.js';
 import {
   FileKind,
   IsoDateTime,
@@ -225,8 +224,10 @@ export const CREATE = defineTool({
             kind = mimeInfo.kind;
             lineCount = await countFileLines(appended.validPath);
           } catch (error) {
-            Logger.warn(
+            ctx.log?.(
+              'warning',
               `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
+              'create',
             );
             // A POSIX mode-0222 file appends fine but cannot be opened 'r';
             // fall back to the chunk for MIME (an approximation) and report

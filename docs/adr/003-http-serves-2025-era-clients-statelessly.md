@@ -106,9 +106,12 @@ not found` and no watcher lease is ever taken on a per-request instance
 - It does **not** get `input_required` confirmations (recursive delete,
   overwrite on move/copy/create, an out-of-root access grant) or
   `resources/subscribe` — both need a return path to the same client
-  connection that a stateless per-request instance does not have. Each
-  answers with the server's own actionable message rather than the SDK's
-  generic refusal or a silently-dropped lease.
+  connection that a stateless per-request instance does not have. A
+  confirmation answers with the server's own actionable message rather than
+  the SDK's generic refusal; `resources/subscribe` is not advertised on this
+  leg (`server.ts` sets `resources.subscribe: false` on a legacy HTTP
+  instance) and, if sent anyway, is refused with the SDK's `-32601 Method not
+found` instead of being accepted onto a silently-dropped lease.
 - `listChanged` notifications (tools, prompts, resources) have nowhere to
   go on a legacy HTTP connection either, for the same reason — there is no
   standing connection to notify.

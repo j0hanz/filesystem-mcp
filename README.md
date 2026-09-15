@@ -299,9 +299,10 @@ the roots already configured or accepted; it cannot discover an unknown
 workspace by itself.
 
 Over HTTP, 2025-era clients are served statelessly: tools, resources and
-prompts work, but confirmations (recursive delete, overwrite, access grants)
-and file subscriptions need a 2026-07-28 client or stdio, and answer with a
-message saying so.
+prompts work. Confirmations (recursive delete, overwrite, access grants) need a
+2026-07-28 client or stdio and answer with a tool error saying so; file
+subscriptions are not advertised on that leg, and a `resources/subscribe` sent
+anyway is refused with method-not-found.
 
 ### Recommended global recipes
 

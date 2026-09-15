@@ -52,10 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, built by the SDK from one Zod schema per form. A client that rendered
   the per-option title now renders the value — `overwrite`, `skip`, `delete`,
   or the directory path — which is what the title already said.
-- **Tool log lines name their request.** Every stderr line a tool emits now
-  starts with `[req <id>]` — the JSON-RPC id of the `tools/call` — followed
-  by the client's `traceparent` when the request carried one in `_meta`, so
-  interleaved HTTP calls can be told apart and matched to client-side traces.
+- **Tool log lines name their request.** Every line a tool writes through its
+  request logger now carries `[req <id>]` after the level tag — the JSON-RPC
+  id of the `tools/call` — followed by the client's `traceparent` when the
+  request carried one in `_meta`, so interleaved HTTP calls can be told apart
+  and matched to client-side traces. Both values are client-supplied and are
+  stripped of control characters before they reach stderr, so a crafted id
+  cannot forge log lines. Progress-sink failures, which run detached from a
+  request, keep their plain prefix.
 - **`create` asks before replacing an existing file.** It used to overwrite
   silently, the one write tool with no guard on existing content: `edit` needs
   `oldText` to match, `patch` needs its hunk context, `move` and `delete`
@@ -97,11 +101,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now serves each such request from a fresh server instance, the SDK's
   stateless legacy posture. Reads, listings, searches, edits, prompts, cached
   results and pagination work unchanged. What a stateless request cannot do
-  answers with a named way forward: a confirmation round-trip (recursive
-  delete, overwrite, out-of-root grant) returns the same tool error a client
-  without elicitation gets, and `resources/subscribe` is refused rather than
-  accepted onto an instance that no longer exists. Modern clients are
-  unaffected. See `docs/adr/003`.
+  fails closed: a confirmation round-trip (recursive delete, overwrite,
+  out-of-root grant) returns the same tool error a client without elicitation
+  gets, naming the way forward; `resources/subscribe` is not advertised on
+  that leg and is refused with method-not-found rather than accepted onto an
+  instance that no longer exists. Modern clients are unaffected. See
+  `docs/adr/003`.
 
 ## [2.2.0] - 2026-09-11
 
