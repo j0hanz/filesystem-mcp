@@ -217,7 +217,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: {
         files: [
           { path: appendFile, content: 'kept\n', append: true },
-          { path: overwriteFile, content: 'replaced\n' },
+          { path: overwriteFile, content: 'replaced\n', overwrite: true },
         ],
       },
     });
@@ -225,6 +225,128 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(await readFile(appendFile, 'utf-8'), 'keep\nkept\n');
     assert.strictEqual(await readFile(overwriteFile, 'utf-8'), 'replaced\n');
+  });
+
+  it('TC-FUNC-009m: create onto an existing file asks first; Skip leaves it untouched', async () => {
+    const asked: string[] = [];
+    const eh = await createElicitationClientPair([tmpDir], async (req) => {
+      asked.push(req.params.message);
+      return { action: 'accept' as const, content: { choice: 'skip' } };
+    });
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_skip_existing.txt', 'keep me\n');
+      const fresh = join(tmpDir, 'create_skip_fresh.txt');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: existing, content: 'clobber\n' },
+            { path: fresh, content: 'brand new\n' },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const s = result.structuredContent as { files?: { path: string }[]; skipped?: string[] };
+      assert.strictEqual(s.files?.length, 1, 'only the fresh file is written');
+      assert.ok(s.skipped?.includes(existing), 'the existing file is reported as skipped');
+      assert.strictEqual(asked.length, 1, 'exactly one prompt, for the existing file only');
+      assert.match(asked[0] ?? '', /already exists/i);
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'keep me\n');
+      assert.strictEqual(await readFile(fresh, 'utf-8'), 'brand new\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
+  it('TC-FUNC-009n: create overwrite via choice round-trip replaces the file', async () => {
+    const eh = await createElicitationClientPair([tmpDir], async () => ({
+      action: 'accept' as const,
+      content: { choice: 'overwrite' },
+    }));
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_ow_existing.txt', 'old\n');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: existing, content: 'new\n' }] },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const s = result.structuredContent as { files?: { path: string }[]; skipped?: string[] };
+      assert.strictEqual(s.files?.length, 1);
+      assert.strictEqual(s.skipped, undefined);
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'new\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
+  it('TC-FUNC-009o: overwrite: true replaces an existing file without asking', async () => {
+    const eh = await createElicitationClientPair([tmpDir], async () => {
+      throw new Error('overwrite: true must not prompt');
+    });
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_ow_flag.txt', 'old\n');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: existing, content: 'new\n', overwrite: true }] },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'new\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
+  it('TC-FUNC-009p: a client without elicitation gets a tool error naming overwrite: true', async () => {
+    const eh = await createElicitationClientPair(
+      [tmpDir],
+      async () => {
+        throw new Error('the server must not ask a client that cannot answer');
+      },
+      { noElicitation: true },
+    );
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_no_elicit.txt', 'keep me\n');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: existing, content: 'clobber\n' }] },
+      });
+      assert.strictEqual(result.isError, true, 'must surface as a tool error');
+      const text = (result.content as { type: string; text?: string }[])
+        .map((block) => block.text ?? '')
+        .join('\n');
+      assert.match(text, /confirmation this client cannot show/i);
+      assert.match(text, /overwrite/i);
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'keep me\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
+  it('TC-FUNC-009q: a file that appears during the confirmation gap is not overwritten', async () => {
+    const gapFile = join(tmpDir, 'create_gap_appears.txt');
+    const eh = await createElicitationClientPair([tmpDir], async () => {
+      // Someone else writes the not-yet-existing entry while the human is
+      // looking at the prompt for the other one.
+      await writeFile(gapFile, 'written during the gap\n');
+      return { action: 'accept' as const, content: { choice: 'overwrite' } };
+    });
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_gap_existing.txt', 'old\n');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: existing, content: 'new\n' },
+            { path: gapFile, content: 'clobber\n' },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true, 'fails closed');
+      assert.strictEqual(await readFile(gapFile, 'utf-8'), 'written during the gap\n');
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'old\n', 'nothing written');
+    } finally {
+      await eh.close();
+    }
   });
 
   it('TC-FUNC-009i: append succeeds on a file larger than max-file-size', async () => {

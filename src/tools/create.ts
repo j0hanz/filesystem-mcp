@@ -4,14 +4,21 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode, formatUnknownErrorMessage } from '../core/errors.js';
+import { processInParallel } from '../core/concurrency.js';
+import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from '../core/errors.js';
 import {
   buildFileResourceLink,
   buildFileResourceUri,
   buildWrittenFileMeta,
   type WrittenFileMeta,
 } from '../core/file-uri.js';
-import { countFileLines, type Stats } from '../core/fs.js';
+import { countFileLines, destExists, type Stats } from '../core/fs.js';
+import {
+  choiceInput,
+  confirmKey,
+  pendingRoundTrip,
+  readAcceptedChoice,
+} from '../core/input-required.js';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.js';
 import { Logger } from '../core/observability.js';
 import {
@@ -21,7 +28,7 @@ import {
   PathFailureSchema,
   RequiredPath,
 } from '../core/schema.js';
-import { getMaxTextFileSize } from '../core/util.js';
+import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.js';
 import { isTotalFailure, runOverPaths } from './batch.js';
 import { defineTool } from './define.js';
 
@@ -40,6 +47,12 @@ const CreateFileItemSchema = z.strictObject({
     .optional()
     .describe(
       'Append the content to the end of the file instead of overwriting; creates the file if it does not exist',
+    ),
+  overwrite: z
+    .boolean()
+    .optional()
+    .describe(
+      'Replace an existing file without asking the user; without it an existing file prompts for confirmation',
     ),
 });
 
@@ -75,6 +88,10 @@ const CreateOutputSchema = z.strictObject({
     .array(PathFailureSchema)
     .optional()
     .describe('Files that failed to create with per-file error details'),
+  skipped: z
+    .array(z.string())
+    .optional()
+    .describe('Paths left untouched because the user chose Skip'),
 });
 
 type CreateFileResult = z.infer<typeof CreateFileResultSchema>;
@@ -83,9 +100,10 @@ export const CREATE = defineTool({
   name: 'create',
   title: 'Create Files',
   description:
-    'Create one or more files (max 100), writing or overwriting content and creating parent directories as needed. ' +
+    'Create one or more files (max 100), creating parent directories as needed. ' +
     'Pass files: [{ path, content }] — there is no single-path form. ' +
-    'Silently overwrites existing files — read first if you need to preserve existing content. ' +
+    'An existing file prompts the user to confirm the overwrite, so the call returns without writing ' +
+    'anything until that confirmation comes back; set overwrite: true on an entry to replace it without the prompt. ' +
     'Set append: true on an entry to add to the end of an existing file (created if missing) instead of overwriting.',
   input: CreateInputSchema,
   output: CreateOutputSchema,
@@ -97,14 +115,74 @@ export const CREATE = defineTool({
   },
   accessPaths: (args) => args.files.map((f) => f.path),
   run: async (args, ctx) => {
+    // Phase 1 (no mutation): which entries would replace a file that exists
+    // right now? Those need the user's word before anything is written (R14).
+    // append never destroys, and overwrite: true is that word given up front.
+    // A path that fails validation here is left for runOverPaths to report.
+    // A file that appears between rounds needs no re-stat before the write:
+    // the retry re-plans, and the grown pending set fails the R9 check.
+    const { results: planned } = await processInParallel(
+      args.files,
+      async (entry) => {
+        if (entry.append || entry.overwrite) return undefined;
+        try {
+          const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
+          return (await destExists(ctx.fs, validPath, 'create')) ? validPath : undefined;
+        } catch (error) {
+          rethrowIfAborted(error);
+          return undefined;
+        }
+      },
+      PARALLEL_CONCURRENCY,
+      ctx.signal,
+    );
+    const pendingByPath = new Map<string, string>();
+    for (const { index, value } of planned) {
+      const requested = args.files[index]?.path;
+      if (value && requested) pendingByPath.set(requested, value);
+    }
+    const pendingSorted = [...new Set(pendingByPath.values())].sort();
+    if (pendingSorted.length > 0) {
+      // Round 1 returns input_required; a retry whose verified state does not
+      // bind this overwrite set throws (R9) via `pendingRoundTrip`.
+      const round = await pendingRoundTrip({
+        op: 'create',
+        pending: pendingSorted,
+        requestState: ctx.requestState,
+        clientCapabilities: ctx.clientCapabilities,
+        buildInputs: (paths) =>
+          paths.map((target, i) =>
+            choiceInput(confirmKey(i), `"${target}" already exists. Overwrite it?`, [
+              { value: 'overwrite', title: 'Overwrite' },
+              { value: 'skip', title: 'Skip' },
+            ]),
+          ),
+      });
+      if (round !== undefined) return round;
+    }
+
     const batch = await runOverPaths<
-      { content: string; append?: boolean | undefined },
-      { file: CreateFileResult; resourceLink?: ContentBlock }
+      { content: string; append?: boolean | undefined; overwrite?: boolean | undefined },
+      { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
     >(
       { files: args.files },
       ctx,
       async ({ path, override }) => {
         const content = override?.content ?? '';
+
+        const pendingPath = pendingByPath.get(path);
+        if (pendingPath !== undefined) {
+          const key = confirmKey(pendingSorted.indexOf(pendingPath));
+          const choice = readAcceptedChoice(ctx.inputResponses, key);
+          if (choice === 'skip') return { skipped: path };
+          if (choice !== 'overwrite') {
+            throw new FsError(
+              ErrorCode.CANCELLED,
+              `create cancelled: overwrite of "${path}" was declined or missing`,
+              path,
+            );
+          }
+        }
 
         await ctx.fs.mkdir(dirname(path), { recursive: true });
 
@@ -206,10 +284,15 @@ export const CREATE = defineTool({
 
     const results: CreateFileResult[] = [];
     const failures: CreateFailureItem[] = [];
+    const skipped: string[] = [];
     const links: ContentBlock[] = [];
     for (const r of batch.results) {
       if ('error' in r) {
         failures.push({ path: r.path, error: r.error });
+        continue;
+      }
+      if ('skipped' in r.value) {
+        skipped.push(r.value.skipped);
         continue;
       }
       results.push(r.value.file);
@@ -219,6 +302,7 @@ export const CREATE = defineTool({
     const structured = {
       files: results,
       ...(failures.length > 0 ? { failures } : {}),
+      ...(skipped.length > 0 ? { skipped } : {}),
     };
     // No `text` on purpose. The one-line roster this used to build named the
     // paths and dropped every per-file size, line count and error the caller
