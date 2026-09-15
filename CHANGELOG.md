@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, built by the SDK from one Zod schema per form. A client that rendered
   the per-option title now renders the value — `overwrite`, `skip`, `delete`,
   or the directory path — which is what the title already said.
+- **Tool log lines name their request.** Every stderr line a tool emits now
+  starts with `[req <id>]` — the JSON-RPC id of the `tools/call` — followed
+  by the client's `traceparent` when the request carried one in `_meta`, so
+  interleaved HTTP calls can be told apart and matched to client-side traces.
 - **`create` asks before replacing an existing file.** It used to overwrite
   silently, the one write tool with no guard on existing content: `edit` needs
   `oldText` to match, `patch` needs its hunk context, `move` and `delete`

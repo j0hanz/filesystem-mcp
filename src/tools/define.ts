@@ -9,6 +9,7 @@ import type {
   McpServer,
   Notification,
   RegisteredTool,
+  RequestId,
   RequestMeta,
   RequestStateAccessor,
   ServerContext,
@@ -18,6 +19,7 @@ import {
   CLIENT_CAPABILITIES_META_KEY,
   fromJsonSchema,
   isInputRequiredResult,
+  TRACEPARENT_META_KEY,
 } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
@@ -44,6 +46,10 @@ import { McpProgressSink, ProgressSession } from './progress.js';
 export interface ToolCtx {
   readonly signal: AbortSignal;
   readonly _meta?: RequestMeta | undefined;
+  /** The JSON-RPC id of the `tools/call` this context serves; prefixes every log line. */
+  readonly requestId: RequestId;
+  /** W3C trace context the client put in `_meta`, when it did; rides the log prefix. */
+  readonly traceparent?: string | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
@@ -164,6 +170,10 @@ function toToolCtx(
   return {
     signal: ctx.mcpReq.signal,
     ...(ctx.mcpReq._meta ? { _meta: ctx.mcpReq._meta } : {}),
+    requestId: ctx.mcpReq.id,
+    ...(typeof ctx.mcpReq._meta?.[TRACEPARENT_META_KEY] === 'string'
+      ? { traceparent: ctx.mcpReq._meta[TRACEPARENT_META_KEY] }
+      : {}),
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
@@ -233,8 +243,11 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       signal: this.signal,
       log: (level: LoggingLevel, data: unknown, logger?: string) => {
         const msg = typeof data === 'string' ? data : String(data);
+        // `[req <id>]` first so one grep finds every line of one call; the
+        // traceparent rides along only when the client sent one.
+        const trace = ctx.traceparent ? ` ${ctx.traceparent}` : '';
         const prefix = logger ? `[${logger}] ` : '';
-        Logger.emit(level, `${prefix}${msg}`);
+        Logger.emit(level, `[req ${String(ctx.requestId)}${trace}] ${prefix}${msg}`);
       },
       onProgress: (p) => {
         this.#tick(p);

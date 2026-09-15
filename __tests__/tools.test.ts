@@ -1266,8 +1266,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       });
       assert.notStrictEqual(result.isError, true);
       assert.ok(
-        lines.some((l) => l.includes('edit:')),
-        'stderr should carry the edit log line',
+        lines.some((l) => /\[req [^\]]+\] \[edit\] edit:/.test(l)),
+        'stderr should carry the edit log line tagged with its request id',
       );
     } finally {
       console.error = origErr;
