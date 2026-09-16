@@ -1,7 +1,7 @@
 # ADR-001: One `skipIgnored` flag owns both exclusion rules a walk applies
 
 **Status**: accepted, 2026-09-11
-**Deciders**: j0hanz — settled on the [arch-audit-six plan](../plan/2026-09-10-arch-audit-six/arch-audit-six.plan.md) and merged as [#26](https://github.com/j0hanz/filesystem-mcp/pull/26)
+**Deciders**: j0hanz — settled on the arch-audit-six plan and merged as [#26](https://github.com/j0hanz/filesystem-mcp/pull/26)
 
 ## Context
 
