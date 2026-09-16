@@ -59,6 +59,7 @@ function cancelledRequestId(message: unknown): string | number | null {
  * still passes `applyGrant`'s boundary and unsafe-path guards, so a client
  * cannot root-declare its way into $HOME or past FS_ROOT_BOUNDARY — a refused
  * root is skipped and its paths fail closed at validateAccess like any other.
+ * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
  */
 export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise<number> {
   let roots: readonly { uri: string }[];

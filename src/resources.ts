@@ -452,8 +452,15 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
   // `resources/subscribe`/`unsubscribe` are 2025-era-only verbs; a modern
   // server answers `-32601 Method not found` for them, so registering these
   // handlers on a modern-era instance would dispatch to code no request can
-  // reach.
-  if (deps.era !== 'modern') {
+  // reach. A legacy instance on the HTTP leg (the one built with a `notifier`)
+  // lives for one request: a subscription accepted there would take a watcher
+  // lease for an instance that is gone before the file changes. Leave the
+  // handlers off so the SDK refuses the verb, and no lease is taken. The
+  // predicate mirrors the capability gate in server.ts exactly, so the
+  // handler is registered if and only if `resources.subscribe` is advertised.
+  // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+  const legacyHttp = deps.era === 'legacy' && deps.notifier !== undefined;
+  if (deps.era !== 'modern' && !legacyHttp) {
     server.server.assertCanSetRequestHandler('resources/subscribe');
     server.server.assertCanSetRequestHandler('resources/unsubscribe');
 

@@ -1266,8 +1266,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       });
       assert.notStrictEqual(result.isError, true);
       assert.ok(
-        lines.some((l) => l.includes('edit:')),
-        'stderr should carry the edit log line',
+        lines.some((l) => /^\[\w+\] \[req [^\]]+\] \[edit\] edit:/.test(l)),
+        'stderr should carry the edit log line tagged with its request id',
       );
     } finally {
       console.error = origErr;
@@ -1483,12 +1483,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         const eh = await createElicitationClientPair([rootDir], async (req: unknown) => {
           const env = req as { params?: { requestedSchema?: unknown } };
           const schema = env.params?.requestedSchema as
-            | {
-                properties?: { choice?: { items?: { anyOf?: { const?: string }[] } } };
-              }
-            | undefined;
-          const offered = schema?.properties?.choice?.items?.anyOf ?? [];
-          const first = offered[0]?.const;
+            { properties?: { choice?: { items?: { enum?: string[] } } } } | undefined;
+          const offered = schema?.properties?.choice?.items?.enum ?? [];
+          const first = offered[0];
           return {
             action: 'accept' as const,
             content: { choice: first ? [first] : [] },

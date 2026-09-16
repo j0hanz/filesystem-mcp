@@ -61,6 +61,18 @@ function write(level: LoggingLevel, message: string, args: readonly unknown[]): 
   console.error(`${prefix} ${message}`, ...args);
 }
 
+/**
+ * A client-supplied value (a JSON-RPC id, a `traceparent`, a tool's own log
+ * message) made safe for one stderr line: a control character or a Unicode
+ * line/paragraph separator (U+2028/U+2029, which `\p{Cc}` misses) would let
+ * a caller forge extra log lines, and an unbounded value would let it flood
+ * one. `max` bounds the value; pass `Infinity` for free text that is only
+ * flattened.
+ */
+export function sanitizeLogField(value: string, max = 128): string {
+  return value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').slice(0, max);
+}
+
 export const Logger = {
   emit: (level: LoggingLevel, message: string) => {
     write(level, message, []);

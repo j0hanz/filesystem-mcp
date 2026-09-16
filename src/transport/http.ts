@@ -309,7 +309,11 @@ export async function startHttpServer(
       return c.mcp;
     },
     {
-      legacy: 'reject',
+      // The SDK's default: a 2025-era request is answered by a fresh instance
+      // from the same factory, no session. What that leg cannot do — answer an
+      // input_required confirmation, deliver a subscription — is refused with a
+      // named workaround (define.ts, resources.ts). See docs/adr/003.
+      legacy: 'stateless',
       onerror: (error: Error) => {
         Logger.error('[HTTP] modern leg error:', formatUnknownErrorMessage(error));
       },

@@ -1,7 +1,11 @@
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+
 import assert from 'node:assert/strict';
+import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { buildFileResourceUri } from '../src/core/file-uri.js';
 import { INSTRUCTIONS_URI } from '../src/instructions.js';
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -92,5 +96,113 @@ describe('HTTP In-Process Transport (createMcpHandler / handler.fetch)', () => {
     assert.ok(discover, 'a modern connection must retain its discover result');
     assert.strictEqual(discover.ttlMs, 3_600_000);
     assert.strictEqual(discover.cacheScope, 'public');
+  });
+});
+
+describe('HTTP 2025-era (legacy) clients', () => {
+  let tmpDir: string;
+  let harness: TestHttpContext;
+  let legacy: Client;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    harness = await createTestHttpHarness([tmpDir]);
+
+    const transport = new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+      fetch: (url, init) => harness.handler.fetch(new Request(url, init)),
+    });
+    legacy = new Client(
+      { name: 'legacy-http', version: '1.0.0' },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    legacy.setRequestHandler('elicitation/create', async () => ({
+      action: 'accept',
+      content: { choice: 'delete' },
+    }));
+    await legacy.connect(transport);
+    assert.strictEqual(
+      legacy.getProtocolEra(),
+      'legacy',
+      'a client with no versionNegotiation option must open with the 2025 handshake',
+    );
+  });
+
+  after(async () => {
+    await legacy.close();
+    await harness.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('LEGACY-HTTP-001: tools list and read work over the stateless legacy leg', async () => {
+    const listResult = await legacy.listTools();
+    assert.strictEqual(listResult.tools.length, ALL_REGISTERED_TOOL_NAMES.length);
+
+    const filePath = await writeTestFile(tmpDir, 'legacy_read.txt', 'legacy content');
+    const result = await legacy.callTool({ name: 'read', arguments: { path: filePath } });
+    assert.notStrictEqual(result.isError, true);
+    const firstBlock = firstTextBlock(result);
+    assert.strictEqual(firstBlock.type, 'text');
+    assert.ok(firstBlock.text?.includes('legacy content'));
+  });
+
+  it('LEGACY-HTTP-002: a confirmation the client cannot answer fails closed with the named workaround', async () => {
+    const dir = join(tmpDir, 'legacy_del_dir');
+    await writeTestFile(tmpDir, 'legacy_del_dir/f.txt', 'x');
+
+    const result = await legacy.callTool({
+      name: 'delete',
+      arguments: { paths: [dir], recursive: true },
+    });
+
+    assert.strictEqual(result.isError, true, 'must surface as a tool error, not a protocol error');
+    const text = (result.content as { type: string; text?: string }[])
+      .map((block) => block.text ?? '')
+      .join('\n');
+    assert.match(text, /confirmation this client cannot show/i);
+    assert.match(text, /individually|elicitation capability/i);
+    // Nothing was touched on the way out — the per-request instance never
+    // reached the SDK's own elicitation round-trip.
+    await access(join(dir, 'f.txt'));
+  });
+
+  it('LEGACY-HTTP-003: resources/subscribe is refused and takes no watcher lease', async () => {
+    const filePath = await writeTestFile(tmpDir, 'legacy_watch.txt', 'x');
+    const uri = buildFileResourceUri(filePath);
+
+    assert.notStrictEqual(
+      legacy.getServerCapabilities()?.resources?.subscribe,
+      true,
+      'a stateless legacy instance must not advertise resources/subscribe',
+    );
+    assert.notStrictEqual(
+      legacy.getServerCapabilities()?.resources?.listChanged,
+      true,
+      'a stateless legacy instance has no stream to send list_changed on',
+    );
+    await assert.rejects(legacy.subscribeResource({ uri }));
+    assert.strictEqual(
+      harness.registry.size(),
+      0,
+      'a refused subscribe must not take a watcher lease on the throwaway instance',
+    );
+  });
+
+  it('LEGACY-HTTP-004: the endpoint-shared result store serves a legacy request', async () => {
+    await writeTestFile(tmpDir, 'legacy_pages/one.txt', 'x');
+    await writeTestFile(tmpDir, 'legacy_pages/two.txt', 'x');
+    await writeTestFile(tmpDir, 'legacy_pages/three.txt', 'x');
+
+    const result = await legacy.callTool({
+      name: 'list',
+      arguments: { path: join(tmpDir, 'legacy_pages'), maxEntries: 1 },
+    });
+    const structured = result._meta as { resourceUri?: string };
+    assert.ok(structured.resourceUri, 'an incomplete first page must carry the full-list URI');
+
+    const read = await legacy.readResource({ uri: structured.resourceUri });
+    assert.ok(
+      read.contents.length > 0,
+      'the externalized result must be readable by a legacy client',
+    );
   });
 });
