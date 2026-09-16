@@ -5,7 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.0] - 2026-09-16
+
+A security fix for operator deny rules, three additions, and two write tools
+that stop guessing. No tool is renamed or removed and no existing input field
+changes shape: `create` gains `append` and `overwrite`, `search_text` gains
+`context`. Read Security if you rely on `--deny` or `FS_DENYLIST`, and Changed
+before upgrading if a caller overwrites files with `create` or passes `edit` an
+`oldText` that is not unique.
+
+### Security
+
+- **Deny/allow glob matching is no longer fail-open on hidden files.**
+  `posix.matchesGlob` runs with `dot:false` semantics on Node 24, so in 2.2.0
+  a deny like `secrets/**` silently let `secrets/.token` through. The denylist
+  now compiles its own matcher: `*` and `**` match dot-leading names like any
+  other, a terminal `**` matches paths containing newlines, and `{`, `}` and
+  `,` inside a `[...]` character class are class members, not brace syntax.
+  UNC roots (`//server/share/...`) and NTFS alternate-data-stream spellings
+  are matched as their plain path. Upgrade if a deny pattern covers a
+  directory that holds dotfiles.
 
 ### Added
 
@@ -32,7 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point: a metadata read failure (a POSIX write-only file, say) degrades the
   reported line count rather than failing the append, so a retry cannot
   double-append.
-
 - **`search_text` returns context lines.** `context: N` (0 to 10, default 0)
   carries N lines either side of each match, like `grep -C`. Each match gains
   `before` and `after` string arrays, present only when `context` is greater
@@ -76,15 +94,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability gets a tool error naming those two ways forward. A call that
   relied on the silent overwrite now prompts, or errors on such a client — add
   `overwrite: true`.
-
-- **Deny/allow glob matching is no longer fail-open on hidden files.**
-  `posix.matchesGlob` runs with `dot:false` semantics on Node 24, so a deny
-  like `secrets/**` silently let `secrets/.env` through. The denylist now
-  compiles its own matcher: `*` and `**` match dot-leading names like any
-  other, a terminal `**` matches paths containing newlines, and `{`, `}`
-  and `,` inside a `[...]` character class are class members, not brace
-  syntax. UNC roots (`//server/share/...`) and NTFS alternate-data-stream
-  spellings are matched as their plain path.
 - **`edit` refuses an `oldText` that matches more than once.** It used to
   splice the first occurrence and report success, so an `oldText` without
   enough surrounding context silently changed a block the caller may not have
@@ -108,6 +117,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that leg and is refused with method-not-found rather than accepted onto an
   instance that no longer exists. Modern clients are unaffected. See
   `docs/adr/003`.
+
+### Removed
+
+- **`edit` results no longer carry `lineRange`.** Each result's `_meta` value
+  used to include a `[firstLine, lastLine]` pair; it was a conservative bound,
+  documented nowhere and read by nothing in the server. `dryRun` returns the
+  real unified diff, and `linesAdded`/`linesRemoved` carry the magnitude.
 
 ## [2.2.0] - 2026-09-11
 
