@@ -1,6 +1,5 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": ["__tests__/**/*.test.ts"],
-  "project": ["src/**/*.ts", "__tests__/helpers.ts"],
-  "ignoreDependencies": ["@modelcontextprotocol/inspector"]
+  "project": ["src/**/*.ts", "__tests__/helpers.ts"]
 }
