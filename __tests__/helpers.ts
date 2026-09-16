@@ -383,7 +383,7 @@ export interface TestStdioContext {
 }
 
 /** The `node --import tsx src/index.ts` invocation every stdio entry point spawns. */
-export function getStdioServerCommand(): string[] {
+function getStdioServerCommand(): string[] {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
   return [process.execPath, '--import', 'tsx', join(repoRoot, 'src', 'index.ts')];
 }
@@ -391,17 +391,20 @@ export function getStdioServerCommand(): string[] {
 /**
  * Spawn the real stdio server (via tsx, no build step) and connect a client.
  * stdio has no in-process shortcut — the only honest coverage spawns a real
- * process, mirroring `node --import tsx src/index.ts <allowedDir>`.
+ * process, mirroring `node --import tsx src/index.ts <flags> <allowedDir>`.
+ * `cliFlags` land before the positional root, which is where argv-only
+ * behaviour (`--read-only`, `--root-boundary`) gets its end-to-end coverage.
  */
 export async function createStdioClient(
   allowedDir: string,
   extraEnv: Record<string, string> = {},
+  cliFlags: readonly string[] = [],
 ): Promise<TestStdioContext> {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
   const [command, ...args] = getStdioServerCommand() as [string, ...string[]];
   const transport = new StdioClientTransport({
     command,
-    args: [...args, allowedDir],
+    args: [...args, ...cliFlags, allowedDir],
     cwd: repoRoot,
     env: { ...getDefaultEnvironment(), ...extraEnv },
   });

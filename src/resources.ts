@@ -21,13 +21,7 @@ import {
 } from '@modelcontextprotocol/server';
 
 import type { FsError } from './core/errors.js';
-import {
-  ErrorCode,
-  formatUnknownErrorMessage,
-  fsErrorCode,
-  hasErrorShape,
-  isFsError,
-} from './core/errors.js';
+import { ErrorCode, formatUnknownErrorMessage, fsErrorCode, isFsError } from './core/errors.js';
 import {
   decodeFileUriPath,
   encodeFileUriPath,
@@ -405,7 +399,9 @@ function wrapRead(contract: ResourceContract) {
     try {
       return await contract.read(uri, variables, ctx);
     } catch (error) {
-      if (hasErrorShape(error, 'ProtocolError')) throw error;
+      // The SDK brands ProtocolError with `static [Symbol.hasInstance]`, so this
+      // holds across separately bundled SDK copies and realms.
+      if (error instanceof ProtocolError) throw error;
       // A missing or out-of-root path is a not-found, not a malformed request.
       // The SDK puts ResourceNotFoundError on the wire as -32602 with
       // `data.uri`, which is what clients match on; -32002 is the older code

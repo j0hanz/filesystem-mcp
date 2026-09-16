@@ -75,9 +75,6 @@ type DeleteOutput = z.infer<typeof DeleteOutputSchema>;
 type DeletePerPathResult = z.infer<typeof DeletePerPathSchema>;
 
 // Internal types for error handling
-interface DeletedItem {
-  path: string;
-}
 interface DeleteFailure {
   path: string;
   error: Problem;
@@ -113,13 +110,12 @@ function toDeleteFailure(path: string, error: unknown): DeleteFailure {
 }
 
 type LstatResult = Awaited<ReturnType<GuardedFileSystem['lstat']>>;
-type ItemType = FileType;
 
 /** A path's pre-checked plan: validated, statted, and flagged if it needs confirmation. */
 interface DeletePlan {
   inputPath: string;
   validPath: string;
-  itemType: ItemType;
+  itemType: FileType;
   firstStats: LstatResult;
   /** Recursive + non-empty directory: needs a round-trip confirmation. */
   pending: boolean;
@@ -127,7 +123,7 @@ interface DeletePlan {
 
 type PlanResult =
   | { status: 'fail'; failure: DeleteFailure }
-  | { status: 'noop'; item: DeletedItem }
+  | { status: 'noop'; deleted: string }
   | { status: 'plan'; plan: DeletePlan };
 
 /**
@@ -148,7 +144,7 @@ async function planPath(
       args.ignoreIfNotExists &&
       ((isFsError(error) && error.code === ErrorCode.NOT_FOUND) || isNotFoundErrno(error))
     ) {
-      return { status: 'noop', item: { path: inputPath } };
+      return { status: 'noop', deleted: inputPath };
     }
     return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
   }
@@ -173,7 +169,7 @@ async function planPath(
     firstStats = await fs.lstat(validPath);
   } catch (error) {
     if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
-      return { status: 'noop', item: { path: inputPath } };
+      return { status: 'noop', deleted: inputPath };
     }
     return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
   }
@@ -216,13 +212,13 @@ async function finalizeDeletion(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'log'>,
-): Promise<{ item: DeletedItem } | { failure: DeleteFailure }> {
+): Promise<{ deleted: string } | { failure: DeleteFailure }> {
   let currentStats: LstatResult;
   try {
     currentStats = await ctx.fs.lstat(plan.validPath);
   } catch (error) {
     if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
-      return { item: { path: plan.validPath } };
+      return { deleted: plan.validPath };
     }
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
@@ -256,7 +252,7 @@ async function finalizeDeletion(
   }
 
   ctx.log?.('info', `rm: ${plan.inputPath}`, 'delete');
-  return { item: { path: plan.validPath } };
+  return { deleted: plan.validPath };
 }
 
 /**
@@ -270,7 +266,7 @@ async function executePlan(
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'log'>,
   pendingSorted: readonly string[],
-): Promise<{ item: DeletedItem } | { failure: DeleteFailure } | { skipped: true; path: string }> {
+): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
     const key = confirmKey(pendingSorted.indexOf(plan.validPath));
     const choice = readAcceptedChoice(ctx.inputResponses, key);
@@ -311,7 +307,7 @@ async function handleDelete(
   const plans: { plan: DeletePlan; index: number }[] = [];
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
-    else if (r.status === 'noop') out[index] = { path: r.item.path, value: { deleted: true } };
+    else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
     else plans.push({ plan: r.plan, index });
   }
   for (const { index, error } of planned.errors) {
@@ -366,8 +362,8 @@ async function handleDelete(
       out[slot] = { path: r.path, value: { deleted: false } };
     } else if ('failure' in r) {
       out[slot] = { path: r.failure.path, error: r.failure.error };
-    } else if (r.item.path) {
-      out[slot] = { path: r.item.path, value: { deleted: true } };
+    } else {
+      out[slot] = { path: r.deleted, value: { deleted: true } };
     }
   }
   for (const { index, error } of executed.errors) {

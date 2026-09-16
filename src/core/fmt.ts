@@ -147,7 +147,6 @@ export const cliFmt = {
   cyan: (t: string) => styleText('cyan', t),
   yellow: (t: string) => styleText('yellow', t),
   flag: (t: string) => styleText('green', t),
-  placeholder: (t: string) => styleText('yellow', t),
   section: (t: string) => styleText(['cyan', 'bold'], t),
   bool: (v: boolean) => (v ? styleText('green', 'true') : styleText('red', 'false')),
 };

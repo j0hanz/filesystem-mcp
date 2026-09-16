@@ -10,6 +10,7 @@ import { setTimeout } from 'node:timers/promises';
 
 import { isNodeError } from '../src/core/errors.js';
 import { buildFileResourceUri } from '../src/core/file-uri.js';
+import { MUTATING_TOOL_NAMES } from '../src/tools/index.js';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   cleanupTestRoot,
@@ -156,6 +157,52 @@ describe('Stdio Transport (real subprocess)', () => {
       (second._meta as { entries?: { name: string }[] }).entries?.map((entry) => entry.name),
       ['bravo.txt'],
     );
+  });
+});
+
+// argv-only behaviour: these flags are read by parseArgs before any server
+// exists, so the only honest coverage spawns a real process with them set.
+describe('Stdio CLI flags (real subprocess)', () => {
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+  });
+
+  after(async () => {
+    if (tmpDir) await cleanupTestRoot(tmpDir);
+  });
+
+  it('STDIO-CLI-001: --read-only unregisters every mutating tool', async () => {
+    const harness = await createStdioClient(tmpDir, {}, ['--read-only']);
+    try {
+      const names = (await harness.client.listTools()).tools.map((t) => t.name);
+      for (const mutating of MUTATING_TOOL_NAMES) {
+        assert.ok(
+          !names.includes(mutating),
+          `${mutating} must not be registered under --read-only`,
+        );
+      }
+      assert.ok(names.includes('read'));
+      assert.ok(names.includes('list_roots'));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('STDIO-CLI-002: --root-boundary denies a path that escapes the boundary', async () => {
+    const harness = await createStdioClient(tmpDir, {}, ['--root-boundary', tmpDir]);
+    try {
+      const result = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: join(tmpDir, '../../../../etc/shadow') },
+      });
+      assert.strictEqual(result.isError, true);
+      const [first] = (result._meta as { results?: { error?: { code?: string } }[] }).results ?? [];
+      assert.strictEqual(first?.error?.code, 'ACCESS_DENIED');
+    } finally {
+      await harness.close();
+    }
   });
 });
 

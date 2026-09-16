@@ -363,32 +363,6 @@ async function runTransfers(
   return { results, skipped, failures };
 }
 
-/**
- * Two-phase move: pre-check every move (no mutation) to build the overwrite
- * pending set; if any move is pending and the round carries no verified
- * `requestState`, return `input_required` moving nothing (R14). On retry, R9
- * checks the state binds this move set, then each pending move proceeds only on
- * an accepted overwrite. Non-pending moves proceed alongside them.
- */
-async function handleMove(
-  args: z.infer<typeof MoveInputSchema>,
-  ctx: ToolCtx,
-): Promise<z.infer<typeof MoveOutputSchema> | InputRequiredResult> {
-  const op: PairOp = args.copy ? 'copy' : 'move';
-  // `overwrite` is copy-only; move has no confirmation bypass.
-  const overwrite = args.copy && args.overwrite;
-  const outcome = await runTransfers(args.moves, ctx, op, overwrite);
-  if (isInputRequiredResult(outcome)) return outcome;
-
-  const { results, skipped, failures } = outcome;
-
-  return {
-    moves: results,
-    ...(failures.length > 0 ? { failures } : {}),
-    ...(skipped.length > 0 ? { skipped } : {}),
-  };
-}
-
 function buildSummary(
   verb: 'move' | 'copy',
   results: readonly MoveItemResult[],
@@ -528,18 +502,23 @@ export const MOVE = defineTool({
   defaultErrorCode: ErrorCode.UNKNOWN,
   accessPaths: (args) => args.moves.flatMap((m) => [m.source, m.destination]),
   run: async (args, ctx) => {
-    const output = await handleMove(args, ctx);
+    const op: PairOp = args.copy ? 'copy' : 'move';
+    // `overwrite` is copy-only; move has no confirmation bypass.
+    const outcome = await runTransfers(args.moves, ctx, op, args.copy && args.overwrite);
     // input_required is a return value, not a completed call: surface it
     // verbatim so the executor short-circuits before building a CallToolResult.
-    if (isInputRequiredResult(output)) return output;
-    const failures = output.failures ?? [];
-    const skipped = output.skipped ?? [];
+    if (isInputRequiredResult(outcome)) return outcome;
+    const { results, skipped, failures } = outcome;
     return {
-      structured: output,
-      text: buildSummary(args.copy ? 'copy' : 'move', output.moves, failures, skipped),
+      structured: {
+        moves: results,
+        ...(failures.length > 0 ? { failures } : {}),
+        ...(skipped.length > 0 ? { skipped } : {}),
+      },
+      text: buildSummary(op, results, failures, skipped),
       // Every requested pair failed: no move, no copy, no user-chosen skip - the
       // call did nothing. A skip is work the caller asked for, so it counts.
-      isError: failures.length > 0 && output.moves.length + skipped.length === 0,
+      isError: failures.length > 0 && results.length + skipped.length === 0,
     };
   },
 });

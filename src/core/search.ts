@@ -4,7 +4,6 @@ import { basename } from 'node:path';
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
-import { StopReasonTracker } from './concurrency.js';
 import { globEntries, type GlobEntry } from './glob.js';
 import type { PathGuard } from './path.js';
 import { escapeRegexLiteral } from './primitives.js';
@@ -302,12 +301,11 @@ export async function searchContent(
       }
     }
 
-    const tracker = new StopReasonTracker();
-    if (matches.length >= maxResults) tracker.hitMaxResults();
-    if (counters.stoppedByAbort) tracker.hitAbort();
-    // resolve() is StoppedReason | undefined, but this scan only records
-    // maxResults/timeout stops (see the summary type's narrowing note).
-    const stoppedReason = tracker.resolve() as 'maxResults' | 'timeout' | undefined;
+    // The result cap is the definite cause even when the abort fired on the same
+    // iteration, matching StopReasonTracker's precedence for the two stops this
+    // scan can record (see the summary type's narrowing note).
+    const stoppedReason =
+      matches.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
 
     return {
       basePath: directory,
@@ -316,7 +314,7 @@ export async function searchContent(
         matchingLines,
         filesScanned,
         filesMatched,
-        truncated: tracker.truncated,
+        truncated: stoppedReason !== undefined,
         skippedInaccessible: counters.skippedInaccessible,
         skippedTooLarge,
         ...(stoppedReason ? { stoppedReason } : {}),
@@ -403,12 +401,9 @@ export async function searchFiles(
     results.sort((a, b) => a.path.localeCompare(b.path));
   }
 
-  const tracker = new StopReasonTracker();
-  if (results.length >= maxResults) tracker.hitMaxResults();
-  if (counters.stoppedByAbort) tracker.hitAbort();
-  // resolve() is StoppedReason | undefined, but this scan only records
-  // maxResults/timeout stops (see the summary type's narrowing note).
-  const stoppedReason = tracker.resolve() as 'maxResults' | 'timeout' | undefined;
+  // Same precedence as above: the result cap wins over a same-iteration abort.
+  const stoppedReason =
+    results.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
 
   return {
     basePath: directory,
@@ -416,7 +411,7 @@ export async function searchFiles(
     summary: {
       matched: results.length,
       filesScanned,
-      truncated: tracker.truncated,
+      truncated: stoppedReason !== undefined,
       skippedInaccessible: counters.skippedInaccessible,
       ...(stoppedReason ? { stoppedReason } : {}),
     },

@@ -117,6 +117,25 @@ describe('input_required multi-round-trip infrastructure', () => {
     );
   });
 
+  it('5b. pendingRoundTrip rejects a pending set that merely EXTENDS the bound one (R9)', async () => {
+    // The bound set is a prefix of the retried one: a confirmation minted for
+    // /x must not authorize /x AND /y.
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] });
+    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    await assert.rejects(
+      async () => {
+        await pendingRoundTrip({
+          op: 'delete',
+          pending: ['/x', '/y'],
+          requestState: () => decoded,
+          buildInputs: (paths) =>
+            paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+        });
+      },
+      (e: unknown) => isFsError(e) && e.code === ErrorCode.INVALID_INPUT,
+    );
+  });
+
   it('6. pendingRoundTrip different-op mints fresh input_required', async () => {
     const wire = await requestStateCodec.mint({ op: 'grant', paths: ['/x'] });
     const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
