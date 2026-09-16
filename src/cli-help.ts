@@ -151,12 +151,12 @@ const EXAMPLES_HELP = [
 ];
 
 export function printHelpAndExit(): never {
-  const { bold, dim, section, flag, placeholder, cyan } = cliFmt;
+  const { bold, dim, section, flag, yellow, cyan } = cliFmt;
   const COL = 27;
 
   const optRow = (flags: string, desc: string): string => {
     const colored = flags
-      .replace(/<[^>]+>/g, (m) => placeholder(m))
+      .replace(/<[^>]+>/g, (m) => yellow(m))
       .replace(/-{1,2}[\w-]+/g, (m) => flag(m));
     return `  ${padEndVisible(colored, COL)}${desc}`;
   };

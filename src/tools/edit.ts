@@ -16,7 +16,6 @@ import {
   NonNegInt,
   OperationSummarySchema,
   PerFileErrorSchema,
-  PositiveInt,
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.js';
@@ -137,10 +136,6 @@ const PerFileResultSchema = z.strictObject({
     .array(z.string())
     .optional()
     .describe('oldText values that did not match any content in the file'),
-  lineRange: z
-    .tuple([PositiveInt, PositiveInt])
-    .optional()
-    .describe('Line range [firstLine, lastLine] covering all applied edits'),
 });
 
 const EditPerPathSchema = z.strictObject({
@@ -170,7 +165,6 @@ interface EditResult {
   linesAdded: number;
   linesRemoved: number;
   diff?: string;
-  lineRange?: [number, number];
 }
 
 const MAX_REPORTED_MATCH_LINES = 5;
@@ -287,45 +281,6 @@ function replaceEditMatch(content: string, match: TextRange, newText: string): s
   );
 }
 
-/**
- * Compute the 1-indexed line range of changed lines in `modified` relative to
- * `original`, using a common-prefix/suffix line scan. This is a conservative
- * bound (it widens to cover independent changes between matching bookends), but
- * it is computed against the FINAL content so it is not skewed by earlier edits
- * inserting or removing lines — which the per-edit merge could not account for.
- */
-function computeChangedLineRange(original: string, modified: string): [number, number] | undefined {
-  const origLines = original.split('\n');
-  const modLines = modified.split('\n');
-  const minLen = Math.min(origLines.length, modLines.length);
-
-  let firstChanged = -1;
-  for (let i = 0; i < minLen; i++) {
-    if (origLines[i] !== modLines[i]) {
-      firstChanged = i;
-      break;
-    }
-  }
-  if (firstChanged === -1 && origLines.length === modLines.length) return undefined;
-  if (firstChanged === -1) firstChanged = minLen; // pure append/trim at the tail
-
-  let lastChangedMod = modLines.length - 1;
-  let lastChangedOrig = origLines.length - 1;
-  while (
-    lastChangedMod > firstChanged &&
-    lastChangedOrig >= 0 &&
-    modLines[lastChangedMod] === origLines[lastChangedOrig]
-  ) {
-    lastChangedMod--;
-    lastChangedOrig--;
-  }
-
-  // When the modified content is a strict prefix of the original (a tail trim on
-  // a file with no final newline), the loop above never runs and lastChangedMod
-  // lands one below firstChanged. Clamp so the range is never inverted.
-  return [firstChanged + 1, Math.max(firstChanged, lastChangedMod) + 1];
-}
-
 function buildEditFileValue(
   validPath: string,
   meta: EditFileMetadata,
@@ -346,7 +301,6 @@ function buildEditFileValue(
       : {}),
     ...(result.unmatchedEdits.length > 0 ? { unmatchedEdits: result.unmatchedEdits } : {}),
     ...(result.diff ? { diff: result.diff } : {}),
-    ...(result.lineRange ? { lineRange: result.lineRange } : {}),
   };
 }
 
@@ -355,7 +309,6 @@ function finalizeEditResult(
   updatedContent: string,
   appliedEdits: number,
   unmatchedEdits: string[],
-  lineRange: EditResult['lineRange'],
 ): EditResult {
   const { linesAdded, linesRemoved } =
     appliedEdits > 0
@@ -368,7 +321,6 @@ function finalizeEditResult(
     unmatchedEdits,
     linesAdded,
     linesRemoved,
-    ...(lineRange ? { lineRange } : {}),
   };
 }
 
@@ -420,11 +372,7 @@ function applyEdits(
     appliedEdits += 1;
   }
 
-  // Compute the line range against the final content so earlier edits whose
-  // lines were shifted by later edits are still covered.
-  const lineRange = appliedEdits > 0 ? computeChangedLineRange(content, newContent) : undefined;
-
-  return finalizeEditResult(content, newContent, appliedEdits, unmatchedEdits, lineRange);
+  return finalizeEditResult(content, newContent, appliedEdits, unmatchedEdits);
 }
 
 interface EditFileOptions {

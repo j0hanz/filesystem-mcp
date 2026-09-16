@@ -49,7 +49,7 @@ export function createWatcherRegistry() {
   // this and the unsubscribe-by-URI over-release if that churn is observed.
   const activeCallbacks = new Map<string, Set<(uri: string) => void>>();
   const subscriberCounts = new Map<string, number>();
-  const desiredState = new Map<string, 'subscribed' | 'unsubscribed' | 'subscribing'>();
+  const desiredState = new Map<string, 'unsubscribed' | 'subscribing'>();
   const debounceTimers = new Map<string, NodeJS.Timeout>();
   let destroyed = false;
 
@@ -163,7 +163,11 @@ export function createWatcherRegistry() {
       activeCallbacks.set(uri, callbacks);
     }
     callbacks.add(notify);
-    desiredState.set(uri, 'subscribed');
+    // A live subscription needs no marker: every reader treats "no entry" the
+    // way it treated 'subscribed'. Clearing here is what retires the
+    // 'subscribing' marker `startSubscribe` set, so teardown deletes the entry
+    // instead of mapping it onto a 'unsubscribed' that would block a later attach.
+    desiredState.delete(uri);
   };
 
   const retain = (uri: string): void => {

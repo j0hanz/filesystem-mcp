@@ -348,7 +348,8 @@ export function readAcceptedMultiChoice(
  * it without allocating.
  */
 function pathsEqual(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
+  // The length check is load-bearing, not an early-out: `every` alone returns
+  // true whenever `a` is a prefix of a longer `b`, so a confirmation minted for
+  // ['/x'] would authorize a retry for ['/x', '/y'] — a direct R9 bypass.
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }

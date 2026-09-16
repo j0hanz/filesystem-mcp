@@ -23,15 +23,10 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   if (isWindowsDriveRelativePath(pattern)) {
     return false;
   }
+  // Covers every engine-specific traversal form too — `{a,..}` and `[..]` both
+  // contain '..', so they are rejected here. Keep this check whole-string: the
+  // per-form guards that used to follow it were unreachable because of it.
   if (pattern.includes('..')) {
-    return false;
-  }
-  // Reject glob-engine-specific traversal bypass forms that some engines
-  // expand as path separators or parent-directory references.
-  if (/\{[^}]*\.\.[^}]*\}/u.test(pattern)) {
-    return false;
-  }
-  if (pattern.includes('[..]')) {
     return false;
   }
   return true;

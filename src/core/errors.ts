@@ -114,94 +114,49 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
 
 export const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
 
-type ClassificationSignal =
-  | { kind: 'abort' }
-  | { kind: 'timeout' }
-  | { kind: 'errno'; errno: string; syscall?: string; path?: string }
-  | { kind: 'unknown' };
-
-function readErrnoCode(value: unknown): string | undefined {
-  if (!(value instanceof Error)) return undefined;
-  const code = (value as { code?: unknown }).code;
-  if (typeof code !== 'string') return undefined;
-  return code;
-}
-
-function isAbortSingle(value: unknown): boolean {
-  if (!(value instanceof Error)) return false;
-  if (value.name === 'AbortError') return true;
-  const code = readErrnoCode(value);
-  return code === 'ABORT_ERR';
-}
-
-function isTimeoutSingle(value: unknown): boolean {
-  if (!(value instanceof Error)) return false;
-  if (value.name === 'TimeoutError') return true;
-  return readErrnoCode(value) === 'ETIMEDOUT';
-}
-
-function readSignalSingle(value: unknown): ClassificationSignal | undefined {
-  if (isAbortSingle(value)) return { kind: 'abort' };
-  if (isTimeoutSingle(value)) return { kind: 'timeout' };
-  const code = readErrnoCode(value);
-  if (code !== undefined && ERRNO_RE.test(code)) {
-    const v = value as NodeJS.ErrnoException;
-    return {
-      kind: 'errno',
-      errno: code,
-      ...(typeof v.syscall === 'string' ? { syscall: v.syscall } : {}),
-      ...(typeof v.path === 'string' ? { path: v.path } : {}),
-    };
-  }
-  return undefined;
-}
-
-function walkCauseChain(error: unknown): ClassificationSignal {
-  let current: unknown = error;
-  const visited = new Set<unknown>();
-  let abortSeen = false;
-  let timeoutSeen = false;
-  let errnoSignal: ClassificationSignal | undefined;
-
-  while (current !== undefined && current !== null && !visited.has(current)) {
-    const signal = readSignalSingle(current);
-    if (signal !== undefined) {
-      if (signal.kind === 'abort') abortSeen = true;
-      else if (signal.kind === 'timeout') timeoutSeen = true;
-      else if (signal.kind === 'errno' && errnoSignal === undefined) {
-        errnoSignal = signal;
-      }
-    }
-    visited.add(current);
-    current = (current as { cause?: unknown }).cause;
-  }
-
-  if (abortSeen) return { kind: 'abort' };
-  if (timeoutSeen) return { kind: 'timeout' };
-  if (errnoSignal !== undefined) return errnoSignal;
-  return { kind: 'unknown' };
-}
-
-function buildProblemFromSignal(signal: ClassificationSignal, error: unknown): Problem {
+/**
+ * Walk `error` and its `cause` chain for the one fact that decides the code: an
+ * abort anywhere wins, then a timeout anywhere, then the FIRST errno seen.
+ * `visited` guards a cyclic chain. Returns the Problem directly — the
+ * intermediate signal union this replaced existed only to be destructured back
+ * into a Problem two functions later, and carried a `syscall` nobody read.
+ */
+function classifyCauseChain(error: unknown): Problem {
   const message = formatUnknownErrorMessage(error);
-  switch (signal.kind) {
-    case 'abort':
-      return Problem.cancelled(message);
-    case 'timeout':
-      return Problem.timeout(message);
-    case 'errno': {
-      const code = ERRNO_MAP[signal.errno] ?? ErrorCode.IO_ERROR;
-      return build(code, message, {
-        ...(signal.path !== undefined ? { path: signal.path } : {}),
-      });
-    }
-    case 'unknown':
-      return Problem.unknown(message);
-    default: {
-      const _exhaustive: never = signal;
-      return _exhaustive;
+  const visited = new Set<unknown>();
+  let aborted = false;
+  let timedOut = false;
+  let errno: { code: string; path?: string } | undefined;
+
+  for (
+    let current: unknown = error;
+    current !== undefined && current !== null && !visited.has(current);
+    current = (current as { cause?: unknown }).cause
+  ) {
+    visited.add(current);
+    if (!(current instanceof Error)) continue;
+    const raw = (current as { code?: unknown }).code;
+    const code = typeof raw === 'string' ? raw : undefined;
+    // Ordered like the per-error read it replaces: a node that reads as an
+    // abort or a timeout never also contributes its errno.
+    if (current.name === 'AbortError' || code === 'ABORT_ERR') {
+      aborted = true;
+    } else if (current.name === 'TimeoutError' || code === 'ETIMEDOUT') {
+      timedOut = true;
+    } else if (errno === undefined && code !== undefined && ERRNO_RE.test(code)) {
+      const { path } = current as NodeJS.ErrnoException;
+      errno = { code, ...(typeof path === 'string' ? { path } : {}) };
     }
   }
+
+  if (aborted) return Problem.cancelled(message);
+  if (timedOut) return Problem.timeout(message);
+  if (errno !== undefined) {
+    return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, {
+      ...(errno.path !== undefined ? { path: errno.path } : {}),
+    });
+  }
+  return Problem.unknown(message);
 }
 
 export function isFsError(error: unknown): error is FsError {
@@ -218,21 +173,6 @@ export function fsErrorCode(error: unknown): ProtocolErrorCode {
   return isFsError(error) ? ProtocolErrorCode.InvalidParams : ProtocolErrorCode.InternalError;
 }
 
-/**
- * Structural discriminator for SDK error classes (`ProtocolError`, `SdkError`).
- * Checks `name` + `code` properties rather than `instanceof` so discrimination
- * survives cross-realm / multi-SDK-copy conditions where the prototype chain
- * breaks. Mirrors the isFsError pattern.
- */
-export function hasErrorShape(
-  error: unknown,
-  name: string,
-): error is Error & { code: string | number } {
-  if (!(error instanceof Error) || error.name !== name) return false;
-  const c = (error as { code?: unknown }).code;
-  return typeof c === 'string' || typeof c === 'number';
-}
-
 function classify(error: unknown): Problem {
   if (error === null || error === undefined) {
     return Problem.unknown('Unknown error');
@@ -247,8 +187,7 @@ function classify(error: unknown): Problem {
   if (!(error instanceof Error)) {
     return Problem.unknown(typeof error === 'string' ? error : '[non-Error thrown]');
   }
-  const signal = walkCauseChain(error);
-  return buildProblemFromSignal(signal, error);
+  return classifyCauseChain(error);
 }
 
 export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -263,12 +202,29 @@ export function isNotFoundErrno(error: unknown): error is NodeJS.ErrnoException 
   return isNodeError(error) && error.code === 'ENOENT';
 }
 
-function isAbortError(error: unknown): boolean {
-  return classify(error).code === ErrorCode.CANCELLED;
-}
-
+/**
+ * Rethrow when `error` reads as cancelled. Answers the question directly rather
+ * than through `classify`, which allocated a Problem — and ran
+ * `formatUnknownErrorMessage`, i.e. a `JSON.stringify` on a non-Error — for a
+ * boolean. This sits in eight catch blocks, several inside per-entry scan loops.
+ */
 export function rethrowIfAborted(error: unknown): void {
-  if (isAbortError(error)) throw error;
+  if (isFsError(error)) {
+    if (error.code === ErrorCode.CANCELLED) throw error;
+    return;
+  }
+  const visited = new Set<unknown>();
+  for (
+    let current: unknown = error;
+    current !== undefined && current !== null && !visited.has(current);
+    current = (current as { cause?: unknown }).cause
+  ) {
+    visited.add(current);
+    if (!(current instanceof Error)) continue;
+    if (current.name === 'AbortError' || (current as { code?: unknown }).code === 'ABORT_ERR') {
+      throw error;
+    }
+  }
 }
 
 export function formatUnknownErrorMessage(error: unknown): string {
