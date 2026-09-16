@@ -57,8 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id of the `tools/call` — followed by the client's `traceparent` when the
   request carried one in `_meta`, so interleaved HTTP calls can be told apart
   and matched to client-side traces. Both values are client-supplied and are
-  stripped of control characters before they reach stderr, so a crafted id
-  cannot forge log lines. Progress-sink failures, which run detached from a
+  stripped of control characters and Unicode line separators before they
+  reach stderr — as is the message itself — so a crafted id or path cannot
+  forge log lines. Progress-sink failures, which run detached from a
   request, keep their plain prefix.
 - **`create` asks before replacing an existing file.** It used to overwrite
   silently, the one write tool with no guard on existing content: `edit` needs

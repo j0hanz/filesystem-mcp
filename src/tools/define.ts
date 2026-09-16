@@ -255,11 +255,15 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
         // traceparent rides along only when the client sent one. Both are
         // client-supplied, so they pass through `sanitizeLogField`: a control
         // character in a JSON-RPC id or a traceparent would forge log lines.
+        // The message is flattened too (uncapped): it can carry a resolved
+        // path or OS error text, and input schemas reject CR/LF but not the
+        // Unicode line separators.
         const trace = ctx.traceparent ? ` ${sanitizeLogField(ctx.traceparent)}` : '';
         const prefix = logger ? `[${logger}] ` : '';
+        const text = sanitizeLogField(msg, Infinity);
         Logger.emit(
           level,
-          `[req ${sanitizeLogField(String(ctx.requestId))}${trace}] ${prefix}${msg}`,
+          `[req ${sanitizeLogField(String(ctx.requestId))}${trace}] ${prefix}${text}`,
         );
       },
       onProgress: (p) => {

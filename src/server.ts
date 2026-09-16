@@ -77,11 +77,12 @@ export async function createServer(
   // `notifications/resources/updated` — which the modern `subscriptions/listen`
   // stream delivers — on this same capability bit. The one exception is a
   // legacy instance on the HTTP leg (era 'legacy' with a notifier): it serves
-  // one request, registers no subscribe handler (resources.ts) and sends no
-  // updates, so advertising the verb would invite a call it answers -32601.
+  // one request, registers no subscribe handler (resources.ts, same
+  // predicate) and sends no notification of any kind — there is no stream to
+  // send it on — so neither `subscribe` nor `listChanged` is advertised.
   const legacyHttp = extraDeps?.era === 'legacy' && extraDeps.notifier !== undefined;
   const capabilities = {
-    resources: { subscribe: !legacyHttp, listChanged: true },
+    resources: { subscribe: !legacyHttp, listChanged: !legacyHttp },
     tools: {},
     prompts: {},
     completions: {},

@@ -174,6 +174,11 @@ describe('HTTP 2025-era (legacy) clients', () => {
       true,
       'a stateless legacy instance must not advertise resources/subscribe',
     );
+    assert.notStrictEqual(
+      legacy.getServerCapabilities()?.resources?.listChanged,
+      true,
+      'a stateless legacy instance has no stream to send list_changed on',
+    );
     await assert.rejects(legacy.subscribeResource({ uri }));
     assert.strictEqual(
       harness.registry.size(),

@@ -455,9 +455,12 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
   // reach. A legacy instance on the HTTP leg (the one built with a `notifier`)
   // lives for one request: a subscription accepted there would take a watcher
   // lease for an instance that is gone before the file changes. Leave the
-  // handlers off so the SDK refuses the verb, and no lease is taken.
+  // handlers off so the SDK refuses the verb, and no lease is taken. The
+  // predicate mirrors the capability gate in server.ts exactly, so the
+  // handler is registered if and only if `resources.subscribe` is advertised.
   // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
-  if (deps.era !== 'modern' && deps.notifier === undefined) {
+  const legacyHttp = deps.era === 'legacy' && deps.notifier !== undefined;
+  if (deps.era !== 'modern' && !legacyHttp) {
     server.server.assertCanSetRequestHandler('resources/subscribe');
     server.server.assertCanSetRequestHandler('resources/unsubscribe');
 
