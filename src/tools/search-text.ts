@@ -373,7 +373,7 @@ export const SEARCH_TEXT = defineTool({
       body +
       pageTrailer({
         offset,
-        shown: rows.length,
+        shown: structured.matches.length,
         total,
         noun: 'matches',
         tool: 'search_text',

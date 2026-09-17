@@ -116,7 +116,7 @@ const ENV_HELP: HelpRow[] = [
   { flags: 'NO_COLOR', desc: 'Any value disables ANSI color output' },
   {
     flags: 'FS_REQUEST_STATE_KEY',
-    desc: 'HMAC key for input_required state; optional outside fleet mode, shared and >=32 bytes in fleet mode',
+    desc: 'HMAC key for input_required state; optional, >=32 bytes when set',
   },
 ];
 
