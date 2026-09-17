@@ -161,9 +161,12 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
     const request = r.inputRequests['confirm_0'] as {
-      params?: { requestedSchema?: { properties?: { confirm?: { type?: string } } } };
+      params?: {
+        requestedSchema?: { properties?: { confirm?: { type?: string; title?: string } } };
+      };
     };
     assert.strictEqual(request.params?.requestedSchema?.properties?.confirm?.type, 'boolean');
+    assert.strictEqual(request.params?.requestedSchema?.properties?.confirm?.title, 'Confirm');
   });
 
   it('8. readAcceptedConfirm accept-true -> true', () => {
@@ -212,12 +215,15 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
     const request = r.inputRequests['confirm_0'] as {
-      params?: { requestedSchema?: { properties?: { choice?: { enum?: string[] } } } };
+      params?: {
+        requestedSchema?: { properties?: { choice?: { enum?: string[]; title?: string } } };
+      };
     };
     assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.enum, [
       'overwrite',
       'skip',
     ]);
+    assert.strictEqual(request.params?.requestedSchema?.properties?.choice?.title, 'Action');
   });
 
   it('11. readAcceptedChoice accept-skip -> "skip"', () => {
@@ -273,13 +279,16 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(typeof r.requestState, 'string');
     const request = r.inputRequests['grant'] as {
       params?: {
-        requestedSchema?: { properties?: { choice?: { items?: { enum?: string[] } } } };
+        requestedSchema?: {
+          properties?: { choice?: { items?: { enum?: string[] }; title?: string } };
+        };
       };
     };
     assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.items?.enum, [
       '/dir/a',
       '/dir/b',
     ]);
+    assert.strictEqual(request.params?.requestedSchema?.properties?.choice?.title, 'Allow');
   });
 
   it('17. readAcceptedMultiChoice accept-array -> array', () => {

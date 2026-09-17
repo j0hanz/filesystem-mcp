@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A refused confirmation says why.** When a `create` overwrite, a `move` or copy overwrite, or a `delete` confirmation comes back without an accepted answer, the `CANCELLED` error used to say `declined or missing`. It now says `declined by the user`, `dismissed by the user`, `answered without a valid choice`, or `not answered`, read from the SDK's `inputResponse` view of the retried call. Nothing about which choices are offered or what proceeds changes.
+- **Confirmation forms label their field.** The `input_required` forms for overwrite, delete and access-grant confirmations now carry a `title` on their one field — `Confirm` for the yes/no grant, `Action` for the overwrite/skip and delete/skip choice, `Allow` for the multi-directory grant — so a host that renders the form shows that label instead of the property name `confirm` or `choice`. The offered values and the `message` text are unchanged.
 
 ## [2.3.0] - 2026-09-16
 
