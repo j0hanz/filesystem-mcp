@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { cli } from '../src/core/config.js';
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import type { PathGuard } from '../src/core/path.js';
-import { SensitiveMatcher } from '../src/core/sensitive.js';
+import { cli } from '../src/core/config.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import type { PathGuard } from '../src/core/path.ts';
+import { SensitiveMatcher } from '../src/core/sensitive.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
   makeGuard,
   trySymlink,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('Security (P0)', () => {
   let root: string;

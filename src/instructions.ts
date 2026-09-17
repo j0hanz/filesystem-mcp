@@ -2,7 +2,7 @@ import {
   DEFAULT_SEARCH_CONTENT_RESULTS,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
-} from './core/util.js';
+} from './core/util.ts';
 import {
   FIND_FILES,
   LIST,
@@ -11,7 +11,7 @@ import {
   READ,
   SEARCH_TEXT,
   STAT,
-} from './tools/index.js';
+} from './tools/index.ts';
 
 function buildToolsOverview(readOnly: boolean): string {
   const rows: [string, string[]][] = [

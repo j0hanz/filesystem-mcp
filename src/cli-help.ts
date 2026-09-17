@@ -1,6 +1,7 @@
+import { styleText } from 'node:util';
+
 import packageJson from '../package.json' with { type: 'json' };
-import { cliFmt, padEndVisible } from './core/fmt.js';
-import { MUTATING_TOOL_NAMES } from './tools/index.js';
+import { MUTATING_TOOL_NAMES } from './tools/index.ts';
 
 // Help text and its rendering. Split out of cli.ts so that module holds only
 // argument parsing and directory validation: this file is static copy plus a
@@ -25,12 +26,7 @@ const OPTIONS_HELP: HelpRow[] = [
     flags: '--read-only',
     desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')}`,
   },
-  { flags: '--safe', desc: 'Alias for --read-only' },
-  {
-    flags: '--print-config',
-    desc: 'Print the active configuration and exit (use with --json for machine output)',
-  },
-  { flags: '--json', desc: 'Output --print-config as JSON' },
+  { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
     flags: '--log-level <level>',
     desc: 'Log level, RFC 5424: debug|info|notice|warn|error|critical|alert|emergency (env: FS_LOG_LEVEL)',
@@ -114,26 +110,9 @@ const ENV_HELP: HelpRow[] = [
     desc: 'Per-client-IP requests/min (default 120 authenticated, 6000 keyless loopback; 1–100000)',
   },
   {
-    flags: 'FS_MAX_REQUEST_BYTES',
-    desc: 'Max HTTP request body bytes (default 4194304, 1024–268435456)',
-  },
-  {
-    flags: 'FS_KEEPALIVE_TIMEOUT_MS',
-    desc: 'HTTP keep-alive timeout; set above any fronting proxy idle timeout (default 5000, 1000–600000)',
-  },
-  {
     flags: 'FS_MAX_WATCHERS',
     desc: 'Max concurrent file watchers (default 256, 1–4096)',
   },
-  {
-    flags: 'FS_MAX_INLINE_MATCHES',
-    desc: 'Deprecated and ignored; maxResults sets the search_text page size. Removed in the next major',
-  },
-  {
-    flags: 'FS_MAX_READ_MANY_BYTES',
-    desc: 'Max total bytes across one batch read (default 524288, 10240–104857600)',
-  },
-  { flags: 'FS_SEARCH_TIMEOUT_MS', desc: 'Search timeout in ms (default 5000, 100–60000)' },
   { flags: 'NO_COLOR', desc: 'Any value disables ANSI color output' },
   {
     flags: 'FS_REQUEST_STATE_KEY',
@@ -147,35 +126,29 @@ const EXAMPLES_HELP = [
   '$ filesystem-mcp /project/src /project/tests --allow-cwd',
   '$ filesystem-mcp --port 3000 /path/to/allowed/dir',
   '$ filesystem-mcp --read-only /data/readonly',
-  '$ filesystem-mcp --print-config --json /project',
+  '$ filesystem-mcp --print-config /project',
 ];
 
 export function printHelpAndExit(): never {
-  const { bold, dim, section, flag, yellow, cyan } = cliFmt;
   const COL = 27;
-
-  const optRow = (flags: string, desc: string): string => {
-    const colored = flags
-      .replace(/<[^>]+>/g, (m) => yellow(m))
-      .replace(/-{1,2}[\w-]+/g, (m) => flag(m));
-    return `  ${padEndVisible(colored, COL)}${desc}`;
-  };
-
-  const envRow = (name: string, desc: string): string => {
-    return `  ${padEndVisible(cyan(name), COL - 1)} ${desc}`;
-  };
+  // Pad first, colour after: `styleText` honours NO_COLOR, and padding the
+  // plain text keeps the columns aligned whether or not colour is on.
+  const row = (color: 'green' | 'cyan', name: string, desc: string): string =>
+    `  ${styleText(color, name.padEnd(COL))}${desc}`;
+  const dim = (t: string): string => styleText('dim', t);
+  const section = (t: string): string => styleText(['cyan', 'bold'], t);
 
   const lines = [
     '',
-    `${bold('Filesystem MCP')} ${dim(`v${SERVER_VERSION}`)}`,
+    `${styleText('bold', 'Filesystem MCP')} ${dim(`v${SERVER_VERSION}`)}`,
     '',
     dim('Pass one or more directories to set the allowed access roots.'),
     '',
     section('Options:'),
-    ...OPTIONS_HELP.map(({ flags, desc }) => optRow(flags, desc)),
+    ...OPTIONS_HELP.map(({ flags, desc }) => row('green', flags, desc)),
     '',
     `${section('Environment variables:')} ${dim('(flags take precedence when both are set)')}`,
-    ...ENV_HELP.map(({ flags, desc }) => envRow(flags, desc)),
+    ...ENV_HELP.map(({ flags, desc }) => row('cyan', flags, desc)),
     '',
     section('Examples:'),
     ...EXAMPLES_HELP.map((ex) => `  ${dim(ex)}`),
@@ -187,6 +160,6 @@ export function printHelpAndExit(): never {
 }
 
 export function printVersionAndExit(): never {
-  process.stdout.write(`${cliFmt.cyan(SERVER_VERSION)}\n`);
+  process.stdout.write(`${styleText('cyan', SERVER_VERSION)}\n`);
   process.exit(0);
 }

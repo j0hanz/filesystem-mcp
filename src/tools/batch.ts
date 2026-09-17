@@ -1,7 +1,7 @@
-import { processInParallel } from '../core/concurrency.js';
-import { ErrorCode, FsError, Problem } from '../core/errors.js';
-import { PARALLEL_CONCURRENCY } from '../core/util.js';
-import type { ToolCtx } from './define.js';
+import { processInParallel } from '../core/concurrency.ts';
+import { ErrorCode, FsError, Problem } from '../core/errors.ts';
+import { PARALLEL_CONCURRENCY } from '../core/util.ts';
+import type { ToolCtx } from './define.ts';
 
 export type PerPathResult<T> = { path: string; value: T } | { path: string; error: Problem };
 

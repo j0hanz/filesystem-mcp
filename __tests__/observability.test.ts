@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { sanitizeLogField } from '../src/core/observability.js';
+import { sanitizeLogField } from '../src/core/observability.ts';
 
 describe('sanitizeLogField', () => {
   it('flattens control characters so a client value cannot forge a log line', () => {

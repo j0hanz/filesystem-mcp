@@ -6,8 +6,8 @@
 // glob.ts reach it through PathGuard.isSensitive, which delegates here.
 import { normalize, posix, sep } from 'node:path';
 
-import { cli } from './config.js';
-import { IS_WINDOWS, isAlpha, parseTrueEnvFlag, toPosixPath } from './primitives.js';
+import { cli } from './config.ts';
+import { IS_WINDOWS, isAlpha, parseTrueEnvFlag, toPosixPath } from './path-utils.ts';
 
 const CHAR_COLON = 58;
 
@@ -32,7 +32,6 @@ interface CompiledPatternSet {
 // (any run within a segment), '**' (any run of whole segments), '?' (one
 // char), '[...]' classes, and '{a,b}' alternation; everything else is
 // literal, and dot-leading segments match like any other.
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Character classes can carry '{', '}' and ',' as members, so every scanner
 // below must skip a class's interior. classEnd returns the index of the ']'
@@ -146,10 +145,10 @@ function globToRegExp(glob: string): RegExp {
           source += `[${negated ? '^' : ''}${body}]`;
           j = close;
         } else {
-          source += escapeRegExp(char);
+          source += RegExp.escape(char);
         }
       } else {
-        source += escapeRegExp(char);
+        source += RegExp.escape(char);
       }
     }
     if (!last) source += '/';

@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.js';
+import { processInParallel } from '../core/concurrency.ts';
 import {
   ErrorCode,
   FsError,
@@ -13,27 +13,26 @@ import {
   isNodeError,
   isNotFoundErrno,
   Problem,
-} from '../core/errors.js';
-import { joinRoster, pathLabel } from '../core/fmt.js';
-import type { FileType, GuardedFileSystem } from '../core/fs.js';
+} from '../core/errors.ts';
+import { joinRoster, pathLabel } from '../core/fmt.ts';
+import type { FileType, GuardedFileSystem } from '../core/fs.ts';
 import {
-  choiceInput,
   confirmKey,
   describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
-} from '../core/input-required.js';
-import { resolveEntryType } from '../core/primitives.js';
+} from '../core/input-required.ts';
+import { resolveEntryType } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
   OperationSummarySchema,
   PerFileErrorSchema,
   RequiredPath,
-} from '../core/schema.js';
-import { PARALLEL_CONCURRENCY } from '../core/util.js';
-import { isTotalFailure } from './batch.js';
-import type { ToolCtx } from './define.js';
-import { defineTool } from './define.js';
+} from '../core/schema.ts';
+import { PARALLEL_CONCURRENCY } from '../core/util.ts';
+import { isTotalFailure } from './batch.ts';
+import type { ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 const DeleteInputSchema = z.strictObject({
   paths: z
@@ -339,13 +338,11 @@ async function handleDelete(
       clientCapabilities: ctx.clientCapabilities,
       serverCtx: ctx.serverCtx,
       buildInputs: (ps) =>
-        ps.map((p, i) =>
-          choiceInput(
-            confirmKey(i),
-            `Permanently delete "${p}" and all its contents? This cannot be undone.`,
-            ['delete', 'skip'],
-          ),
-        ),
+        ps.map((p, i) => ({
+          key: confirmKey(i),
+          message: `Permanently delete "${p}" and all its contents? This cannot be undone.`,
+          choices: ['delete', 'skip'],
+        })),
     });
     if (round !== undefined) return round;
   }

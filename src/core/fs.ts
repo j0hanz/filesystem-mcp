@@ -19,21 +19,15 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
-import { withAbort } from './concurrency.js';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError, isNodeError } from './errors.js';
-import { detectMimeFromContent } from './mime.js';
-import { Logger } from './observability.js';
-import type { PathGuard } from './path.js';
-import type { EntryType as FileType } from './primitives.js';
-import type { ReadFileResult, ReadSpec } from './read.js';
-import {
-  assertFileStats,
-  createTooLargeError,
-  normalizeSpec,
-  readFileWithStats,
-  readNormalized,
-} from './read.js';
-import { getMaxTextFileSize } from './util.js';
+import { withAbort } from './concurrency.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError, isNodeError } from './errors.ts';
+import { detectMimeFromContent } from './mime.ts';
+import { Logger } from './observability.ts';
+import type { EntryType as FileType } from './path-utils.ts';
+import type { PathGuard } from './path.ts';
+import type { ReadFileResult, ReadSpec } from './read.ts';
+import { assertFileStats, createTooLargeError, readFileWithStats } from './read.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 export type { FileType };
 export type { Stats };
@@ -346,11 +340,10 @@ export class GuardedFileSystem {
   }
 
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
-    const normalized = normalizeSpec(spec);
+    spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    normalized.signal?.throwIfAborted();
-    const stats = await withAbort(fsStat(validPath), normalized.signal);
-    return readNormalized(filePath, validPath, stats, normalized);
+    const stats = await withAbort(fsStat(validPath), spec.signal);
+    return readFileWithStats(filePath, validPath, stats, spec);
   }
 
   async readEditableText(

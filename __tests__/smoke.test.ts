@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { normalizePath } from '../src/core/path-utils.js';
+import { normalizePath } from '../src/core/path-utils.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   cleanupTestRoot,
@@ -10,7 +10,7 @@ import {
   createTestRoot,
   firstTextBlock,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('Smoke Tests', () => {
   let tmpDir: string;

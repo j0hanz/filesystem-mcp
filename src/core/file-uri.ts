@@ -2,11 +2,11 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { basename } from 'node:path';
 
-import { detectMimeFromContent } from './mime.js';
-import { countLines } from './read.js';
-import type { FileKind } from './schema.js';
-import type { ResourceStore } from './store.js';
-import { getMaxTextFileSize } from './util.js';
+import { detectMimeFromContent } from './mime.ts';
+import { countLines } from './read.ts';
+import type { FileKind } from './schema.ts';
+import type { ResourceStore } from './store.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,
 // the path→URI encoder, the URI→path decoder, the link blocks built from them,

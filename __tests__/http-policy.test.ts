@@ -4,8 +4,8 @@ import { describe, it } from 'node:test';
 
 import type { Request, Response } from 'express';
 
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { splitCsvList } from '../src/core/util.js';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { splitCsvList } from '../src/core/util.ts';
 import {
   assertHttpBindingPolicy,
   assertHttpHostPolicy,
@@ -19,9 +19,9 @@ import {
   resolveAllowedHosts,
   resolveTrustProxySetting,
   validateBearerAuthorization,
-} from '../src/transport/http-policy.js';
-import { startHttpServer } from '../src/transport/http.js';
-import { cleanupTestRoot, createTestRoot } from './helpers.js';
+} from '../src/transport/http-policy.ts';
+import { startHttpServer } from '../src/transport/http.ts';
+import { cleanupTestRoot, createTestRoot } from './helpers.ts';
 
 interface MockResponse {
   statusCode?: number;

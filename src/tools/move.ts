@@ -5,7 +5,7 @@ import { basename, dirname, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.js';
+import { processInParallel } from '../core/concurrency.ts';
 import {
   ErrorCode,
   FsError,
@@ -13,26 +13,25 @@ import {
   isNodeError,
   Problem,
   rethrowIfAborted,
-} from '../core/errors.js';
-import { joinRoster, pathLabel } from '../core/fmt.js';
-import { destExists } from '../core/fs.js';
-import type { GuardedFileSystem } from '../core/fs.js';
+} from '../core/errors.ts';
+import { joinRoster, pathLabel } from '../core/fmt.ts';
+import { destExists } from '../core/fs.ts';
+import type { GuardedFileSystem } from '../core/fs.ts';
 import {
-  choiceInput,
   confirmKey,
   describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
-} from '../core/input-required.js';
+} from '../core/input-required.ts';
 import {
   isPathInsideDirectory,
   isSamePath,
   normalizeCaseForComparison,
-} from '../core/path-utils.js';
-import { defaultFalseBoolean, PerFileErrorSchema, RequiredPath } from '../core/schema.js';
-import { PARALLEL_CONCURRENCY } from '../core/util.js';
-import type { ToolCtx } from './define.js';
-import { defineTool } from './define.js';
+} from '../core/path-utils.ts';
+import { defaultFalseBoolean, PerFileErrorSchema, RequiredPath } from '../core/schema.ts';
+import { PARALLEL_CONCURRENCY } from '../core/util.ts';
+import type { ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 const MoveItemSchema = z.strictObject({
   source: RequiredPath.describe('Path of the file or directory to move or copy'),
@@ -317,15 +316,14 @@ async function runTransfers(
       clientCapabilities: ctx.clientCapabilities,
       serverCtx: ctx.serverCtx,
       buildInputs: (dests) =>
-        dests.map((dest, i) =>
-          choiceInput(
-            confirmKey(i),
+        dests.map((dest, i) => ({
+          key: confirmKey(i),
+          message:
             op === 'move'
               ? `"${dest}" already exists. Overwrite it?`
               : `Destination "${dest}" already exists. Overwrite it?`,
-            ['overwrite', 'skip'],
-          ),
-        ),
+          choices: ['overwrite', 'skip'],
+        })),
     });
     if (round !== undefined) return round;
   }

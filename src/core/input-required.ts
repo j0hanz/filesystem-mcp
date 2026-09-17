@@ -29,8 +29,8 @@ import { randomBytes } from 'node:crypto';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode, FsError } from './errors.js';
-import { Logger } from './observability.js';
+import { ErrorCode, FsError } from './errors.ts';
+import { Logger } from './observability.ts';
 
 /** The destructive operation a pending confirmation authorizes. */
 type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
@@ -47,7 +47,7 @@ export interface PendingState {
 }
 
 /** One embedded form-mode confirmation, keyed within the call. */
-interface PendingInput {
+export interface PendingInput {
   /** Server-assigned key, unique within the `tools/call`. */
   readonly key: string;
   /** Human-readable prompt for this item. */
@@ -118,38 +118,6 @@ export const requestStateCodec: RequestStateCodec<PendingState> = {
   mint: (payload, ctx) => getRequestStateCodec().mint(payload, ctx),
   verify: (state, ctx) => getRequestStateCodec().verify(state, ctx),
 };
-
-/**
- * Build a single-select enum confirmation input. The form renders a `choice`
- * field whose options are the offered `choices`; the caller reads the
- * selection with `readAcceptedChoice`.
- */
-export function choiceInput(
-  key: string,
-  message: string,
-  choices: readonly string[],
-): PendingInput {
-  return { key, message, choices };
-}
-
-/**
- * Build a multi-select enum confirmation input. Like `choiceInput` but the
- * form renders `choice` as a string array (`MultiSelectEnumSchema` shape), so
- * the client may accept a subset; the caller reads the accepted set with
- * `readAcceptedMultiChoice`.
- */
-export function multiSelectInput(
-  key: string,
-  message: string,
-  choices: readonly string[],
-): PendingInput {
-  return {
-    key,
-    message,
-    choices,
-    multi: true,
-  };
-}
 
 // Response shapes handed to the SDK's schema-aware `acceptedContent` overload:
 // it returns `undefined` for a missing key, a decline/cancel, a non-elicit

@@ -4,33 +4,32 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.js';
-import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from '../core/errors.js';
+import { processInParallel } from '../core/concurrency.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from '../core/errors.ts';
 import {
   buildFileResourceLink,
   buildFileResourceUri,
   buildWrittenFileMeta,
   type WrittenFileMeta,
-} from '../core/file-uri.js';
-import { countFileLines, destExists, type Stats } from '../core/fs.js';
+} from '../core/file-uri.ts';
+import { countFileLines, destExists, type Stats } from '../core/fs.ts';
 import {
-  choiceInput,
   confirmKey,
   describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
-} from '../core/input-required.js';
-import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.js';
+} from '../core/input-required.ts';
+import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.ts';
 import {
   FileKind,
   IsoDateTime,
   NonNegInt,
   PathFailureSchema,
   RequiredPath,
-} from '../core/schema.js';
-import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.js';
-import { isTotalFailure, runOverPaths } from './batch.js';
-import { defineTool } from './define.js';
+} from '../core/schema.ts';
+import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
+import { defineTool } from './define.ts';
 
 const EPOCH = new Date(0);
 
@@ -152,12 +151,11 @@ export const CREATE = defineTool({
         clientCapabilities: ctx.clientCapabilities,
         serverCtx: ctx.serverCtx,
         buildInputs: (paths) =>
-          paths.map((target, i) =>
-            choiceInput(confirmKey(i), `"${target}" already exists. Overwrite it?`, [
-              'overwrite',
-              'skip',
-            ]),
-          ),
+          paths.map((target, i) => ({
+            key: confirmKey(i),
+            message: `"${target}" already exists. Overwrite it?`,
+            choices: ['overwrite', 'skip'],
+          })),
       });
       if (round !== undefined) return round;
     }

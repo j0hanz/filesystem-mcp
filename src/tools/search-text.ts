@@ -3,64 +3,42 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { SearchStoppedReasonSchema } from '../core/concurrency.js';
-import { pageQueryKey, paginate } from '../core/cursor.js';
-import { ErrorCode, FsError } from '../core/errors.js';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
-import { Logger } from '../core/observability.js';
-import { toPosixRelative } from '../core/path.js';
+import { SearchStoppedReasonSchema } from '../core/concurrency.ts';
+import { paginate } from '../core/cursor.ts';
+import { ErrorCode, FsError } from '../core/errors.ts';
+import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
+import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
-  includeHiddenField,
-  includeIgnoredField,
+  IncludeHidden,
+  IncludeIgnored,
   isBlank,
-  maxDepthField,
+  MaxDepth,
   NextCursorSchema,
   NonNegInt,
   OptionalPath,
   PositiveInt,
   SafeGlobPattern,
-} from '../core/schema.js';
-import type { SearchContentOptions } from '../core/search.js';
-import { searchContent } from '../core/search.js';
-import type { JsonResourceResult } from '../core/store.js';
-import { putJsonResource } from '../core/store.js';
+} from '../core/schema.ts';
+import type { SearchContentOptions } from '../core/search.ts';
+import { searchContent } from '../core/search.ts';
+import type { JsonResourceResult } from '../core/store.ts';
+import { putJsonResource } from '../core/store.ts';
 import {
   DEFAULT_SEARCH_CONTENT_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
   MAX_SEARCH_RESULTS,
-} from '../core/util.js';
-import { defineTool, type ToolCtx } from './define.js';
-
-/**
- * `FS_MAX_INLINE_MATCHES` used to cap how many matches a page showed inline
- * and, past it, push the rest into the resource store. `maxResults` is the one
- * page size now, and the full list is externalized whenever a response is
- * incomplete, so the variable does nothing. It is still read so an operator who
- * set it hears why it stopped mattering; the read goes at the next major.
- */
-if (process.env['FS_MAX_INLINE_MATCHES'] !== undefined) {
-  Logger.warn(
-    'FS_MAX_INLINE_MATCHES is deprecated and ignored: maxResults sets the search_text page size. It will be removed in the next major release.',
-  );
-}
+} from '../core/util.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 // Type Definitions
 type SearchInput = z.infer<typeof GrepInputSchema>;
 type SearchOutput = z.infer<typeof GrepOutputSchema>;
 type SearchMatchPayload = NonNullable<SearchOutput['matches']>[number];
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
-
-interface SearchContentPageMetadata {
-  readonly totalMatches: number;
-  readonly filesScanned: number;
-  readonly filesMatched?: number;
-  readonly truncated: boolean;
-  readonly stoppedReason?: SearchOutput['stoppedReason'];
-  readonly skippedInaccessible?: number;
-  readonly skippedTooLarge?: number;
-}
+/** The engine's own summary is the page metadata; nothing is copied out of it. */
+type SearchContentPageMetadata = SearchResultValue['summary'];
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
@@ -81,8 +59,8 @@ const GrepInputSchema = z.strictObject({
     )
     .meta({ examples: ['TODO', 'function\\s+(\\w+)', 'import.*from'] }),
   isRegex: defaultFalseBoolean('Treat searchPattern as a regex (default: literal text match)'),
-  includeHidden: includeHiddenField(),
-  includeIgnored: includeIgnoredField(),
+  includeHidden: IncludeHidden,
+  includeIgnored: IncludeIgnored,
   caseSensitive: defaultFalseBoolean('Enable case-sensitive matching (default: case-insensitive)'),
   maxResults: z
     .uint32()
@@ -99,7 +77,7 @@ const GrepInputSchema = z.strictObject({
     .describe(
       'Lines of context to return either side of each match, like grep -C (default: 0, max: 10)',
     ),
-  maxDepth: maxDepthField(),
+  maxDepth: MaxDepth,
   cursor: CursorSchema,
 });
 
@@ -209,7 +187,7 @@ function searchContentOutput(
 ): SearchOutput {
   return {
     matches: [...matches],
-    totalMatches: metadata.totalMatches,
+    totalMatches: metadata.matchingLines,
     filesScanned: metadata.filesScanned,
     ...(metadata.filesMatched ? { filesMatched: metadata.filesMatched } : {}),
     ...(metadata.truncated ? { truncated: true } : {}),
@@ -302,7 +280,7 @@ async function handleSearchContent(
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = pageQueryKey({
+  const queryKey = JSON.stringify({
     method: 'search_text',
     path: requestedPath,
     pattern: args.pattern,
@@ -331,24 +309,9 @@ async function handleSearchContent(
         ctx.fs.pathGuard,
       );
 
-      const items = buildSortedPayloads(result);
       return {
-        items,
-        metadata: {
-          totalMatches: result.summary.matchingLines,
-          filesScanned: result.summary.filesScanned,
-          ...(result.summary.filesMatched ? { filesMatched: result.summary.filesMatched } : {}),
-          truncated: result.summary.truncated,
-          ...(result.summary.stoppedReason !== undefined
-            ? { stoppedReason: result.summary.stoppedReason }
-            : {}),
-          ...(result.summary.skippedInaccessible
-            ? { skippedInaccessible: result.summary.skippedInaccessible }
-            : {}),
-          ...(result.summary.skippedTooLarge
-            ? { skippedTooLarge: result.summary.skippedTooLarge }
-            : {}),
-        },
+        items: buildSortedPayloads(result),
+        metadata: result.summary,
         truncated: result.summary.truncated,
       };
     },
@@ -370,7 +333,7 @@ async function handleSearchContent(
       paged.resource?.entry.uri,
     ),
     offset: paged.offset,
-    total: paged.metadata.totalMatches,
+    total: paged.metadata.matchingLines,
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }

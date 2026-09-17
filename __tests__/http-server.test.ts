@@ -7,8 +7,8 @@ import { type AddressInfo } from 'node:net';
 import { json } from 'node:stream/consumers';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { MAX_WATCHERS } from '../src/core/watcher-registry.js';
-import { startHttpServer } from '../src/transport.js';
+import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
+import { startHttpServer } from '../src/transport.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
@@ -18,7 +18,7 @@ import {
   type HttpTestContext,
   TEST_API_KEY,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 async function postWithoutEndingUpload(
   url: URL,
@@ -211,16 +211,18 @@ describe('Real HTTP Server integration', () => {
   it('externalized tool result is readable back over HTTP', async () => {
     const client = await http.makeClient('result-roundtrip');
     try {
-      const fileA = await writeTestFile(tmpDir, 'diff-a.txt', 'body a\n');
-      const fileB = await writeTestFile(tmpDir, 'diff-b.txt', 'body b\n');
+      // Two entries and a one-entry page: an incomplete first page externalizes
+      // the full list.
+      await writeTestFile(tmpDir, 'page-a.txt', 'body a\n');
+      await writeTestFile(tmpDir, 'page-b.txt', 'body b\n');
       const res = (await client.callTool({
-        name: 'diff',
-        arguments: { a: fileA, b: fileB },
+        name: 'list',
+        arguments: { path: tmpDir, maxEntries: 1 },
       })) as {
         _meta?: { resourceUri?: string };
       };
       const uri = res._meta?.resourceUri;
-      assert.ok(uri, 'diff must externalize a result uri');
+      assert.ok(uri, 'an incomplete list page must externalize a result uri');
       const read = await client.readResource({ uri });
       assert.ok(read.contents.length > 0, 'the externalized result must be readable');
     } finally {

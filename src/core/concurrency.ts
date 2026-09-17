@@ -1,7 +1,7 @@
 import * as z from 'zod/v4';
 
-import { normalizeUnknownError } from './errors.js';
-import { PARALLEL_CONCURRENCY } from './util.js';
+import { normalizeUnknownError } from './errors.ts';
+import { PARALLEL_CONCURRENCY } from './util.ts';
 
 export type StoppedReason = 'maxResults' | 'maxFiles' | 'timeout';
 
@@ -14,35 +14,6 @@ export const StoppedReasonSchema = z.enum(['maxResults', 'maxFiles', 'timeout'])
  * both tools' own descriptions.
  */
 export const SearchStoppedReasonSchema = z.enum(['maxResults', 'timeout']).optional();
-
-/**
- * Accumulates why an enumeration stopped early. maxResults wins over maxFiles
- * wins over timeout (the most specific cap is the definite cause even if the
- * abort also fired on the same iteration). Call `resolve()` once at the end.
- */
-export class StopReasonTracker {
-  #reason?: StoppedReason;
-
-  hitMaxResults(): void {
-    this.#reason = 'maxResults';
-  }
-
-  hitMaxFiles(): void {
-    if (this.#reason !== 'maxResults') this.#reason = 'maxFiles';
-  }
-
-  hitAbort(): void {
-    this.#reason ??= 'timeout';
-  }
-
-  get truncated(): boolean {
-    return this.#reason !== undefined;
-  }
-
-  resolve(): StoppedReason | undefined {
-    return this.#reason;
-  }
-}
 
 interface ParallelResult<R> {
   results: { index: number; value: R }[];
@@ -127,8 +98,9 @@ export async function processInParallel<T, R>(
  *
  * `maxEntries` caps how many entries are dispatched (maxFiles); `shouldStop`
  * lets the caller stop on its own accumulating result count (maxResults). Both
- * are checked before dispatch, so the returned tracker names exactly one
- * reason — the loop breaks on the first that fires.
+ * are checked before dispatch, so the returned reason is exactly one — the
+ * loop breaks on the first that fires. `undefined` means every entry was
+ * dispatched.
  */
 export async function processEntriesConcurrently(
   entries: AsyncIterable<{ path: string }> | Iterable<{ path: string }>,
@@ -141,10 +113,10 @@ export async function processEntriesConcurrently(
     onError?: (entryPath: string, err: unknown) => void;
     runEntry: (entryPath: string) => Promise<void>;
   },
-): Promise<StopReasonTracker> {
+): Promise<StoppedReason | undefined> {
   const pending = new Set<Promise<void>>();
   const { signal, concurrency, maxEntries, shouldStop, onEntry, onError, runEntry } = options;
-  const tracker = new StopReasonTracker();
+  let stoppedReason: StoppedReason | undefined;
   let dispatched = 0;
 
   const waitForSlot = async (): Promise<void> => {
@@ -156,17 +128,17 @@ export async function processEntriesConcurrently(
     // The signal is cancellation OR the caller's timeout: stop dispatching and
     // let the caller report the run as incomplete rather than as a full sweep.
     if (signal?.aborted) {
-      tracker.hitAbort();
+      stoppedReason = 'timeout';
       break;
     }
     if (maxEntries !== undefined && dispatched >= maxEntries) {
-      tracker.hitMaxFiles();
+      stoppedReason = 'maxFiles';
       break;
     }
     // Check the result cap before waiting for a slot so an in-flight task that
     // already crossed the cap stops dispatch without an extra wait...
     if (shouldStop?.()) {
-      tracker.hitMaxResults();
+      stoppedReason = 'maxResults';
       break;
     }
     await waitForSlot();
@@ -174,7 +146,7 @@ export async function processEntriesConcurrently(
     // cap can still be exceeded by at most `concurrency - 1` already-dispatched
     // tasks that are mid-flight; that overrun is inherent to concurrent dispatch.
     if (shouldStop?.()) {
-      tracker.hitMaxResults();
+      stoppedReason = 'maxResults';
       break;
     }
     onEntry();
@@ -198,7 +170,7 @@ export async function processEntriesConcurrently(
     await Promise.allSettled([...pending]);
   }
 
-  return tracker;
+  return stoppedReason;
 }
 
 export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

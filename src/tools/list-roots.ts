@@ -1,8 +1,8 @@
 import * as z from 'zod/v4';
 
-import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../core/config.js';
-import { ErrorCode } from '../core/errors.js';
-import { defineTool } from './define.js';
+import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../core/config.ts';
+import { ErrorCode } from '../core/errors.ts';
+import { defineTool } from './define.ts';
 
 const RootsInputSchema = z.strictObject({});
 

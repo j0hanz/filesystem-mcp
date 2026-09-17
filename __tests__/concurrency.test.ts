@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { processInParallel } from '../src/core/concurrency.js';
+import { processInParallel } from '../src/core/concurrency.ts';
 
 describe('Concurrency Tests', () => {
   it('TC-CONC-001: an abort after every item ran still returns the results', async () => {

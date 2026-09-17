@@ -2,10 +2,9 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 
-import { formatUnknownErrorMessage } from './errors.js';
-import { Logger } from './observability.js';
-import { isPathWithinDirectories, isSamePath, normalizePath } from './path-utils.js';
-import { splitDirList } from './primitives.js';
+import { formatUnknownErrorMessage } from './errors.ts';
+import { Logger } from './observability.ts';
+import { isPathWithinDirectories, isSamePath, normalizePath, splitDirList } from './path-utils.ts';
 
 // Resolve a configured env-var directory list (FS_ALLOWED_DIRS / FS_ROOT_BOUNDARY)
 // into normalized, verified directories. Each entry is stat'd; a non-directory

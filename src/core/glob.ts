@@ -4,12 +4,11 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'n
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
-import { processInParallel } from './concurrency.js';
-import { formatUnknownErrorMessage } from './errors.js';
-import { Logger } from './observability.js';
-import { isWindowsDriveRelativePath } from './path-utils.js';
-import { type DirentLike, toPosixPath } from './primitives.js';
-import type { EntryType } from './primitives.js';
+import { processInParallel } from './concurrency.ts';
+import { formatUnknownErrorMessage } from './errors.ts';
+import { Logger } from './observability.ts';
+import type { DirentLike, EntryType } from './path-utils.ts';
+import { isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
 
 export type { EntryType };
 
@@ -65,7 +64,8 @@ class GitignoreManager {
     this.matchers.set(dir, matcher);
   }
 
-  static async load(root: string, signal?: AbortSignal): Promise<GitignoreManager> {
+  /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
+  static async load(root: string, signal?: AbortSignal): Promise<GitignoreManager | null> {
     const manager = new GitignoreManager();
     try {
       const gitignorePaths: string[] = [];
@@ -91,11 +91,7 @@ class GitignoreManager {
         `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
       );
     }
-    return manager;
-  }
-
-  size(): number {
-    return this.matchers.size;
+    return manager.matchers.size === 0 ? null : manager;
   }
 
   isIgnored(relativePath: string, isDirectory: boolean): boolean {
@@ -162,17 +158,6 @@ class GitignoreManager {
 
     return ignored;
   }
-}
-
-async function loadRootGitignore(
-  root: string,
-  signal?: AbortSignal,
-): Promise<GitignoreManager | null> {
-  const manager = await GitignoreManager.load(root, signal);
-  if (manager.size() === 0) {
-    return null;
-  }
-  return manager;
 }
 
 interface GlobDirentLike extends DirentLike {
@@ -408,10 +393,9 @@ async function* processGlobPattern(
 }
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
-  let gitignoreMatcher: GitignoreManager | null = null;
-  if (options.skipIgnored) {
-    gitignoreMatcher = await loadRootGitignore(options.cwd, options.signal);
-  }
+  const gitignoreMatcher = options.skipIgnored
+    ? await GitignoreManager.load(options.cwd, options.signal)
+    : null;
 
   const plan = normalizeGlobOptions(options);
   const seen = new Set<string>();

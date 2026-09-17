@@ -7,17 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.js';
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { buildFileResourceUri, encodeFileUriPath, extractPath } from '../src/core/file-uri.js';
-import { isSamePath } from '../src/core/path-utils.js';
-import { PathGuard } from '../src/core/path.js';
-import { ResourceStore } from '../src/core/store.js';
-import { createWatcherRegistry } from '../src/core/watcher-registry.js';
-import { buildSectionsRecord, INSTRUCTIONS_URI, renderSections } from '../src/instructions.js';
-import { getResourceContracts, registerResources } from '../src/resources.js';
-import { createServer } from '../src/server.js';
-import { MUTATING_TOOL_NAMES } from '../src/tools/index.js';
+import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { buildFileResourceUri, encodeFileUriPath, extractPath } from '../src/core/file-uri.ts';
+import { isSamePath } from '../src/core/path-utils.ts';
+import { PathGuard } from '../src/core/path.ts';
+import { ResourceStore } from '../src/core/store.ts';
+import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
+import { buildSectionsRecord, INSTRUCTIONS_URI, renderSections } from '../src/instructions.ts';
+import { getResourceContracts, registerResources } from '../src/resources.ts';
+import { createServer } from '../src/server.ts';
+import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -25,7 +25,7 @@ import {
   makeGuard,
   waitFor,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 const dummyContext = { sessionId: 'test-session' } as unknown as ServerContext;
 

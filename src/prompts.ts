@@ -3,7 +3,7 @@ import { completable } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
 
-import { buildSectionsRecord, INSTRUCTIONS_SUMMARY, renderSections } from './instructions.js';
+import { buildSectionsRecord, INSTRUCTIONS_SUMMARY, renderSections } from './instructions.ts';
 
 // --- Types ---
 

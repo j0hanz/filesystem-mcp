@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { buildFileResourceUri } from '../src/core/file-uri.js';
-import { MAX_WATCHERS } from '../src/core/watcher-registry.js';
-import { listenSubscriptionUris } from '../src/transport/shared.js';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
+import { listenSubscriptionUris } from '../src/transport/shared.ts';
 import {
   bootHttpTest,
   cleanupTestRoot,
@@ -20,7 +20,7 @@ import {
   TEST_API_KEY,
   waitFor,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('listenSubscriptionUris', () => {
   it('de-duplicates repeated URIs so attach and release stay balanced', () => {
@@ -382,8 +382,10 @@ describe('HTTP resourcesListChanged listen filter', () => {
   });
 
   it('an externalized result invalidates resources/list and appears after refresh', async () => {
-    const fileA = await writeTestFile(rootDir, 'diff-a.txt', 'body a\n');
-    const fileB = await writeTestFile(rootDir, 'diff-b.txt', 'body b\n');
+    // Two entries and a one-entry page: an incomplete first page externalizes
+    // the full list.
+    await writeTestFile(rootDir, 'page-a.txt', 'body a\n');
+    await writeTestFile(rootDir, 'page-b.txt', 'body b\n');
     const before = await client.listResources();
     let received = false;
     client.setNotificationHandler('notifications/resources/list_changed', () => {
@@ -393,11 +395,11 @@ describe('HTTP resourcesListChanged listen filter', () => {
 
     try {
       const result = (await client.callTool({
-        name: 'diff',
-        arguments: { a: fileA, b: fileB },
+        name: 'list',
+        arguments: { path: rootDir, maxEntries: 1 },
       })) as { _meta?: { resourceUri?: string } };
       const uri = result._meta?.resourceUri;
-      assert.ok(uri, 'diff must externalize a result resource');
+      assert.ok(uri, 'an incomplete list page must externalize a result resource');
 
       await waitFor(() => received);
       assert.strictEqual(received, true, 'result insertion must emit resources/list_changed');

@@ -5,8 +5,8 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { buildFileResourceUri } from '../src/core/file-uri.js';
-import { INSTRUCTIONS_URI } from '../src/instructions.js';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { INSTRUCTIONS_URI } from '../src/instructions.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   cleanupTestRoot,
@@ -16,7 +16,7 @@ import {
   firstTextBlock,
   type TestHttpContext,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('HTTP In-Process Transport (createMcpHandler / handler.fetch)', () => {
   let tmpDir: string;

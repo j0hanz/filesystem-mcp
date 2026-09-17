@@ -1,22 +1,21 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 
-import type { PageSnapshotStore } from '../core/page-store.js';
-import type { PathGuard } from '../core/path.js';
-import type { ResourceStore } from '../core/store.js';
-import { CREATE } from './create.js';
-import type { DefinedTool } from './define.js';
-import { DELETE } from './delete.js';
-import { DIFF } from './diff.js';
-import { EDIT } from './edit.js';
-import { FIND_FILES } from './find-files.js';
-import { LIST_ROOTS } from './list-roots.js';
-import { LIST } from './list.js';
-import { MOVE } from './move.js';
-import { PATCH } from './patch.js';
-import { READ } from './read.js';
-import { REPLACE_TEXT } from './replace-text.js';
-import { SEARCH_TEXT } from './search-text.js';
-import { STAT } from './stat.js';
+import type { PathGuard } from '../core/path.ts';
+import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { CREATE } from './create.ts';
+import type { DefinedTool } from './define.ts';
+import { DELETE } from './delete.ts';
+import { DIFF } from './diff.ts';
+import { EDIT } from './edit.ts';
+import { FIND_FILES } from './find-files.ts';
+import { LIST_ROOTS } from './list-roots.ts';
+import { LIST } from './list.ts';
+import { MOVE } from './move.ts';
+import { PATCH } from './patch.ts';
+import { READ } from './read.ts';
+import { REPLACE_TEXT } from './replace-text.ts';
+import { SEARCH_TEXT } from './search-text.ts';
+import { STAT } from './stat.ts';
 
 export const ALL_TOOLS = [
   CREATE,

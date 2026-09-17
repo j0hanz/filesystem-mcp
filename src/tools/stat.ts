@@ -1,14 +1,12 @@
-import type { ContentBlock } from '@modelcontextprotocol/server';
-
 import { parse } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode, rethrowIfAborted } from '../core/errors.js';
-import type { GuardedFileSystem, Stats } from '../core/fs.js';
-import { isHidden } from '../core/fs.js';
-import { detectMimeType } from '../core/mime.js';
-import { resolveEntryType } from '../core/primitives.js';
+import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
+import type { GuardedFileSystem, Stats } from '../core/fs.ts';
+import { isHidden } from '../core/fs.ts';
+import { detectMimeType } from '../core/mime.ts';
+import { resolveEntryType } from '../core/path-utils.ts';
 import {
   FileInfoSchema,
   NonNegInt,
@@ -16,13 +14,12 @@ import {
   PerFileErrorSchema,
   singleOrBatchAccessPaths,
   singleOrBatchPathsInput,
-} from '../core/schema.js';
-import { putJsonResource } from '../core/store.js';
-import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.js';
-import type { PerPathResult } from './batch.js';
-import { isTotalFailure, runOverPaths } from './batch.js';
-import type { ToolCtx } from './define.js';
-import { defineTool } from './define.js';
+} from '../core/schema.ts';
+import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
+import type { PerPathResult } from './batch.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
+import type { ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 type FileInfo = z.infer<typeof FileInfoSchema>;
 
@@ -41,12 +38,6 @@ const StatOutputSchema = z.strictObject({
   summary: OperationSummarySchema,
   fileCount: NonNegInt.optional().describe('Number of regular files in the results'),
   dirCount: NonNegInt.optional().describe('Number of directories in the results'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'URI to aggregated stats.json in the resource store (present when resource store is available)',
-    ),
 });
 
 function getPermissions(mode: number): string {
@@ -195,34 +186,14 @@ export const STAT = defineTool({
     );
 
     const { fileCount, dirCount } = classifyTypeCounts(batch.results);
-    const perPathPayload = batch.results;
-
-    let resourceUri: string | undefined;
-    const resources: ContentBlock[] = [];
-    if (ctx.resourceStore && batch.summary.total > 1) {
-      const { entry, link } = putJsonResource(
-        ctx.resourceStore,
-        `${String(batch.summary.total)} paths`,
-        perPathPayload,
-      );
-      resourceUri = entry.uri;
-      resources.push(link);
-    }
 
     // No `text` on purpose. The one-liner this used to build (`AGENTS.md: file,
     // 751 B`) dropped tokenEstimate, modified, mimeType and isHidden — the very
     // fields a caller asks `stat` for. Supplying no text makes this a data tool,
     // so `define.ts` renders the JSON and keeps it in `structuredContent`.
     return {
-      structured: {
-        results: perPathPayload,
-        summary: batch.summary,
-        fileCount,
-        dirCount,
-        ...(resourceUri ? { resourceUri } : {}),
-      },
+      structured: { results: batch.results, summary: batch.summary, fileCount, dirCount },
       isError: isTotalFailure(batch.summary),
-      ...(resources.length > 0 ? { resources } : {}),
     };
   },
 });

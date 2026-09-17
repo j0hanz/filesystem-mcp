@@ -6,10 +6,10 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
-import { ErrorCode, FsError } from '../core/errors.js';
-import { Logger } from '../core/observability.js';
-import { splitCsvList } from '../core/util.js';
-import { jsonRpcError } from './shared.js';
+import { ErrorCode, FsError } from '../core/errors.ts';
+import { Logger } from '../core/observability.ts';
+import { splitCsvList } from '../core/util.ts';
+import { jsonRpcError } from './shared.ts';
 
 const MAX_BEARER_TOKEN_LENGTH = 4096;
 

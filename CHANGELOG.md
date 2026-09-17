@@ -19,6 +19,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   echoed under another method or by another caller is refused with the SDK's
   `-32602 Invalid or expired requestState`. A well-behaved client sees no
   change: it echoes the token on the same connection it received it on.
+- **`tools/list` publishes the SDK's own schema conversion.** Each tool's
+  `inputSchema` is now the Zod schema handed straight to `registerTool`, so the
+  wire copy carries the `$schema` key and Zod's integer bounds the server used
+  to strip. About 1.1 kB more per session start; validation, defaults and
+  error messages are unchanged.
+- **`--print-config` always prints JSON.** The coloured table and the `--json`
+  switch that selected between the two are gone.
+- **`diff` and `stat` no longer externalize their result.** Both carried the
+  whole payload inline already; the `resourceUri` field and the
+  `resource_link` block that pointed at a duplicate store entry are dropped.
+- **Path completion is uncached.** The 100 ms result cache in front of
+  `completion/complete` is gone; a completion is one directory read.
+
+### Removed
+
+- The `--safe` alias for `--read-only`.
+- `FS_MAX_INLINE_MATCHES`, deprecated in 2.2.0 and ignored since.
+- `FS_KEEPALIVE_TIMEOUT_MS`, `FS_MAX_REQUEST_BYTES`, `FS_MAX_READ_MANY_BYTES`
+  and `FS_SEARCH_TIMEOUT_MS`. Their defaults (5000 ms, 4 MiB, 512 KiB, 5000 ms)
+  are now constants; `FS_MAX_WATCHERS` and `FS_RATE_LIMIT_RPM` stay.
+- `tsx` as a development dependency: tests and the stdio harness run on
+  Node 24's native type stripping.
 
 ## [2.3.0] - 2026-09-16
 

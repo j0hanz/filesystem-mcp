@@ -44,10 +44,8 @@ export const Problem = {
     build(ErrorCode.INVALID_INPUT, msg, o),
   accessDenied: (msg: string, o?: ProblemFactoryOptions): Problem =>
     build(ErrorCode.ACCESS_DENIED, msg, o),
-  timeout: (msg: string, o?: ProblemFactoryOptions): Problem => build(ErrorCode.TIMEOUT, msg, o),
   cancelled: (msg: string, o?: ProblemFactoryOptions): Problem =>
     build(ErrorCode.CANCELLED, msg, o),
-  unknown: (msg: string, o?: ProblemFactoryOptions): Problem => build(ErrorCode.UNKNOWN, msg, o),
   fromUnknown(error: unknown, defaultCode: ErrorCode, path?: string): Problem {
     const problem = classify(error);
     const shouldOverride =
@@ -150,22 +148,17 @@ function classifyCauseChain(error: unknown): Problem {
   }
 
   if (aborted) return Problem.cancelled(message);
-  if (timedOut) return Problem.timeout(message);
+  if (timedOut) return build(ErrorCode.TIMEOUT, message);
   if (errno !== undefined) {
     return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, {
       ...(errno.path !== undefined ? { path: errno.path } : {}),
     });
   }
-  return Problem.unknown(message);
+  return build(ErrorCode.UNKNOWN, message);
 }
 
 export function isFsError(error: unknown): error is FsError {
-  if (!(error instanceof Error) || error.name !== 'FsError') return false;
-  if (!('problem' in error)) return false;
-  const p = (error as { problem?: unknown }).problem;
-  if (p === null || typeof p !== 'object') return false;
-  const c = p as Record<string, unknown>;
-  return typeof c['code'] === 'string' && typeof c['message'] === 'string';
+  return error instanceof FsError;
 }
 
 /** FsError traces to a caller-supplied argument; anything else is server-side. */
@@ -175,17 +168,17 @@ export function fsErrorCode(error: unknown): ProtocolErrorCode {
 
 function classify(error: unknown): Problem {
   if (error === null || error === undefined) {
-    return Problem.unknown('Unknown error');
+    return build(ErrorCode.UNKNOWN, 'Unknown error');
   }
   if (isFsError(error)) return error.problem;
   // No `ZodError` branch, deliberately. Tool arguments are validated by
   // `safeParse` inside the SDK's validator seam (tools/define.ts), which never
   // throws — it hands back `z.prettifyError`'s string — and nothing in `src/`
   // calls `.parse()`. A ZodError reaching here would fall through to
-  // `Problem.unknown` with Zod's raw JSON-dump `.message`, so if a `.parse()`
+  // UNKNOWN with Zod's raw JSON-dump `.message`, so if a `.parse()`
   // is ever added, add the branch back with it rather than discovering this.
   if (!(error instanceof Error)) {
-    return Problem.unknown(typeof error === 'string' ? error : '[non-Error thrown]');
+    return build(ErrorCode.UNKNOWN, typeof error === 'string' ? error : '[non-Error thrown]');
   }
   return classifyCauseChain(error);
 }
@@ -267,7 +260,6 @@ export class FsError extends Error {
       ...(suggestion !== undefined ? { suggestion } : {}),
     };
     this.name = 'FsError';
-    Object.setPrototypeOf(this, FsError.prototype);
   }
 
   get code(): ErrorCode {

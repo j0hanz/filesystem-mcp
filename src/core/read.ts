@@ -4,11 +4,11 @@ import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
-import { withAbort } from './concurrency.js';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.js';
-import { isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.js';
-import { Logger } from './observability.js';
-import { getMaxTextFileSize } from './util.js';
+import { withAbort } from './concurrency.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.ts';
+import { isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
+import { Logger } from './observability.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
@@ -71,16 +71,10 @@ export type ReadSpec =
   | { kind: 'tail'; lines: number; signal?: AbortSignal }
   | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
 
-interface NormalizedBase {
+interface ReadOptions {
   maxSize: number;
   signal?: AbortSignal;
 }
-
-type NormalizedSpec =
-  | (NormalizedBase & { kind: 'full' })
-  | (NormalizedBase & { kind: 'head'; lines: number })
-  | (NormalizedBase & { kind: 'tail'; lines: number })
-  | (NormalizedBase & { kind: 'range'; start: number; end?: number });
 
 interface PartialReadResult {
   content: string;
@@ -99,37 +93,6 @@ export interface ReadFileResult {
   endLine?: number;
   linesRead?: number;
   hasMoreLines?: boolean;
-}
-
-function buildBaseOptions(spec: ReadSpec): NormalizedBase {
-  return {
-    maxSize: getMaxTextFileSize(),
-    ...(spec.signal ? { signal: spec.signal } : {}),
-  };
-}
-
-export function normalizeSpec(spec: ReadSpec): NormalizedSpec {
-  const base = buildBaseOptions(spec);
-  spec.signal?.throwIfAborted();
-
-  switch (spec.kind) {
-    case 'head':
-    case 'tail':
-      return { ...base, kind: spec.kind, lines: spec.lines };
-    case 'range':
-      return {
-        ...base,
-        kind: 'range',
-        start: spec.start,
-        ...(spec.end !== undefined ? { end: spec.end } : {}),
-      };
-    case 'full':
-      return { ...base, kind: 'full' };
-    default: {
-      const _exhaustive: never = spec;
-      return _exhaustive;
-    }
-  }
 }
 
 export function createTooLargeError(
@@ -223,7 +186,7 @@ function stripCarriageReturn(line: string): string {
  */
 async function* readLinesBounded(
   handle: FileHandle,
-  options: NormalizedBase,
+  options: ReadOptions,
   filePath: string,
   startLine: number,
 ): AsyncGenerator<string, void, undefined> {
@@ -306,7 +269,7 @@ async function readRangeContent(
   handle: FileHandle,
   startLine: number,
   endLine: number | undefined,
-  options: NormalizedBase,
+  options: ReadOptions,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -363,7 +326,7 @@ async function readRangeContent(
 async function readTailContent(
   handle: FileHandle,
   tail: number,
-  options: NormalizedBase,
+  options: ReadOptions,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -473,7 +436,7 @@ async function assertNotBinary(
   validPath: string,
   filePath: string,
   handle: FileHandle,
-  normalized: NormalizedBase,
+  normalized: ReadOptions,
 ): Promise<void> {
   normalized.signal?.throwIfAborted();
   const isBinary = await isProbablyBinary(validPath, handle, normalized.signal);
@@ -490,116 +453,54 @@ function assertSizeWithinLimit(size: number, maxSize: number, filePath: string):
   );
 }
 
-interface ReadModeContext {
-  handle: FileHandle;
-  validPath: string;
-  filePath: string;
-  stats: Stats;
-  spec: NormalizedSpec;
-}
-
-async function readHead(
-  context: ReadModeContext,
-  spec: Extract<NormalizedSpec, { kind: 'head' }>,
+async function readByMode(
+  handle: FileHandle,
+  validPath: string,
+  filePath: string,
+  stats: Stats,
+  spec: ReadSpec,
+  options: ReadOptions,
 ): Promise<ReadFileResult> {
-  const { content, linesRead, hasMoreLines } = await readRangeContent(
-    context.handle,
-    1,
-    spec.lines,
-    spec,
-    context.filePath,
-  );
-
-  return {
-    path: context.validPath,
-    content,
-    readMode: 'head',
-    head: spec.lines,
-    linesRead,
-    hasMoreLines,
-  };
-}
-
-async function readRange(
-  context: ReadModeContext,
-  spec: Extract<NormalizedSpec, { kind: 'range' }>,
-): Promise<ReadFileResult> {
-  const { content, linesRead, hasMoreLines } = await readRangeContent(
-    context.handle,
-    spec.start,
-    spec.end,
-    spec,
-    context.filePath,
-  );
-
-  return {
-    path: context.validPath,
-    content,
-    readMode: 'range',
-    startLine: spec.start,
-    ...(spec.end !== undefined ? { endLine: spec.end } : {}),
-    linesRead,
-    hasMoreLines,
-  };
-}
-
-async function readFull(
-  context: ReadModeContext,
-  spec: Extract<NormalizedSpec, { kind: 'full' }>,
-): Promise<ReadFileResult> {
-  assertSizeWithinLimit(context.stats.size, spec.maxSize, context.filePath);
-  const { content, totalLines } = await readFullContent(
-    context.handle,
-    spec.maxSize,
-    context.filePath,
-    spec.signal,
-  );
-
-  return {
-    path: context.validPath,
-    content,
-    totalLines,
-    readMode: 'full',
-    linesRead: totalLines,
-    hasMoreLines: false,
-  };
-}
-
-async function readTail(
-  context: ReadModeContext,
-  spec: Extract<NormalizedSpec, { kind: 'tail' }>,
-): Promise<ReadFileResult> {
-  const { content, linesRead, hasMoreLines } = await readTailContent(
-    context.handle,
-    spec.lines,
-    spec,
-    context.validPath,
-  );
-
-  return {
-    path: context.validPath,
-    content,
-    readMode: 'tail',
-    tail: spec.lines,
-    linesRead,
-    hasMoreLines,
-  };
-}
-
-async function readByMode(context: ReadModeContext): Promise<ReadFileResult> {
-  switch (context.spec.kind) {
-    case 'head':
-      return readHead(context, context.spec);
-    case 'range':
-      return readRange(context, context.spec);
-    case 'full':
-      return readFull(context, context.spec);
-    case 'tail':
-      return readTail(context, context.spec);
-    default: {
-      const _exhaustive: never = context.spec;
-      return _exhaustive;
+  switch (spec.kind) {
+    case 'full': {
+      assertSizeWithinLimit(stats.size, options.maxSize, filePath);
+      const { content, totalLines } = await readFullContent(
+        handle,
+        options.maxSize,
+        filePath,
+        options.signal,
+      );
+      return {
+        path: validPath,
+        readMode: 'full',
+        content,
+        totalLines,
+        linesRead: totalLines,
+        hasMoreLines: false,
+      };
     }
+    case 'head':
+      return {
+        path: validPath,
+        readMode: 'head',
+        head: spec.lines,
+        ...(await readRangeContent(handle, 1, spec.lines, options, filePath)),
+      };
+    case 'range':
+      return {
+        path: validPath,
+        readMode: 'range',
+        startLine: spec.start,
+        ...(spec.end !== undefined ? { endLine: spec.end } : {}),
+        ...(await readRangeContent(handle, spec.start, spec.end, options, filePath)),
+      };
+    case 'tail':
+      return {
+        path: validPath,
+        readMode: 'tail',
+        tail: spec.lines,
+        ...(await readTailContent(handle, spec.lines, options, validPath)),
+      };
   }
 }
 
@@ -609,29 +510,24 @@ export function assertFileStats(filePath: string, stats: Stats): void {
   }
 }
 
-export async function readNormalized(
-  filePath: string,
-  validPath: string,
-  stats: Stats,
-  spec: NormalizedSpec,
-): Promise<ReadFileResult> {
-  spec.signal?.throwIfAborted();
-
-  assertFileStats(filePath, stats);
-
-  await using handle = await openReadableFileHandle(validPath, spec.signal);
-
-  await assertNotBinary(validPath, filePath, handle, spec);
-  spec.signal?.throwIfAborted();
-
-  return await readByMode({ handle, validPath, filePath, stats, spec });
-}
-
+/** Read an already-validated, already-stat'd file per `spec`. */
 export async function readFileWithStats(
   filePath: string,
   validPath: string,
   stats: Stats,
-  spec: ReadSpec | undefined,
+  spec: ReadSpec,
 ): Promise<ReadFileResult> {
-  return readNormalized(filePath, validPath, stats, normalizeSpec(spec ?? { kind: 'full' }));
+  const options: ReadOptions = {
+    maxSize: getMaxTextFileSize(),
+    ...(spec.signal ? { signal: spec.signal } : {}),
+  };
+  spec.signal?.throwIfAborted();
+  assertFileStats(filePath, stats);
+
+  await using handle = await openReadableFileHandle(validPath, spec.signal);
+
+  await assertNotBinary(validPath, filePath, handle, options);
+  spec.signal?.throwIfAborted();
+
+  return await readByMode(handle, validPath, filePath, stats, spec, options);
 }

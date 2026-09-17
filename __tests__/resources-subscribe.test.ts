@@ -4,14 +4,14 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { buildFileResourceUri } from '../src/core/file-uri.js';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
   waitFor,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('Resource subscriptions round-trip', () => {
   let tmpDir: string;
