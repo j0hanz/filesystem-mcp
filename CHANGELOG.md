@@ -5,12 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.4.0] - 2026-09-17
 
-### Changed
+A trim release: one over-engineering audit applied across the tree, plus
+three confirmation-flow refinements. No tool is renamed and no input field
+changes shape. Read Removed before upgrading if a launcher passes `--safe` or
+`--json` (the parser is strict, so an unknown flag now stops startup), and
+Changed if a caller reads `resourceUri` off a `diff` or `stat` result or
+parses the `--print-config` table.
 
-- **A refused confirmation says why.** When a `create` overwrite, a `move` or copy overwrite, or a `delete` confirmation comes back without an accepted answer, the `CANCELLED` error used to say `declined or missing`. It now says `declined by the user`, `dismissed by the user`, `answered without a valid choice`, or `not answered`, read from the SDK's `inputResponse` view of the retried call. Nothing about which choices are offered or what proceeds changes.
-- **Confirmation forms label their field.** The `input_required` forms for overwrite, delete and access-grant confirmations now carry a `title` on their one field — `Confirm` for the yes/no grant, `Action` for the overwrite/skip and delete/skip choice, `Allow` for the multi-directory grant — so a host that renders the form shows that label instead of the property name `confirm` or `choice`. The offered values and the `message` text are unchanged.
+### Security
+
 - **Confirmation tokens are bound to their request and caller.** The
   `requestState` a `delete`, `move`, `copy`, `create` or access-grant
   confirmation carries is now HMAC-bound to the JSON-RPC method that minted
@@ -19,10 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   echoed under another method or by another caller is refused with the SDK's
   `-32602 Invalid or expired requestState`. A well-behaved client sees no
   change: it echoes the token on the same connection it received it on.
+
+### Changed
+
+- **A refused confirmation says why.** When a `create` overwrite, a `move` or copy overwrite, or a `delete` confirmation comes back without an accepted answer, the `CANCELLED` error used to say `declined or missing`. It now says `declined by the user`, `dismissed by the user`, `answered without a valid choice`, or `not answered`, read from the SDK's `inputResponse` view of the retried call. Nothing about which choices are offered or what proceeds changes.
+- **Confirmation forms label their field.** The `input_required` forms for overwrite, delete and access-grant confirmations now carry a `title` on their one field — `Confirm` for the yes/no grant, `Action` for the overwrite/skip and delete/skip choice, `Allow` for the multi-directory grant — so a host that renders the form shows that label instead of the property name `confirm` or `choice`. The offered values and the `message` text are unchanged.
 - **`tools/list` publishes the SDK's own schema conversion.** Each tool's
   `inputSchema` is now the Zod schema handed straight to `registerTool`, so the
-  wire copy carries the `$schema` key and Zod's integer bounds the server used
-  to strip. About 1.1 kB more per session start; validation, defaults and
+  wire copy carries the `$schema` key and the `examples` arrays the server
+  used to strip. About 1.1 kB more per session start; validation, defaults and
   error messages are unchanged.
 - **`--print-config` always prints JSON.** The coloured table and the `--json`
   switch that selected between the two are gone.
@@ -34,8 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- The `--safe` alias for `--read-only`.
-- `FS_MAX_INLINE_MATCHES`, deprecated in 2.2.0 and ignored since.
+- The `--safe` alias for `--read-only` and the `--json` switch. The argument
+  parser is strict, so a launcher still passing either exits at startup with
+  `Unknown option`; pass `--read-only`, and drop `--json`.
+- `FS_MAX_INLINE_MATCHES`, deprecated in 2.2.0 and ignored since. Unset it;
+  every removed variable is ignored, not rejected.
 - `FS_KEEPALIVE_TIMEOUT_MS`, `FS_MAX_REQUEST_BYTES`, `FS_MAX_READ_MANY_BYTES`
   and `FS_SEARCH_TIMEOUT_MS`. Their defaults (5000 ms, 4 MiB, 512 KiB, 5000 ms)
   are now constants; `FS_MAX_WATCHERS` and `FS_RATE_LIMIT_RPM` stay.
