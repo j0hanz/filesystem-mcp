@@ -84,6 +84,8 @@ export interface ToolCtx {
    * all. `undefined` means "cannot tell" — never "no capabilities".
    */
   readonly clientCapabilities?: ClientCapabilities | undefined;
+  /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
+  readonly serverCtx: ServerContext;
 }
 
 interface ToolDeps {
@@ -188,6 +190,7 @@ function toToolCtx(
     sendNotification: async (notification) => ctx.mcpReq.notify(notification),
     inputResponses: ctx.mcpReq.inputResponses,
     requestState: ctx.mcpReq.requestState,
+    serverCtx: ctx,
     ...(clientCapabilities ? { clientCapabilities } : {}),
   };
 }
@@ -336,6 +339,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       pending: grantDirs,
       requestState: this.toolCtx.requestState,
       clientCapabilities: this.toolCtx.clientCapabilities,
+      serverCtx: this.toolCtx.serverCtx,
       buildInputs: (dirs) =>
         multi
           ? [

@@ -1,3 +1,4 @@
+import type { ServerContext } from '@modelcontextprotocol/server';
 import { createRequestStateCodec, isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -13,12 +14,17 @@ import {
   readAcceptedChoice,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
+  requestStateBinding,
   requestStateCodec,
 } from '../src/core/input-required.js';
 
-// The installed codec type requires a ServerContext even when no bind callback
-// is configured; its implementation does not read the context in that mode.
-const NO_BIND_CONTEXT = undefined as never;
+/** The two fields `requestStateBinding` reads; everything else is unused. */
+function bindContext(method = 'tools/call', clientId?: string): ServerContext {
+  return {
+    mcpReq: { method },
+    ...(clientId === undefined ? {} : { http: { authInfo: { clientId } } }),
+  } as unknown as ServerContext;
+}
 
 /** The converted `requestedSchema` an embedded elicitation carries, keyed by its one field. */
 interface FormRequest<K extends string> {
@@ -38,11 +44,12 @@ describe('request-state key initialization', () => {
     process.env['FS_REQUEST_STATE_KEY'] = stateKey;
     try {
       // The codec is built lazily, so the first mint is what reads the env var.
-      const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/fleet'] });
+      const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/fleet'] }, bindContext());
       const reference = createRequestStateCodec<{ op: string; paths: string[] }>({
         key: stateKey,
+        bind: requestStateBinding,
       });
-      const decoded = await reference.verify(wire, NO_BIND_CONTEXT);
+      const decoded = await reference.verify(wire, bindContext());
       assert.deepStrictEqual(decoded, { op: 'delete', paths: ['/fleet'] });
     } finally {
       if (saved === undefined) {
@@ -56,18 +63,18 @@ describe('request-state key initialization', () => {
 
 describe('input_required multi-round-trip infrastructure', () => {
   it('1. requestStateCodec mint/verify round-trip', async () => {
-    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a', '/b'] });
-    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a', '/b'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
     assert.strictEqual(decoded.op, 'delete');
     assert.deepStrictEqual(decoded.paths, ['/a', '/b']);
   });
 
   it('2. requestStateCodec.verify rejects a tampered token', async () => {
-    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] });
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] }, bindContext());
     assert.ok(wire.length > 10);
     const tampered = wire.slice(0, 10) + (wire[10] === 'X' ? 'Y' : 'X') + wire.slice(11);
     await assert.rejects(async () => {
-      await requestStateCodec.verify(tampered, NO_BIND_CONTEXT);
+      await requestStateCodec.verify(tampered, bindContext());
     });
   });
 
@@ -78,13 +85,25 @@ describe('input_required multi-round-trip infrastructure', () => {
     });
     const wire = await codec.mint({ op: 'delete', paths: ['/a'] });
     await new Promise((r) => setTimeout(r, 2100));
-    await assert.rejects(() => codec.verify(wire, NO_BIND_CONTEXT));
+    await assert.rejects(() => codec.verify(wire, bindContext()));
   });
 
   it('2c. requestStateCodec.verify rejects a malformed token', async () => {
-    await assert.rejects(() =>
-      requestStateCodec.verify('not-a-valid-state-string', NO_BIND_CONTEXT),
-    );
+    await assert.rejects(() => requestStateCodec.verify('not-a-valid-state-string', bindContext()));
+  });
+
+  it('2d. requestStateCodec.verify rejects a token echoed under another method', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] }, bindContext());
+    await assert.rejects(() => requestStateCodec.verify(wire, bindContext('prompts/get')));
+  });
+
+  it('2e. requestStateCodec.verify rejects a token echoed by another caller', async () => {
+    const minted = bindContext('tools/call', 'api-key');
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] }, minted);
+    const same = await requestStateCodec.verify(wire, bindContext('tools/call', 'api-key'));
+    assert.strictEqual(same.op, 'delete');
+    await assert.rejects(() => requestStateCodec.verify(wire, bindContext('tools/call', 'other')));
+    await assert.rejects(() => requestStateCodec.verify(wire, bindContext()));
   });
 
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
@@ -94,27 +113,29 @@ describe('input_required multi-round-trip infrastructure', () => {
       requestState: undefined,
       buildInputs: (paths) =>
         paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+      serverCtx: bindContext(),
     });
     assert.ok(result !== undefined);
     assert.strictEqual(isInputRequiredResult(result), true);
   });
 
   it('4. pendingRoundTrip same-op + same paths returns undefined (proceed)', async () => {
-    const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] });
-    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
     const result = await pendingRoundTrip({
       op: 'move',
       pending: ['/x'],
       requestState: () => decoded,
       buildInputs: (paths) =>
         paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
+      serverCtx: bindContext(),
     });
     assert.strictEqual(result, undefined);
   });
 
   it('5. pendingRoundTrip same-op + different paths throws FsError(INVALID_INPUT) (R9)', async () => {
-    const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] });
-    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(
       async () => {
         await pendingRoundTrip({
@@ -123,6 +144,7 @@ describe('input_required multi-round-trip infrastructure', () => {
           requestState: () => decoded,
           buildInputs: (paths) =>
             paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
+          serverCtx: bindContext(),
         });
       },
       (e: unknown) => isFsError(e) && e.code === ErrorCode.INVALID_INPUT,
@@ -132,8 +154,8 @@ describe('input_required multi-round-trip infrastructure', () => {
   it('5b. pendingRoundTrip rejects a pending set that merely EXTENDS the bound one (R9)', async () => {
     // The bound set is a prefix of the retried one: a confirmation minted for
     // /x must not authorize /x AND /y.
-    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] });
-    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(
       async () => {
         await pendingRoundTrip({
@@ -142,6 +164,7 @@ describe('input_required multi-round-trip infrastructure', () => {
           requestState: () => decoded,
           buildInputs: (paths) =>
             paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+          serverCtx: bindContext(),
         });
       },
       (e: unknown) => isFsError(e) && e.code === ErrorCode.INVALID_INPUT,
@@ -149,23 +172,26 @@ describe('input_required multi-round-trip infrastructure', () => {
   });
 
   it('6. pendingRoundTrip different-op mints fresh input_required', async () => {
-    const wire = await requestStateCodec.mint({ op: 'grant', paths: ['/x'] });
-    const decoded = await requestStateCodec.verify(wire, NO_BIND_CONTEXT);
+    const wire = await requestStateCodec.mint({ op: 'grant', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
     const result = await pendingRoundTrip({
       op: 'delete',
       pending: ['/x'],
       requestState: () => decoded,
       buildInputs: (paths) =>
         paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+      serverCtx: bindContext(),
     });
     assert.ok(result !== undefined);
     assert.strictEqual(isInputRequiredResult(result), true);
   });
 
   it('7. buildInputRequired shape', async () => {
-    const r = await buildInputRequired({ op: 'delete', paths: ['/a'] }, [
-      { key: 'confirm_0', message: 'Delete /a?' },
-    ]);
+    const r = await buildInputRequired(
+      { op: 'delete', paths: ['/a'] },
+      [{ key: 'confirm_0', message: 'Delete /a?' }],
+      bindContext(),
+    );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
@@ -209,13 +235,17 @@ describe('input_required multi-round-trip infrastructure', () => {
   const overwriteSkipChoices = ['overwrite', 'skip'] as const;
 
   it('10. buildInputRequired with choiceInput returns InputRequiredResult with requestState', async () => {
-    const r = await buildInputRequired({ op: 'copy', paths: ['/dst'] }, [
-      choiceInput(
-        'confirm_0',
-        'Destination "/dst" exists. Overwrite or skip?',
-        overwriteSkipChoices,
-      ),
-    ]);
+    const r = await buildInputRequired(
+      { op: 'copy', paths: ['/dst'] },
+      [
+        choiceInput(
+          'confirm_0',
+          'Destination "/dst" exists. Overwrite or skip?',
+          overwriteSkipChoices,
+        ),
+      ],
+      bindContext(),
+    );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
@@ -273,9 +303,11 @@ describe('input_required multi-round-trip infrastructure', () => {
   const grantChoices = ['/dir/a', '/dir/b'] as const;
 
   it('16. buildInputRequired with multiSelectInput returns InputRequiredResult', async () => {
-    const r = await buildInputRequired({ op: 'grant', paths: ['/dir/a', '/dir/b'] }, [
-      multiSelectInput('grant', 'Grant access to these directories?', grantChoices),
-    ]);
+    const r = await buildInputRequired(
+      { op: 'grant', paths: ['/dir/a', '/dir/b'] },
+      [multiSelectInput('grant', 'Grant access to these directories?', grantChoices)],
+      bindContext(),
+    );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
     assert.ok(r.inputRequests['grant'] !== undefined);

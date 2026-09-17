@@ -16,6 +16,7 @@ import type {
   InputRequest,
   InputRequiredResult,
   RequestStateCodec,
+  ServerContext,
 } from '@modelcontextprotocol/server';
 import {
   acceptedContent,
@@ -88,9 +89,21 @@ function configuredRequestStateKey(): Uint8Array | undefined {
 // import and the random per-boot fallback is minted only once something needs it.
 let codec: RequestStateCodec<PendingState> | undefined;
 
+/**
+ * What a minted `requestState` is bound to: the JSON-RPC method of the
+ * request that minted it and the authenticated caller (`ctx.http` is absent
+ * on stdio, so the caller part is empty there and constant across rounds).
+ * The SDK stores an HMAC tag of this value in the token and refuses an echo
+ * whose context yields a different value.
+ */
+export function requestStateBinding(ctx: ServerContext): string {
+  return `${ctx.mcpReq.method}\0${ctx.http?.authInfo?.clientId ?? ''}`;
+}
+
 function getRequestStateCodec(): RequestStateCodec<PendingState> {
   codec ??= createRequestStateCodec<PendingState>({
     key: configuredRequestStateKey() ?? randomBytes(32),
+    bind: requestStateBinding,
   });
   return codec;
 }
@@ -173,6 +186,7 @@ function requestedSchemaFor(input: PendingInput): z.ZodObject {
 export async function buildInputRequired(
   pending: PendingState,
   inputs: readonly PendingInput[],
+  ctx: ServerContext,
 ): Promise<InputRequiredResult> {
   const inputRequests: Record<string, InputRequest> = {};
   for (const input of inputs) {
@@ -181,10 +195,10 @@ export async function buildInputRequired(
       requestedSchema: requestedSchemaFor(input),
     });
   }
-  const requestState = await requestStateCodec.mint({
-    op: pending.op,
-    paths: [...pending.paths].sort(),
-  });
+  const requestState = await requestStateCodec.mint(
+    { op: pending.op, paths: [...pending.paths].sort() },
+    ctx,
+  );
   return inputRequired({ inputRequests, requestState });
 }
 
@@ -213,6 +227,8 @@ interface PendingRoundTripOpts {
    */
   readonly clientCapabilities?: ClientCapabilities | undefined;
   readonly buildInputs: (pending: readonly string[]) => readonly PendingInput[];
+  /** The live handler context; the codec binds the minted state to its method and caller. */
+  readonly serverCtx: ServerContext;
 }
 
 /**
@@ -269,7 +285,11 @@ export async function pendingRoundTrip(
   // tamper/mismatch error.
   if (state?.op !== opts.op) {
     assertCanElicit(opts.op, opts.clientCapabilities);
-    return buildInputRequired({ op: opts.op, paths: opts.pending }, opts.buildInputs(opts.pending));
+    return buildInputRequired(
+      { op: opts.op, paths: opts.pending },
+      opts.buildInputs(opts.pending),
+      opts.serverCtx,
+    );
   }
   // Retry for THIS op (R9): the verified state must bind the same pending set.
   if (!pathsEqual(state.paths, opts.pending)) {
