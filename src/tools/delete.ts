@@ -19,6 +19,7 @@ import type { FileType, GuardedFileSystem } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
+  describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
 } from '../core/input-required.js';
@@ -277,9 +278,10 @@ async function executePlan(
       return {
         failure: {
           path: plan.validPath,
-          error: Problem.cancelled('Delete cancelled: confirmation was declined or missing', {
-            path: plan.validPath,
-          }),
+          error: Problem.cancelled(
+            `Delete cancelled: confirmation was ${describeRefusal(ctx.inputResponses, key)}`,
+            { path: plan.validPath },
+          ),
         },
       };
     }

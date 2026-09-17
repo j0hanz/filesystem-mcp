@@ -20,6 +20,7 @@ import type { GuardedFileSystem } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
+  describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
 } from '../core/input-required.js';
@@ -186,7 +187,7 @@ async function executeTransfer(
     if (choice !== 'overwrite') {
       throw new FsError(
         ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was declined or missing`,
+        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx.inputResponses, key)}`,
         plan.pair.destination,
       );
     }

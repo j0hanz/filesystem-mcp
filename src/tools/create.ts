@@ -16,6 +16,7 @@ import { countFileLines, destExists, type Stats } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
+  describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
 } from '../core/input-required.js';
@@ -177,7 +178,7 @@ export const CREATE = defineTool({
           if (choice !== 'overwrite') {
             throw new FsError(
               ErrorCode.CANCELLED,
-              `create cancelled: overwrite of "${path}" was declined or missing`,
+              `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx.inputResponses, key)}`,
               path,
             );
           }
