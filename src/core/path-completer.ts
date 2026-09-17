@@ -1,26 +1,21 @@
 import { opendir, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
-import { isNodeError, isNotFoundErrno, rethrowIfAborted } from './errors.js';
-import { Logger } from './observability.js';
-import { isPathWithinDirectories, isSamePath, normalizePath } from './path-utils.js';
-import type { PathGuard } from './path.js';
-import { resolveRealPath } from './path.js';
-import { isSlash, toPosixPath } from './primitives.js';
+import { isNodeError, isNotFoundErrno, rethrowIfAborted } from './errors.ts';
+import { Logger } from './observability.ts';
+import {
+  isPathWithinDirectories,
+  isSamePath,
+  isSlash,
+  normalizePath,
+  toPosixPath,
+} from './path-utils.ts';
+import type { PathGuard } from './path.ts';
+import { resolveRealPath } from './path.ts';
 
 const MAX_COMPLETION_ITEMS = 100;
-const COMPLETION_RATE_LIMIT_MS = 100;
-const MAX_COMPLETION_CACHE_KEYS = 128;
 
-interface CacheEntry {
-  ms: number;
-  result: string[];
-}
-
-// ─── pure path-completion helpers (no instance state) ───────────────────────
-// Formerly static methods on PathCompleter. They take `allowed` explicitly and
-// touch no state, so they read as plain functions rather than a class used as
-// a namespace. PathCompleter keeps only the cache and the path guard.
+// ─── pure path-completion helpers ───────────────────────────────────────────
 
 function hasTrailingSeparator(value: string): boolean {
   return value.length > 0 && isSlash(value.charCodeAt(value.length - 1));
@@ -186,64 +181,34 @@ function getSearchContext(
   return undefined;
 }
 
-// ─── PathCompleter: cache + path guard ───────────────────────────────────────
+/**
+ * Path suggestions for `completion/complete` on the file template. One
+ * `opendir` per call; clients debounce, so nothing is cached here.
+ */
+export async function suggestPaths(pathGuard: PathGuard, value: string): Promise<string[]> {
+  const allowed = pathGuard.getAllowedDirectories();
 
-export class PathCompleter {
-  private cache = new Map<string, CacheEntry>();
-  private readonly pathGuard: PathGuard;
-
-  constructor(pathGuard: PathGuard) {
-    this.pathGuard = pathGuard;
-  }
-
-  async suggest(value: string): Promise<string[]> {
-    const now = Date.now();
-    const cacheEntry = this.cache.get(value);
-
-    if (cacheEntry && now - cacheEntry.ms < COMPLETION_RATE_LIMIT_MS) {
-      return cacheEntry.result;
+  try {
+    if (!value) {
+      return allowed.slice(0, MAX_COMPLETION_ITEMS);
     }
 
-    const results = await this.completePath(value);
-    this.setCacheValue(value, { ms: now, result: results });
-    return results;
-  }
-
-  private setCacheValue(key: string, entry: CacheEntry): void {
-    // Entries are stale after COMPLETION_RATE_LIMIT_MS anyway, so the cap only
-    // has to bound memory — dropping the whole map beats per-key LRU eviction.
-    if (this.cache.size >= MAX_COMPLETION_CACHE_KEYS) this.cache.clear();
-    this.cache.set(key, entry);
-  }
-
-  private async completePath(value: string): Promise<string[]> {
-    const allowed = this.pathGuard.getAllowedDirectories();
-
-    try {
-      if (!value) {
-        return allowed.slice(0, MAX_COMPLETION_ITEMS);
-      }
-
-      const context = getSearchContext(value, allowed);
-      if (!context) {
-        return findRootPrefixMatches(value, allowed).slice(0, MAX_COMPLETION_ITEMS);
-      }
-
-      const { searchDir, prefix } = context;
-      const dirMatches = await findMatchesInDirectory(
-        searchDir,
-        prefix,
-        allowed,
-        this.pathGuard.isSensitive.bind(this.pathGuard),
-      );
-      const rootMatches = findMatchingRoots(searchDir, prefix, allowed);
-      return mergeCompletionMatches(dirMatches, rootMatches).slice(0, MAX_COMPLETION_ITEMS);
-    } catch (error) {
-      rethrowIfAborted(error);
-      Logger.warn('PathCompleter: completion failed, returning empty list', {
-        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
-      });
-      return [];
+    const context = getSearchContext(value, allowed);
+    if (!context) {
+      return findRootPrefixMatches(value, allowed).slice(0, MAX_COMPLETION_ITEMS);
     }
+
+    const { searchDir, prefix } = context;
+    const dirMatches = await findMatchesInDirectory(searchDir, prefix, allowed, (p) =>
+      pathGuard.isSensitive(p),
+    );
+    const rootMatches = findMatchingRoots(searchDir, prefix, allowed);
+    return mergeCompletionMatches(dirMatches, rootMatches).slice(0, MAX_COMPLETION_ITEMS);
+  } catch (error) {
+    rethrowIfAborted(error);
+    Logger.warn('suggestPaths: completion failed, returning empty list', {
+      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+    return [];
   }
 }

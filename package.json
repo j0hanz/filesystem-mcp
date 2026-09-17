@@ -35,7 +35,7 @@
     "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip",
     "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
-    "test": "node --test --import tsx"
+    "test": "node --test"
   },
   "keywords": [
     "mcp",
@@ -77,14 +77,10 @@
     "eslint-config-prettier": "^10.1.8",
     "knip": "^6",
     "prettier": "^3.9.6",
-    "tsx": "^4.23.13",
     "typescript": "^6",
     "typescript-eslint": "^8.70.0"
   },
   "engines": {
     "node": ">=24"
-  },
-  "allowScripts": {
-    "esbuild@0.28.2": true
   }
 }

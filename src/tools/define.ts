@@ -3,9 +3,6 @@ import type {
   ClientCapabilities,
   ContentBlock,
   InputRequiredResult,
-  JsonSchemaType,
-  JsonSchemaValidator,
-  jsonSchemaValidator,
   McpServer,
   Notification,
   RegisteredTool,
@@ -13,35 +10,33 @@ import type {
   RequestMeta,
   RequestStateAccessor,
   ServerContext,
+  StandardSchemaWithJSON,
   ToolAnnotations,
 } from '@modelcontextprotocol/server';
 import {
   CLIENT_CAPABILITIES_META_KEY,
-  fromJsonSchema,
   isInputRequiredResult,
   TRACEPARENT_META_KEY,
 } from '@modelcontextprotocol/server';
 
-import * as z from 'zod/v4';
+import type * as z from 'zod/v4';
 
-import { ErrorCode, formatUnknownErrorMessage, Problem } from '../core/errors.js';
-import type { ProgressCtx } from '../core/fmt.js';
-import { plainMessage } from '../core/fmt.js';
-import { GuardedFileSystem } from '../core/fs.js';
+import { ErrorCode, formatUnknownErrorMessage, Problem } from '../core/errors.ts';
+import type { ProgressCtx } from '../core/fmt.ts';
+import { plainMessage } from '../core/fmt.ts';
+import { GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
-  multiSelectInput,
   pendingRoundTrip,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
-} from '../core/input-required.js';
-import { Logger, sanitizeLogField } from '../core/observability.js';
-import type { LoggingLevel } from '../core/observability.js';
-import type { PageSnapshotStore } from '../core/page-store.js';
-import { isSamePath } from '../core/path-utils.js';
-import type { PathGuard } from '../core/path.js';
-import type { ResourceStore } from '../core/store.js';
-import { McpProgressSink, ProgressSession } from './progress.js';
+} from '../core/input-required.ts';
+import { Logger, sanitizeLogField } from '../core/observability.ts';
+import type { LoggingLevel } from '../core/observability.ts';
+import { isSamePath } from '../core/path-utils.ts';
+import type { PathGuard } from '../core/path.ts';
+import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
   readonly signal: AbortSignal;
@@ -229,7 +224,6 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   private readonly toolCtx: ToolCtx;
 
   readonly #progressCtx: ProgressCtx;
-  readonly #mcpSink?: McpProgressSink;
   readonly #progressSession: ProgressSession;
 
   constructor(toolName: string, ctx: ToolCtx, def: ToolDef<I, O>, parsedArgs: z.infer<I>) {
@@ -240,14 +234,10 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
     const token = ctx._meta?.progressToken;
-    if (token !== undefined && ctx.sendNotification !== undefined) {
-      this.#mcpSink = new McpProgressSink(toolName, token, ctx.sendNotification);
-    }
-    const isTest = process.env['NODE_ENV'] === 'test' || process.execArgv.includes('--test');
+    const notify = ctx.sendNotification;
     this.#progressSession = new ProgressSession({
       label: this.#progressCtx.label,
-      ...(this.#mcpSink ? { sink: this.#mcpSink } : {}),
-      ...(isTest ? { rateLimitMs: 0 } : {}),
+      ...(token !== undefined && notify !== undefined ? { sink: { toolName, token, notify } } : {}),
     });
     this.toolCtx = {
       ...ctx,
@@ -284,23 +274,18 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     this.#progressSession.set({ ...p, message: plainMessage('tick', tickCtx) });
   }
 
-  async #flushProgress(): Promise<void> {
-    if (this.#mcpSink) await this.#mcpSink.flush();
-  }
-
   private async completeProgress(result: z.infer<O>): Promise<void> {
     const doneCtx: ProgressCtx = this.def.progressDone
       ? { ...this.#progressCtx, ...this.def.progressDone(this.parsedArgs, result) }
       : this.#progressCtx;
     this.#progressSession.complete(plainMessage('done', doneCtx));
-    await this.#flushProgress();
+    await this.#progressSession.flush();
   }
 
   private async failProgress(error: unknown): Promise<{ isError: true; content: ContentBlock[] }> {
     const errMsg = formatUnknownErrorMessage(error);
-    const message = plainMessage('fail', { ...this.#progressCtx, error: errMsg });
-    this.#progressSession.fail(error, message);
-    await this.#flushProgress();
+    this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
+    await this.#progressSession.flush();
     const { text: errorText } = Problem.toText(
       error,
       this.def.defaultErrorCode ?? ErrorCode.UNKNOWN,
@@ -343,11 +328,12 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       buildInputs: (dirs) =>
         multi
           ? [
-              multiSelectInput(
-                'grant',
-                'Grant filesystem access to these directories? Select the ones to allow.',
-                dirs,
-              ),
+              {
+                key: 'grant',
+                message: 'Grant filesystem access to these directories? Select the ones to allow.',
+                choices: dirs,
+                multi: true,
+              },
             ]
           : dirs.map((dir, i) => ({
               key: confirmKey(i),
@@ -404,81 +390,14 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     } catch (error) {
       return await this.failProgress(error);
     } finally {
-      await this.#flushProgress();
+      await this.#progressSession.flush();
     }
   }
-}
-
-/**
- * Validate with Zod while publishing the precomputed JSON Schema: clients get
- * draft-2020-12, handlers get Zod's coercions, defaults and error messages.
- *
- * Each validator instance is built for exactly one schema and handed straight
- * to `fromJsonSchema(thatSchema, ...)`, which calls `getValidator` once with
- * the same schema — so the argument is redundant here and deliberately ignored.
- * Reusing one instance across schemas would silently validate against `schema`.
- */
-function zodJsonSchemaValidator(schema: z.ZodType): jsonSchemaValidator {
-  return {
-    getValidator<U>(): JsonSchemaValidator<U> {
-      return (input: unknown) => {
-        const result = schema.safeParse(input);
-        if (result.success) {
-          return {
-            valid: true as const,
-            data: result.data as U,
-            errorMessage: undefined,
-          };
-        }
-        return {
-          valid: false as const,
-          data: undefined,
-          errorMessage: z.prettifyError(result.error),
-        };
-      };
-    },
-  };
-}
-
-/**
- * Generate the wire copy of a schema for `tools/list`. The Zod schema keeps
- * every constraint for runtime validation; the `override` pass only trims what
- * the wire copy costs every client at session start:
- *
- * - `$schema` and `title` carry no information the host uses.
- * - `maximum: Number.MAX_SAFE_INTEGER` is zod's int() artifact, not a bound.
- * - `examples` is dropped in both directions: on output it describes a field the
- *   server itself fills in, and on input every description that carried one
- *   already spells the same example out inline, so the keyword paid twice.
- *
- * Output `description`s are NOT dropped. They were, and the result was a wire
- * contract the model had to guess at: `delete` returns `path` XOR `paths`,
- * `edit.diff` appears only under dryRun, `read.value` has no required field at
- * all. None of that is inferable from types alone.
- *
- * No shared subschema carries a `.meta({ id })`, so zod inlines every one of
- * them and the emitted document has no `$defs`/`$ref` to dereference.
- */
-function toDraft202012(schema: z.ZodType, io: 'input' | 'output'): JsonSchemaType {
-  const generated = z.toJSONSchema(schema, {
-    target: 'draft-2020-12',
-    io,
-    override: ({ jsonSchema }) => {
-      const node = jsonSchema as Record<string, unknown>;
-      delete node['title'];
-      if (node['maximum'] === Number.MAX_SAFE_INTEGER) delete node['maximum'];
-      delete node['examples'];
-    },
-  }) as Record<string, unknown>;
-  delete generated['$schema'];
-  return generated;
 }
 
 export function defineTool<I extends z.ZodType, O extends z.ZodType>(
   def: ToolDef<I, O>,
 ): DefinedTool {
-  const inputJsonSchema = toDraft202012(def.input, 'input');
-
   // Nothing here depends on `deps`, so it is built once per tool definition
   // rather than once per `register` — the HTTP leg registers every tool afresh
   // on each request.
@@ -498,7 +417,10 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
   const toolDefShape = {
     title: def.title,
     description: def.description,
-    inputSchema: fromJsonSchema<z.infer<I>>(inputJsonSchema, zodJsonSchemaValidator(def.input)),
+    // The Zod schema goes in as-is: the SDK validates with it and publishes its
+    // own draft-2020-12 conversion in `tools/list`. The cast only names the
+    // in/out types a generic `ZodType` cannot surface through `~standard`.
+    inputSchema: def.input as unknown as StandardSchemaWithJSON<z.input<I>, z.output<I>>,
     // No `outputSchema`, ever. Publishing one obliges the result to carry
     // `structuredContent` (clients enforce it), and every tool that authors its
     // own text ships its metadata under `_meta` instead — see

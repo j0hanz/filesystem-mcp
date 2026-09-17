@@ -3,13 +3,13 @@ import type { TextContent } from '@modelcontextprotocol/server';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
-import { buildSectionsRecord, renderSections } from '../src/instructions.js';
+import { buildSectionsRecord, renderSections } from '../src/instructions.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
   type TestClientContext,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('MCP Prompts Tests (MCP Client)', () => {
   let tmpDir: string;

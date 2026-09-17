@@ -2,19 +2,18 @@ import type { Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { parseArgs as utilParseArgs } from 'node:util';
 
-import { printHelpAndExit, printVersionAndExit } from './cli-help.js';
-import { cli } from './core/config.js';
-import { formatUnknownErrorMessage } from './core/errors.js';
-import { cliFmt, padEndVisible } from './core/fmt.js';
+import { printHelpAndExit, printVersionAndExit } from './cli-help.ts';
+import { cli } from './core/config.ts';
+import { formatUnknownErrorMessage } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
   isWindowsDriveRelativePath,
   normalizePath,
-} from './core/path-utils.js';
-import { PathGuard } from './core/path.js';
-import { IS_WINDOWS, parseTrueEnvFlag } from './core/primitives.js';
-import { getMaxTextFileSize } from './core/util.js';
-import { registeredTools } from './tools/index.js';
+  parseTrueEnvFlag,
+} from './core/path-utils.ts';
+import { PathGuard } from './core/path.ts';
+import { getMaxTextFileSize } from './core/util.ts';
+import { registeredTools } from './tools/index.ts';
 
 // ════════════════════════════════════════════════════════════
 // Path & Config Utilities — pure functions and error types
@@ -62,6 +61,9 @@ async function validateDirectoryPath(inputPath: string, allowMissing = false): P
   return normalized;
 }
 
+// No dedupe here: PathGuard's `normalizeAllowedDirectories` already Set-dedupes
+// the normalized set, and containment checks are case-insensitive where the
+// filesystem is.
 async function normalizeAndValidateDirs(
   paths: readonly string[],
   allowMissing = false,
@@ -70,26 +72,12 @@ async function normalizeAndValidateDirs(
   for (const p of paths) {
     normalized.push(await validateDirectoryPath(p, allowMissing));
   }
-  return deduplicateAllowedDirectories(normalized);
+  return normalized;
 }
 
 function normalizeCliExitMessage(error: unknown): string {
   const rawMessage = formatUnknownErrorMessage(error);
   return rawMessage.startsWith('Error:') ? rawMessage : `Error: ${rawMessage}`;
-}
-
-function deduplicateAllowedDirectories(dirs: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduplicated: string[] = [];
-
-  for (const dir of dirs) {
-    const key = IS_WINDOWS ? dir.toLowerCase() : dir;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduplicated.push(dir);
-  }
-
-  return deduplicated;
 }
 
 function parsePortOption(raw: unknown): number | undefined {
@@ -106,9 +94,7 @@ const CLI_PARSER_CONFIG = {
   options: {
     'allow-cwd': { type: 'boolean', default: false },
     'read-only': { type: 'boolean', default: false },
-    safe: { type: 'boolean', default: false },
     'print-config': { type: 'boolean', default: false },
-    json: { type: 'boolean', default: false },
     port: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
@@ -133,7 +119,6 @@ export async function parseArgs(): Promise<{
   port: number | undefined;
   readOnly: boolean;
   printConfig: boolean;
-  json: boolean;
   httpHost: string | undefined;
   apiKey: string | undefined;
 }> {
@@ -178,9 +163,8 @@ export async function parseArgs(): Promise<{
       v['allow-cwd'] ||
       v['walk-cwd'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
-    const readOnly = v['read-only'] || v.safe;
+    const readOnly = v['read-only'];
     const printConfig = v['print-config'];
-    const json = v.json;
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
     const allowMissingRoots =
       v['allow-missing-roots'] ||
@@ -202,7 +186,6 @@ export async function parseArgs(): Promise<{
       port,
       readOnly,
       printConfig,
-      json,
       httpHost,
       apiKey,
     };
@@ -216,21 +199,18 @@ export async function parseArgs(): Promise<{
 }
 
 // ════════════════════════════════════════════════════════════
-// Effective config reporting — prints the resolved server config
+// Effective config reporting — prints the resolved server config as JSON
 // ════════════════════════════════════════════════════════════
 
 export async function runPrintConfig(options: {
   allowedDirs: string[];
   allowCwd: boolean;
   readOnly: boolean;
-  json: boolean;
   /** Resolved `--port`. Present means the launch this reports on is an HTTP bind. */
   port?: number;
   httpHost?: string;
   apiKey?: string;
 }): Promise<void> {
-  const write = (s: string) => process.stdout.write(s);
-
   const pathGuard = new PathGuard({
     allowCwd: options.allowCwd,
     cliAllowedDirs: options.allowedDirs,
@@ -254,15 +234,5 @@ export async function runPrintConfig(options: {
     limits: { maxFileSizeBytes: getMaxTextFileSize() },
   };
 
-  if (options.json) {
-    write(JSON.stringify(config, null, 2));
-  } else {
-    const key = (k: string) => padEndVisible(cliFmt.cyan(k), 14);
-    write(`${key('transport:')}${config.transport}\n`);
-    write(`${key('readOnly:')}${cliFmt.bool(config.readOnly)}\n`);
-    write(`${key('apiKey:')}${cliFmt.dim(config.apiKey ?? 'none')}\n`);
-    write(`${key('allowedRoots:')}${config.allowedRoots.join(', ') || cliFmt.dim('(none)')}\n`);
-    write(`${key('tools:')}${cliFmt.dim(config.tools.join(', '))}\n`);
-    write(`${key('maxFileSize:')}${cliFmt.yellow(String(config.limits.maxFileSizeBytes))}\n`);
-  }
+  process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
 }

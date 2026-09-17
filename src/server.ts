@@ -6,17 +6,16 @@ import type {
 import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
-import { requestStateCodec } from './core/input-required.js';
-import { Logger } from './core/observability.js';
-import { PageSnapshotStore } from './core/page-store.js';
-import type { ServerOptions } from './core/path.js';
-import { PathGuard } from './core/path.js';
-import { ResourceStore } from './core/store.js';
-import type { WatcherRegistry } from './core/watcher-registry.js';
-import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.js';
-import { registerPrompts } from './prompts.js';
-import { registerResources } from './resources.js';
-import { registerTools } from './tools/index.js';
+import { requestStateCodec } from './core/input-required.ts';
+import { Logger } from './core/observability.ts';
+import type { ServerOptions } from './core/path.ts';
+import { PathGuard } from './core/path.ts';
+import { PageSnapshotStore, ResourceStore } from './core/store.ts';
+import type { WatcherRegistry } from './core/watcher-registry.ts';
+import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
+import { registerPrompts } from './prompts.ts';
+import { registerResources } from './resources.ts';
+import { registerTools } from './tools/index.ts';
 
 // ═══════════════════════════════════════════════════════════════
 // bootstrap

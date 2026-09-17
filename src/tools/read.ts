@@ -6,12 +6,12 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.js';
-import { ErrorCode } from '../core/errors.js';
-import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.js';
-import { detectMimeFromContent, detectMimeType } from '../core/mime.js';
-import type { ReadFileResult, ReadSpec } from '../core/read.js';
-import { readFileWithStats } from '../core/read.js';
+import { processInParallel } from '../core/concurrency.ts';
+import { ErrorCode } from '../core/errors.ts';
+import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
+import { detectMimeFromContent, detectMimeType } from '../core/mime.ts';
+import type { ReadFileResult, ReadSpec } from '../core/read.ts';
+import { readFileWithStats } from '../core/read.ts';
 import {
   ContinuationSchema,
   defaultFalseBoolean,
@@ -24,18 +24,18 @@ import {
   singleOrBatchAccessPaths,
   singleOrBatchPathsInput,
   validateReadRange,
-} from '../core/schema.js';
+} from '../core/schema.ts';
 import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   DEFAULT_SEARCH_TIMEOUT_MS,
-  getDefaultReadManyMaxTotalSize,
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
-} from '../core/util.js';
-import type { PerPathResult } from './batch.js';
-import { isTotalFailure, runOverPaths } from './batch.js';
-import type { ToolCtx } from './define.js';
-import { defineTool } from './define.js';
+  READ_MANY_MAX_TOTAL_BYTES,
+} from '../core/util.ts';
+import type { PerPathResult } from './batch.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
+import type { ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 const rangeField = (description: string) =>
   z
@@ -428,9 +428,12 @@ export const READ = defineTool({
 
     if (args.paths !== undefined) {
       pathList = args.paths;
-      const defaultMaxTotalSize = getDefaultReadManyMaxTotalSize();
-      const maxTextFileSize = getMaxTextFileSize();
-      const budget = await collectFileBudget(pathList, defaultMaxTotalSize, maxTextFileSize, ctx);
+      const budget = await collectFileBudget(
+        pathList,
+        READ_MANY_MAX_TOTAL_BYTES,
+        getMaxTextFileSize(),
+        ctx,
+      );
       known = budget.known;
       skippedResults = budget.skippedResults;
       survivors = budget.survivors;

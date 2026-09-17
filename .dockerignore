@@ -1,40 +1,13 @@
-# Dependencies
 node_modules
-
-# Build output
 dist
-*.tsbuildinfo
-
-# Version control
 .git
-.gitignore
-
-# CI/CD & Editor
 .github
-.vscode
-.cursor
-
-# Tests
-src/__tests__
-node-tests
-coverage
-
-# Development
-.env
-.env.*
-.ts-trace
-
-# Docker (avoid recursive context)
-Dockerfile
-.dockerignore
-
-# Documentation (not needed in image)
+__tests__
+docs
 *.md
 !README.md
-LICENSE
-CONTRIBUTING.md
-
-# Tooling configs
+Dockerfile
+.dockerignore
 eslint.config.mjs
 knip.json
 .prettierrc*

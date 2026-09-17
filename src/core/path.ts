@@ -3,8 +3,8 @@ import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { withAbort } from './concurrency.js';
-import { cli } from './config.js';
+import { withAbort } from './concurrency.ts';
+import { cli } from './config.ts';
 import {
   ERRNO_MAP,
   ErrorCode,
@@ -15,9 +15,9 @@ import {
   rethrowIfAborted,
   SKIPPABLE_ERRNOS,
   SKIPPABLE_FS_CODES,
-} from './errors.js';
-import { Logger } from './observability.js';
-import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.js';
+} from './errors.ts';
+import { Logger } from './observability.ts';
+import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
 import {
   getReservedDeviceNameForPath,
   isPathWithinDirectories,
@@ -25,17 +25,16 @@ import {
   isWindowsDriveRelativePath,
   normalizeAllowedDirectory,
   normalizePath,
-} from './path-utils.js';
-import { parseTrueEnvFlag, toPosixPath } from './primitives.js';
-import { SensitiveMatcher } from './sensitive.js';
-import { ROOTS_TIMEOUT_MS } from './util.js';
+  parseTrueEnvFlag,
+  toPosixPath,
+} from './path-utils.ts';
+import { SensitiveMatcher } from './sensitive.ts';
+import { ROOTS_TIMEOUT_MS } from './util.ts';
 
 // Allowed-directory assembly and the PathGuard that enforces it. The
 // sensitive-file denylist lives in sensitive.ts, and the character-level
 // primitives (IS_WINDOWS, isAlpha, isSlash, toPosixPath) live in
-// primitives.ts.
-declare const ValidatedPathBrand: unique symbol;
-export type ValidatedPath = string & { readonly [ValidatedPathBrand]: true };
+// path-utils.ts.
 
 export interface ValidatedPathDetails {
   requestedPath: string;
@@ -253,9 +252,9 @@ export class PathGuard {
     }
   }
 
-  async validateExistingPath(requestedPath: string): Promise<ValidatedPath> {
+  async validateExistingPath(requestedPath: string): Promise<string> {
     const details = await this.validateExistingPathDetailed(requestedPath);
-    return details.resolvedPath as ValidatedPath;
+    return details.resolvedPath;
   }
 
   /**
@@ -680,7 +679,7 @@ export class PathGuard {
     }
   }
 
-  async validatePathForWrite(requestedPath: string): Promise<ValidatedPath> {
+  async validatePathForWrite(requestedPath: string): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccessAndSensitivity(requestedPath);
 
@@ -697,10 +696,10 @@ export class PathGuard {
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.
     this.assertNotSensitiveFile(resolvedTarget, requestedPath);
-    return resolvedTarget as ValidatedPath;
+    return resolvedTarget;
   }
 
-  async validatePathForDelete(requestedPath: string): Promise<ValidatedPath> {
+  async validatePathForDelete(requestedPath: string): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccessAndSensitivity(requestedPath);
 
@@ -745,7 +744,7 @@ export class PathGuard {
         // Symlink: check link sensitivity but don't resolve target.
         // The parent check above ensures the link itself is in an allowed root.
         this.assertNotSensitiveFile(normalizedRequested, requestedPath);
-        return normalizedRequested as ValidatedPath;
+        return normalizedRequested;
       }
 
       // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
@@ -755,7 +754,7 @@ export class PathGuard {
         this.throwAccessDenied(requestedPath, accessDeniedHint);
       }
       this.assertNotSensitiveFile(realTarget, requestedPath);
-      return realTarget as ValidatedPath;
+      return realTarget;
     } catch (error) {
       // A denial raised inside this block (out-of-root real target, or a
       // sensitive file reached through a symlinked parent) must propagate.
@@ -765,7 +764,7 @@ export class PathGuard {
         throw error;
       }
     }
-    return normalizedRequested as ValidatedPath;
+    return normalizedRequested;
   }
 
   async recomputeAllowedDirectories(): Promise<void> {

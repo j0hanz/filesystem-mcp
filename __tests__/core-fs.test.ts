@@ -3,13 +3,13 @@ import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { buildWrittenFileMeta } from '../src/core/file-uri.js';
-import { countFileLines, GuardedFileSystem } from '../src/core/fs.js';
-import { normalizePath } from '../src/core/path-utils.js';
-import { searchContent, searchFiles } from '../src/core/search.js';
-import { getDefaultReadManyMaxTotalSize } from '../src/core/util.js';
-import type { FilesystemServerContext } from '../src/server.js';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { buildWrittenFileMeta } from '../src/core/file-uri.ts';
+import { countFileLines, GuardedFileSystem } from '../src/core/fs.ts';
+import { normalizePath } from '../src/core/path-utils.ts';
+import { searchContent, searchFiles } from '../src/core/search.ts';
+import { getMaxTextFileSize } from '../src/core/util.ts';
+import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
@@ -17,7 +17,7 @@ import {
   trySymlink,
   writeNLineFile,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
@@ -501,25 +501,25 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Invalid setting warnings (TC-FUNC-019b)', () => {
     it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', () => {
       const priorLevel = process.env['FS_LOG_LEVEL'];
-      const priorBytes = process.env['FS_MAX_READ_MANY_BYTES'];
+      const priorBytes = process.env['FS_MAX_FILE_SIZE'];
       const realError = console.error;
       const collected: string[] = [];
 
       process.env['FS_LOG_LEVEL'] = 'error';
-      process.env['FS_MAX_READ_MANY_BYTES'] = 'not-a-number';
+      process.env['FS_MAX_FILE_SIZE'] = 'not-a-number';
       console.error = (...args: unknown[]) => {
         collected.push(args.map(String).join(' '));
       };
 
       try {
-        const first = getDefaultReadManyMaxTotalSize();
-        const second = getDefaultReadManyMaxTotalSize();
+        const first = getMaxTextFileSize();
+        const second = getMaxTextFileSize();
 
-        assert.strictEqual(first, 512 * 1024, 'falls back to the documented default');
+        assert.strictEqual(first, 10 * 1024 * 1024, 'falls back to the documented default');
         assert.strictEqual(second, first);
 
         const warnings = collected.filter((line) =>
-          line.includes('Invalid FS_MAX_READ_MANY_BYTES value'),
+          line.includes('Invalid FS_MAX_FILE_SIZE value'),
         );
         // Once per (setting, value), not once per call — and it reaches stderr
         // despite FS_LOG_LEVEL=error, which used to suppress this one warning
@@ -531,14 +531,14 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         );
         assert.match(
           warnings[0] ?? '',
-          /^\[warning\] Invalid FS_MAX_READ_MANY_BYTES value: not-a-number \(must be 10240-104857600\)\. Using default: 524288$/,
+          /^\[warning\] Invalid FS_MAX_FILE_SIZE value: not-a-number \(must be 1048576-104857600\)\. Using default: 10485760$/,
         );
       } finally {
         console.error = realError;
         if (priorLevel === undefined) delete process.env['FS_LOG_LEVEL'];
         else process.env['FS_LOG_LEVEL'] = priorLevel;
-        if (priorBytes === undefined) delete process.env['FS_MAX_READ_MANY_BYTES'];
-        else process.env['FS_MAX_READ_MANY_BYTES'] = priorBytes;
+        if (priorBytes === undefined) delete process.env['FS_MAX_FILE_SIZE'];
+        else process.env['FS_MAX_FILE_SIZE'] = priorBytes;
       }
     });
   });

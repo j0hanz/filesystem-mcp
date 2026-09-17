@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import type { FilesystemServerContext } from '../src/server.js';
-import { seedRootsFromClient } from '../src/transport/stdio.js';
-import { cleanupTestRoot, createTestRoot, createTestServer } from './helpers.js';
+import type { FilesystemServerContext } from '../src/server.ts';
+import { seedRootsFromClient } from '../src/transport/stdio.ts';
+import { cleanupTestRoot, createTestRoot, createTestServer } from './helpers.ts';
 
 describe('Client roots seeding (legacy era)', () => {
   let tmpDir: string;

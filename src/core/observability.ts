@@ -1,5 +1,5 @@
-import { cli } from './config.js';
-import { warnInvalidSetting } from './primitives.js';
+import { cli } from './config.ts';
+import { warnInvalidSetting } from './path-utils.ts';
 
 export type LoggingLevel =
   'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency';

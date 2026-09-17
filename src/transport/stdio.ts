@@ -11,21 +11,21 @@ import {
 
 import { fileURLToPath } from 'node:url';
 
-import { formatUnknownErrorMessage } from '../core/errors.js';
-import { Logger } from '../core/observability.js';
-import type { ServerOptions } from '../core/path.js';
-import { PathGuard } from '../core/path.js';
-import { createWatcherRegistry } from '../core/watcher-registry.js';
-import type { FilesystemServerContext } from '../server.js';
-import { createServer } from '../server.js';
-import type { RuntimeConfig } from './shared.js';
+import { formatUnknownErrorMessage } from '../core/errors.ts';
+import { Logger } from '../core/observability.ts';
+import type { ServerOptions } from '../core/path.ts';
+import { PathGuard } from '../core/path.ts';
+import { createWatcherRegistry } from '../core/watcher-registry.ts';
+import type { FilesystemServerContext } from '../server.ts';
+import { createServer } from '../server.ts';
+import type { RuntimeConfig } from './shared.ts';
 import {
   isStructurallyValidListen,
   jsonRpcError,
   jsonRpcRequestId,
   listenSubscriptionUris,
   prepareListenWatchers,
-} from './shared.js';
+} from './shared.ts';
 
 interface StdioListenState {
   acquiredUris: string[];

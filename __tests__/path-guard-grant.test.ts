@@ -4,16 +4,16 @@ import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { isSamePath } from '../src/core/path-utils.js';
-import { PathGuard } from '../src/core/path.js';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { isSamePath } from '../src/core/path-utils.ts';
+import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
   makeGuard,
   trySymlink,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 // Grant round-trip: precheckAccess → applyGrant → the guard's
 // allowed-directory view. These pin the behavior so future regressions fail

@@ -4,10 +4,9 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { computeDiffStats, unifiedPatch } from '../core/diff.js';
-import { ErrorCode, FsError } from '../core/errors.js';
-import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.js';
-import { escapeRegexLiteral } from '../core/primitives.js';
+import { computeDiffStats, unifiedPatch } from '../core/diff.ts';
+import { ErrorCode, FsError } from '../core/errors.ts';
+import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import {
   defaultFalseBoolean,
   FileKind,
@@ -18,11 +17,11 @@ import {
   PerFileErrorSchema,
   RequiredPath,
   singleOrBatchAccessPaths,
-} from '../core/schema.js';
-import { compileRegex, execMatches, freeRegex } from '../core/search.js';
-import type { ResourceStore } from '../core/store.js';
-import { isTotalFailure, runOverPaths } from './batch.js';
-import { defineTool, type ToolCtx } from './define.js';
+} from '../core/schema.ts';
+import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
+import type { ResourceStore } from '../core/store.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z
   .strictObject({
@@ -198,11 +197,21 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // a newline keeps at least one newline, so a single-line oldText cannot
     // match across a newline and a multi-line oldText cannot collapse onto one
     // line. Horizontal whitespace stays mandatory between word characters so
-    // adjacent identifiers are not merged.
-    const pattern = escapeRegexLiteral(oldText)
-      .replace(/[^\S\n]*\n\s*/g, '[^\\S\\n]*\\n+[^\\S\\n]*')
-      .replace(/(\w)[^\S\n]+(\w)/g, '$1[^\\S\\n]+$2')
-      .replace(/[^\S\n]+/g, '[^\\S\\n]*');
+    // adjacent identifiers are not merged. Built token by token: `split` on
+    // whitespace puts text at even indices and whitespace runs at odd ones.
+    const tokens = oldText.split(/(\s+)/u);
+    let pattern = '';
+    for (const [i, token] of tokens.entries()) {
+      if (i % 2 === 0) {
+        pattern += RegExp.escape(token);
+      } else if (token.includes('\n')) {
+        pattern += '[^\\S\\n]*\\n+[^\\S\\n]*';
+      } else if (/\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '')) {
+        pattern += '[^\\S\\n]+';
+      } else {
+        pattern += '[^\\S\\n]*';
+      }
+    }
     const regex = compileRegex(pattern, { caseSensitive: true });
     try {
       // execMatches resets lastIndex and reports UTF-16 offsets; the raw RE2
@@ -283,7 +292,7 @@ function replaceEditMatch(content: string, match: TextRange, newText: string): s
 
 function buildEditFileValue(
   validPath: string,
-  meta: EditFileMetadata,
+  meta: WrittenFileMeta,
   modified: string,
   result: EditResult,
 ): EditFileValue {
@@ -304,38 +313,12 @@ function buildEditFileValue(
   };
 }
 
-function finalizeEditResult(
-  originalContent: string,
-  updatedContent: string,
-  appliedEdits: number,
-  unmatchedEdits: string[],
-): EditResult {
-  const { linesAdded, linesRemoved } =
-    appliedEdits > 0
-      ? computeDiffStats(originalContent, updatedContent)
-      : { linesAdded: 0, linesRemoved: 0 };
-
-  return {
-    content: updatedContent,
-    appliedEdits,
-    unmatchedEdits,
-    linesAdded,
-    linesRemoved,
-  };
-}
-
-/** {@link WrittenFileMeta}, with `resourceUri` widened: an edit that matched
- *  nothing has no updated content to point at. */
-type EditFileMetadata = Omit<WrittenFileMeta, 'resourceUri'> & {
-  resourceUri: string | undefined;
-};
-
 function buildEditFileMetadata(
   content: string,
   validPath: string,
   appliedEdits: number,
   resourceStore: ResourceStore | undefined,
-): EditFileMetadata {
+): WrittenFileMeta {
   const meta = buildWrittenFileMeta(validPath, content, resourceStore);
   // Omitted rather than empty-stringed when nothing matched: `""` satisfied the
   // schema's `string` and then failed every resources/read a client tried it on.
@@ -372,7 +355,9 @@ function applyEdits(
     appliedEdits += 1;
   }
 
-  return finalizeEditResult(content, newContent, appliedEdits, unmatchedEdits);
+  const { linesAdded, linesRemoved } =
+    appliedEdits > 0 ? computeDiffStats(content, newContent) : { linesAdded: 0, linesRemoved: 0 };
+  return { content: newContent, appliedEdits, unmatchedEdits, linesAdded, linesRemoved };
 }
 
 interface EditFileOptions {

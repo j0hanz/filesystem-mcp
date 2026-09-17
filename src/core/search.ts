@@ -4,10 +4,9 @@ import { basename } from 'node:path';
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
-import { globEntries, type GlobEntry } from './glob.js';
-import type { PathGuard } from './path.js';
-import { escapeRegexLiteral } from './primitives.js';
-import { getMaxTextFileSize } from './util.js';
+import { globEntries, type GlobEntry } from './glob.ts';
+import type { PathGuard } from './path.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 interface SearchResult {
   file: string;
@@ -213,7 +212,7 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const regex = compileRegex(options.isRegex ? pattern || '' : escapeRegexLiteral(pattern || ''), {
+  const regex = compileRegex(options.isRegex ? pattern || '' : RegExp.escape(pattern || ''), {
     caseSensitive: Boolean(options.caseSensitive),
   });
   try {

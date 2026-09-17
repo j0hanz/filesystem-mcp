@@ -7,8 +7,8 @@ import {
   isPathWithinDirectories,
   isSamePath,
   normalizePath,
-} from '../src/core/path-utils.js';
-import { normalizeAllowedDirectories } from '../src/core/path.js';
+} from '../src/core/path-utils.ts';
+import { normalizeAllowedDirectories } from '../src/core/path.ts';
 
 // Pure lexical containment primitives — no fs. These pin the off-by-one
 // boundary (prefix `/foo` must NOT match `/fooboar`) and the trailing-slash

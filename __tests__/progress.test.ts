@@ -3,7 +3,7 @@ import type { Notification } from '@modelcontextprotocol/server';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { McpProgressSink, ProgressSession } from '../src/tools/progress.js';
+import { ProgressSession } from '../src/tools/progress.ts';
 
 interface Frame {
   progress: number;
@@ -11,37 +11,34 @@ interface Frame {
   message?: string;
 }
 
-function collector(): { sent: Frame[]; notify: (n: Notification) => Promise<void> } {
-  const sent: Frame[] = [];
-  return {
-    sent,
-    notify: (n) => {
-      sent.push(n.params as unknown as Frame);
-      return Promise.resolve();
-    },
-  };
-}
-
 /**
- * Mirrors how ToolExecutor builds its session (src/tools/define.ts): no `total`,
- * rate limiting off. A session that knows no total reports the cursor on its
+ * Mirrors how ToolExecutor builds its session (src/tools/define.ts): rate
+ * limiting off. A session that knows no total reports the cursor on its
  * terminal frame, which is the value the last tick already used — the case the
- * sink's monotonic guard has to handle without swallowing the outcome.
+ * monotonic wire guard has to handle without swallowing the outcome.
  */
-function session(sink: McpProgressSink): ProgressSession {
-  return new ProgressSession({ label: 'label', sink, rateLimitMs: 0 });
+function session(): { sent: Frame[]; progress: ProgressSession } {
+  const sent: Frame[] = [];
+  const notify = (n: Notification): Promise<void> => {
+    sent.push(n.params as unknown as Frame);
+    return Promise.resolve();
+  };
+  const progress = new ProgressSession({
+    label: 'label',
+    sink: { toolName: 't', token: 'tok', notify },
+    rateLimitMs: 0,
+  });
+  return { sent, progress };
 }
 
-describe('McpProgressSink wire monotonicity', () => {
+describe('ProgressSession wire monotonicity', () => {
   it('delivers every frame of a totalless session, strictly increasing', async () => {
-    const { sent, notify } = collector();
-    const sink = new McpProgressSink('t', 'tok', notify);
-    const progress = session(sink);
+    const { sent, progress } = session();
 
     progress.set({ current: 1 });
     progress.set({ current: 2 });
     progress.complete('done');
-    await sink.flush();
+    await progress.flush();
 
     // 0 is the session's synthetic start tick; 3 is the completion advanced past
     // the cursor it would otherwise have repeated.
@@ -53,13 +50,11 @@ describe('McpProgressSink wire monotonicity', () => {
   });
 
   it('delivers the fail frame and its message', async () => {
-    const { sent, notify } = collector();
-    const sink = new McpProgressSink('t', 'tok', notify);
-    const progress = session(sink);
+    const { sent, progress } = session();
 
     progress.set({ current: 1 });
-    progress.fail(new Error('boom'), 'failed');
-    await sink.flush();
+    progress.fail('failed');
+    await progress.flush();
 
     assert.deepStrictEqual(
       sent.map((f) => f.progress),
@@ -69,32 +64,30 @@ describe('McpProgressSink wire monotonicity', () => {
   });
 
   it('keeps a known total ahead of the advanced completion', async () => {
-    const { sent, notify } = collector();
-    const sink = new McpProgressSink('t', 'tok', notify);
+    const { sent, progress } = session();
 
-    sink.emit({ kind: 'tick', current: 1, total: 2, message: 'a' });
-    sink.emit({ kind: 'tick', current: 2, total: 2, message: 'b' });
-    sink.emit({ kind: 'complete', current: 2, total: 2, message: 'done' });
-    await sink.flush();
+    progress.set({ current: 1, total: 2 });
+    progress.set({ current: 2, total: 2 });
+    progress.complete('done');
+    await progress.flush();
 
     assert.deepStrictEqual(
       sent.map((f) => f.progress),
-      [1, 2, 3],
+      [0, 1, 2, 3],
     );
     assert.strictEqual(sent.at(-1)?.total, 3);
   });
 
   it('drops a tick that repeats the last value on the wire', async () => {
-    const { sent, notify } = collector();
-    const sink = new McpProgressSink('t', 'tok', notify);
+    const { sent, progress } = session();
 
-    sink.emit({ kind: 'tick', current: 1, total: 3, message: 'a' });
-    sink.emit({ kind: 'tick', current: 1, total: 3, message: 'again' });
-    await sink.flush();
+    progress.set({ current: 1, total: 3 });
+    progress.set({ current: 1, total: 3 });
+    await progress.flush();
 
     assert.deepStrictEqual(
       sent.map((f) => f.progress),
-      [1],
+      [0, 1],
     );
   });
 });

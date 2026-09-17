@@ -5,16 +5,16 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
-import { ErrorCode, FsError } from '../core/errors.js';
-import { buildWrittenFileMeta } from '../core/file-uri.js';
+import { ErrorCode, FsError } from '../core/errors.ts';
+import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import {
   defaultFalseBoolean,
   FileKind,
   IsoDateTime,
   NonNegInt,
   RequiredPath,
-} from '../core/schema.js';
-import { defineTool, type ToolCtx } from './define.js';
+} from '../core/schema.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 const PatchInputSchema = z.strictObject({
   path: RequiredPath.describe('File to apply the diff to'),

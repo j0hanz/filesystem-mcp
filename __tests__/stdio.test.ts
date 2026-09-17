@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { isNodeError } from '../src/core/errors.js';
-import { buildFileResourceUri } from '../src/core/file-uri.js';
-import { MUTATING_TOOL_NAMES } from '../src/tools/index.js';
+import { isNodeError } from '../src/core/errors.ts';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   cleanupTestRoot,
@@ -20,7 +20,7 @@ import {
   firstTextBlock,
   waitFor,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;

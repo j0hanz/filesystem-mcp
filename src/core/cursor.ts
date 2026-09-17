@@ -1,6 +1,6 @@
-import { ErrorCode, FsError } from './errors.js';
-import type { PageSnapshot, PageSnapshotStore } from './page-store.js';
-import { invalidCursor } from './page-store.js';
+import { ErrorCode, FsError } from './errors.ts';
+import type { PageSnapshot, PageSnapshotStore } from './store.ts';
+import { invalidCursor } from './store.ts';
 
 interface PageCursor {
   readonly snapshotId: string;
@@ -57,19 +57,6 @@ interface Page<T, M> {
 export interface PaginatedPage<T, M, R> extends Page<T, M> {
   /** The externalized full set. First page only, and only when incomplete. */
   readonly resource?: R;
-}
-
-/**
- * The single home of the pagination cache-key rule: `JSON.stringify` of a
- * flat object whose `method` names the tool and whose remaining fields
- * identify the query. The literal's field order fixes key stability;
- * `method` keeps tool key spaces disjoint. Byte-identical to the three
- * hand-written tool builders it replaces.
- */
-export function pageQueryKey(
-  query: { readonly method: string; readonly path: string } & Record<string, unknown>,
-): string {
-  return JSON.stringify(query);
 }
 
 /**

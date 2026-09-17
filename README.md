@@ -370,15 +370,13 @@ filesystem-mcp /path/to/project1 /path/to/project2
 | `--http-host <host>`      | —       | HTTP server bind address (env: `FS_HTTP_HOST`)                                                                                        |
 | `--api-key <key>`         | —       | Require this API key on HTTP requests (env: `FS_API_KEY`)                                                                             |
 | `--read-only`             | `false` | Disable write tools: `create`, `edit`, `delete`, `move`, `patch`, `replace_text`                                                      |
-| `--safe`                  | `false` | Alias for `--read-only`                                                                                                               |
 | `--deny <pattern>`        | —       | Block paths matching this pattern; repeatable                                                                                         |
 | `--allow <pattern>`       | —       | Exempt a pattern from the built-in sensitive denylist; repeatable (env: `FS_ALLOWLIST`). Does not lift `--deny`/`FS_DENYLIST` entries |
 | `--allow-sensitive`       | `false` | Allow access to sensitive system paths (env: `FS_ALLOW_SENSITIVE`)                                                                    |
 | `--root-boundary <path>`  | —       | Require all allowed roots to fall under this path (env: `FS_ROOT_BOUNDARY`)                                                           |
 | `--max-file-size <bytes>` | —       | Maximum file size for reads in bytes (env: `FS_MAX_FILE_SIZE`)                                                                        |
 | `--log-level <level>`     | `info`  | RFC 5424 log level, `debug` through `emergency` (env: `FS_LOG_LEVEL`)                                                                 |
-| `--print-config`          | `false` | Print the active configuration and exit (use `--json` for machine-readable output)                                                    |
-| `--json`                  | `false` | Output `--print-config` as JSON                                                                                                       |
+| `--print-config`          | `false` | Print the active configuration as JSON and exit                                                                                       |
 
 `--deny` and `--allow` patterns support `*` (any run within a segment),
 `**` (any run of segments), `?`, `[...]` classes, and `{a,b}` alternation.
@@ -411,12 +409,7 @@ Flags take precedence when both are set.
 | `FS_ALLOW_UNRESTRICTED_HOSTS` | Bind a wildcard host with no Host validation (accepts the risk).                                                                                                                       |
 | `FS_PUBLIC_URL`               | Resource identifier URL for RFC 9728 discovery.                                                                                                                                        |
 | `FS_RATE_LIMIT_RPM`           | Per-client-IP requests/minute (default 120 with API-key authentication, 6,000 for keyless loopback; range 1–100000).                                                                   |
-| `FS_MAX_REQUEST_BYTES`        | Max HTTP request body bytes (default 4194304, 1024–268435456).                                                                                                                         |
-| `FS_KEEPALIVE_TIMEOUT_MS`     | HTTP keep-alive timeout in ms; set above any fronting proxy's idle timeout (default 5000, 1000–600000).                                                                                |
 | `FS_MAX_WATCHERS`             | Max concurrent file watchers (default 256, 1–4096).                                                                                                                                    |
-| `FS_MAX_INLINE_MATCHES`       | Deprecated and ignored; `maxResults` sets the `search_text` page size. Logs a warning when set; removed in the next major.                                                             |
-| `FS_MAX_READ_MANY_BYTES`      | Max total bytes across a batched `read` (default 524288, 10240–104857600).                                                                                                             |
-| `FS_SEARCH_TIMEOUT_MS`        | Search timeout in ms (default 5000, 100–60000).                                                                                                                                        |
 | `NO_COLOR`                    | Any value disables ANSI color output.                                                                                                                                                  |
 | `FS_REQUEST_STATE_KEY`        | HMAC key sealing `input_required` requestState across retry rounds. Optional (random per boot if unset); set it, at >=32 bytes UTF-8, to keep in-flight rounds alive across a restart. |
 

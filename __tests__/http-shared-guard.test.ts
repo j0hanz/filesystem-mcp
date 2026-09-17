@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { buildFileResourceUri } from '../src/core/file-uri.js';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import {
   bootHttpTest,
   cleanupTestRoot,
@@ -14,7 +14,7 @@ import {
   type HttpTestContext,
   waitFor,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 // The modern HTTP leg builds a fresh McpServer per request. With a per-instance
 // PathGuard, an accepted access grant died with the request that accepted it

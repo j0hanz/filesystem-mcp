@@ -1,9 +1,9 @@
 import * as z from 'zod/v4';
 
-import { isSafeGlobSyntax } from './glob.js';
-import { MIME_KINDS } from './mime.js';
-import { ENTRY_TYPES } from './primitives.js';
-import { MAX_SEARCH_DEPTH } from './util.js';
+import { isSafeGlobSyntax } from './glob.ts';
+import { MIME_KINDS } from './mime.ts';
+import { ENTRY_TYPES } from './path-utils.ts';
+import { MAX_SEARCH_DEPTH } from './util.ts';
 
 // Runtime: full ISO-8601 UTC; emits the standard `date-time` format on the wire
 // (no AJV warning — it is a known format, unlike sha256_hex / base64url).
@@ -33,13 +33,11 @@ export const PositiveInt = z
   .int({ message: 'Must be integer' })
   .positive({ message: 'Must be > 0' });
 
-const FILE_TYPES = ENTRY_TYPES;
-export type FileType = (typeof FILE_TYPES)[number];
-export const FileType = z.enum(FILE_TYPES);
+export type FileType = (typeof ENTRY_TYPES)[number];
+export const FileType = z.enum(ENTRY_TYPES);
 
-const FILE_KINDS = MIME_KINDS;
-export type FileKind = (typeof FILE_KINDS)[number];
-export const FileKind = z.enum(FILE_KINDS);
+export type FileKind = (typeof MIME_KINDS)[number];
+export const FileKind = z.enum(MIME_KINDS);
 
 const MAX_PATH_LENGTH = 4096;
 
@@ -67,7 +65,7 @@ function refineSafeText(
   };
 }
 
-const PathBase = z
+export const RequiredPath = z
   .string()
   .min(1, { message: 'Path required' })
   .max(MAX_PATH_LENGTH, { message: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
@@ -78,8 +76,7 @@ const PathBase = z
   )
   .describe('File or directory path inside an allowed workspace root.');
 
-export const OptionalPath = PathBase.optional();
-export const RequiredPath = PathBase;
+export const OptionalPath = RequiredPath.optional();
 
 export const SafeGlobPattern = z
   .string()
@@ -188,17 +185,16 @@ export function defaultFalseBoolean(description: string): z.ZodDefault<z.ZodBool
   return z.boolean().default(false).describe(description);
 }
 
-export const includeHiddenField = (): z.ZodDefault<z.ZodBoolean> =>
-  defaultFalseBoolean('Include hidden items (starting with .)');
-export const includeIgnoredField = (): z.ZodDefault<z.ZodBoolean> =>
-  defaultFalseBoolean('Include ignored items (node_modules, .git, etc).');
-export const maxDepthField = (): z.ZodOptional<z.ZodNumber> =>
-  z
-    .uint32()
-    .min(0)
-    .max(MAX_SEARCH_DEPTH)
-    .optional()
-    .describe('Max directory depth to scan; 0 = base directory only, omit for unlimited');
+export const IncludeHidden = defaultFalseBoolean('Include hidden items (starting with .)');
+export const IncludeIgnored = defaultFalseBoolean(
+  'Include ignored items (node_modules, .git, etc).',
+);
+export const MaxDepth = z
+  .uint32()
+  .min(0)
+  .max(MAX_SEARCH_DEPTH)
+  .optional()
+  .describe('Max directory depth to scan; 0 = base directory only, omit for unlimited');
 
 const DEFAULT_MAX_BATCH = 1000;
 

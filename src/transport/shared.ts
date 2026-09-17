@@ -4,13 +4,13 @@
 // differs (connection close vs response close).
 import { JSONRPC_VERSION, specTypeSchemas } from '@modelcontextprotocol/server';
 
-import { formatUnknownErrorMessage } from '../core/errors.js';
-import type { PathGuard } from '../core/path.js';
+import { formatUnknownErrorMessage } from '../core/errors.ts';
+import type { PathGuard } from '../core/path.ts';
 import {
   MAX_WATCHERS,
   type WatcherAttachResult,
   type WatcherRegistry,
-} from '../core/watcher-registry.js';
+} from '../core/watcher-registry.ts';
 
 /**
  * Runtime inputs the CLI resolves once (flag, else the operator's env var) and

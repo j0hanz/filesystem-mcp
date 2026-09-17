@@ -15,20 +15,19 @@ import { createServer as createHttpServer } from 'node:http';
 
 import type { Express, NextFunction, Request, Response } from 'express';
 
-import { formatUnknownErrorMessage } from '../core/errors.js';
-import { Logger } from '../core/observability.js';
-import { PageSnapshotStore } from '../core/page-store.js';
-import { PathGuard } from '../core/path.js';
-import type { ServerOptions } from '../core/path.js';
-import { parseTrueEnvFlag } from '../core/primitives.js';
-import { ResourceStore } from '../core/store.js';
-import { MIB, parseEnvInt } from '../core/util.js';
+import { formatUnknownErrorMessage } from '../core/errors.ts';
+import { Logger } from '../core/observability.ts';
+import { parseTrueEnvFlag } from '../core/path-utils.ts';
+import { PathGuard } from '../core/path.ts';
+import type { ServerOptions } from '../core/path.ts';
+import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { MIB, parseEnvInt } from '../core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
   type WatcherRegistry,
-} from '../core/watcher-registry.js';
-import { createServer } from '../server.js';
+} from '../core/watcher-registry.ts';
+import { createServer } from '../server.ts';
 import {
   assertHttpBindingPolicy,
   assertHttpHostPolicy,
@@ -41,16 +40,19 @@ import {
   resolveAllowedHosts,
   resolveTrustProxySetting,
   sendJsonRpcError,
-} from './http-policy.js';
-import type { RuntimeConfig } from './shared.js';
+} from './http-policy.ts';
+import type { RuntimeConfig } from './shared.ts';
 import {
   isStructurallyValidListen,
   jsonRpcRequestId,
   listenSubscriptionUris,
   prepareListenWatchers,
-} from './shared.js';
+} from './shared.ts';
 
-const MAX_REQUEST_BODY_BYTES = parseEnvInt('FS_MAX_REQUEST_BYTES', 4 * MIB, 1024, 256 * MIB);
+const MAX_REQUEST_BODY_BYTES = 4 * MIB;
+// Must exceed the idle timeout of any proxy in front of this server, or the
+// proxy reuses connections the server already closed (intermittent 502s).
+const KEEPALIVE_TIMEOUT_MS = 5_000;
 
 /** Body-parser rejections and anything else that reaches the end of the chain. */
 function errorHandlerMiddleware(
@@ -332,11 +334,8 @@ export async function startHttpServer(
   );
 
   const httpServer = createHttpServer(app);
-  // Must exceed the idle timeout of any proxy in front of this server, or the
-  // proxy reuses connections the server already closed (intermittent 502s).
-  const keepAliveMs = parseEnvInt('FS_KEEPALIVE_TIMEOUT_MS', 5_000, 1_000, 600_000);
-  httpServer.keepAliveTimeout = keepAliveMs;
-  httpServer.headersTimeout = keepAliveMs + 5_000;
+  httpServer.keepAliveTimeout = KEEPALIVE_TIMEOUT_MS;
+  httpServer.headersTimeout = KEEPALIVE_TIMEOUT_MS + 5_000;
   httpServer.requestTimeout = DEFAULT_REQUEST_TIMEOUT_MSEC;
 
   const onHttpServerError = (error: Error): void => {

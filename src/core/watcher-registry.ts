@@ -1,11 +1,11 @@
 import type { FSWatcher } from 'node:fs';
 import { statSync, watch } from 'node:fs';
 
-import { formatUnknownErrorMessage } from './errors.js';
-import { extractPath } from './file-uri.js';
-import { Logger } from './observability.js';
-import type { PathGuard } from './path.js';
-import { parseEnvInt } from './util.js';
+import { formatUnknownErrorMessage } from './errors.ts';
+import { extractPath } from './file-uri.ts';
+import { Logger } from './observability.ts';
+import type { PathGuard } from './path.ts';
+import { parseEnvInt } from './util.ts';
 
 // Cap concurrent file watchers to avoid exhausting OS-level watch handles
 // (e.g. Linux inotify, default ~8192/user). One subscription == one watcher.

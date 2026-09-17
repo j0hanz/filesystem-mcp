@@ -7,10 +7,10 @@ import process from 'node:process';
 
 import * as z from 'zod/v4';
 
-import { CliExitError, parseArgs, runPrintConfig } from './cli.js';
-import { NO_POSITIONAL_ROOTS_GUIDANCE } from './core/config.js';
-import { logRuntimeFailure } from './core/observability.js';
-import { startHttpServer, startServer } from './transport.js';
+import { CliExitError, parseArgs, runPrintConfig } from './cli.ts';
+import { NO_POSITIONAL_ROOTS_GUIDANCE } from './core/config.ts';
+import { logRuntimeFailure } from './core/observability.ts';
+import { startHttpServer, startServer } from './transport.ts';
 
 z.config(z.locales.en());
 
@@ -83,14 +83,13 @@ async function main(): Promise<void> {
     }
     throw error;
   }
-  const { allowedDirs, allowCwd, port, readOnly, printConfig, json, httpHost, apiKey } = parsed;
+  const { allowedDirs, allowCwd, port, readOnly, printConfig, httpHost, apiKey } = parsed;
 
   if (printConfig) {
     await runPrintConfig({
       allowedDirs,
       allowCwd,
       readOnly,
-      json,
       ...(port !== undefined ? { port } : {}),
       ...(httpHost !== undefined ? { httpHost } : {}),
       ...(apiKey !== undefined ? { apiKey } : {}),

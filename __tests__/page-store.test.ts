@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { paginate } from '../src/core/cursor.js';
-import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { PageSnapshotStore } from '../src/core/page-store.js';
+import { paginate } from '../src/core/cursor.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { PageSnapshotStore } from '../src/core/store.ts';
 
 function assertInvalidCursor(error: unknown): boolean {
   assert(isFsError(error));

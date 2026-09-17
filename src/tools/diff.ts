@@ -1,14 +1,11 @@
-import type { ContentBlock } from '@modelcontextprotocol/server';
-
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 import { createTwoFilesPatch } from 'diff';
 
-import { computeDiffStats } from '../core/diff.js';
-import { NonNegInt, PositiveInt, RequiredPath } from '../core/schema.js';
-import { putJsonResource } from '../core/store.js';
-import { defineTool, type ToolCtx } from './define.js';
+import { computeDiffStats } from '../core/diff.ts';
+import { NonNegInt, PositiveInt, RequiredPath } from '../core/schema.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 const DiffInputSchema = z.strictObject({
   a: RequiredPath.describe('First file to compare'),
@@ -21,26 +18,15 @@ const DiffInputSchema = z.strictObject({
 const DiffOutputSchema = z.strictObject({
   a: z.string().describe('Resolved absolute path of the first file'),
   b: z.string().describe('Resolved absolute path of the second file'),
-  // The unified diff itself rides the text content block; `resourceUri` holds
-  // the full copy for a client that wants to fetch it separately.
+  // The unified diff itself rides the text content block.
   linesAdded: NonNegInt.describe('Number of lines added'),
   linesRemoved: NonNegInt.describe('Number of lines removed'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'URI to the full diff in the resource store (present when resource store is enabled)',
-    ),
 });
 
 async function handleDiff(
   args: z.infer<typeof DiffInputSchema>,
   ctx: ToolCtx,
-): Promise<{
-  structured: z.infer<typeof DiffOutputSchema>;
-  text: string;
-  resources?: ContentBlock[];
-}> {
+): Promise<{ structured: z.infer<typeof DiffOutputSchema>; text: string }> {
   const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
     await Promise.all([
       ctx.fs.readEditableText(args.a, { signal: ctx.signal, tool: 'diff' }),
@@ -61,36 +47,11 @@ async function handleDiff(
 
   const { linesAdded, linesRemoved } = computeDiffStats(contentA, contentB);
 
-  let resourceUri: string | undefined;
-  let link: ReturnType<typeof putJsonResource>['link'] | undefined;
-  // Identical files: the diff has no hunks, so externalizing it buys the client
-  // a link to nothing and burns a store slot the next real diff wants.
-  if (ctx.resourceStore && linesAdded + linesRemoved > 0) {
-    const result = putJsonResource(ctx.resourceStore, 'diff', {
-      diff: diffText,
-      linesAdded,
-      linesRemoved,
-      a: validA,
-      b: validB,
-    });
-    resourceUri = result.entry.uri;
-    link = result.link;
-  }
-
-  // The diff shipped three times: this text block, `structured.diff`, and the
-  // externalized store entry. The text block is the one a model reads, so the
-  // structured copy goes — `resourceUri` still holds the full diff for a client
-  // that wants to fetch it separately.
+  // The text block is the one copy of the diff; a model reads that, and a
+  // structured duplicate or a store entry would only ship the same bytes again.
   return {
-    structured: {
-      a: validA,
-      b: validB,
-      linesAdded,
-      linesRemoved,
-      ...(resourceUri !== undefined ? { resourceUri } : {}),
-    },
+    structured: { a: validA, b: validB, linesAdded, linesRemoved },
     text: diffText,
-    ...(link !== undefined ? { resources: [link] } : {}),
   };
 }
 

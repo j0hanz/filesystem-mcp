@@ -2,8 +2,94 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { randomUUID } from 'node:crypto';
 
-import { ErrorCode, FsError } from './errors.js';
-import { MIB } from './util.js';
+import { ErrorCode, FsError } from './errors.ts';
+import { MIB } from './util.ts';
+
+// ─── TTL + LRU map ───────────────────────────────────────────────────────────
+
+/**
+ * A bounded, expiring map. `Map` keeps insertion order and a read re-inserts,
+ * so the first key is always the least recently used one. Entries carry an
+ * optional weight so a byte budget can be enforced next to the entry cap.
+ */
+class TtlLru<V> {
+  readonly #byKey = new Map<string, { value: V; expiresAt: number; weight: number }>();
+  readonly #maxEntries: number;
+  readonly #maxWeight: number;
+  readonly #ttlMs: number;
+  readonly #now: () => number;
+  #weight = 0;
+
+  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number; now?: () => number }) {
+    this.#maxEntries = opts.maxEntries;
+    this.#maxWeight = opts.maxWeight ?? Number.POSITIVE_INFINITY;
+    this.#ttlMs = opts.ttlMs;
+    this.#now = opts.now ?? Date.now;
+  }
+
+  get size(): number {
+    return this.#byKey.size;
+  }
+
+  /** Drop every expired entry; true when at least one went. */
+  prune(): boolean {
+    const now = this.#now();
+    const before = this.#byKey.size;
+    for (const [key, entry] of this.#byKey) {
+      if (entry.expiresAt <= now) this.delete(key);
+    }
+    return this.#byKey.size !== before;
+  }
+
+  /** The live value, bumped to most recently used; `undefined` when missing or expired. */
+  get(key: string): V | undefined {
+    const entry = this.#byKey.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= this.#now()) {
+      this.delete(key);
+      return undefined;
+    }
+    this.#byKey.delete(key);
+    this.#byKey.set(key, entry);
+    return entry.value;
+  }
+
+  /** Insert (pruning expired first) and evict least recently used entries past either cap. */
+  set(key: string, value: V, weight = 0): void {
+    this.prune();
+    this.delete(key);
+    this.#byKey.set(key, { value, expiresAt: this.#now() + this.#ttlMs, weight });
+    this.#weight += weight;
+    while (
+      this.#byKey.size > 0 &&
+      (this.#byKey.size > this.#maxEntries || this.#weight > this.#maxWeight)
+    ) {
+      const oldest = this.#byKey.keys().next();
+      if (oldest.done) break;
+      this.delete(oldest.value);
+    }
+  }
+
+  delete(key: string): void {
+    const entry = this.#byKey.get(key);
+    if (!entry) return;
+    this.#weight -= entry.weight;
+    this.#byKey.delete(key);
+  }
+
+  /** Live keys, least recently used first. Prunes expired entries first. */
+  keys(): string[] {
+    this.prune();
+    return [...this.#byKey.keys()];
+  }
+
+  clear(): void {
+    this.#byKey.clear();
+    this.#weight = 0;
+  }
+}
+
+// ─── Resource store: externalized tool results ───────────────────────────────
 
 interface ResourceEntry {
   uri: string;
@@ -19,133 +105,56 @@ const MAX_TOTAL_BYTES = 25 * MIB;
 const MAX_ENTRY_BYTES = 10 * MIB;
 const ENTRY_TTL_MS = 60 * 1000;
 
-function isExpired(entry: ResourceEntry, now = Date.now()): boolean {
-  const expiresAt = Date.parse(entry.expiresAt);
-  if (!Number.isFinite(expiresAt)) {
-    return true;
-  }
-  return expiresAt <= now;
-}
-
 export class ResourceStore {
-  private readonly byUri = new Map<string, ResourceEntry>();
-  private _totalBytes = 0;
-
-  private readonly onListChanged: (() => void) | undefined;
+  readonly #entries = new TtlLru<ResourceEntry>({
+    maxEntries: MAX_ENTRIES,
+    maxWeight: MAX_TOTAL_BYTES,
+    ttlMs: ENTRY_TTL_MS,
+  });
+  readonly #onListChanged: (() => void) | undefined;
 
   constructor(onListChanged?: () => void) {
-    this.onListChanged = onListChanged;
-  }
-
-  private emitListChanged(changed: boolean): void {
-    if (changed) this.onListChanged?.();
-  }
-
-  private bumpLru(uri: string, entry: ResourceEntry): void {
-    if (!this.byUri.has(uri)) {
-      return;
-    }
-    this.byUri.delete(uri);
-    this.byUri.set(uri, entry);
-  }
-
-  private removeEntry(uri: string): ResourceEntry | undefined {
-    const existing = this.byUri.get(uri);
-    if (!existing) {
-      return undefined;
-    }
-    this._totalBytes -= existing.size;
-    this.byUri.delete(uri);
-    return existing;
-  }
-
-  private evictOldest(): void {
-    const first = this.byUri.values().next();
-    if (first.done) {
-      return;
-    }
-    this.removeEntry(first.value.uri);
-  }
-
-  private pruneExpiredEntries(now = Date.now()): boolean {
-    const before = this.byUri.size;
-    for (const entry of this.byUri.values()) {
-      if (isExpired(entry, now)) this.removeEntry(entry.uri);
-    }
-    return this.byUri.size !== before;
-  }
-
-  private enforceLimits(): void {
-    while (
-      this.byUri.size > 0 &&
-      (this.byUri.size > MAX_ENTRIES || this._totalBytes > MAX_TOTAL_BYTES)
-    ) {
-      this.evictOldest();
-    }
+    this.#onListChanged = onListChanged;
   }
 
   getEntry(uri: string): ResourceEntry {
-    const existing = this.byUri.get(uri);
-
-    if (!existing) {
-      throw new FsError(
-        ErrorCode.NOT_FOUND,
-        `Resource not found: ${uri}. Re-run the tool to regenerate.`,
-      );
-    }
-
-    if (isExpired(existing)) {
-      this.removeEntry(uri);
-      this.emitListChanged(true);
-      throw new FsError(
-        ErrorCode.NOT_FOUND,
-        `Resource expired: ${uri}. Re-run the tool to regenerate.`,
-      );
-    }
-
-    this.bumpLru(uri, existing);
-    return existing;
-  }
-
-  private checkBeforePut(entryBytes: number): void {
-    const changed = this.pruneExpiredEntries();
-    if (entryBytes > MAX_ENTRY_BYTES) {
-      this.emitListChanged(changed);
-      throw new FsError(ErrorCode.TOO_LARGE, `Resource too large to cache (${entryBytes} bytes).`);
-    }
+    const entry = this.#entries.get(uri);
+    if (entry) return entry;
+    // Not found and expired share a remedy; only the wording differs, and an
+    // expiry seen here changed the list a client may hold.
+    if (this.#entries.prune()) this.#onListChanged?.();
+    throw new FsError(
+      ErrorCode.NOT_FOUND,
+      `Resource not found: ${uri}. Re-run the tool to regenerate.`,
+    );
   }
 
   putText(params: { name: string; mimeType?: string; text: string }): ResourceEntry {
     const entryBytes = Buffer.byteLength(params.text, 'utf8');
-    this.checkBeforePut(entryBytes);
-
-    const storedAt = new Date();
+    if (entryBytes > MAX_ENTRY_BYTES) {
+      if (this.#entries.prune()) this.#onListChanged?.();
+      throw new FsError(ErrorCode.TOO_LARGE, `Resource too large to cache (${entryBytes} bytes).`);
+    }
     const entry: ResourceEntry = {
       uri: `filesystem-mcp://result/${randomUUID()}`,
       name: params.name,
       mimeType: params.mimeType ?? 'text/plain',
       size: entryBytes,
-      expiresAt: new Date(storedAt.getTime() + ENTRY_TTL_MS).toISOString(),
+      expiresAt: new Date(Date.now() + ENTRY_TTL_MS).toISOString(),
       text: params.text,
     };
-    this.byUri.set(entry.uri, entry);
-    this._totalBytes += entryBytes;
-    this.enforceLimits();
-    this.emitListChanged(true);
+    this.#entries.set(entry.uri, entry, entryBytes);
+    this.#onListChanged?.();
     return entry;
   }
 
   /**
-   * Returns live URIs currently in the store.
-   * Side effect: prunes expired entries before returning.
-   *
-   * Deliberately silent: this is the read path `resources/list` runs through,
-   * and the caller is already receiving the post-prune list. Emitting here
-   * would tell the client its list changed while handing it that same list.
+   * Live URIs, oldest first. Deliberately silent about the prune it runs:
+   * this is the read path `resources/list` runs through, and the caller is
+   * already receiving the post-prune list.
    */
   keys(): string[] {
-    this.pruneExpiredEntries();
-    return Array.from(this.byUri.keys());
+    return this.#entries.keys();
   }
 }
 
@@ -195,4 +204,66 @@ export function putJsonResource(
       annotations: { audience: ['user'] },
     },
   };
+}
+
+// ─── Page snapshots: paginated result sets ───────────────────────────────────
+
+export interface PageSnapshot<T = unknown, M = unknown> {
+  readonly items: readonly T[];
+  readonly metadata: M;
+}
+
+/**
+ * The one cursor rejection: a cursor whose snapshot expired, was evicted, was
+ * already consumed past its end, or belongs to a different query. Every case
+ * has the same remedy, so they share one message.
+ */
+export function invalidCursor(): FsError {
+  return new FsError(
+    ErrorCode.INVALID_INPUT,
+    'Invalid cursor. Request the first page without a cursor.',
+  );
+}
+
+/**
+ * Short-lived snapshots of a completed query's full result set, so later pages
+ * slice a stored array instead of re-scanning and re-sorting the filesystem.
+ *
+ * ponytail: bounded by snapshot count and TTL, not by bytes — 32 x 20,000
+ * `list` entries or 32 x 10,000 `search_text` matches, each match retaining up
+ * to 20 more line strings at `context: 10`, order of a few hundred MB held for
+ * 60s, and the HTTP leg shares one store so any caller can drive it. If that
+ * shows up as memory pressure, pass a byte weight to `set` the way
+ * `ResourceStore` does.
+ */
+export class PageSnapshotStore {
+  readonly #byId: TtlLru<PageSnapshot & { queryKey: string }>;
+
+  constructor(options: { maxSnapshots?: number; ttlMs?: number; now?: () => number } = {}) {
+    this.#byId = new TtlLru({
+      maxEntries: options.maxSnapshots ?? 32,
+      ttlMs: options.ttlMs ?? 60 * 1000,
+      ...(options.now ? { now: options.now } : {}),
+    });
+  }
+
+  create(params: { queryKey: string; items: readonly unknown[]; metadata?: unknown }): string {
+    const snapshotId = randomUUID();
+    this.#byId.set(snapshotId, {
+      queryKey: params.queryKey,
+      items: params.items,
+      metadata: params.metadata,
+    });
+    return snapshotId;
+  }
+
+  read<T, M = undefined>(snapshotId: string, queryKey: string): PageSnapshot<T, M> {
+    const entry = this.#byId.get(snapshotId);
+    if (entry?.queryKey !== queryKey) throw invalidCursor();
+    return { items: entry.items as readonly T[], metadata: entry.metadata as M };
+  }
+
+  clear(): void {
+    this.#byId.clear();
+  }
 }

@@ -20,30 +20,30 @@ import {
   resourceUrlFromServerUrl,
 } from '@modelcontextprotocol/server';
 
-import type { FsError } from './core/errors.js';
-import { ErrorCode, formatUnknownErrorMessage, fsErrorCode, isFsError } from './core/errors.js';
+import type { FsError } from './core/errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, fsErrorCode, isFsError } from './core/errors.ts';
 import {
   decodeFileUriPath,
   encodeFileUriPath,
   extractPath,
   FILESYSTEM_FILE_URI_TEMPLATE,
-} from './core/file-uri.js';
-import { GuardedFileSystem } from './core/fs.js';
-import { Logger } from './core/observability.js';
-import { PathCompleter } from './core/path-completer.js';
-import type { PathGuard } from './core/path.js';
-import type { ResourceStore } from './core/store.js';
+} from './core/file-uri.ts';
+import { GuardedFileSystem } from './core/fs.ts';
+import { Logger } from './core/observability.ts';
+import { suggestPaths } from './core/path-completer.ts';
+import type { PathGuard } from './core/path.ts';
+import type { ResourceStore } from './core/store.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
   type WatcherRegistry,
-} from './core/watcher-registry.js';
+} from './core/watcher-registry.ts';
 import {
   buildSectionsRecord,
   INSTRUCTIONS_SUMMARY,
   INSTRUCTIONS_URI,
   renderSections,
-} from './instructions.js';
+} from './instructions.ts';
 
 // ═══════════════════════════════════════════════════════════════
 // shared
@@ -97,7 +97,7 @@ function isNotFoundish(error: unknown): error is FsError {
 // contract
 // ═══════════════════════════════════════════════════════════════
 
-interface BaseResourceContract {
+interface ResourceContract {
   name: string;
   title?: string;
   description?: string;
@@ -107,6 +107,11 @@ interface BaseResourceContract {
     audience?: Role[];
     priority?: number;
   };
+  /** A fixed, enumerable URI (e.g. internal://instructions)... */
+  uri?: string;
+  /** ...or a URI template, optionally with a completer for its variable. */
+  uriTemplate?: string;
+  complete?: { path: CompleteResourceTemplateCallback };
   readonly read: (
     uri: URL,
     variables: Record<string, string | string[]>,
@@ -123,21 +128,9 @@ interface BaseResourceContract {
   ) => Promise<{ resources: Resource[] }> | { resources: Resource[] };
 }
 
-/** A resource with a fixed, enumerable URI (e.g. internal://instructions). */
-interface StaticResourceContract extends BaseResourceContract {
-  uri: string;
-  uriTemplate?: never;
-  complete?: never;
-}
-
-/** A resource identified by a URI template (FILESYSTEM_FILE_URI_TEMPLATE). */
-interface TemplateResourceContract extends BaseResourceContract {
-  uriTemplate: string;
-  uri?: never;
-  complete?: { path: CompleteResourceTemplateCallback };
-}
-
-type ResourceContract = StaticResourceContract | TemplateResourceContract;
+/** The one contract with a live watcher behind it. */
+type SubscribableContract = ResourceContract &
+  Required<Pick<ResourceContract, 'subscribe' | 'unsubscribe'>>;
 
 // ═══════════════════════════════════════════════════════════════
 // instructions
@@ -171,8 +164,7 @@ function createInstructionsResource(options: ResourceRegistrationOptions): Resou
 // filesystem
 // ═══════════════════════════════════════════════════════════════
 
-function createFilesystemResource(options: ResourceRegistrationOptions): ResourceContract {
-  const completer = new PathCompleter(options.pathGuard);
+function createFilesystemResource(options: ResourceRegistrationOptions): SubscribableContract {
   const registry = options.watcherRegistry ?? createWatcherRegistry();
   // Only the per-server (legacy/stdio) registry is owned by this resource and
   // destroyed on dispose; the shared modern-leg registry is owned by the host
@@ -248,7 +240,10 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Resourc
       // paths: the partial arriving here is whatever this returned last, so the
       // decode mirrors the encode. An undecodable partial is matched as typed.
       path: async (value) => {
-        const suggestions = await completer.suggest(decodeFileUriPath(value) ?? value);
+        const suggestions = await suggestPaths(
+          options.pathGuard,
+          decodeFileUriPath(value) ?? value,
+        );
         return suggestions.map(encodeFileUriPath);
       },
     },
@@ -420,7 +415,13 @@ function wrapRead(contract: ResourceContract) {
 
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
   const server = deps.server;
-  const resourceContracts = getResourceContracts({ ...deps, readOnly: deps.readOnly ?? false });
+  const options = { ...deps, readOnly: deps.readOnly ?? false };
+  const file = createFilesystemResource(options);
+  const resourceContracts = [
+    createInstructionsResource(options),
+    createResultResource(options),
+    file,
+  ];
 
   for (const contract of resourceContracts) {
     const config = {
@@ -481,60 +482,44 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
       });
     };
 
+    // The URI prefix a contract answers for: a fixed URI, or a template up to
+    // its first variable.
+    const prefixOf = (contract: ResourceContract): string | undefined =>
+      contract.uri ?? contract.uriTemplate?.split('{')[0];
+    const matches = (contract: ResourceContract, requested: URL): boolean => {
+      const configured = prefixOf(contract);
+      return (
+        configured !== undefined &&
+        checkResourceAllowed({ requestedResource: requested, configuredResource: configured })
+      );
+    };
+
     server.server.setRequestHandler(
       'resources/subscribe',
       async (req: { params: SubscribeRequestParams }) => {
-        const requestedResource = resourceUrlFromServerUrl(req.params.uri);
-        let foundMatch = false;
-        // A resource that exists but has no watcher (the instructions text, a
-        // cached result) is NOT a not-found: reporting it as one told clients a
-        // URI they can list and read does not exist. Track the two cases apart.
-        let knownButNotSubscribable = false;
-        for (const contract of resourceContracts) {
-          const configured = contract.uri ?? contract.uriTemplate.split('{')[0];
-          if (!contract.subscribe) {
-            if (
-              configured &&
-              checkResourceAllowed({ requestedResource, configuredResource: configured })
-            ) {
-              knownButNotSubscribable = true;
-            }
-            continue;
-          }
-          if (!configured) continue;
-          if (
-            checkResourceAllowed({
-              requestedResource,
-              configuredResource: configured,
-            })
-          ) {
-            foundMatch = true;
-            const subscribeResult = await contract.subscribe(
-              requestedResource.toString(),
-              notifyUpdated,
-            );
-            if (subscribeResult === false) {
-              // InternalError for want of anything better: ProtocolErrorCode
-              // has no resource-limit member, and the message already names
-              // the actionable cause.
-              throw new ProtocolError(
-                ProtocolErrorCode.InternalError,
-                `Subscription rejected: no watcher attached (watcher limit ${MAX_WATCHERS} reached, or fs.watch failed to start).`,
-              );
-            }
-            break;
-          }
-        }
-        if (!foundMatch) {
-          if (knownButNotSubscribable) {
+        const requested = resourceUrlFromServerUrl(req.params.uri);
+        if (!matches(file, requested)) {
+          // A resource that exists but has no watcher (the instructions text,
+          // a cached result) is NOT a not-found: reporting it as one told
+          // clients a URI they can list and read does not exist.
+          if (resourceContracts.some((contract) => matches(contract, requested))) {
             throw new ProtocolError(
               ProtocolErrorCode.InvalidParams,
-              `Resource ${requestedResource.toString()} does not support subscriptions; only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
+              `Resource ${requested.toString()} does not support subscriptions; only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
             );
           }
           throw new ResourceNotFoundError(
-            requestedResource.toString(),
-            `Resource not found: ${requestedResource.toString()}`,
+            requested.toString(),
+            `Resource not found: ${requested.toString()}`,
+          );
+        }
+        if ((await file.subscribe(requested.toString(), notifyUpdated)) === false) {
+          // InternalError for want of anything better: ProtocolErrorCode has
+          // no resource-limit member, and the message already names the
+          // actionable cause.
+          throw new ProtocolError(
+            ProtocolErrorCode.InternalError,
+            `Subscription rejected: no watcher attached (watcher limit ${MAX_WATCHERS} reached, or fs.watch failed to start).`,
           );
         }
         return {};
@@ -544,18 +529,8 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     server.server.setRequestHandler(
       'resources/unsubscribe',
       (req: { params: UnsubscribeRequestParams }) => {
-        // Route by URI prefix, mirroring the subscribe handler: a broadcast
-        // to every contract works while only one is subscribable, but hands a
-        // second subscribable contract someone else's URI the day it appears.
-        const requestedResource = resourceUrlFromServerUrl(req.params.uri);
-        for (const contract of resourceContracts) {
-          if (!contract.unsubscribe) continue;
-          const configured = contract.uri ?? contract.uriTemplate.split('{')[0];
-          if (!configured) continue;
-          if (checkResourceAllowed({ requestedResource, configuredResource: configured })) {
-            contract.unsubscribe(requestedResource.toString());
-          }
-        }
+        const requested = resourceUrlFromServerUrl(req.params.uri);
+        if (matches(file, requested)) file.unsubscribe(requested.toString());
         return {};
       },
     );

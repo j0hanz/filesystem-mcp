@@ -1,29 +1,29 @@
 import * as z from 'zod/v4';
 
-import { SearchStoppedReasonSchema } from '../core/concurrency.js';
-import { pageQueryKey, paginate } from '../core/cursor.js';
-import { ErrorCode } from '../core/errors.js';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
-import { toPosixRelative } from '../core/path.js';
+import { SearchStoppedReasonSchema } from '../core/concurrency.ts';
+import { paginate } from '../core/cursor.ts';
+import { ErrorCode } from '../core/errors.ts';
+import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
+import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
-  includeHiddenField,
-  includeIgnoredField,
-  maxDepthField,
+  IncludeHidden,
+  IncludeIgnored,
+  MaxDepth,
   NextCursorSchema,
   NonNegInt,
   OptionalPath,
   SafeGlobPattern,
-} from '../core/schema.js';
-import { searchFiles } from '../core/search.js';
-import type { JsonResourceResult } from '../core/store.js';
-import { putJsonResource } from '../core/store.js';
+} from '../core/schema.ts';
+import { searchFiles } from '../core/search.ts';
+import type { JsonResourceResult } from '../core/store.ts';
+import { putJsonResource } from '../core/store.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
   MAX_SEARCH_RESULTS,
-} from '../core/util.js';
-import { defineTool, type ToolCtx } from './define.js';
+} from '../core/util.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 // ---------------------------------------------------------------------------
 
@@ -37,14 +37,14 @@ const SearchFilesInputSchema = z.strictObject({
     .optional()
     .default(DEFAULT_SEARCH_RESULTS)
     .describe('Maximum number of matching files to return per page'),
-  includeIgnored: includeIgnoredField(),
-  includeHidden: includeHiddenField(),
+  includeIgnored: IncludeIgnored,
+  includeHidden: IncludeHidden,
   sortBy: z
     .enum(['name', 'path'])
     .optional()
     .default('path')
     .describe('Sort order: path = full path (default), name = basename only'),
-  maxDepth: maxDepthField(),
+  maxDepth: MaxDepth,
   cursor: CursorSchema,
 });
 
@@ -74,28 +74,12 @@ const SearchFilesOutputSchema = z.strictObject({
   nextCursor: NextCursorSchema,
 });
 
-function buildRelativeResults(
-  basePath: string,
-  displayResults: readonly { path: string }[],
-): NonNullable<z.infer<typeof SearchFilesOutputSchema>['results']> {
-  const relativeResults: NonNullable<z.infer<typeof SearchFilesOutputSchema>['results']> = [];
-  for (const entry of displayResults) {
-    relativeResults.push({
-      path: toPosixRelative(basePath, entry.path),
-    });
-  }
-  return relativeResults;
-}
+type SearchFileResult = z.infer<typeof SearchFilesOutputSchema>['results'][number];
 
-type SearchFileResult = NonNullable<z.infer<typeof SearchFilesOutputSchema>['results']>[number];
-
-interface SearchFilesPageMetadata {
+/** The engine's own summary plus its root is the page metadata; nothing is copied out of it. */
+type SearchFilesPageMetadata = Awaited<ReturnType<typeof searchFiles>>['summary'] & {
   readonly root: string;
-  readonly totalMatches: number;
-  readonly filesScanned: number;
-  readonly skippedInaccessible?: number;
-  readonly stoppedReason?: z.infer<typeof SearchFilesOutputSchema>['stoppedReason'];
-}
+};
 
 function searchFilesOutput(
   results: readonly SearchFileResult[],
@@ -106,7 +90,7 @@ function searchFilesOutput(
   return {
     root: metadata.root,
     results: [...results],
-    totalMatches: metadata.totalMatches,
+    totalMatches: metadata.matched,
     filesScanned: metadata.filesScanned,
     ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
     ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
@@ -125,7 +109,7 @@ async function handleSearchFiles(
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = pageQueryKey({
+  const queryKey = JSON.stringify({
     method: 'find_files',
     path: requestedBasePath,
     pattern: args.pattern,
@@ -153,18 +137,8 @@ async function handleSearchFiles(
       };
       const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
       return {
-        items: buildRelativeResults(result.basePath, result.results),
-        metadata: {
-          root: result.basePath,
-          totalMatches: result.summary.matched,
-          filesScanned: result.summary.filesScanned,
-          ...(result.summary.skippedInaccessible
-            ? { skippedInaccessible: result.summary.skippedInaccessible }
-            : {}),
-          ...(result.summary.stoppedReason !== undefined
-            ? { stoppedReason: result.summary.stoppedReason }
-            : {}),
-        },
+        items: result.results.map((r) => ({ path: toPosixRelative(result.basePath, r.path) })),
+        metadata: { root: result.basePath, ...result.summary },
         truncated: result.summary.truncated,
       };
     },
@@ -181,7 +155,7 @@ async function handleSearchFiles(
       paged.resource?.entry.uri,
     ),
     offset: paged.offset,
-    total: paged.metadata.totalMatches,
+    total: paged.metadata.matched,
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }

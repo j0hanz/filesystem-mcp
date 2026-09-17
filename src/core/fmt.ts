@@ -1,7 +1,6 @@
 import { basename } from 'node:path';
-import { stripVTControlCharacters, styleText } from 'node:util';
 
-import { MAX_SEARCH_RESULTS } from './util.js';
+import { MAX_SEARCH_RESULTS } from './util.ts';
 
 export interface ProgressCtx {
   label: string;
@@ -131,22 +130,3 @@ export function pageTrailer(p: {
   }
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
 }
-
-// ---------------------------------------------------------------------------
-// CLI color helpers
-// ---------------------------------------------------------------------------
-
-export function padEndVisible(s: string, width: number): string {
-  const visible = stripVTControlCharacters(s).length;
-  return visible >= width ? s : s + ' '.repeat(width - visible);
-}
-
-export const cliFmt = {
-  bold: (t: string) => styleText('bold', t),
-  dim: (t: string) => styleText('dim', t),
-  cyan: (t: string) => styleText('cyan', t),
-  yellow: (t: string) => styleText('yellow', t),
-  flag: (t: string) => styleText('green', t),
-  section: (t: string) => styleText(['cyan', 'bold'], t),
-  bool: (v: boolean) => (v ? styleText('green', 'true') : styleText('red', 'false')),
-};

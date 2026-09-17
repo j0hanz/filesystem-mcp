@@ -4,33 +4,33 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { pageQueryKey, paginate } from '../core/cursor.js';
-import { ErrorCode } from '../core/errors.js';
-import { pageTrailer } from '../core/fmt.js';
-import type { EntryType } from '../core/glob.js';
-import { globEntries } from '../core/glob.js';
-import type { PathGuard } from '../core/path.js';
-import { toPosixRelative } from '../core/path.js';
-import { resolveEntryType } from '../core/primitives.js';
+import { paginate } from '../core/cursor.ts';
+import { ErrorCode } from '../core/errors.ts';
+import { pageTrailer } from '../core/fmt.ts';
+import type { EntryType } from '../core/glob.ts';
+import { globEntries } from '../core/glob.ts';
+import { resolveEntryType } from '../core/path-utils.ts';
+import type { PathGuard } from '../core/path.ts';
+import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
   FileType as FileTypeEnum,
-  includeHiddenField,
-  includeIgnoredField,
+  IncludeHidden,
+  IncludeIgnored,
   NextCursorSchema,
   NonNegInt,
   OptionalPath,
   PositiveInt,
-} from '../core/schema.js';
-import type { JsonResourceResult } from '../core/store.js';
-import { putJsonResource } from '../core/store.js';
+} from '../core/schema.ts';
+import type { JsonResourceResult } from '../core/store.ts';
+import { putJsonResource } from '../core/store.ts';
 import {
   DEFAULT_SEARCH_TIMEOUT_MS,
   DEFAULT_TREE_ENTRIES,
   MAX_LIST_ENTRIES,
   MAX_TREE_DEPTH,
-} from '../core/util.js';
-import { defineTool, type ToolCtx } from './define.js';
+} from '../core/util.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 interface CollectedEntry {
   name: string;
@@ -178,7 +178,6 @@ function renderMarkdown(rootName: string, entries: readonly CollectedEntry[]): s
 }
 
 const DEFAULT_LIST_DEPTH = 1;
-const DEFAULT_LIST_ENTRIES = DEFAULT_TREE_ENTRIES;
 
 const ListInputSchema = z.strictObject({
   path: OptionalPath.describe('Directory to list (default: first allowed root)'),
@@ -188,12 +187,12 @@ const ListInputSchema = z.strictObject({
       `Max directory depth to traverse (default: ${String(DEFAULT_LIST_DEPTH)} = top-level only; increase to recurse deeper)`,
     ),
   maxEntries: PositiveInt.max(MAX_LIST_ENTRIES)
-    .default(DEFAULT_LIST_ENTRIES)
+    .default(DEFAULT_TREE_ENTRIES)
     .describe(
-      `Page size (default: ${String(DEFAULT_LIST_ENTRIES)}). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.`,
+      `Page size (default: ${String(DEFAULT_TREE_ENTRIES)}). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.`,
     ),
-  includeHidden: includeHiddenField(),
-  includeIgnored: includeIgnoredField(),
+  includeHidden: IncludeHidden,
+  includeIgnored: IncludeIgnored,
   cursor: CursorSchema,
 });
 
@@ -234,24 +233,6 @@ interface ListPageMetadata {
   readonly totalDirectories: number;
 }
 
-function listOutput(
-  entries: readonly CollectedEntry[],
-  metadata: ListPageMetadata,
-  nextCursor: string | undefined,
-  resourceUri: string | undefined,
-): z.infer<typeof ListOutputSchema> {
-  return {
-    path: metadata.path,
-    entries: [...entries],
-    entryCount: entries.length,
-    totalEntries: metadata.totalEntries,
-    totalFiles: metadata.totalFiles,
-    totalDirectories: metadata.totalDirectories,
-    ...(resourceUri !== undefined ? { resourceUri } : {}),
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
-}
-
 async function handleList(
   args: z.infer<typeof ListInputSchema>,
   ctx: ToolCtx,
@@ -263,7 +244,7 @@ async function handleList(
 }> {
   const path = args.path;
   const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(path);
-  const queryKey = pageQueryKey({
+  const queryKey = JSON.stringify({
     method: 'list',
     path: resolvedPath,
     maxDepth: args.maxDepth,
@@ -317,8 +298,15 @@ async function handleList(
       : undefined,
   });
 
+  const resourceUri = paged.resource?.entry.uri;
   return {
-    structured: listOutput(paged.page, paged.metadata, paged.nextCursor, paged.resource?.entry.uri),
+    structured: {
+      ...paged.metadata,
+      entries: [...paged.page],
+      entryCount: paged.page.length,
+      ...(resourceUri !== undefined ? { resourceUri } : {}),
+      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
+    },
     markdown: renderMarkdown(basename(paged.metadata.path), [...paged.page]),
     offset: paged.offset,
     ...(paged.resource ? { link: paged.resource.link } : {}),

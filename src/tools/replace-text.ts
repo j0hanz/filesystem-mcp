@@ -1,50 +1,43 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { Buffer } from 'node:buffer';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import type { StoppedReason, StopReasonTracker } from '../core/concurrency.js';
-import { processEntriesConcurrently, StoppedReasonSchema } from '../core/concurrency.js';
-import { unifiedPatch } from '../core/diff.js';
-import {
-  ErrorCode,
-  formatUnknownErrorMessage,
-  FsError,
-  Problem,
-  rethrowIfAborted,
-} from '../core/errors.js';
-import { buildFileResourceLink } from '../core/file-uri.js';
-import { truncateProgressPattern } from '../core/fmt.js';
-import type { GuardedFileSystem } from '../core/fs.js';
-import { globEntries } from '../core/glob.js';
-import { toPosixRelative } from '../core/path.js';
-import { escapeRegexLiteral } from '../core/primitives.js';
-import { readFileBufferWithLimit } from '../core/read.js';
+import type { StoppedReason } from '../core/concurrency.ts';
+import { processEntriesConcurrently, StoppedReasonSchema } from '../core/concurrency.ts';
+import { unifiedPatch } from '../core/diff.ts';
+import { ErrorCode, FsError, Problem } from '../core/errors.ts';
+import { buildWrittenFileMeta } from '../core/file-uri.ts';
+import { truncateProgressPattern } from '../core/fmt.ts';
+import type { GuardedFileSystem } from '../core/fs.ts';
+import { globEntries } from '../core/glob.ts';
+import { toPosixRelative } from '../core/path.ts';
+import { readFileBufferWithLimit } from '../core/read.ts';
 import {
   defaultFalseBoolean,
-  includeHiddenField,
-  includeIgnoredField,
+  IncludeHidden,
+  IncludeIgnored,
   isBlank,
-  maxDepthField,
+  MaxDepth,
   NonNegInt,
   OperationSummarySchema,
   OptionalPath,
   PerFileErrorSchema,
   SafeGlobPattern,
-} from '../core/schema.js';
-import type { Regex } from '../core/search.js';
-import { compileRegex, execMatches, freeRegex } from '../core/search.js';
+} from '../core/schema.ts';
+import type { Regex } from '../core/search.ts';
+import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
-} from '../core/util.js';
-import { isTotalFailure } from './batch.js';
-import { defineTool, type ToolCtx } from './define.js';
+} from '../core/util.ts';
+import { isTotalFailure } from './batch.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 const SearchAndReplaceInputSchema = z.strictObject({
   path: OptionalPath.describe(
@@ -73,8 +66,8 @@ const SearchAndReplaceInputSchema = z.strictObject({
     )
     .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
   isRegex: defaultFalseBoolean('Treat searchPattern as a RE2 regex (default: literal text match)'),
-  includeHidden: includeHiddenField(),
-  includeIgnored: includeIgnoredField(),
+  includeHidden: IncludeHidden,
+  includeIgnored: IncludeIgnored,
   caseSensitive: defaultFalseBoolean('Enable case-sensitive matching (default: case-insensitive)'),
   wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
   dryRun: defaultFalseBoolean(
@@ -94,7 +87,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe('Maximum number of files to process'),
-  maxDepth: maxDepthField(),
+  maxDepth: MaxDepth,
 });
 
 const ReplacePerPathSchema = z.strictObject({
@@ -153,10 +146,13 @@ function recordFailure(failures: Failure[], failure: Failure): void {
   failures.push(failure);
 }
 
-function recordChangedFile(summary: ReplaceSummary, filePath: string, matchCount: number): void {
+function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, filePath: string): void {
   const relativePath = toPosixRelative(summary.root, filePath);
+  // The first changed file is the one the resource_link points at; keep what
+  // was written so the link needs no read-back.
+  summary.primary ??= { path: filePath, content: plan.updatedContent };
   if (summary.changedFiles.length < MAX_CHANGED_FILES) {
-    summary.changedFiles.push({ path: relativePath, matches: matchCount });
+    summary.changedFiles.push({ path: relativePath, matches: plan.matchCount });
     return;
   }
   summary.changedFilesTruncated = true;
@@ -318,7 +314,7 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
     summary.totalMatches += plan.matchCount;
     summary.filesChanged++;
 
-    recordChangedFile(summary, validPath, plan.matchCount);
+    recordChangedFile(summary, plan, validPath);
 
     maybeAppendPatchDiff(summary, {
       filePath: validPath,
@@ -393,6 +389,8 @@ interface ReplaceSummary {
   failures: Failure[];
   changedFiles: { path: string; matches: number }[];
   changedFilesTruncated: boolean;
+  /** First file changed, as written. */
+  primary?: { path: string; content: string };
   diff: string;
   diffTruncated: boolean;
   stoppedReason?: StoppedReason;
@@ -439,7 +437,7 @@ function buildSearchPattern(args: SearchAndReplaceArgs): string {
   if (args.isRegex) {
     return args.wholeWord ? `\\b(?:${args.searchPattern})\\b` : args.searchPattern;
   }
-  const escaped = escapeRegexLiteral(args.searchPattern);
+  const escaped = RegExp.escape(args.searchPattern);
   return args.wholeWord ? `\\b(?:${escaped})\\b` : escaped;
 }
 
@@ -515,7 +513,7 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
-  let scan: StopReasonTracker;
+  let stoppedReason: StoppedReason | undefined;
   try {
     const context: ReplaceContext = {
       options: {
@@ -530,7 +528,7 @@ async function handleSearchAndReplace(
       fs: ctx.fs,
     };
 
-    scan = await processEntriesConcurrently(entries, {
+    stoppedReason = await processEntriesConcurrently(entries, {
       signal: ctx.signal,
       concurrency: REPLACE_CONCURRENCY,
       ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
@@ -551,7 +549,6 @@ async function handleSearchAndReplace(
   } finally {
     matcher.dispose();
   }
-  const stoppedReason = scan.resolve();
   if (stoppedReason !== undefined) summary.stoppedReason = stoppedReason;
 
   ctx.onProgress?.({ current: summary.processedFiles });
@@ -566,37 +563,13 @@ async function handleSearchAndReplace(
 
   const structured = buildSearchAndReplaceStructuredResult(summary, args);
 
-  // Store primary file in resource store if available (skip in dryRun to avoid reading stale disk content)
-  if (
-    !args.dryRun &&
-    ctx.resourceStore &&
-    summary.changedFiles.length > 0 &&
-    summary.filesChanged > 0
-  ) {
-    const primaryFile = summary.changedFiles[0];
-    if (!primaryFile) return { structured };
-
-    const primaryFilePath = primaryFile.path;
-    const fullPath = join(summary.root, primaryFilePath);
-
-    try {
-      const { content: rawBuffer, mimeType } = await ctx.fs.readRaw(fullPath, {
-        signal: ctx.signal,
-      });
-      const link = buildFileResourceLink(fullPath, mimeType, rawBuffer.length);
-      return { structured, link };
-    } catch (error) {
-      rethrowIfAborted(error);
-      // Gracefully fall back if resource storage fails
-      ctx.log?.(
-        'error',
-        `Failed to store primary file in resource store: ${formatUnknownErrorMessage(error)}`,
-        'replace_text',
-      );
-    }
-  }
-
-  return { structured };
+  // A dry run wrote nothing, so there is no updated file to link.
+  const link =
+    !args.dryRun && summary.primary
+      ? buildWrittenFileMeta(summary.primary.path, summary.primary.content, ctx.resourceStore)
+          .resourceLink
+      : undefined;
+  return link ? { structured, link } : { structured };
 }
 
 export const REPLACE_TEXT = defineTool({

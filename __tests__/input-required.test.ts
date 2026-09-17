@@ -4,19 +4,17 @@ import { createRequestStateCodec, isInputRequiredResult } from '@modelcontextpro
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.js';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import {
   buildInputRequired,
-  choiceInput,
   describeRefusal,
-  multiSelectInput,
   pendingRoundTrip,
   readAcceptedChoice,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
   requestStateBinding,
   requestStateCodec,
-} from '../src/core/input-required.js';
+} from '../src/core/input-required.ts';
 
 /** The two fields `requestStateBinding` reads; everything else is unused. */
 function bindContext(method = 'tools/call', clientId?: string): ServerContext {
@@ -238,11 +236,11 @@ describe('input_required multi-round-trip infrastructure', () => {
     const r = await buildInputRequired(
       { op: 'copy', paths: ['/dst'] },
       [
-        choiceInput(
-          'confirm_0',
-          'Destination "/dst" exists. Overwrite or skip?',
-          overwriteSkipChoices,
-        ),
+        {
+          key: 'confirm_0',
+          message: 'Destination "/dst" exists. Overwrite or skip?',
+          choices: overwriteSkipChoices,
+        },
       ],
       bindContext(),
     );
@@ -305,7 +303,14 @@ describe('input_required multi-round-trip infrastructure', () => {
   it('16. buildInputRequired with multiSelectInput returns InputRequiredResult', async () => {
     const r = await buildInputRequired(
       { op: 'grant', paths: ['/dir/a', '/dir/b'] },
-      [multiSelectInput('grant', 'Grant access to these directories?', grantChoices)],
+      [
+        {
+          key: 'grant',
+          message: 'Grant access to these directories?',
+          choices: grantChoices,
+          multi: true,
+        },
+      ],
       bindContext(),
     );
     assert.strictEqual(isInputRequiredResult(r), true);

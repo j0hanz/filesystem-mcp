@@ -16,16 +16,15 @@ import { createInterface } from 'node:readline';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { isNodeError } from '../src/core/errors.js';
-import { PageSnapshotStore } from '../src/core/page-store.js';
-import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.js';
-import { ResourceStore } from '../src/core/store.js';
-import { createWatcherRegistry } from '../src/core/watcher-registry.js';
-import type { WatcherRegistry } from '../src/core/watcher-registry.js';
-import { createServer } from '../src/server.js';
-import type { FilesystemServerContext } from '../src/server.js';
-import { ALL_TOOLS } from '../src/tools/index.js';
-import { startHttpServer } from '../src/transport.js';
+import { isNodeError } from '../src/core/errors.ts';
+import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.ts';
+import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
+import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
+import type { WatcherRegistry } from '../src/core/watcher-registry.ts';
+import { createServer } from '../src/server.ts';
+import type { FilesystemServerContext } from '../src/server.ts';
+import { ALL_TOOLS } from '../src/tools/index.ts';
+import { startHttpServer } from '../src/transport.ts';
 
 /** Every registered tool's name - the inventory tests assert `tools/list` against. */
 export const ALL_REGISTERED_TOOL_NAMES: readonly string[] = ALL_TOOLS.map((t) => t.name);
@@ -382,16 +381,16 @@ export interface TestStdioContext {
   close: () => Promise<void>;
 }
 
-/** The `node --import tsx src/index.ts` invocation every stdio entry point spawns. */
+/** The `node src/index.ts` invocation every stdio entry point spawns (Node strips the types). */
 function getStdioServerCommand(): string[] {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-  return [process.execPath, '--import', 'tsx', join(repoRoot, 'src', 'index.ts')];
+  return [process.execPath, join(repoRoot, 'src', 'index.ts')];
 }
 
 /**
- * Spawn the real stdio server (via tsx, no build step) and connect a client.
+ * Spawn the real stdio server (no build step: Node runs the .ts) and connect a client.
  * stdio has no in-process shortcut — the only honest coverage spawns a real
- * process, mirroring `node --import tsx src/index.ts <flags> <allowedDir>`.
+ * process, mirroring `node src/index.ts <flags> <allowedDir>`.
  * `cliFlags` land before the positional root, which is where argv-only
  * behaviour (`--read-only`, `--root-boundary`) gets its end-to-end coverage.
  */

@@ -6,7 +6,7 @@ import {
   createTestClientPair,
   createTestRoot,
   type TestClientContext,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('Capability Negotiation', () => {
   let tmpDir: string;

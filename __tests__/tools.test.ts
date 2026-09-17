@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { MAX_SEARCH_RESULTS } from '../src/core/util.js';
-import { createServer } from '../src/server.js';
-import { ALL_TOOLS, MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.js';
+import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
+import { createServer } from '../src/server.ts';
+import { ALL_TOOLS, MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
@@ -23,7 +23,7 @@ import {
   trySymlink,
   withBoundary,
   writeTestFile,
-} from './helpers.js';
+} from './helpers.ts';
 
 describe('P0 Functional Tests - Tools (MCP Client)', () => {
   let tmpDir: string;
@@ -510,12 +510,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const { tools } = await pinHarness.client.listTools();
       assert.ok(tools.length > 0);
       for (const tool of tools) {
-        // The wire copy is slimmed: no $schema, no $defs, no titles.
-        assert.strictEqual(
-          (tool.inputSchema as { $schema?: string }).$schema,
-          undefined,
-          `${tool.name} must not publish a $schema key`,
-        );
+        // The wire copy is the SDK's own conversion of the Zod schema: no $defs
+        // except where a subschema is deliberately hoisted.
         // `edit` is the deliberate exception: EditSpec is used at two sites in
         // one document, so it carries an `id` and is hoisted (see below).
         if (tool.name !== 'edit') {
