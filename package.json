@@ -32,7 +32,7 @@
     "format": "prettier --write .",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "type-check:test": "tsc -p tsconfig.test.json",
-    "check:static": "npm run build && npm run type-check && npm run type-check:test && eslint . && prettier --check . && knip",
+    "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip",
     "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
     "test": "node --test --import tsx"
