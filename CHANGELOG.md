@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-09-17
+
+A bug-fix release. One paging line reported the wrong range; the published
+surface is byte-identical to 2.4.0, so nothing needs adapting before you
+upgrade.
+
+### Fixed
+
+- **`search_text` reported the wrong range when `context` was set.** The
+  `// showing X-Y of Z matches` trailer counted rendered rows, which include
+  the grep-style context lines and the `--` separators between groups, while
+  the total counted matching lines. A search with `context: 2` over ten
+  matches read `// showing 1-50 of 10 matches`. Both sides now count matching
+  lines. The default `context: 0` was never affected, and neither were `list`
+  or `find_files`.
+- **`--help` no longer documents fleet mode.** The `FS_REQUEST_STATE_KEY`
+  entry still described a shared-key requirement for the deployment mode
+  removed in 2.1.1. The key is optional, and 32 bytes or more when set.
+
 ## [2.4.0] - 2026-09-17
 
 A trim release: one over-engineering audit applied across the tree, plus
