@@ -7,6 +7,7 @@ import { ErrorCode, isFsError } from '../src/core/errors.js';
 import {
   buildInputRequired,
   choiceInput,
+  describeRefusal,
   multiSelectInput,
   pendingRoundTrip,
   readAcceptedChoice,
@@ -322,6 +323,34 @@ describe('input_required multi-round-trip infrastructure', () => {
         'grant',
       ),
       undefined,
+    );
+  });
+});
+
+describe('describeRefusal', () => {
+  it('names a decline', () => {
+    assert.strictEqual(
+      describeRefusal({ confirm_0: { action: 'decline' } }, 'confirm_0'),
+      'declined by the user',
+    );
+  });
+
+  it('names a cancel', () => {
+    assert.strictEqual(
+      describeRefusal({ confirm_0: { action: 'cancel' } }, 'confirm_0'),
+      'dismissed by the user',
+    );
+  });
+
+  it('names a missing key and an undefined response map', () => {
+    assert.strictEqual(describeRefusal({}, 'confirm_0'), 'not answered');
+    assert.strictEqual(describeRefusal(undefined, 'confirm_0'), 'not answered');
+  });
+
+  it('names an accept that carried no usable choice', () => {
+    assert.strictEqual(
+      describeRefusal({ confirm_0: { action: 'accept', content: {} } }, 'confirm_0'),
+      'answered without a valid choice',
     );
   });
 });

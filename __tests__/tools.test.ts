@@ -349,6 +349,31 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('TC-FUNC-009r: a declined overwrite is reported as declined by the user', async () => {
+    const eh = await createElicitationClientPair([tmpDir], async () => ({
+      action: 'decline' as const,
+    }));
+    try {
+      const existing = await writeTestFile(tmpDir, 'create_ow_declined.txt', 'old\n');
+      const result = await eh.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: existing, content: 'new\n' }] },
+      });
+      assert.strictEqual(result.isError, true, 'one file, one refusal: a total failure');
+      const s = result.structuredContent as {
+        files?: unknown[];
+        failures?: { path: string; error: { code: string; message: string } }[];
+      };
+      assert.strictEqual(s.files?.length, 0);
+      assert.strictEqual(s.failures?.length, 1);
+      assert.strictEqual(s.failures?.[0]?.error.code, 'CANCELLED');
+      assert.match(s.failures?.[0]?.error.message ?? '', /declined by the user/);
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'old\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
   it('TC-FUNC-009i: append succeeds on a file larger than max-file-size', async () => {
     // A >10 MiB file cannot pass through read/edit (TOO_LARGE), but appending
     // one line must still work — the bytes never enter model context.
