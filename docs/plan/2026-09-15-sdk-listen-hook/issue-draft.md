@@ -184,4 +184,7 @@ way filesystem-mcp does.
 
 ---
 
-Filed as: (not yet filed)
+Filed as: https://github.com/modelcontextprotocol/typescript-sdk/issues/2827
+(2026-09-17; body follows the repo's `v2 feedback` template, line references
+refreshed to permalinks at `5c25b283`; the `v2` label was not applied — the
+repo does not let non-maintainers label, so maintainers add it at triage)
