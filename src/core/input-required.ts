@@ -142,7 +142,7 @@ export function multiSelectInput(
 // response, AND a payload that fails validation — one call covers every refusal
 // case the readers below used to hand-check. `buildInputRequired` reuses
 // `ConfirmContent` as the no-choices form schema (below), so these sit above it.
-const ConfirmContent = z.object({ confirm: z.boolean() });
+const ConfirmContent = z.object({ confirm: z.boolean().meta({ title: 'Confirm' }) });
 const ChoiceContent = z.object({ choice: z.string() });
 const MultiChoiceContent = z.object({ choice: z.array(z.string()) });
 
@@ -153,12 +153,15 @@ const MultiChoiceContent = z.object({ choice: z.array(z.string()) });
  * wrapped in an array for multi-select so the client may accept a subset.
  * The offered lists are never empty by construction (single-select always
  * offers two literals; multi-select only runs with two or more grant dirs),
- * so no empty-array guard is added.
+ * so no empty-array guard is added. Each field carries a `title` so a host
+ * that renders the form labels it instead of showing the property name.
  */
 function requestedSchemaFor(input: PendingInput): z.ZodObject {
   if (!input.choices) return ConfirmContent;
   const value = z.enum(input.choices);
-  return z.object({ choice: input.multi ? z.array(value) : value });
+  return z.object({
+    choice: input.multi ? z.array(value).meta({ title: 'Allow' }) : value.meta({ title: 'Action' }),
+  });
 }
 
 /**

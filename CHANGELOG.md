@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Confirmation forms label their field.** The `input_required` forms for overwrite, delete and access-grant confirmations now carry a `title` on their one field — `Confirm` for the yes/no grant, `Action` for the overwrite/skip and delete/skip choice, `Allow` for the multi-directory grant — so a host that renders the form shows that label instead of the property name `confirm` or `choice`. The offered values and the `message` text are unchanged.
+
 ## [2.3.0] - 2026-09-16
 
 A security fix for operator deny rules, three additions, and two write tools
