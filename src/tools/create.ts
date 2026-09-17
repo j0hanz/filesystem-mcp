@@ -150,6 +150,7 @@ export const CREATE = defineTool({
         pending: pendingSorted,
         requestState: ctx.requestState,
         clientCapabilities: ctx.clientCapabilities,
+        serverCtx: ctx.serverCtx,
         buildInputs: (paths) =>
           paths.map((target, i) =>
             choiceInput(confirmKey(i), `"${target}" already exists. Overwrite it?`, [

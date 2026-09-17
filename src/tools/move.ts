@@ -315,6 +315,7 @@ async function runTransfers(
       pending: pendingSorted,
       requestState: ctx.requestState,
       clientCapabilities: ctx.clientCapabilities,
+      serverCtx: ctx.serverCtx,
       buildInputs: (dests) =>
         dests.map((dest, i) =>
           choiceInput(
