@@ -345,15 +345,7 @@ export function readAcceptedMultiChoice(
   return acceptedContent(responses, key, MultiChoiceContent)?.choice;
 }
 
-/**
- * Why a pending item has no accepted answer this round, worded for the
- * `CANCELLED` error the caller raises. The `readAccepted*` readers fold every
- * refusal into one `undefined` on purpose — the caller only needs to know it
- * cannot proceed — but the model reading the error benefits from the
- * distinction the SDK's `inputResponse` view carries: a user who declined
- * decided, a user who dismissed the prompt did not, and a missing key means
- * the client never answered. Call it only after a reader returned nothing.
- */
+/** Refusal wording for the `CANCELLED` error; call after a `readAccepted*` reader returned nothing. */
 export function describeRefusal(
   responses: Record<string, unknown> | undefined,
   key: string,

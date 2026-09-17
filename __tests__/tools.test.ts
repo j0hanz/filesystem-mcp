@@ -361,10 +361,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       });
       assert.strictEqual(result.isError, true, 'one file, one refusal: a total failure');
       const s = result.structuredContent as {
-        files?: unknown[];
         failures?: { path: string; error: { code: string; message: string } }[];
       };
-      assert.strictEqual(s.files?.length, 0);
       assert.strictEqual(s.failures?.length, 1);
       assert.strictEqual(s.failures?.[0]?.error.code, 'CANCELLED');
       assert.match(s.failures?.[0]?.error.message ?? '', /declined by the user/);

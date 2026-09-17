@@ -20,6 +20,17 @@ import {
 // is configured; its implementation does not read the context in that mode.
 const NO_BIND_CONTEXT = undefined as never;
 
+/** The converted `requestedSchema` an embedded elicitation carries, keyed by its one field. */
+interface FormRequest<K extends string> {
+  params?: {
+    requestedSchema?: {
+      properties?: Partial<
+        Record<K, { type?: string; title?: string; enum?: string[]; items?: { enum?: string[] } }>
+      >;
+    };
+  };
+}
+
 describe('request-state key initialization', () => {
   it('binds the codec to a key configured after import, on first use', async () => {
     const stateKey = 'a'.repeat(32);
@@ -160,11 +171,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
-    const request = r.inputRequests['confirm_0'] as {
-      params?: {
-        requestedSchema?: { properties?: { confirm?: { type?: string; title?: string } } };
-      };
-    };
+    const request = r.inputRequests['confirm_0'] as FormRequest<'confirm'>;
     assert.strictEqual(request.params?.requestedSchema?.properties?.confirm?.type, 'boolean');
     assert.strictEqual(request.params?.requestedSchema?.properties?.confirm?.title, 'Confirm');
   });
@@ -214,11 +221,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests['confirm_0'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
     assert.ok(typeof r.requestState === 'string' && r.requestState.length > 0);
-    const request = r.inputRequests['confirm_0'] as {
-      params?: {
-        requestedSchema?: { properties?: { choice?: { enum?: string[]; title?: string } } };
-      };
-    };
+    const request = r.inputRequests['confirm_0'] as FormRequest<'choice'>;
     assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.enum, [
       'overwrite',
       'skip',
@@ -277,13 +280,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.ok(r.inputRequests);
     assert.ok(r.inputRequests['grant'] !== undefined);
     assert.strictEqual(typeof r.requestState, 'string');
-    const request = r.inputRequests['grant'] as {
-      params?: {
-        requestedSchema?: {
-          properties?: { choice?: { items?: { enum?: string[] }; title?: string } };
-        };
-      };
-    };
+    const request = r.inputRequests['grant'] as FormRequest<'choice'>;
     assert.deepStrictEqual(request.params?.requestedSchema?.properties?.choice?.items?.enum, [
       '/dir/a',
       '/dir/b',
@@ -337,29 +334,16 @@ describe('input_required multi-round-trip infrastructure', () => {
 });
 
 describe('describeRefusal', () => {
-  it('names a decline', () => {
-    assert.strictEqual(
-      describeRefusal({ confirm_0: { action: 'decline' } }, 'confirm_0'),
-      'declined by the user',
-    );
-  });
-
-  it('names a cancel', () => {
-    assert.strictEqual(
-      describeRefusal({ confirm_0: { action: 'cancel' } }, 'confirm_0'),
-      'dismissed by the user',
-    );
-  });
-
-  it('names a missing key and an undefined response map', () => {
-    assert.strictEqual(describeRefusal({}, 'confirm_0'), 'not answered');
-    assert.strictEqual(describeRefusal(undefined, 'confirm_0'), 'not answered');
-  });
-
-  it('names an accept that carried no usable choice', () => {
-    assert.strictEqual(
-      describeRefusal({ confirm_0: { action: 'accept', content: {} } }, 'confirm_0'),
-      'answered without a valid choice',
-    );
+  it('names each refusal kind', () => {
+    const cases: [Record<string, unknown> | undefined, string][] = [
+      [{ confirm_0: { action: 'decline' } }, 'declined by the user'],
+      [{ confirm_0: { action: 'cancel' } }, 'dismissed by the user'],
+      [{ confirm_0: { action: 'accept', content: {} } }, 'answered without a valid choice'],
+      [{}, 'not answered'],
+      [undefined, 'not answered'],
+    ];
+    for (const [responses, expected] of cases) {
+      assert.strictEqual(describeRefusal(responses, 'confirm_0'), expected);
+    }
   });
 });
