@@ -30,6 +30,28 @@ describe('listenSubscriptionUris', () => {
     };
     assert.deepStrictEqual(listenSubscriptionUris(body), ['a://1', 'a://2']);
   });
+
+  it('returns undefined for a listen the schema rejects, so nothing is attached for it', () => {
+    const body = {
+      method: 'subscriptions/listen',
+      params: { notifications: { resourceSubscriptions: [42, 'a://1'] } },
+    };
+    assert.strictEqual(listenSubscriptionUris(body), undefined);
+  });
+
+  it('returns undefined for anything that is not a listen', () => {
+    assert.strictEqual(listenSubscriptionUris({ method: 'tools/list' }), undefined);
+    assert.strictEqual(listenSubscriptionUris(null), undefined);
+    assert.strictEqual(listenSubscriptionUris('subscriptions/listen'), undefined);
+  });
+
+  it('returns [] for a valid listen that names no resources', () => {
+    const body = {
+      method: 'subscriptions/listen',
+      params: { notifications: { toolsListChanged: true } },
+    };
+    assert.deepStrictEqual(listenSubscriptionUris(body), []);
+  });
 });
 
 describe('HTTP watcher fan-out and listen admission', () => {
@@ -84,13 +106,12 @@ describe('HTTP watcher fan-out and listen admission', () => {
     }
   });
 
-  // The watcher gate runs off the raw body, ahead of the SDK.
-  // `listenSubscriptionUris` filters `resourceSubscriptions` to its string
-  // entries, so a mixed-type array still yields URIs to attach — for a request
-  // the schema rejects outright. Without the gate those fs.watch handles get
-  // created and then depend on the response-close release to come back. The
-  // client cannot send this shape, so it goes over raw fetch; the assertion is
-  // decisive because the ungated path answers with its own message.
+  // The watcher gate runs off the raw body, ahead of the SDK, and attaches only
+  // for a listen the schema accepts. A mixed-type array fails the schema, so no
+  // fs.watch handle is created for it — otherwise those handles would depend on
+  // the response-close release to come back. The client cannot send this shape,
+  // so it goes over raw fetch; the assertion is decisive because the gated path
+  // answers with its own "Cannot subscribe to" message.
   it('does not attach watchers for a structurally invalid listen', async () => {
     const missingUri = buildFileResourceUri(join(tmpDir, 'never-created.txt'));
     const response = await fetch(http.base, {
@@ -106,7 +127,7 @@ describe('HTTP watcher fan-out and listen admission', () => {
         jsonrpc: '2.0',
         id: 1,
         method: 'subscriptions/listen',
-        // 42 fails the schema; missingUri survives listenSubscriptionUris.
+        // 42 fails the schema, so listenSubscriptionUris yields nothing to attach.
         params: { notifications: { resourceSubscriptions: [42, missingUri] } },
       }),
     });
