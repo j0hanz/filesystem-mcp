@@ -71,6 +71,10 @@ export async function createServer(
     apiKey?: string;
   },
 ): Promise<FilesystemServerContext> {
+  // Only `resources` is declared: `McpServer` advertises `tools` and `prompts`
+  // (with `listChanged: true`) and `completions` from the registrations below,
+  // but never infers `subscribe`.
+  //
   // `resources.subscribe` stays advertised on both eras: the verb itself is
   // 2025-only, but with enforceStrictCapabilities the SDK also gates outbound
   // `notifications/resources/updated` — which the modern `subscriptions/listen`
@@ -82,9 +86,6 @@ export async function createServer(
   const legacyHttp = extraDeps?.era === 'legacy' && extraDeps.notifier !== undefined;
   const capabilities = {
     resources: { subscribe: !legacyHttp, listChanged: !legacyHttp },
-    tools: {},
-    prompts: {},
-    completions: {},
   } satisfies ServerCapabilities;
 
   const cacheScope: 'private' | 'public' = extraDeps?.apiKey ? 'private' : 'public';

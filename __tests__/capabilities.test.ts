@@ -39,4 +39,13 @@ describe('Capability Negotiation', () => {
       'instructions should mention filesystem-mcp',
     );
   });
+
+  it('CAP-003: the advertised capability set is exactly what the registrations imply', () => {
+    assert.deepStrictEqual(harness.client.getServerCapabilities(), {
+      resources: { subscribe: true, listChanged: true },
+      tools: { listChanged: true },
+      prompts: { listChanged: true },
+      completions: {},
+    });
+  });
 });
