@@ -48,21 +48,11 @@ async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buff
 
 async function isProbablyBinary(
   filePath: string,
-  existingHandle?: FileHandle,
+  handle: FileHandle,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (isKnownBinaryExtension(filePath)) {
-    return true;
-  }
-
-  if (existingHandle) {
-    const slice = await readProbe(existingHandle, signal);
-    return isBinarySample(slice);
-  }
-
-  await using handle = await openReadableFileHandle(filePath, signal);
-  const slice = await readProbe(handle, signal);
-  return isBinarySample(slice);
+  if (isKnownBinaryExtension(filePath)) return true;
+  return isBinarySample(await readProbe(handle, signal));
 }
 
 export type ReadSpec =
@@ -170,10 +160,6 @@ async function peekHasMore(iterator: AsyncIterator<string>): Promise<boolean> {
 
 const LF = 0x0a;
 
-function stripCarriageReturn(line: string): string {
-  return line.endsWith('\r') ? line.slice(0, -1) : line;
-}
-
 /**
  * Line iterator bounded by bytes rather than by the decoded string, so a file
  * that is one enormous line cannot be materialized before the size check runs.
@@ -228,7 +214,7 @@ async function* readLinesBounded(
         const decoded = decoder.write(segment);
         if (lineNumber >= startLine) {
           if (lineBytes > options.maxSize) throw tooLong(lineBytes);
-          yield stripCarriageReturn(pending + decoded);
+          yield (pending + decoded).replace(/\r$/, '');
         }
         pending = '';
         pendingBytes = 0;

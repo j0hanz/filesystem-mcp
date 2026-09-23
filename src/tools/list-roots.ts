@@ -24,8 +24,6 @@ export const LIST_ROOTS = defineTool({
   output: RootsOutputSchema,
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   run: (_args, ctx) => {

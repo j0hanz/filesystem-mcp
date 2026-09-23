@@ -21,9 +21,6 @@ interface SearchResult {
 }
 
 export type Regex = RE2;
-export interface RegexCompileOptions {
-  caseSensitive?: boolean;
-}
 
 /** Occurrence-counting bound, so one pathological line cannot spin forever. */
 const MAX_MATCHES_PER_LINE = 100_000;
@@ -49,7 +46,7 @@ const MAX_MATCHES_PER_LINE = 100_000;
  * the rest of the process. Every caller MUST pass the result to
  * {@link freeRegex} when it is done with it.
  */
-export function compileRegex(pattern: string, options: RegexCompileOptions = {}): Regex {
+export function compileRegex(pattern: string, options: { caseSensitive?: boolean } = {}): Regex {
   const flags = options.caseSensitive ? 'gu' : 'giu';
   try {
     return new RE2(pattern, flags);

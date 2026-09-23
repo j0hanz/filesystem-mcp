@@ -403,7 +403,6 @@ export const DELETE = defineTool({
   output: DeleteOutputSchema,
   annotations: {
     readOnlyHint: false,
-    idempotentHint: false,
     destructiveHint: true,
     openWorldHint: false,
   },

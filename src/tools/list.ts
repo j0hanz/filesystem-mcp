@@ -7,9 +7,8 @@ import * as z from 'zod/v4';
 import { paginate } from '../core/cursor.ts';
 import { ErrorCode } from '../core/errors.ts';
 import { pageTrailer } from '../core/fmt.ts';
-import type { EntryType } from '../core/glob.ts';
 import { globEntries } from '../core/glob.ts';
-import { resolveEntryType } from '../core/path-utils.ts';
+import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { toPosixRelative } from '../core/path.ts';
 import {
@@ -344,8 +343,6 @@ export const LIST = defineTool({
   // the value-XOR-error union shape a sample cannot convey.
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,

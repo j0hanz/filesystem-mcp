@@ -7,7 +7,7 @@ import { createMcpHandler, InMemoryServerEventBus } from '@modelcontextprotocol/
 import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -82,11 +82,6 @@ export async function withBoundary<T>(boundary: string, fn: () => Promise<T>): P
   }
 }
 
-/** Spreadable `readOnly` flag — the one owner of the `--read-only` gate in test setup. */
-function readOnlyOpts(options: { readOnly?: boolean }): { readOnly?: true } {
-  return options.readOnly ? { readOnly: true } : {};
-}
-
 /** A PathGuard initialized straight from `dirs` — no CLI/env recompute. */
 export async function makeGuard(dirs: readonly string[]): Promise<PathGuard> {
   const guard = new PathGuard();
@@ -99,10 +94,7 @@ export async function createTestServer(
   allowedDirs: string[],
   options: { readOnly?: boolean } = {},
 ): Promise<FilesystemServerContext> {
-  return createServer({
-    cliAllowedDirs: allowedDirs,
-    ...readOnlyOpts(options),
-  });
+  return createServer({ cliAllowedDirs: allowedDirs, ...options });
 }
 
 export interface TestClientContext {
@@ -141,12 +133,6 @@ export async function createTestClientPair(
  */
 export type ElicitHandler = (request: ElicitRequest) => Promise<ElicitResult> | ElicitResult;
 
-/** An elicitation-capable modern-era client and its teardown. */
-export interface ElicitationTestContext {
-  client: Client;
-  close: () => Promise<void>;
-}
-
 /**
  * A client/server pair pinned to the 2026-07-28 era, with form-mode
  * elicitation declared and `elicitHandler` registered for `elicitation/create`
@@ -171,7 +157,7 @@ export async function createElicitationClientPair(
    * tool error naming the way around it.
    */
   options: { noElicitation?: boolean } = {},
-): Promise<ElicitationTestContext> {
+) {
   const sharedRegistry = createWatcherRegistry();
   const sharedPathGuard = new PathGuard({ cliAllowedDirs: allowedDirs });
   await sharedPathGuard.recomputeAllowedDirectories();
@@ -376,17 +362,6 @@ export async function bootHttpTest(
   };
 }
 
-export interface TestStdioContext {
-  client: Client;
-  close: () => Promise<void>;
-}
-
-/** The `node src/index.ts` invocation every stdio entry point spawns (Node strips the types). */
-function getStdioServerCommand(): string[] {
-  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-  return [process.execPath, join(repoRoot, 'src', 'index.ts')];
-}
-
 /**
  * Spawn the real stdio server (no build step: Node runs the .ts) and connect a client.
  * stdio has no in-process shortcut — the only honest coverage spawns a real
@@ -398,12 +373,11 @@ export async function createStdioClient(
   allowedDir: string,
   extraEnv: Record<string, string> = {},
   cliFlags: readonly string[] = [],
-): Promise<TestStdioContext> {
+) {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-  const [command, ...args] = getStdioServerCommand() as [string, ...string[]];
   const transport = new StdioClientTransport({
-    command,
-    args: [...args, ...cliFlags, allowedDir],
+    command: process.execPath,
+    args: [join(repoRoot, 'src', 'index.ts'), ...cliFlags, allowedDir],
     cwd: repoRoot,
     env: { ...getDefaultEnvironment(), ...extraEnv },
   });
@@ -421,22 +395,13 @@ export async function createStdioClient(
   };
 }
 
-export interface RawStdioTestContext {
-  readonly child: ChildProcessWithoutNullStreams;
-  send: (message: JSONRPCMessage) => Promise<void>;
-  sendMany: (messages: readonly JSONRPCMessage[]) => Promise<void>;
-  nextMessage: () => Promise<JSONRPCMessage>;
-  close: () => Promise<void>;
-}
-
 /** Spawn the stdio entry without an SDK client so malformed wire messages can be tested. */
 export async function createRawStdioServer(
   allowedDir: string,
   extraEnv: Record<string, string> = {},
-): Promise<RawStdioTestContext> {
+) {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-  const [command, ...args] = getStdioServerCommand() as [string, ...string[]];
-  const child = spawn(command, [...args, allowedDir], {
+  const child = spawn(process.execPath, [join(repoRoot, 'src', 'index.ts'), allowedDir], {
     cwd: repoRoot,
     env: { ...getDefaultEnvironment(), ...extraEnv },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -455,7 +420,7 @@ export async function createRawStdioServer(
 
   return {
     child,
-    send: async (message) => {
+    send: async (message: JSONRPCMessage) => {
       await new Promise<void>((resolve, reject) => {
         child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
           if (error) reject(error);
@@ -463,7 +428,7 @@ export async function createRawStdioServer(
         });
       });
     },
-    sendMany: async (messages) => {
+    sendMany: async (messages: readonly JSONRPCMessage[]) => {
       await new Promise<void>((resolve, reject) => {
         const payload = messages.map((message) => JSON.stringify(message)).join('\n');
         child.stdin.write(`${payload}\n`, (error) => {

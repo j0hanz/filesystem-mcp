@@ -76,13 +76,9 @@ export function buildFileResourceLink(
 }
 
 export function extractPath(uri: string): string | undefined {
-  try {
-    const url = new URL(uri);
-    if (url.protocol !== 'filesystem-mcp:' || url.host !== 'file') return undefined;
-    return decodeFileUriPath(url.pathname.slice(1));
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(uri);
+  if (url?.protocol !== 'filesystem-mcp:' || url.host !== 'file') return undefined;
+  return decodeFileUriPath(url.pathname.slice(1));
 }
 
 export interface WrittenFileMeta {

@@ -35,10 +35,7 @@ export function registerPrompts(deps: PromptRegistrarDeps): void {
             .describe(
               `Section key to filter instructions (one of: ${topics.join(', ')}); omit to return all instructions.`,
             ),
-          (value) => {
-            const lower = value.toLowerCase();
-            return lower ? topics.filter((t) => t.startsWith(lower)) : [...topics];
-          },
+          (value) => topics.filter((t) => t.startsWith(value.toLowerCase())),
         ).optional(),
       }),
     },

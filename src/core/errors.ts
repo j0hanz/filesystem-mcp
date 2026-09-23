@@ -61,9 +61,8 @@ export const Problem = {
       ...(suggestion !== undefined ? { suggestion } : {}),
     });
   },
-  toText(error: unknown, defaultCode: ErrorCode): { code: ErrorCode; text: string } {
-    const resolved = Problem.fromUnknown(error, defaultCode);
-    return { code: resolved.code, text: formatDetailedError(resolved) };
+  toText(error: unknown, defaultCode: ErrorCode): string {
+    return formatDetailedError(Problem.fromUnknown(error, defaultCode));
   },
 } as const;
 
@@ -113,14 +112,16 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
 export const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
 
 /**
- * Walk `error` and its `cause` chain for the one fact that decides the code: an
- * abort anywhere wins, then a timeout anywhere, then the FIRST errno seen.
- * `visited` guards a cyclic chain. Returns the Problem directly — the
- * intermediate signal union this replaced existed only to be destructured back
- * into a Problem two functions later, and carried a `syscall` nobody read.
+ * Walk `error` and its `cause` chain once for the three facts error handling
+ * needs: an abort anywhere, a timeout anywhere, and the FIRST errno seen.
+ * `visited` guards a cyclic chain. A node that reads as an abort or a timeout
+ * never also contributes its errno.
  */
-function classifyCauseChain(error: unknown): Problem {
-  const message = formatUnknownErrorMessage(error);
+function scanCauseChain(error: unknown): {
+  aborted: boolean;
+  timedOut: boolean;
+  errno: { code: string; path?: string } | undefined;
+} {
   const visited = new Set<unknown>();
   let aborted = false;
   let timedOut = false;
@@ -135,8 +136,6 @@ function classifyCauseChain(error: unknown): Problem {
     if (!(current instanceof Error)) continue;
     const raw = (current as { code?: unknown }).code;
     const code = typeof raw === 'string' ? raw : undefined;
-    // Ordered like the per-error read it replaces: a node that reads as an
-    // abort or a timeout never also contributes its errno.
     if (current.name === 'AbortError' || code === 'ABORT_ERR') {
       aborted = true;
     } else if (current.name === 'TimeoutError' || code === 'ETIMEDOUT') {
@@ -147,6 +146,13 @@ function classifyCauseChain(error: unknown): Problem {
     }
   }
 
+  return { aborted, timedOut, errno };
+}
+
+/** The scan's facts as a Problem: an abort wins, then a timeout, then errno. */
+function classifyCauseChain(error: unknown): Problem {
+  const message = formatUnknownErrorMessage(error);
+  const { aborted, timedOut, errno } = scanCauseChain(error);
   if (aborted) return Problem.cancelled(message);
   if (timedOut) return build(ErrorCode.TIMEOUT, message);
   if (errno !== undefined) {
@@ -206,18 +212,7 @@ export function rethrowIfAborted(error: unknown): void {
     if (error.code === ErrorCode.CANCELLED) throw error;
     return;
   }
-  const visited = new Set<unknown>();
-  for (
-    let current: unknown = error;
-    current !== undefined && current !== null && !visited.has(current);
-    current = (current as { cause?: unknown }).cause
-  ) {
-    visited.add(current);
-    if (!(current instanceof Error)) continue;
-    if (current.name === 'AbortError' || (current as { code?: unknown }).code === 'ABORT_ERR') {
-      throw error;
-    }
-  }
+  if (scanCauseChain(error).aborted) throw error;
 }
 
 export function formatUnknownErrorMessage(error: unknown): string {

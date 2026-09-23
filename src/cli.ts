@@ -170,15 +170,10 @@ export async function parseArgs(): Promise<{
       v['allow-missing-roots'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
 
-    let allowedDirs: string[] = [];
-    try {
-      allowedDirs =
-        parsed.positionals.length > 0
-          ? await normalizeAndValidateDirs(parsed.positionals, allowMissingRoots)
-          : [];
-    } catch (error: unknown) {
-      throw new CliExitError(normalizeCliExitMessage(error));
-    }
+    const allowedDirs =
+      parsed.positionals.length > 0
+        ? await normalizeAndValidateDirs(parsed.positionals, allowMissingRoots)
+        : [];
 
     return {
       allowedDirs,

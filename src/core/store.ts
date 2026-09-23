@@ -27,10 +27,6 @@ class TtlLru<V> {
     this.#now = opts.now ?? Date.now;
   }
 
-  get size(): number {
-    return this.#byKey.size;
-  }
-
   /** Drop every expired entry; true when at least one went. */
   prune(): boolean {
     const now = this.#now();

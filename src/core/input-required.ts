@@ -85,10 +85,6 @@ function configuredRequestStateKey(): Uint8Array | undefined {
   return undefined;
 }
 
-// Built on first use, not at module load, so an unset env var costs nothing at
-// import and the random per-boot fallback is minted only once something needs it.
-let codec: RequestStateCodec<PendingState> | undefined;
-
 /**
  * What a minted `requestState` is bound to: the JSON-RPC method of the
  * request that minted it and the authenticated caller (`ctx.http` is absent
@@ -96,16 +92,8 @@ let codec: RequestStateCodec<PendingState> | undefined;
  * The SDK stores an HMAC tag of this value in the token and refuses an echo
  * whose context yields a different value.
  */
-export function requestStateBinding(ctx: ServerContext): string {
+function requestStateBinding(ctx: ServerContext): string {
   return `${ctx.mcpReq.method}\0${ctx.http?.authInfo?.clientId ?? ''}`;
-}
-
-function getRequestStateCodec(): RequestStateCodec<PendingState> {
-  codec ??= createRequestStateCodec<PendingState>({
-    key: configuredRequestStateKey() ?? randomBytes(32),
-    bind: requestStateBinding,
-  });
-  return codec;
 }
 
 /**
@@ -114,10 +102,11 @@ function getRequestStateCodec(): RequestStateCodec<PendingState> {
  * `ServerOptions.requestState.verify` and throws on tamper, expiry, or bind
  * mismatch (the seam answers with the frozen `-32602`).
  */
-export const requestStateCodec: RequestStateCodec<PendingState> = {
-  mint: (payload, ctx) => getRequestStateCodec().mint(payload, ctx),
-  verify: (state, ctx) => getRequestStateCodec().verify(state, ctx),
-};
+export const requestStateCodec: RequestStateCodec<PendingState> =
+  createRequestStateCodec<PendingState>({
+    key: configuredRequestStateKey() ?? randomBytes(32),
+    bind: requestStateBinding,
+  });
 
 // Response shapes handed to the SDK's schema-aware `acceptedContent` overload:
 // it returns `undefined` for a missing key, a decline/cancel, a non-elicit

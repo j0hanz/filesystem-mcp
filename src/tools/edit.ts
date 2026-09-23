@@ -285,12 +285,6 @@ function ambiguousEditError(
   );
 }
 
-function replaceEditMatch(content: string, match: TextRange, newText: string): string {
-  return (
-    content.slice(0, match.startIndex) + newText + content.slice(match.startIndex + match.length)
-  );
-}
-
 function buildEditFileValue(
   validPath: string,
   meta: WrittenFileMeta,
@@ -352,7 +346,11 @@ function applyEdits(
       continue;
     }
 
-    newContent = replaceEditMatch(newContent, found.first, edit.newText);
+    const first = found.first;
+    newContent =
+      newContent.slice(0, first.startIndex) +
+      edit.newText +
+      newContent.slice(first.startIndex + first.length);
     appliedEdits += 1;
   }
 
@@ -389,7 +387,6 @@ async function handleEditFile(
     const meta = buildEditFileMetadata(editResult.content, validPath, 0, ctx.resourceStore);
     return {
       file: buildEditFileValue(validPath, meta, new Date().toISOString(), editResult),
-      ...(meta.resourceLink ? { resourceLink: meta.resourceLink } : {}),
     };
   }
 
@@ -481,7 +478,6 @@ export const EDIT = defineTool({
   output: EditFileOutputSchema,
   annotations: {
     readOnlyHint: false,
-    idempotentHint: false,
     destructiveHint: true,
     openWorldHint: false,
   },

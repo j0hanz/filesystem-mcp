@@ -1,4 +1,3 @@
-import { ErrorCode, FsError } from './errors.ts';
 import type { PageSnapshot, PageSnapshotStore } from './store.ts';
 import { invalidCursor } from './store.ts';
 
@@ -118,13 +117,7 @@ function decodePageCursor(cursor: string): PageCursor {
       return { snapshotId: parsed.snapshotId, offset: parsed.offset };
     }
     throw new Error('Invalid page cursor');
-  } catch (error) {
-    if (error instanceof FsError) throw error;
-    throw new FsError(
-      ErrorCode.INVALID_INPUT,
-      invalidCursor().message,
-      undefined,
-      error instanceof Error ? error : undefined,
-    );
+  } catch {
+    throw invalidCursor();
   }
 }

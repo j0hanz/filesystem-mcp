@@ -7,10 +7,8 @@ import ignore from 'ignore';
 import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
-import type { DirentLike, EntryType } from './path-utils.ts';
+import type { DirentLike } from './path-utils.ts';
 import { isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
-
-export type { EntryType };
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
@@ -162,7 +160,7 @@ class GitignoreManager {
 
 interface GlobDirentLike extends DirentLike {
   name: string;
-  parentPath?: string;
+  parentPath: string;
 }
 
 export interface GlobEntry {
@@ -296,11 +294,6 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
   return normalized;
 }
 
-function resolveDirentBase(cwd: string, parentPath: string | undefined): string {
-  if (!parentPath) return cwd;
-  return isAbsolute(parentPath) ? parentPath : resolve(cwd, parentPath);
-}
-
 function* processDirentMatch(
   match: GlobDirentLike,
   cwd: string,
@@ -308,8 +301,7 @@ function* processDirentMatch(
   seen: Set<string>,
   onlyFiles: boolean,
 ): Generator<GlobEntry> {
-  const base = resolveDirentBase(cwd, match.parentPath);
-  const absolutePath = resolve(base, match.name);
+  const absolutePath = resolve(match.parentPath, match.name);
 
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);

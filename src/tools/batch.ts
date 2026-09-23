@@ -55,12 +55,9 @@ export async function runOverPaths<TOverride, TPerPath>(
     ctx.onProgress?.({ current: completed, total });
   };
 
-  await processInParallel<
-    { item: { path: string; override?: TOverride }; index: number },
-    undefined
-  >(
-    items.map((item, index) => ({ item, index })),
-    async ({ item, index }) => {
+  await processInParallel(
+    items,
+    async (item, index) => {
       try {
         const value = await perPath(item, ctx);
         results[index] = { path: item.path, value };
@@ -72,7 +69,6 @@ export async function runOverPaths<TOverride, TPerPath>(
       } finally {
         tick();
       }
-      return undefined;
     },
     PARALLEL_CONCURRENCY,
     ctx.signal,

@@ -30,7 +30,6 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "type-check": "tsc -p tsconfig.json --noEmit",
     "type-check:test": "tsc -p tsconfig.test.json",
     "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip",
     "fix": "npm run format && npm run lint:fix && npm run check",

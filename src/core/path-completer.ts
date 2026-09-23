@@ -95,7 +95,6 @@ function collectAllowedRoots(
 
 function findRootPrefixMatches(currentValue: string, allowed: readonly string[]): string[] {
   const rootPrefix = parseNamedRootInput(currentValue)?.rootName.toLowerCase() ?? '';
-  if (!rootPrefix) return collectAllowedRoots(allowed, () => true);
   return collectAllowedRoots(allowed, (root) =>
     basename(root).toLowerCase().startsWith(rootPrefix),
   );

@@ -394,8 +394,6 @@ export const READ = defineTool({
   output: ReadFileOutputSchema,
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,

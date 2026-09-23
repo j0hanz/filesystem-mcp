@@ -12,7 +12,6 @@ import {
   readAcceptedChoice,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
-  requestStateBinding,
   requestStateCodec,
 } from '../src/core/input-required.ts';
 
@@ -34,30 +33,6 @@ interface FormRequest<K extends string> {
     };
   };
 }
-
-describe('request-state key initialization', () => {
-  it('binds the codec to a key configured after import, on first use', async () => {
-    const stateKey = 'a'.repeat(32);
-    const saved = process.env['FS_REQUEST_STATE_KEY'];
-    process.env['FS_REQUEST_STATE_KEY'] = stateKey;
-    try {
-      // The codec is built lazily, so the first mint is what reads the env var.
-      const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/fleet'] }, bindContext());
-      const reference = createRequestStateCodec<{ op: string; paths: string[] }>({
-        key: stateKey,
-        bind: requestStateBinding,
-      });
-      const decoded = await reference.verify(wire, bindContext());
-      assert.deepStrictEqual(decoded, { op: 'delete', paths: ['/fleet'] });
-    } finally {
-      if (saved === undefined) {
-        Reflect.deleteProperty(process.env, 'FS_REQUEST_STATE_KEY');
-      } else {
-        process.env['FS_REQUEST_STATE_KEY'] = saved;
-      }
-    }
-  });
-});
 
 describe('input_required multi-round-trip infrastructure', () => {
   it('1. requestStateCodec mint/verify round-trip', async () => {

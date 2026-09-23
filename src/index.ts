@@ -19,14 +19,11 @@ let activeStdioHandle: StdioServerHandle | undefined;
 let activeHttpServer: http.Server | undefined;
 let shutdownStarted = false;
 
-function isStdinEvent(event: NodeJS.Signals | 'end' | 'close'): boolean {
-  return event === 'end' || event === 'close';
-}
-
 function registerShutdownTrigger(event: NodeJS.Signals | 'end' | 'close'): void {
-  const target = isStdinEvent(event) ? process.stdin : process;
+  const isStdinEvent = event === 'end' || event === 'close';
+  const target = isStdinEvent ? process.stdin : process;
   target.once(event, () => {
-    const reason = isStdinEvent(event) ? `stdin ${event}` : event;
+    const reason = isStdinEvent ? `stdin ${event}` : event;
     void shutdown(reason, 0);
   });
 }

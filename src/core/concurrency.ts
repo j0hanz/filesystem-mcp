@@ -22,7 +22,7 @@ interface ParallelResult<R> {
 
 export async function processInParallel<T, R>(
   items: readonly T[],
-  processor: (item: T) => Promise<R>,
+  processor: (item: T, index: number) => Promise<R>,
   concurrency: number = PARALLEL_CONCURRENCY,
   signal?: AbortSignal,
 ): Promise<ParallelResult<R>> {
@@ -60,7 +60,7 @@ export async function processInParallel<T, R>(
         // result is real work that a write caller may have committed to
         // disk. Discarding it here would report a finished append as
         // failed, and a client retry would append twice.
-        const value = await processor(item);
+        const value = await processor(item, index);
         results.push({ index, value });
       } catch (error) {
         errors.push({

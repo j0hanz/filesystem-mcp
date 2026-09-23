@@ -189,22 +189,17 @@ export class GuardedFileSystem {
     return { linkString, validPath };
   }
 
-  async mkdir(
-    filePath: string,
-    options?: Parameters<typeof fsMkdir>[1],
-  ): Promise<{ validPath: string; result: string | undefined }> {
+  async mkdir(filePath: string, options?: Parameters<typeof fsMkdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForWrite(filePath);
-    const result = await fsMkdir(validPath, options);
-    return { validPath, result };
+    await fsMkdir(validPath, options);
   }
 
-  async rename(oldPath: string, newPath: string): Promise<{ validOld: string; validNew: string }> {
+  async rename(oldPath: string, newPath: string): Promise<void> {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
     const validNew = await this.pathGuard.validatePathForWrite(newPath);
     await fsRename(validOld, validNew);
-    return { validOld, validNew };
   }
 
   async writeFile(
@@ -311,32 +306,26 @@ export class GuardedFileSystem {
     }
   }
 
-  async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<{ validPath: string }> {
+  async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
     await fsRm(validPath, options);
-    return { validPath };
   }
 
-  async rmdir(
-    filePath: string,
-    options?: Parameters<typeof fsRmdir>[1],
-  ): Promise<{ validPath: string }> {
+  async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
     await fsRmdir(validPath, options);
-    return { validPath };
   }
 
   async cp(
     source: string,
     destination: string,
     options?: Parameters<typeof fsCp>[2],
-  ): Promise<{ validSource: string; validDest: string }> {
+  ): Promise<void> {
     // As in rename: keep the link itself so callers passing verbatimSymlinks
     // actually copy the link rather than a dereferenced target.
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
     await fsCp(validSource, validDest, options);
-    return { validSource, validDest };
   }
 
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {

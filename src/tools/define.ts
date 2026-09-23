@@ -104,11 +104,15 @@ interface RunResult<T> {
 }
 
 /**
- * `ToolAnnotations` with `readOnlyHint` required. It is optional in the SDK, but
- * MUTATING_TOOL_NAMES derives the `--read-only` gate from it, so a tool that
- * forgets it must be a compile error rather than a silent reclassification.
+ * `ToolAnnotations` with `readOnlyHint` required and `idempotentHint` removed.
+ * `readOnlyHint` is optional in the SDK, but MUTATING_TOOL_NAMES derives the
+ * `--read-only` gate from it, so a tool that forgets it must be a compile error
+ * rather than a silent reclassification. `idempotentHint` is omitted because
+ * nothing reads it: `publishedAnnotations` derives the wire set below.
  */
-type DeclaredAnnotations = ToolAnnotations & { readonly readOnlyHint: boolean };
+type DeclaredAnnotations = Omit<ToolAnnotations, 'idempotentHint'> & {
+  readonly readOnlyHint: boolean;
+};
 
 export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
   readonly name: string;
@@ -286,10 +290,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
     await this.#progressSession.flush();
-    const { text: errorText } = Problem.toText(
-      error,
-      this.def.defaultErrorCode ?? ErrorCode.UNKNOWN,
-    );
+    const errorText = Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
     return {
       content: [{ type: 'text' as const, text: errorText }],
       isError: true,

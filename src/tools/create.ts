@@ -105,7 +105,6 @@ export const CREATE = defineTool({
   output: CreateOutputSchema,
   annotations: {
     readOnlyHint: false,
-    idempotentHint: false,
     destructiveHint: true,
     openWorldHint: false,
   },

@@ -21,7 +21,6 @@ import {
   PositiveInt,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import type { SearchContentOptions } from '../core/search.ts';
 import { searchContent } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
@@ -225,20 +224,6 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
   return payloads;
 }
 
-function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): SearchContentOptions {
-  return {
-    includeHidden: args.includeHidden,
-    filePattern: args.pattern ?? '**/*',
-    caseSensitive: args.caseSensitive,
-    isRegex: args.isRegex,
-    maxResults: args.maxResults,
-    skipIgnored: !args.includeIgnored,
-    context: args.context,
-    ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-    ...(signal ? { signal } : {}),
-  };
-}
-
 /**
  * `path` is documented as "file to search, or directory to search under", but
  * the scan itself only walks directories. A file path is therefore rewritten
@@ -312,7 +297,17 @@ async function handleSearchContent(
       const result = await searchContent(
         basePath,
         scoped.searchPattern,
-        buildSearchContentOptions({ ...scoped, maxResults: MAX_SEARCH_RESULTS }, ctx.signal),
+        {
+          includeHidden: scoped.includeHidden,
+          filePattern: scoped.pattern ?? '**/*',
+          caseSensitive: scoped.caseSensitive,
+          isRegex: scoped.isRegex,
+          maxResults: MAX_SEARCH_RESULTS,
+          skipIgnored: !scoped.includeIgnored,
+          context: scoped.context,
+          ...(scoped.maxDepth !== undefined ? { maxDepth: scoped.maxDepth } : {}),
+          signal: ctx.signal,
+        },
         ctx.fs.pathGuard,
       );
 
@@ -355,8 +350,6 @@ export const SEARCH_TEXT = defineTool({
   output: GrepOutputSchema,
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,

@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
-import { ALL_TOOLS, MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
+import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
@@ -929,15 +929,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
-  it('TC-FUNC-058: list tool declares idempotentHint', () => {
-    const listTool = ALL_TOOLS.find((t) => t.name === 'list');
-    assert.ok(listTool, 'list tool should be defined');
-    assert.strictEqual(listTool.annotations.idempotentHint, true);
-  });
-
-  // The declaration above stays the source of truth in code; the wire copy is
-  // narrowed in defineTool, so the hint that costs every client tokens without
-  // changing what it does never leaves the process.
+  // idempotentHint is gone from the declarations (production never read it); pin
+  // that it stays off the wire too — it costs every client tokens without
+  // changing what any tool does.
   it('TC-FUNC-058b: list does not publish idempotentHint on the wire', async () => {
     const { tools } = await harness.client.listTools();
     const listTool = tools.find((t) => t.name === 'list');

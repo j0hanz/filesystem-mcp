@@ -5,7 +5,7 @@ import { createTwoFilesPatch } from 'diff';
 
 import { computeDiffStats } from '../core/diff.ts';
 import { NonNegInt, PositiveInt, RequiredPath } from '../core/schema.ts';
-import { defineTool, type ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 const DiffInputSchema = z.strictObject({
   a: RequiredPath.describe('First file to compare'),
@@ -23,38 +23,6 @@ const DiffOutputSchema = z.strictObject({
   linesRemoved: NonNegInt.describe('Number of lines removed'),
 });
 
-async function handleDiff(
-  args: z.infer<typeof DiffInputSchema>,
-  ctx: ToolCtx,
-): Promise<{ structured: z.infer<typeof DiffOutputSchema>; text: string }> {
-  const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
-    await Promise.all([
-      ctx.fs.readEditableText(args.a, { signal: ctx.signal, tool: 'diff' }),
-      ctx.fs.readEditableText(args.b, { signal: ctx.signal, tool: 'diff' }),
-    ]);
-
-  // createTwoFilesPatch returns the unified diff string synchronously on diff v9
-  // (the { callback } option does not fire on this version — verified).
-  const diffText = createTwoFilesPatch(
-    basename(validA),
-    basename(validB),
-    contentA,
-    contentB,
-    'a',
-    'b',
-    { context: args.context },
-  );
-
-  const { linesAdded, linesRemoved } = computeDiffStats(contentA, contentB);
-
-  // The text block is the one copy of the diff; a model reads that, and a
-  // structured duplicate or a store entry would only ship the same bytes again.
-  return {
-    structured: { a: validA, b: validB, linesAdded, linesRemoved },
-    text: diffText,
-  };
-}
-
 export const DIFF = defineTool({
   name: 'diff',
   title: 'Diff',
@@ -63,8 +31,6 @@ export const DIFF = defineTool({
   output: DiffOutputSchema,
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   progress: (args) => ({
@@ -72,5 +38,32 @@ export const DIFF = defineTool({
     subject: basename(args.a),
   }),
   accessPaths: (args) => [args.a, args.b],
-  run: (args, ctx) => handleDiff(args, ctx),
+  run: async (args, ctx) => {
+    const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
+      await Promise.all([
+        ctx.fs.readEditableText(args.a, { signal: ctx.signal, tool: 'diff' }),
+        ctx.fs.readEditableText(args.b, { signal: ctx.signal, tool: 'diff' }),
+      ]);
+
+    // createTwoFilesPatch returns the unified diff string synchronously on diff v9
+    // (the { callback } option does not fire on this version — verified).
+    const diffText = createTwoFilesPatch(
+      basename(validA),
+      basename(validB),
+      contentA,
+      contentB,
+      'a',
+      'b',
+      { context: args.context },
+    );
+
+    const { linesAdded, linesRemoved } = computeDiffStats(contentA, contentB);
+
+    // The text block is the one copy of the diff; a model reads that, and a
+    // structured duplicate or a store entry would only ship the same bytes again.
+    return {
+      structured: { a: validA, b: validB, linesAdded, linesRemoved },
+      text: diffText,
+    };
+  },
 });

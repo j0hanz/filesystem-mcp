@@ -369,14 +369,7 @@ function buildSummary(
   failures: readonly MoveFailureItem[],
   skipped: readonly string[],
 ): string {
-  const successCount = results.length;
   const failCount = failures.length;
-  if (failCount === 0 && skipped.length === 0 && successCount === 1) {
-    const result = results[0];
-    if (result) {
-      return `${verb}: ${pathLabel(result.from)} → ${pathLabel(result.to)}`;
-    }
-  }
   // Name each pair. "move: 2 items" left the caller to open structuredContent
   // to learn which two, and a partial failure was unreadable without it.
   // Skipped destinations are an outcome the user chose, not a failure — name
@@ -480,7 +473,6 @@ export const MOVE = defineTool({
   output: MoveOutputSchema,
   annotations: {
     readOnlyHint: false,
-    idempotentHint: false,
     destructiveHint: true,
     openWorldHint: false,
   },

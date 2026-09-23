@@ -170,8 +170,6 @@ export const FIND_FILES = defineTool({
   output: SearchFilesOutputSchema,
   annotations: {
     readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,

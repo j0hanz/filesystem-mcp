@@ -96,14 +96,7 @@ export function toPosixRelative(from: string, to: string): string {
 // ---------------------------------------------------------------------------
 
 export function normalizeAllowedDirectories(dirs: readonly string[]): string[] {
-  const normalized: string[] = [];
-  for (const dir of dirs) {
-    const entry = normalizeAllowedDirectory(dir);
-    if (entry.length > 0) {
-      normalized.push(entry);
-    }
-  }
-  return [...new Set(normalized)];
+  return [...new Set(dirs.map(normalizeAllowedDirectory).filter((entry) => entry.length > 0))];
 }
 
 export async function resolveRealPath(

@@ -298,10 +298,9 @@ interface ReplacementPlan {
 
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
   const { options, signal, summary } = ctx;
-  const validPath = entryPath;
 
   try {
-    const plan = await readReplacementPlan(validPath, ctx);
+    const plan = await readReplacementPlan(entryPath, ctx);
     if (!plan) {
       return;
     }
@@ -318,10 +317,10 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
     summary.totalMatches += plan.matchCount;
     summary.filesChanged++;
 
-    recordChangedFile(summary, plan, validPath);
+    recordChangedFile(summary, plan, entryPath);
 
     maybeAppendPatchDiff(summary, {
-      filePath: validPath,
+      filePath: entryPath,
       originalContent: plan.originalContent,
       updatedContent: plan.updatedContent,
       includeDiff: options.dryRun || options.returnDiff,
@@ -329,8 +328,8 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
   } catch (error) {
     summary.failedFiles++;
     recordFailure(summary.failures, {
-      path: toPosixRelative(summary.root, validPath),
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, validPath),
+      path: toPosixRelative(summary.root, entryPath),
+      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
     });
   }
 }
@@ -601,7 +600,6 @@ export const REPLACE_TEXT = defineTool({
   output: SearchAndReplaceOutputSchema,
   annotations: {
     readOnlyHint: false,
-    idempotentHint: false,
     destructiveHint: true,
     openWorldHint: false,
   },
