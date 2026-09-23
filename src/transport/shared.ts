@@ -25,19 +25,6 @@ export interface RuntimeConfig {
   apiKey?: string;
 }
 
-/**
- * True when `message` really is a `subscriptions/listen` request, not merely a
- * body carrying that method string. Both legs gate watcher attachment on this:
- * a malformed listen cannot succeed downstream, so creating and tearing down
- * `fs.watch` handles for it is pure waste — and on HTTP the teardown depended on
- * the response-close listener firing. Non-listen bodies fail it too, which is
- * the same answer `listenSubscriptionUris` gives them.
- */
-export function isStructurallyValidListen(message: unknown): boolean {
-  const result = specTypeSchemas.SubscriptionsListenRequest['~standard'].validate(message);
-  return !('issues' in result);
-}
-
 /** The request id of a parsed JSON-RPC body, for error-envelope echo. */
 export function jsonRpcRequestId(parsedBody: unknown): string | number | null {
   const id = (parsedBody as { id?: unknown } | null | undefined)?.id;
@@ -57,19 +44,25 @@ export function jsonRpcError<Id extends string | number | null>(
   return { jsonrpc: JSONRPC_VERSION, id, error: { code, message } };
 }
 
-/** The `resourceSubscriptions` URIs of a `subscriptions/listen` body, de-duplicated. */
-export function listenSubscriptionUris(parsedBody: unknown): string[] {
-  if (typeof parsedBody !== 'object' || parsedBody === null) return [];
-  const body = parsedBody as {
-    method?: unknown;
-    params?: { notifications?: { resourceSubscriptions?: unknown } };
-  };
-  if (body.method !== 'subscriptions/listen') return [];
-  const uris = body.params?.notifications?.resourceSubscriptions;
-  if (!Array.isArray(uris)) return [];
+/**
+ * The de-duplicated `resourceSubscriptions` URIs of a structurally valid
+ * `subscriptions/listen` request — `[]` when it names none — or `undefined` for
+ * anything else, including a listen the schema rejects. Both legs gate watcher
+ * attachment on this: a malformed listen cannot succeed downstream, so creating
+ * and tearing down `fs.watch` handles for it is pure waste — and on HTTP the
+ * teardown depended on the response-close listener firing.
+ *
+ * The method check runs first because every inbound stdio message passes
+ * through here; only a listen pays for the schema parse.
+ */
+export function listenSubscriptionUris(message: unknown): string[] | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  if ((message as { method?: unknown }).method !== 'subscriptions/listen') return undefined;
+  const result = specTypeSchemas.SubscriptionsListenRequest['~standard'].validate(message);
+  if (result instanceof Promise || result.issues !== undefined) return undefined;
   // De-duplicate: one attach must yield one ref-count, or the release below
   // decrements further than it incremented and tears down a live watcher.
-  return [...new Set(uris.filter((uri): uri is string => typeof uri === 'string'))];
+  return [...new Set(result.value.params.notifications.resourceSubscriptions ?? [])];
 }
 
 export type ListenPreparation =
@@ -99,12 +92,11 @@ function watcherFailureMessage(
  * The batch is all-or-nothing: a failed URI releases each prior lease.
  */
 export async function prepareListenWatchers(
-  parsedBody: unknown,
+  uris: readonly string[],
   pathGuard: PathGuard,
   registry: WatcherRegistry,
   notify: (uri: string) => void,
 ): Promise<ListenPreparation> {
-  const uris = listenSubscriptionUris(parsedBody);
   const acquired: string[] = [];
   for (const uri of uris) {
     const result = await registry.acquire(pathGuard, uri, notify);

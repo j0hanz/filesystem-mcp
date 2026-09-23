@@ -1,5 +1,5 @@
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/express';
-import { localhostAllowedHostnames } from '@modelcontextprotocol/server';
+import { localhostAllowedHostnames, validateOriginHeader } from '@modelcontextprotocol/server';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -45,8 +45,6 @@ export function sendJsonRpcError(
     .json(jsonRpcError(code, message, id));
 }
 
-const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/u;
-
 /**
  * Pure HTTP auth and binding policy. Holds no state; all functions are
  * directly testable without spinning up a server.
@@ -61,37 +59,30 @@ export function isLoopbackHttpHost(host: string): boolean {
   );
 }
 
-export function isAllowedLocalhostOrigin(origin: string): boolean {
-  return LOCALHOST_ORIGIN_RE.test(origin);
-}
-
 /** A bind to every interface. Clients never send `Host: 0.0.0.0`, so this bind
  * cannot derive its allowed-host set from itself. */
 function isWildcardHttpHost(host: string): boolean {
   return host === '0.0.0.0' || host === '::';
 }
 
-function originHostname(origin: string): string | undefined {
-  try {
-    return new URL(origin).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * True if `origin` (a raw `Origin` request header) is allowed given the
- * env-derived `allowedHostnames` set (hostname-form, no scheme/port). Localhost
- * origins are always accepted via {@link isAllowedLocalhostOrigin}; a remote
- * origin is accepted iff its parsed hostname is in the set. Both the SDK app's
- * `allowedOrigins` and this OPTIONS-handler check consume hostname-form, so a
- * remote origin allowed via `FS_ALLOWED_ORIGINS` is reflected
- * end-to-end in `Access-Control-Allow-Origin`.
+ * True if `origin` (a raw `Origin` request header) may have
+ * `Access-Control-Allow-Origin` reflected. `allowedHostnames` is the same
+ * hostname-form list `createMcpExpressApp` receives as `allowedOrigins`, and
+ * the check is the SDK's own `validateOriginHeader`, so reflection matches
+ * admission: the SDK gate runs first and answers 403 to any Origin outside
+ * that list — localhost included once `FS_ALLOWED_ORIGINS` replaces the
+ * loopback default. An empty list (an all-blank `FS_ALLOWED_ORIGINS`) mounts no
+ * `allowedOrigins`: a loopback bind keeps the SDK's localhost default, which
+ * this reuses, but a concrete or wildcard bind then mounts no Origin gate at
+ * all, so there admission is wider than reflection — which fails safe, since
+ * the browser still blocks an unreflected response. An empty header is never
+ * reflected — the SDK treats an
+ * absent `Origin` as allowed, which is right for admission but not for echoing.
  */
 export function isOriginAllowed(origin: string, allowedHostnames: readonly string[]): boolean {
-  if (isAllowedLocalhostOrigin(origin)) return true;
-  const host = originHostname(origin);
-  return host !== undefined && allowedHostnames.includes(host);
+  const allowed = allowedHostnames.length > 0 ? [...allowedHostnames] : localhostAllowedHostnames();
+  return origin !== '' && validateOriginHeader(origin, allowed).ok;
 }
 
 export function validateBearerAuthorization(
@@ -320,14 +311,15 @@ export function bearerAuthMiddleware(
  */
 export function computeAllowedOriginHostnames(originsEnv: string | undefined): string[] {
   // Truthiness, not list length: an all-blank value (" , ") is a configured but
-  // empty allow-list — deny every remote origin — while an unset or "" value
-  // falls back to the loopback defaults.
+  // empty allow-list — no remote origin is reflected, and a non-loopback bind
+  // then mounts no SDK Origin gate (see isOriginAllowed) — while an unset or ""
+  // value falls back to the loopback defaults.
   return originsEnv ? splitCsvList(originsEnv) : localhostAllowedHostnames();
 }
 
 /** Mounted at the `/mcp` prefix: every response — not just the OPTIONS preflight —
- * carries `Access-Control-Allow-Origin` for an allowed Origin (localhost, or in
- * the env-derived `FS_ALLOWED_ORIGINS` set — no wildcard fallback), and the
+ * carries `Access-Control-Allow-Origin` for an Origin {@link isOriginAllowed}
+ * accepts (no wildcard fallback), and the
  * preflight answers only the exact endpoint. Reflection must happen here
  * because `createMcpExpressApp`'s `allowedOrigins` only gates which Origins
  * are accepted, it never sets `Access-Control-Allow-Origin` on the actual

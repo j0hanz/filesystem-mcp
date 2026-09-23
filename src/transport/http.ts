@@ -42,12 +42,7 @@ import {
   sendJsonRpcError,
 } from './http-policy.ts';
 import type { RuntimeConfig } from './shared.ts';
-import {
-  isStructurallyValidListen,
-  jsonRpcRequestId,
-  listenSubscriptionUris,
-  prepareListenWatchers,
-} from './shared.ts';
+import { jsonRpcRequestId, listenSubscriptionUris, prepareListenWatchers } from './shared.ts';
 
 const MAX_REQUEST_BODY_BYTES = 4 * MIB;
 // Must exceed the idle timeout of any proxy in front of this server, or the
@@ -173,7 +168,8 @@ function setupExpressApp(
       // gate. A malformed one cannot succeed downstream, so attaching handles
       // for it only gives the response-close release something to undo — and
       // everything that is not a listen takes no watchers either way.
-      if (!isStructurallyValidListen(parsedBody)) {
+      const requestedUris = listenSubscriptionUris(parsedBody);
+      if (requestedUris === undefined) {
         await modernNodeHandler(req, res, parsedBody);
         return;
       }
@@ -182,7 +178,6 @@ function setupExpressApp(
       // every requested URI is watched when the watcher budget is exhausted.
       // The per-URI `capped` failure below would also reject, but only after
       // creating and tearing down every watcher up to the cap.
-      const requestedUris = listenSubscriptionUris(parsedBody);
       // Only URIs without a live watcher consume a slot; a re-listen to an
       // already-watched URI just retains another lease.
       const newUris = requestedUris.filter((uri) => !sharedRegistry.hasWatcher(uri));
@@ -199,7 +194,7 @@ function setupExpressApp(
       }
 
       const prepared = await prepareListenWatchers(
-        parsedBody,
+        requestedUris,
         sharedPathGuard,
         sharedRegistry,
         resourceUpdateSink,

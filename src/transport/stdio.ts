@@ -20,7 +20,6 @@ import type { FilesystemServerContext } from '../server.ts';
 import { createServer } from '../server.ts';
 import type { RuntimeConfig } from './shared.ts';
 import {
-  isStructurallyValidListen,
   jsonRpcError,
   jsonRpcRequestId,
   listenSubscriptionUris,
@@ -276,8 +275,10 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       return;
     }
 
+    // A malformed listen, or one naming no resources, needs no watcher and
+    // goes straight to the SDK, which answers it.
     const subscriptionUris = listenSubscriptionUris(message);
-    if (subscriptionUris.length === 0) {
+    if (subscriptionUris === undefined || subscriptionUris.length === 0) {
       deliver(message);
       return;
     }
@@ -294,17 +295,12 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
     listens.set(id, state);
     gated = gated
       .then(async () => {
-        if (!isStructurallyValidListen(message)) {
-          listens.delete(id);
-          deliver(message);
-          return;
-        }
         if (isListenCancelled(state)) {
           listens.delete(id);
           return;
         }
         await ensurePathGuard();
-        const prepared = await prepareListenWatchers(message, pathGuard, registry, sink);
+        const prepared = await prepareListenWatchers(subscriptionUris, pathGuard, registry, sink);
         if (!prepared.ok) {
           listens.delete(id);
           await wire.send(jsonRpcError(ProtocolErrorCode.InvalidParams, prepared.message, id));

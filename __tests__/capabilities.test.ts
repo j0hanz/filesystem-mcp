@@ -1,6 +1,9 @@
+import type { ServerNotifier } from '@modelcontextprotocol/server';
+
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
+import { createServer } from '../src/server.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -38,5 +41,38 @@ describe('Capability Negotiation', () => {
       instructions?.includes('filesystem-mcp'),
       'instructions should mention filesystem-mcp',
     );
+  });
+
+  it('CAP-003: the advertised capability set is exactly what the registrations imply', () => {
+    assert.deepStrictEqual(harness.client.getServerCapabilities(), {
+      resources: { subscribe: true, listChanged: true },
+      tools: { listChanged: true },
+      prompts: { listChanged: true },
+      completions: {},
+    });
+  });
+
+  it('CAP-004: a legacy instance on the HTTP leg advertises no resource subscribe or listChanged', async () => {
+    // The one instance whose capabilities differ (server.ts `legacyHttp`): it
+    // serves a single request and has no stream to notify on. Its other keys
+    // come from McpServer's inference alone.
+    const notifier: ServerNotifier = {
+      toolsChanged: () => undefined,
+      promptsChanged: () => undefined,
+      resourcesChanged: () => undefined,
+      resourceUpdated: () => undefined,
+    };
+    const ctx = await createServer({ cliAllowedDirs: [tmpDir] }, { era: 'legacy', notifier });
+    try {
+      assert.deepStrictEqual(ctx.mcp.server.getCapabilities(), {
+        resources: { subscribe: false, listChanged: false },
+        tools: { listChanged: true },
+        prompts: { listChanged: true },
+        completions: {},
+      });
+    } finally {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
   });
 });
