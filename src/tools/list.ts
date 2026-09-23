@@ -1,6 +1,6 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { basename } from 'node:path';
+import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -141,8 +141,25 @@ const ELBOW = '└── ';
 const PIPE = '│   ';
 const INDENT = '    ';
 
-function renderMarkdown(rootName: string, entries: readonly CollectedEntry[]): string {
-  if (entries.length === 0) return rootName;
+function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): string {
+  if (page.length === 0) return rootName;
+
+  // The tree is drawn down from the root, but a later page (or a capped set)
+  // can hold entries whose ancestors sat elsewhere; those would never be drawn.
+  // Re-draw each missing ancestor as context so every entry stays locatable.
+  const present = new Set(page.map((entry) => entry.relativePath));
+  const entries = [...page];
+  for (const entry of page) {
+    for (
+      let dir = posix.dirname(entry.relativePath);
+      dir !== '.' && !present.has(dir);
+      dir = posix.dirname(dir)
+    ) {
+      present.add(dir);
+      entries.push({ name: posix.basename(dir), relativePath: dir, type: 'directory' });
+    }
+  }
+  entries.sort(compareEntries);
 
   // Group entries by parent path
   const childrenOf = new Map<string, CollectedEntry[]>();
@@ -165,7 +182,7 @@ function renderMarkdown(rootName: string, entries: readonly CollectedEntry[]): s
       if (!child) continue;
       const isLast = i === children.length - 1;
       const connector = isLast ? ELBOW : TEE;
-      lines.push(prefix + connector + child.name);
+      lines.push(prefix + connector + child.name + (child.type === 'directory' ? '/' : ''));
 
       const childKey = child.relativePath;
       const nextPrefix = prefix + (isLast ? INDENT : PIPE);
@@ -317,8 +334,8 @@ export const LIST = defineTool({
   name: 'list',
   title: 'List',
   description:
-    'List sorted directory entries and an ASCII tree. maxDepth=1 is top-level. ' +
-    'maxEntries sets page size; continue with nextCursor. An incomplete first page also carries resourceUri for the whole list.',
+    "List a directory's files and subdirectories as a tree of names, like ls or tree. " +
+    'stat returns sizes and dates.',
   input: ListInputSchema,
   output: ListOutputSchema,
   // Not published: every field is a plainly-named scalar (`entryCount`,

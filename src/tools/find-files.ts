@@ -164,9 +164,8 @@ export const FIND_FILES = defineTool({
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files matching a glob pattern. Returns matched paths with optional metadata. ' +
-    'Pagination cursors reference a query-bound snapshot that expires after 60 seconds. ' +
-    'For content search use search_text; for bulk regex replacements use replace_text with the same glob.',
+    'Find files by name or glob pattern; returns file paths relative to the searched directory. ' +
+    'A pattern without / matches file names at any depth. search_text searches contents.',
   input: SearchFilesInputSchema,
   output: SearchFilesOutputSchema,
   annotations: {
@@ -201,6 +200,7 @@ export const FIND_FILES = defineTool({
         tool: 'find_files',
         nextCursor: structured.nextCursor,
         stoppedReason: structured.stoppedReason,
+        skippedInaccessible: structured.skippedInaccessible,
       });
     if (link) {
       return { structured, text, resources: [link] };

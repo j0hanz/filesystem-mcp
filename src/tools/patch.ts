@@ -7,6 +7,7 @@ import { applyPatch, parsePatch } from 'diff';
 
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
+import { countLines } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   FileKind,
@@ -87,18 +88,43 @@ async function handlePatch(
       args.path,
     );
   }
+  // jsdiff tries each hunk at its header line before bounding the search by
+  // the previous hunk, so a header pointing back into text an earlier hunk
+  // already consumed applies there and emits that region twice. Start each
+  // hunk no earlier than where the previous hunk's changes end; its trailing
+  // context may still overlap, as jsdiff allows.
+  let floor = 0;
+  const hunks = parsedPatch.hunks.map((hunk) => {
+    const oldStart = Math.max(hunk.oldStart, floor);
+    let trailingContext = 0;
+    for (const line of hunk.lines) {
+      if (line === '' || line.startsWith(' ')) trailingContext++;
+      else if (line.startsWith('+') || line.startsWith('-')) trailingContext = 0;
+    }
+    floor = oldStart + hunk.oldLines - trailingContext;
+    return { ...hunk, oldStart };
+  });
   // applyPatch returns false (strict) on hunk mismatch — not a falsy empty string,
   // so `=== false` distinguishes a no-op patch ('') from a failed one.
-  const patched = applyPatch(content, parsedPatch);
+  const patched = applyPatch(content, { ...parsedPatch, hunks });
   if (patched === false) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      'patch did not apply cleanly: hunk context does not match file content',
+      'patch did not apply cleanly: hunk context does not match file content (hunks must be in file order)',
       args.path,
     );
   }
 
   const { linesAdded, linesRemoved } = countAddedRemoved(parsedPatch);
+  // Backstop for placements the clamp cannot see, such as zero-context hunks
+  // whose headers point past the end of the file: refuse rather than write.
+  if (countLines(patched) !== countLines(content) + linesAdded - linesRemoved) {
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      'patch would duplicate or drop lines: a hunk overlaps an earlier one or starts past the end of the file',
+      args.path,
+    );
+  }
   // The patched file used to come back whole in the text block, so a one-line
   // hunk against a 5000-line file returned 5000 lines. Every other write tool
   // answers with a summary; the result is reachable via `resourceUri` or a
@@ -156,10 +182,9 @@ export const PATCH = defineTool({
   name: 'patch',
   title: 'Patch',
   description:
-    'Apply a single-file unified diff to one file and write the result. Pass { path, diff }. ' +
-    'Use after inspecting a diff tool dry-run: pass the diff blob directly instead of re-expressing it as line edits. ' +
-    'Rejects multi-file diffs and diffs whose hunk context does not match the file. ' +
-    'Set dryRun=true to preview the result without writing.',
+    'Apply a single-file unified diff to one existing text file, like git apply. ' +
+    'Nothing is written unless every hunk applies in file order with exactly matching context; ' +
+    'hunks are found by their context, so start line numbers may be off.',
   input: PatchInputSchema,
   output: PatchOutputSchema,
   annotations: {

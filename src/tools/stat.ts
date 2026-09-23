@@ -155,9 +155,9 @@ export const STAT = defineTool({
   name: 'stat',
   title: 'Get File Info',
   description:
-    'Get metadata for one or more files or directories: size, type, permissions, MIME type, timestamps, and tokenEstimate. ' +
-    'Use tokenEstimate to pre-screen read cost before calling read. ' +
-    'Single path: pass path. Batch mode: pass paths[].',
+    'Get metadata without reading contents, like ls -ld: type, size (a directory reports its own entry, not its contents), ' +
+    'tokenEstimate, timestamps, permissions, MIME type guessed from the extension, and symlink target. ' +
+    'Also checks whether paths exist.',
   input: StatInputSchema,
   output: StatOutputSchema,
   annotations: {

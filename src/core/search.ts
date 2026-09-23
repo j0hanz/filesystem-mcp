@@ -224,6 +224,9 @@ export async function searchContent(
     const entries = globEntries({
       cwd: directory,
       pattern: options.filePattern ?? '**/*',
+      // Same rule as replace_text, so a search with the same glob previews the
+      // files a replace would touch: a slash-free glob matches at any depth.
+      baseNameMatch: true,
       includeHidden: Boolean(options.includeHidden),
       skipIgnored: Boolean(options.skipIgnored),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -376,6 +379,7 @@ export async function searchFiles(
   const entries = globEntries({
     cwd: directory,
     pattern,
+    baseNameMatch: true,
     includeHidden: Boolean(options.includeHidden),
     skipIgnored: Boolean(options.skipIgnored),
     ...(options.signal ? { signal: options.signal } : {}),

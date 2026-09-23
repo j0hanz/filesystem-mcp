@@ -388,10 +388,8 @@ export const READ = defineTool({
   name: 'read',
   title: 'Read File',
   description:
-    'Read one or more text files and return content. ' +
-    'Partial reads: head (first N lines), tail (last N lines), startLine/endLine (line range). ' +
-    'Batch mode: pass paths[] instead of path; line params are shared across all files. ' +
-    'head, tail, and startLine/endLine are mutually exclusive — use exactly one.',
+    'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
+    'Images and audio return as media; other binary files are rejected.',
   input: ReadFileInputSchema,
   output: ReadFileOutputSchema,
   annotations: {

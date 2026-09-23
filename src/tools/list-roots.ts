@@ -18,7 +18,8 @@ export const LIST_ROOTS = defineTool({
   name: 'list_roots',
   title: 'Workspace Roots',
   description:
-    'List the allowed workspace root directories. Call this first to discover what paths are accessible; all other tools are scoped to these roots. Allowed directories are configured via CLI arguments, the FS_ALLOWED_DIRS environment variable, or --allow-cwd.',
+    'List the directories this server can access, as absolute paths, including any the user granted during this session. ' +
+    'Other tools can ask the user to grant access to a path outside them.',
   input: RootsInputSchema,
   output: RootsOutputSchema,
   annotations: {
@@ -35,9 +36,8 @@ export const LIST_ROOTS = defineTool({
     // and keeps it in `structuredContent`.
     //
     // `hint` rides the same JSON so the recovery reaches every client. An empty
-    // `roots` says the call failed to be useful but not what to do about it,
-    // and the elicitation route out — call a tool with a concrete path and
-    // approve the grant — appears in no tool description. It is conditional
+    // `roots` says the call failed to be useful but not what to do about it;
+    // the description names the grant route only in passing. It is conditional
     // because a configured server pays nothing to be told how to configure.
     return Promise.resolve({
       structured: {

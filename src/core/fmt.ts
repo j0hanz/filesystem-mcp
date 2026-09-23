@@ -93,13 +93,15 @@ const STOP_REASON_TEXT: Record<string, string> = {
 };
 
 /**
- * The `//` lines a paged search appends to its text block. Paging and the
- * engine's stop state live in the structured half, which `defineTool` ships
- * under `_meta` for a tool that authors its own text — and no client renders
- * that. These lines are the only place a caller learns that more remains or
- * that the scan was cut. They are independent: a scan can stop early with too
- * few results to page, so a truncation with no cursor must still say so.
- * Prefixed `//` so neither can be mistaken for a result row.
+ * The `//` lines a paged search appends to its text block. Paging, the
+ * engine's stop state and the files it skipped live in the structured half,
+ * which `defineTool` ships under `_meta` for a tool that authors its own text —
+ * and no client renders that. These lines are the only place a caller learns
+ * that more remains, that the scan was cut, or that files went unexamined (a
+ * lone match in an oversized file otherwise reads as "No matches"). They are
+ * independent: a scan can stop early with too few results to page, so a
+ * truncation with no cursor must still say so. Prefixed `//` so none can be
+ * mistaken for a result row.
  */
 export function pageTrailer(p: {
   offset: number;
@@ -109,6 +111,8 @@ export function pageTrailer(p: {
   tool: string;
   nextCursor?: string | undefined;
   stoppedReason?: string | undefined;
+  skippedTooLarge?: number | undefined;
+  skippedInaccessible?: number | undefined;
 }): string {
   const lines: string[] = [];
   // Position is owed on every page of a split set, including the last one —
@@ -122,11 +126,19 @@ export function pageTrailer(p: {
       `// showing ${String(p.offset + 1)}-${String(p.offset + p.shown)} of ${String(p.total)} ${p.noun}.${next}`,
     );
   }
-  if (p.stoppedReason !== undefined) {
-    const cause = STOP_REASON_TEXT[p.stoppedReason] ?? `stopped (${p.stoppedReason})`;
-    lines.push(
-      `// scan stopped early: ${cause}. That total is a floor, not the count. Narrow path or pattern for the rest.`,
-    );
+  if (p.stoppedReason !== undefined) lines.push(stoppedEarlyLine(p.stoppedReason));
+  const skipped = [
+    p.skippedTooLarge ? `${formatCount(p.skippedTooLarge, 'file')} over the text size limit` : '',
+    p.skippedInaccessible ? formatCount(p.skippedInaccessible, 'inaccessible file') : '',
+  ].filter(Boolean);
+  if (skipped.length > 0) {
+    lines.push(`// skipped ${skipped.join(', ')}; results may be incomplete.`);
   }
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
+}
+
+/** The `//` line saying a scan was cut short. */
+export function stoppedEarlyLine(stoppedReason: string): string {
+  const why = STOP_REASON_TEXT[stoppedReason] ?? `stopped (${stoppedReason})`;
+  return `// scan stopped early: ${why}. That total is a floor, not the count. Narrow path or pattern for the rest.`;
 }

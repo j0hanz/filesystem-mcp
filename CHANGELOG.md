@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Tool descriptions were rewritten for models.** Each now leads with what
+  the tool does and the command it resembles (grep, cat, sed -i, git apply),
+  and names a sibling only where the two are easy to confuse. Anything the
+  parameter schema already says, operator-only setup, and imperative
+  reminders are gone, as are claims that did not match the code. Read-only
+  tools no longer name write tools, which are absent under `--read-only`.
+  `tools/list` shrinks from about 20,100 to 18,100 characters.
+- **`find_files` and `search_text` match a glob without `/` at any depth**,
+  the way `replace_text` already did. `*.ts` or `config.ts` used to match
+  only at the top of the searched directory, so a search could not preview
+  what a replace with the same glob would touch. A pattern containing `/`
+  stays anchored to the searched directory.
+- **`list` marks directories with a trailing `/`** in its tree.
+
+### Fixed
+
+- **`replace_text` corrupted binary and non-UTF-8 files** that contained a
+  match, rewriting every undecodable byte as U+FFFD. A sweep now skips such
+  files and counts them (`N binary skipped`); naming one as `path` is an
+  `INVALID_INPUT` error.
+- **Dry-run previews reached no model.** `edit` with `dryRun` and
+  `replace_text` with `dryRun` or `returnDiff` put the diff only in `_meta`,
+  which clients do not show the model. The diff now follows the summary line,
+  and `edit` quotes each `oldText` that did not match.
+- **`replace_text` stopped early and failed without saying so.** Hitting
+  `maxResults`, `maxFiles`, or the timeout now adds a `// scan stopped early`
+  line, a diff cut at 20 KB says so, and each failed file's reason follows the
+  summary instead of only a failure count.
+- **`search_text` and `find_files` hid skipped files.** A lone match in a
+  file over the size limit read as `No matches`; the text now says how many
+  files were skipped as too large or inaccessible.
+- **`list` pages after the first drew an empty tree** when `maxDepth` was
+  above 1. Entries whose parent directory sat on an earlier page are now drawn
+  under that parent.
+- **`patch` could duplicate content.** jsdiff tried each hunk at its header
+  line even when that pointed back into text an earlier hunk had already
+  changed, and emitted the region between twice. Each hunk now starts after
+  the previous one: out-of-order hunks are rejected and nothing is written,
+  while in-order hunks with wrong line numbers land in the right place.
+- **A failed `edit` named no `oldText`.** The error now quotes each one that
+  did not match.
+
 ## [2.4.1] - 2026-09-17
 
 A bug-fix release. One paging line reported the wrong range; the published

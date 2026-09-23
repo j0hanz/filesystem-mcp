@@ -58,9 +58,7 @@ async function handleDiff(
 export const DIFF = defineTool({
   name: 'diff',
   title: 'Diff',
-  description:
-    'Compare two files and return a unified diff with line counts. Pass the two paths as a and b. ' +
-    'Use after an edit dry-run to compare against another file, or to inspect changes between two paths.',
+  description: 'Compare two text files and return a unified diff from a to b, like diff -u.',
   input: DiffInputSchema,
   output: DiffOutputSchema,
   annotations: {

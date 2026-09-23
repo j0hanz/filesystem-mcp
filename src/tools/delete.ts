@@ -398,12 +398,7 @@ export const DELETE = defineTool({
   name: 'delete',
   title: 'Delete File',
   description:
-    'Permanently delete one or more files, directories, or symlinks (max 1000 per call). This action is irreversible. ' +
-    'Pass paths: [...] — there is no single-path form. ' +
-    'Non-empty directories require recursive=true and additionally prompt the user to confirm each one, ' +
-    'so the call returns without deleting anything until that confirmation comes back; ' +
-    'a client that cannot prompt gets an error naming the alternative. ' +
-    'Workspace root directories cannot be deleted.',
+    'Permanently delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded.',
   input: DeleteInputSchema,
   output: DeleteOutputSchema,
   annotations: {
