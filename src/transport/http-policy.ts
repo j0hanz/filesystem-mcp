@@ -73,8 +73,11 @@ function isWildcardHttpHost(host: string): boolean {
  * admission: the SDK gate runs first and answers 403 to any Origin outside
  * that list — localhost included once `FS_ALLOWED_ORIGINS` replaces the
  * loopback default. An empty list (an all-blank `FS_ALLOWED_ORIGINS`) mounts no
- * `allowedOrigins`, so a loopback bind keeps the SDK's localhost default; this
- * uses the same default. An empty header is never reflected — the SDK treats an
+ * `allowedOrigins`: a loopback bind keeps the SDK's localhost default, which
+ * this reuses, but a concrete or wildcard bind then mounts no Origin gate at
+ * all, so there admission is wider than reflection — which fails safe, since
+ * the browser still blocks an unreflected response. An empty header is never
+ * reflected — the SDK treats an
  * absent `Origin` as allowed, which is right for admission but not for echoing.
  */
 export function isOriginAllowed(origin: string, allowedHostnames: readonly string[]): boolean {
@@ -308,8 +311,9 @@ export function bearerAuthMiddleware(
  */
 export function computeAllowedOriginHostnames(originsEnv: string | undefined): string[] {
   // Truthiness, not list length: an all-blank value (" , ") is a configured but
-  // empty allow-list — deny every remote origin — while an unset or "" value
-  // falls back to the loopback defaults.
+  // empty allow-list — no remote origin is reflected, and a non-loopback bind
+  // then mounts no SDK Origin gate (see isOriginAllowed) — while an unset or ""
+  // value falls back to the loopback defaults.
   return originsEnv ? splitCsvList(originsEnv) : localhostAllowedHostnames();
 }
 

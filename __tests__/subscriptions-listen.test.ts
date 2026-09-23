@@ -110,8 +110,9 @@ describe('HTTP watcher fan-out and listen admission', () => {
   // for a listen the schema accepts. A mixed-type array fails the schema, so no
   // fs.watch handle is created for it — otherwise those handles would depend on
   // the response-close release to come back. The client cannot send this shape,
-  // so it goes over raw fetch; the assertion is decisive because the gated path
-  // answers with its own "Cannot subscribe to" message.
+  // so it goes over raw fetch. The assertion is decisive because attaching the
+  // missing file would fail with "Cannot subscribe to"; its absence proves the
+  // gate attached nothing.
   it('does not attach watchers for a structurally invalid listen', async () => {
     const missingUri = buildFileResourceUri(join(tmpDir, 'never-created.txt'));
     const response = await fetch(http.base, {
