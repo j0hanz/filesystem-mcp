@@ -1,4 +1,9 @@
-import { McpServer, ProtocolErrorCode, ResourceNotFoundError } from '@modelcontextprotocol/server';
+import {
+  McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
+  ResourceNotFoundError,
+} from '@modelcontextprotocol/server';
 import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -590,6 +595,45 @@ describe('MCP Resources', () => {
         assert.strictEqual(err.uri, uri);
         return true;
       });
+    });
+
+    it('resources/subscribe refuses a result URI as unsubscribable, not as missing', async () => {
+      // `filesystem-mcp://result/{id}` is listed and readable, so a subscribe
+      // must say it has no watcher, not that the resource does not exist.
+      const uri = 'filesystem-mcp://result/abc';
+      await assert.rejects(harness.client.subscribeResource({ uri }), (err: unknown) => {
+        assert.ok(ProtocolError.isInstance(err), 'expected ProtocolError');
+        assert.strictEqual(
+          ResourceNotFoundError.isInstance(err),
+          false,
+          'must not read as missing',
+        );
+        assert.strictEqual(err.code, ProtocolErrorCode.InvalidParams);
+        assert.match(err.message, /does not support subscriptions/u);
+        return true;
+      });
+    });
+
+    it('resources/subscribe answers an unparseable URI as not found, not an internal error', async () => {
+      await assert.rejects(
+        harness.client.subscribeResource({ uri: 'not a uri' }),
+        (err: unknown) => {
+          assert.ok(ResourceNotFoundError.isInstance(err), 'expected ResourceNotFoundError');
+          assert.strictEqual(err.code, ProtocolErrorCode.InvalidParams);
+          return true;
+        },
+      );
+    });
+
+    it('resources/subscribe answers a foreign scheme as not found', async () => {
+      await assert.rejects(
+        harness.client.subscribeResource({ uri: 'other://file/x' }),
+        (err: unknown) => {
+          assert.ok(ResourceNotFoundError.isInstance(err), 'expected ResourceNotFoundError');
+          assert.match(err.message, /^Resource not found: other:\/\/file\/x$/u);
+          return true;
+        },
+      );
     });
 
     it('advertises resources.subscribe and resources.listChanged capabilities', async () => {

@@ -12,12 +12,11 @@ import type {
   UnsubscribeRequestParams,
 } from '@modelcontextprotocol/server';
 import {
-  checkResourceAllowed,
   ProtocolError,
   ProtocolErrorCode,
   ResourceNotFoundError,
   ResourceTemplate,
-  resourceUrlFromServerUrl,
+  UriTemplate,
 } from '@modelcontextprotocol/server';
 
 import type { FsError } from './core/errors.ts';
@@ -413,6 +412,22 @@ function wrapRead(contract: ResourceContract) {
   };
 }
 
+/**
+ * Whether `contract` answers for `uri`, decided by the template matcher the SDK
+ * dispatches `resources/read` with, so `resources/subscribe` and
+ * `resources/read` agree on which resource owns a URI. Not
+ * `checkResourceAllowed`: that is an RFC 8707 audience check comparing
+ * `URL.origin`, which is the opaque `"null"` for every custom scheme, so it
+ * matched `filesystem-mcp://result/…` — and any other scheme — to the file
+ * template.
+ */
+function owns(contract: ResourceContract, uri: string): boolean {
+  if (contract.uri !== undefined) return uri === contract.uri;
+  return (
+    contract.uriTemplate !== undefined && new UriTemplate(contract.uriTemplate).match(uri) !== null
+  );
+}
+
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
   const server = deps.server;
   const options = { ...deps, readOnly: deps.readOnly ?? false };
@@ -482,38 +497,23 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
       });
     };
 
-    // The URI prefix a contract answers for: a fixed URI, or a template up to
-    // its first variable.
-    const prefixOf = (contract: ResourceContract): string | undefined =>
-      contract.uri ?? contract.uriTemplate?.split('{')[0];
-    const matches = (contract: ResourceContract, requested: URL): boolean => {
-      const configured = prefixOf(contract);
-      return (
-        configured !== undefined &&
-        checkResourceAllowed({ requestedResource: requested, configuredResource: configured })
-      );
-    };
-
     server.server.setRequestHandler(
       'resources/subscribe',
       async (req: { params: SubscribeRequestParams }) => {
-        const requested = resourceUrlFromServerUrl(req.params.uri);
-        if (!matches(file, requested)) {
+        const { uri } = req.params;
+        if (!owns(file, uri)) {
           // A resource that exists but has no watcher (the instructions text,
           // a cached result) is NOT a not-found: reporting it as one told
           // clients a URI they can list and read does not exist.
-          if (resourceContracts.some((contract) => matches(contract, requested))) {
+          if (resourceContracts.some((contract) => owns(contract, uri))) {
             throw new ProtocolError(
               ProtocolErrorCode.InvalidParams,
-              `Resource ${requested.toString()} does not support subscriptions; only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
+              `Resource ${uri} does not support subscriptions; only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
             );
           }
-          throw new ResourceNotFoundError(
-            requested.toString(),
-            `Resource not found: ${requested.toString()}`,
-          );
+          throw new ResourceNotFoundError(uri, `Resource not found: ${uri}`);
         }
-        if ((await file.subscribe(requested.toString(), notifyUpdated)) === false) {
+        if ((await file.subscribe(uri, notifyUpdated)) === false) {
           // InternalError for want of anything better: ProtocolErrorCode has
           // no resource-limit member, and the message already names the
           // actionable cause.
@@ -529,8 +529,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     server.server.setRequestHandler(
       'resources/unsubscribe',
       (req: { params: UnsubscribeRequestParams }) => {
-        const requested = resourceUrlFromServerUrl(req.params.uri);
-        if (matches(file, requested)) file.unsubscribe(requested.toString());
+        if (owns(file, req.params.uri)) file.unsubscribe(req.params.uri);
         return {};
       },
     );
