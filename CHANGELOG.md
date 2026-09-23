@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.5.0] - 2026-09-23
+
+A release for the model reading the tools: every tool description is
+rewritten for tool selection, and auditing each one against the code surfaced
+six bugs, fixed here. No tool is renamed and no input field changes shape.
+Read Changed before upgrading if a caller passes `find_files` or
+`search_text` a glob without `/` and expects top-level matches only, or
+parses `list` tree text. Read Fixed if a caller parses `edit` or
+`replace_text` result text, sends `patch` hunks out of file order, names a
+binary file as `replace_text`'s `path`, or matches a `resources/subscribe`
+error code.
 
 ### Changed
 
@@ -20,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the way `replace_text` already did. `*.ts` or `config.ts` used to match
   only at the top of the searched directory, so a search could not preview
   what a replace with the same glob would touch. A pattern containing `/`
-  stays anchored to the searched directory.
+  stays anchored to the searched directory; `maxDepth: 0` keeps a search to
+  the top level.
 - **`list` marks directories with a trailing `/`** in its tree.
 
 ### Fixed
@@ -50,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while in-order hunks with wrong line numbers land in the right place.
 - **A failed `edit` named no `oldText`.** The error now quotes each one that
   did not match.
+- **`resources/subscribe` misrouted custom-scheme URIs.** A listed
+  `filesystem-mcp://result/` URI was answered as not found; it is now refused
+  as not supporting subscriptions, like other non-file resources. An
+  unparseable URI answers `-32602` instead of `-32603`.
+- **CORS reflection could disagree with the Origin gate.** A localhost
+  Origin passed the preflight even when `FS_ALLOWED_ORIGINS` had replaced the
+  loopback default and the request itself was refused with 403. Reflection
+  now uses the SDK's own Origin check over the same list.
 
 ## [2.4.1] - 2026-09-17
 
