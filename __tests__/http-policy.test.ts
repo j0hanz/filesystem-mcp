@@ -13,7 +13,6 @@ import {
   computeAllowedOriginHostnames,
   corsMiddleware,
   createRateLimiter,
-  isAllowedLocalhostOrigin,
   isLoopbackHttpHost,
   isOriginAllowed,
   resolveAllowedHosts,
@@ -342,20 +341,20 @@ describe('HTTP Policy & Security', () => {
   });
 
   describe('CORS and Origin Policy (TC-SEC-028 - TC-SEC-031)', () => {
-    it('TC-SEC-028: isAllowedLocalhostOrigin validates localhost origins and rejects external/spoofed origins', () => {
-      assert.strictEqual(isAllowedLocalhostOrigin('http://localhost'), true);
-      assert.strictEqual(isAllowedLocalhostOrigin('http://localhost:3000'), true);
-      assert.strictEqual(isAllowedLocalhostOrigin('https://127.0.0.1:8080'), true);
-      assert.strictEqual(isAllowedLocalhostOrigin('http://[::1]:5173'), true);
-      assert.strictEqual(isAllowedLocalhostOrigin('https://localhost'), true);
+    it('TC-SEC-028: isOriginAllowed on the loopback default accepts localhost origins and rejects spoofed ones', () => {
+      assert.strictEqual(isOriginAllowed('http://localhost', []), true);
+      assert.strictEqual(isOriginAllowed('http://localhost:3000', []), true);
+      assert.strictEqual(isOriginAllowed('https://127.0.0.1:8080', []), true);
+      assert.strictEqual(isOriginAllowed('http://[::1]:5173', []), true);
+      assert.strictEqual(isOriginAllowed('https://localhost', []), true);
 
-      assert.strictEqual(isAllowedLocalhostOrigin('http://localhost.attacker.com'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin('http://127.0.0.1.attacker.com'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin('http://evil.com'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin('http://evil.com/localhost'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin('file:///etc/passwd'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin('null'), false);
-      assert.strictEqual(isAllowedLocalhostOrigin(''), false);
+      assert.strictEqual(isOriginAllowed('http://localhost.attacker.com', []), false);
+      assert.strictEqual(isOriginAllowed('http://127.0.0.1.attacker.com', []), false);
+      assert.strictEqual(isOriginAllowed('http://evil.com', []), false);
+      assert.strictEqual(isOriginAllowed('http://evil.com/localhost', []), false);
+      assert.strictEqual(isOriginAllowed('file:///etc/passwd', []), false);
+      assert.strictEqual(isOriginAllowed('null', []), false);
+      assert.strictEqual(isOriginAllowed('', []), false);
     });
 
     it('TC-SEC-029: computeAllowedOriginHostnames parses env list or defaults to localhost hostnames', () => {
@@ -375,14 +374,18 @@ describe('HTTP Policy & Security', () => {
       assert.deepStrictEqual(spaceDefaults, []);
     });
 
-    it('TC-SEC-030: isOriginAllowed allows localhost origins unconditionally and remote origins if in allowed list', () => {
-      assert.strictEqual(isOriginAllowed('http://localhost:3000', []), true);
-      assert.strictEqual(isOriginAllowed('http://127.0.0.1:8080', ['app.example.com']), true);
-      assert.strictEqual(isOriginAllowed('http://[::1]:5000', []), true);
-
+    it('TC-SEC-030: isOriginAllowed accepts exactly the configured list, localhost only by default', () => {
       assert.strictEqual(isOriginAllowed('https://app.example.com', ['app.example.com']), true);
       assert.strictEqual(
         isOriginAllowed('https://app.example.com:8443', ['app.example.com']),
+        true,
+      );
+      // A configured list replaces the loopback default, exactly as the SDK
+      // Origin gate treats `allowedOrigins` — it 403s these before CORS runs.
+      assert.strictEqual(isOriginAllowed('http://127.0.0.1:8080', ['app.example.com']), false);
+      assert.strictEqual(isOriginAllowed('http://localhost:5173', ['app.example.com']), false);
+      assert.strictEqual(
+        isOriginAllowed('http://localhost:5173', ['localhost', 'app.example.com']),
         true,
       );
 
@@ -392,7 +395,7 @@ describe('HTTP Policy & Security', () => {
     });
 
     it('TC-SEC-031: corsMiddleware responds to OPTIONS requests with appropriate CORS headers', () => {
-      const handler = corsMiddleware(['app.example.com']);
+      const handler = corsMiddleware(['localhost', 'app.example.com']);
 
       // 1. Allowed localhost origin
       const reqLocalhost = createMockRequest({
@@ -480,6 +483,18 @@ describe('HTTP Policy & Security', () => {
         resSubpath.headers['access-control-allow-origin'],
         'http://localhost:3000',
       );
+
+      // 6. A configured list without localhost reflects no localhost origin,
+      // matching the SDK Origin gate, which already 403s it on a live server.
+      const strict = corsMiddleware(['app.example.com']);
+      const reqStrict = createMockRequest({
+        method: 'OPTIONS',
+        path: '/',
+        headers: { origin: 'http://localhost:3000' },
+      });
+      const resStrict = createMockResponse();
+      strict(reqStrict, resStrict, () => {});
+      assert.strictEqual(resStrict.headers['access-control-allow-origin'], undefined);
     });
   });
 
@@ -734,6 +749,43 @@ describe('keyless bind rate limiting', () => {
       await cleanupTestRoot(dir);
       if (saved === undefined) Reflect.deleteProperty(process.env, 'FS_RATE_LIMIT_RPM');
       else process.env['FS_RATE_LIMIT_RPM'] = saved;
+    }
+  });
+});
+
+describe('CORS reflection agrees with the SDK Origin gate', () => {
+  it('TC-SEC-031b: with FS_ALLOWED_ORIGINS set, localhost is refused and the listed origin reflected', async () => {
+    const saved = process.env['FS_ALLOWED_ORIGINS'];
+    process.env['FS_ALLOWED_ORIGINS'] = 'app.example.com';
+    const dir = await createTestRoot();
+    const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
+    const port = (httpServer.address() as AddressInfo).port;
+    const preflight = async (origin: string): Promise<{ status: number; allow: string | null }> => {
+      const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+        method: 'OPTIONS',
+        headers: { origin },
+      });
+      await res.text();
+      return { status: res.status, allow: res.headers.get('access-control-allow-origin') };
+    };
+    try {
+      const local = await preflight('http://localhost:5173');
+      assert.strictEqual(local.status, 403, 'the SDK gate refuses an unlisted localhost origin');
+      assert.strictEqual(local.allow, null);
+
+      const listed = await preflight('https://app.example.com');
+      assert.strictEqual(listed.status, 204);
+      assert.strictEqual(listed.allow, 'https://app.example.com');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      await cleanupTestRoot(dir);
+      if (saved === undefined) Reflect.deleteProperty(process.env, 'FS_ALLOWED_ORIGINS');
+      else process.env['FS_ALLOWED_ORIGINS'] = saved;
     }
   });
 });
