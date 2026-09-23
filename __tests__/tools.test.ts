@@ -1107,6 +1107,54 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(result.isError, true);
   });
 
+  it('patch rejects out-of-order hunks instead of duplicating text', async () => {
+    const f = join(tmpDir, 'patch_order.txt');
+    const original = 'abcdefghijklmnopqrst'.split('').join('\n') + '\n';
+    await writeFile(f, original);
+    const swapped = '--- f.txt\n+++ f.txt\n@@ -5,1 +5,1 @@\n-e\n+E\n@@ -1,1 +1,1 @@\n-a\n+A\n';
+    for (const dryRun of [true, false]) {
+      const result = await harness.client.callTool({
+        name: 'patch',
+        arguments: { path: f, diff: swapped, dryRun },
+      });
+      assert.strictEqual(result.isError, true, `dryRun=${String(dryRun)}`);
+      assert.match(firstTextBlock(result).text ?? '', /INVALID_INPUT.*file order/);
+    }
+    assert.strictEqual(await readFile(f, 'utf-8'), original);
+
+    // Same hunks in order, both headers off by +2: offset tolerance still applies.
+    const offset = '--- f.txt\n+++ f.txt\n@@ -3,1 +3,1 @@\n-a\n+A\n@@ -7,1 +7,1 @@\n-e\n+E\n';
+    const ok = await harness.client.callTool({
+      name: 'patch',
+      arguments: { path: f, diff: offset },
+    });
+    assert.notStrictEqual(ok.isError, true);
+    assert.strictEqual(await readFile(f, 'utf-8'), original.replace('a', 'A').replace('e', 'E'));
+
+    // Hand-written headers can be wrong by different amounts, even descending,
+    // while the hunks themselves are in order; jsdiff places those correctly.
+    await writeFile(f, original);
+    const misnumbered = '--- f.txt\n+++ f.txt\n@@ -9,1 +9,1 @@\n-a\n+A\n@@ -3,1 +3,1 @@\n-e\n+E\n';
+    const guessed = await harness.client.callTool({
+      name: 'patch',
+      arguments: { path: f, diff: misnumbered },
+    });
+    assert.notStrictEqual(guessed.isError, true, firstTextBlock(guessed).text);
+    assert.strictEqual(await readFile(f, 'utf-8'), original.replace('a', 'A').replace('e', 'E'));
+
+    // A later hunk whose header points back to text that also appears earlier
+    // must land after the previous hunk, not on that earlier copy.
+    const repeated = join(tmpDir, 'patch_repeat.txt');
+    await writeFile(repeated, 'x\n1\n2\n3\nx\n5\n');
+    const back = '--- f\n+++ f\n@@ -2,1 +2,1 @@\n-1\n+ONE\n@@ -1,1 +1,1 @@\n-x\n+X\n';
+    const landed = await harness.client.callTool({
+      name: 'patch',
+      arguments: { path: repeated, diff: back },
+    });
+    assert.notStrictEqual(landed.isError, true, firstTextBlock(landed).text);
+    assert.strictEqual(await readFile(repeated, 'utf-8'), 'x\nONE\n2\n3\nX\n5\n');
+  });
+
   it('TC-FUNC-063: list paginates entries via nextCursor', async () => {
     const sub = join(tmpDir, 'page_dir');
     await mkdir(sub, { recursive: true });
@@ -1131,6 +1179,38 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(s2.entryCount, 2);
     assert.ok(!s2.nextCursor, 'second page is the last');
     assert.strictEqual(s2.resourceUri, undefined, 'later pages never carry the URI');
+  });
+
+  it('TC-FUNC-063c: a later list page draws its entries under their ancestors', async () => {
+    const sub = join(tmpDir, 'tree_page_dir');
+    for (const dir of ['a', 'b']) {
+      await mkdir(join(sub, dir), { recursive: true });
+      for (let i = 0; i < 3; i++) await writeFile(join(sub, dir, `${dir}${String(i)}.txt`), 'x');
+    }
+    const first = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxDepth: 2, maxEntries: 4 },
+    });
+    // `b/` holds nothing on this page; the slash still says it is a directory.
+    assert.match(
+      firstTextBlock(first).text ?? '',
+      /^tree_page_dir\n├── a\/\n│ {3}├── a0\.txt\n│ {3}└── a1\.txt\n└── b\/\n\n\/\/ showing 1-4 of 8/,
+    );
+    const second = await harness.client.callTool({
+      name: 'list',
+      arguments: {
+        path: sub,
+        maxDepth: 2,
+        maxEntries: 4,
+        cursor: (first._meta as { nextCursor?: string }).nextCursor,
+      },
+    });
+    // `a/` and `b/` sat on page one; without them as context this page's
+    // entries have no path back to the root and the tree renders empty.
+    assert.match(
+      firstTextBlock(second).text ?? '',
+      /^tree_page_dir\n├── a\/\n│ {3}└── a2\.txt\n└── b\/\n {4}├── b0\.txt\n {4}├── b1\.txt\n {4}└── b2\.txt\n\n\/\/ showing 5-8 of 8/,
+    );
   });
 
   it('TC-FUNC-075b: list prunes an ignored directory and everything under it', async () => {
@@ -1611,6 +1691,89 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(content, 'QUX bar QUX\n');
   });
 
+  // Decoding these as UTF-8 and writing the result back swaps every invalid
+  // byte for U+FFFD, corrupting the file even though the match itself is ASCII.
+  it('replace_text leaves binary and non-UTF-8 files untouched', async () => {
+    const dir = join(tmpDir, 'binrep');
+    const text = await writeTestFile(dir, 'text.txt', 'foo\n');
+    // Valid UTF-8 with a NUL, so each file trips one half of the guard.
+    const blob = Buffer.from([0x66, 0x6f, 0x6f, 0x00, 0x01]);
+    const latin1 = Buffer.from('café foo\n', 'latin1');
+    await writeFile(join(dir, 'blob.bin'), blob);
+    await writeFile(join(dir, 'latin1.txt'), latin1);
+
+    const swept = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'foo', replacement: 'bar' },
+    });
+    assert.notStrictEqual(swept.isError, true);
+    const s = swept._meta as { summary: { failed: number }; skippedBinary?: number };
+    assert.strictEqual(s.summary.failed, 0);
+    assert.strictEqual(s.skippedBinary, 2);
+    assert.match(firstTextBlock(swept).text ?? '', /2 binary skipped/);
+    assert.strictEqual(await readFile(text, 'utf-8'), 'bar\n');
+    assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
+    assert.deepStrictEqual(await readFile(join(dir, 'latin1.txt')), latin1);
+
+    // Named explicitly, the file is the whole request: refuse it, don't skip.
+    const single = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: join(dir, 'blob.bin'), searchPattern: 'foo', replacement: 'bar' },
+    });
+    assert.strictEqual(single.isError, true);
+    const r = single._meta as { results: { error?: { code: string } }[] };
+    assert.strictEqual(r.results[0]?.error?.code, 'INVALID_INPUT');
+    assert.match(firstTextBlock(single).text ?? '', /blob.bin: INVALID_INPUT Binary/);
+    assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
+  });
+
+  // Both tools author their own text, so the structured half ships under
+  // `_meta`, which a client like Claude Code never shows the model. The dry-run
+  // diff, the unmatched oldText, and replace_text's stop reason lived only there.
+  it('edit and replace_text put the preview diff and stop reason in the text', async () => {
+    const file = await writeTestFile(tmpDir, 'preview/0.txt', 'alpha\nbeta\n');
+    const edit = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        dryRun: true,
+        edits: [
+          { oldText: 'alpha', newText: 'ALPHA' },
+          { oldText: 'gamma', newText: 'x' },
+        ],
+      },
+    });
+    const editText = firstTextBlock(edit).text ?? '';
+    assert.ok(editText.includes('NO MATCH "gamma"'), editText);
+    assert.match(editText, /^\+ALPHA$/mu);
+    // A real edit fails the file instead, and must still say which oldText missed.
+    const applied = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'gamma', newText: 'x' }] },
+    });
+    assert.match(firstTextBlock(applied).text ?? '', /no match for oldText "gamma"/);
+
+    // More files than replace_text dispatches at once, so a finished file
+    // trips maxResults=1 before the sweep ends.
+    for (let i = 1; i < 10; i++) await writeTestFile(tmpDir, `preview/${String(i)}.txt`, 'alpha\n');
+    const replace = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: join(tmpDir, 'preview'),
+        searchPattern: 'alpha',
+        replacement: 'ALPHA',
+        dryRun: true,
+        maxResults: 1,
+      },
+    });
+    const replaceText = firstTextBlock(replace).text ?? '';
+    assert.match(replaceText, /^\+ALPHA$/mu);
+    assert.ok(
+      replaceText.includes('// scan stopped early: hit the maxResults limit;'),
+      replaceText,
+    );
+  });
+
   // RE2 reports offsets in code points; JS strings index in UTF-16 code units,
   // so every astral character earlier in the file used to shift the splice by
   // one and cut into surrounding text.
@@ -1721,6 +1884,42 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
+  });
+
+  it('find_files and search_text match a slash-free glob at any depth, as replace_text does', async () => {
+    const dir = join(tmpDir, 'basename_glob');
+    await mkdir(join(dir, 'sub'), { recursive: true });
+    await writeFile(join(dir, 'top.ts'), 'NEEDLE\n');
+    await writeFile(join(dir, 'sub', 'deep.ts'), 'NEEDLE\n');
+    await writeFile(join(dir, 'sub', 'top.ts'), 'NEEDLE\n');
+
+    const found = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: dir, pattern: '*.ts' },
+    });
+    assert.deepStrictEqual(
+      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path),
+      ['sub/deep.ts', 'sub/top.ts', 'top.ts'],
+    );
+
+    const searched = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, pattern: 'deep.ts', searchPattern: 'NEEDLE' },
+    });
+    assert.deepStrictEqual(
+      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
+      ['sub/deep.ts'],
+    );
+
+    // Naming a file must still search that file alone, not its namesake below.
+    const named = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: join(dir, 'top.ts'), searchPattern: 'NEEDLE' },
+    });
+    assert.deepStrictEqual(
+      (named._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
+      ['top.ts'],
+    );
   });
 
   it('TC-FUNC-015s: stat returns file metadata via callTool', async () => {
@@ -2046,6 +2245,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       true,
       'the engine reports its own stop state',
     );
+  });
+
+  it('search_text names the files it skipped in the text, with or without matches', async () => {
+    // A lone match in a file over the size cap read as "No matches": the skip
+    // count lived only in `_meta`, which no client shows the model.
+    const previous = process.env['FS_MAX_FILE_SIZE'];
+    const limit = 1024 * 1024;
+    process.env['FS_MAX_FILE_SIZE'] = String(limit);
+    try {
+      const dir = join(tmpDir, 'skipped_big');
+      await writeTestFile(tmpDir, 'skipped_big/big.txt', `BIGNEEDLE\n${'a'.repeat(limit)}`);
+      const skipLine = '// skipped 1 file over the text size limit; results may be incomplete.';
+      const alone = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
+      });
+      assert.strictEqual(firstTextBlock(alone).text, `No matches for 'BIGNEEDLE'\n\n${skipLine}`);
+
+      await writeTestFile(tmpDir, 'skipped_big/small.txt', 'BIGNEEDLE\n');
+      const beside = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
+      });
+      assert.strictEqual(firstTextBlock(beside).text, `small.txt:1: BIGNEEDLE\n\n${skipLine}`);
+    } finally {
+      if (previous === undefined) delete process.env['FS_MAX_FILE_SIZE'];
+      else process.env['FS_MAX_FILE_SIZE'] = previous;
+    }
   });
 
   it('HTTP pagination survives the per-request server factory', async () => {

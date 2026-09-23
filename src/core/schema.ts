@@ -88,7 +88,7 @@ export const SafeGlobPattern = z
     ),
   )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')
-  .meta({ examples: ['**/*.ts', 'src/**/*.js', '*.{ts,tsx}'] });
+  .meta({ examples: ['**/*.ts', 'src/**/*.js', '**/*.{ts,tsx}'] });
 
 // Only the fields whose key does not already say what they hold carry a
 // description. A `.describe('Name')` on `name` costs every client tokens to

@@ -99,11 +99,8 @@ export const CREATE = defineTool({
   name: 'create',
   title: 'Create Files',
   description:
-    'Create one or more files (max 100), creating parent directories as needed. ' +
-    'Pass files: [{ path, content }] — there is no single-path form. ' +
-    'An existing file prompts the user to confirm the overwrite, so the call returns without writing ' +
-    'anything until that confirmation comes back; set overwrite: true on an entry to replace it without the prompt. ' +
-    'Set append: true on an entry to add to the end of an existing file (created if missing) instead of overwriting.',
+    'Write whole text files: create new ones, overwrite, or append. Missing parent directories are created. ' +
+    'edit or patch changes part of an existing file.',
   input: CreateInputSchema,
   output: CreateOutputSchema,
   annotations: {

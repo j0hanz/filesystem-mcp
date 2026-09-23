@@ -263,10 +263,17 @@ async function resolveSearchScope(
   }
   return {
     basePath: dirname(resolved),
+    // The `./` anchors the name to the parent: a bare name is a basename glob
+    // that would also match every namesake anywhere below it.
     // ponytail: the name goes through as a glob, so a file whose name contains
     // glob metacharacters (`[id].ts`) matches as a pattern rather than
     // literally. Escape it here if that ever bites.
-    args: { ...args, pattern: basename(resolved), includeHidden: true, includeIgnored: true },
+    args: {
+      ...args,
+      pattern: `./${basename(resolved)}`,
+      includeHidden: true,
+      includeIgnored: true,
+    },
   };
 }
 
@@ -342,11 +349,8 @@ export const SEARCH_TEXT = defineTool({
   name: 'search_text',
   title: 'Search Content',
   description:
-    'Search file contents by text or regex (grep-style). Returns matching lines with file path, ' +
-    '1-indexed line number and 0-indexed column offset. ' +
-    'Set context=N to also return N lines either side of each match (grep -C). ' +
-    'Scope to specific file types with pattern (e.g. **/*.ts). ' +
-    'Set includeHidden=true to include dotfiles. Use find_files to search by filename instead.',
+    'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
+    'and paths relative to the searched directory. Patterns match within one line. find_files matches file names.',
   input: GrepInputSchema,
   output: GrepOutputSchema,
   annotations: {
@@ -379,6 +383,8 @@ export const SEARCH_TEXT = defineTool({
         tool: 'search_text',
         nextCursor: structured.nextCursor,
         stoppedReason: structured.stoppedReason,
+        skippedTooLarge: structured.skippedTooLarge,
+        skippedInaccessible: structured.skippedInaccessible,
       });
     if (link) {
       return { structured, text, resources: [link] };

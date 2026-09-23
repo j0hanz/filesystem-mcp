@@ -1,7 +1,7 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { Buffer } from 'node:buffer';
-import { dirname } from 'node:path';
+import { Buffer, isUtf8 } from 'node:buffer';
+import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -10,7 +10,7 @@ import { processEntriesConcurrently, StoppedReasonSchema } from '../core/concurr
 import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
-import { truncateProgressPattern } from '../core/fmt.ts';
+import { stoppedEarlyLine, truncateProgressPattern } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { toPosixRelative } from '../core/path.ts';
@@ -111,6 +111,9 @@ const SearchAndReplaceOutputSchema = z.strictObject({
   summary: OperationSummarySchema,
   totalMatches: NonNegInt.describe('Total number of replacements made across all files'),
   filesScanned: NonNegInt.describe('Total number of files examined'),
+  skippedBinary: NonNegInt.optional().describe(
+    'Matching files left untouched because they are binary or not valid UTF-8 text',
+  ),
   resultsTruncated: z
     .boolean()
     .optional()
@@ -284,6 +287,7 @@ interface ReplaceContext {
   signal: AbortSignal | undefined;
   summary: ReplaceSummary;
   fs: GuardedFileSystem;
+  singleFile: boolean;
 }
 
 interface ReplacementPlan {
@@ -347,6 +351,16 @@ async function readReplacementPlan(
 
   const buffer = await readFileBufferWithLimit(fileHandle, maxFileSize, validPath, signal);
   if (!matcher.testBuffer(buffer)) return undefined;
+  // Only bytes that decode to UTF-8 losslessly survive the string round trip;
+  // anything else would be written back with U+FFFD in place of every bad byte.
+  // NUL is valid UTF-8 but marks a binary file, as it does for `read`.
+  if (!isUtf8(buffer) || buffer.includes(0)) {
+    if (ctx.singleFile) {
+      throw new FsError(ErrorCode.INVALID_INPUT, 'Binary or non-UTF-8 file detected.', validPath);
+    }
+    ctx.summary.skippedBinary++;
+    return undefined;
+  }
 
   const originalContent = buffer.toString('utf-8');
   const { content: updatedContent, matchCount } = matcher.replace(originalContent, replacement);
@@ -386,6 +400,7 @@ interface ReplaceSummary {
   filesChanged: number;
   failedFiles: number;
   processedFiles: number;
+  skippedBinary: number;
   failures: Failure[];
   changedFiles: { path: string; matches: number }[];
   changedFilesTruncated: boolean;
@@ -403,6 +418,7 @@ function createReplaceSummary(root: string): ReplaceSummary {
     filesChanged: 0,
     failedFiles: 0,
     processedFiles: 0,
+    skippedBinary: 0,
     failures: [],
     changedFiles: [],
     changedFilesTruncated: false,
@@ -469,6 +485,7 @@ function buildSearchAndReplaceStructuredResult(
     },
     totalMatches: summary.totalMatches,
     filesScanned: summary.processedFiles,
+    ...(summary.skippedBinary ? { skippedBinary: summary.skippedBinary } : {}),
     // Failures are capped at MAX_FAILURES independently of the changed-file
     // cap, so either cap can leave `results` shorter than `summary.total`.
     ...(summary.changedFilesTruncated || summary.failures.length < summary.failedFiles
@@ -526,6 +543,7 @@ async function handleSearchAndReplace(
       signal: ctx.signal,
       summary,
       fs: ctx.fs,
+      singleFile: singleFile !== undefined,
     };
 
     stoppedReason = await processEntriesConcurrently(entries, {
@@ -576,10 +594,9 @@ export const REPLACE_TEXT = defineTool({
   name: 'replace_text',
   title: 'Search and Replace',
   description:
-    'Bulk search-and-replace across files matching a glob pattern. ' +
-    'Replaces ALL occurrences per file (unlike edit, which replaces only the first match). ' +
-    'Set returnDiff=true to preview changes as a unified diff before or after writing. ' +
-    'Literal matching by default; set isRegex=true to enable RE2 regex with capture groups ($1, $2).',
+    'Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files ' +
+    'under a directory, optionally filtered by glob. The pattern runs over the whole file: it can span lines, ' +
+    'and ^ and $ anchor to file start and end. edit replaces one unique exact match.',
   input: SearchAndReplaceInputSchema,
   output: SearchAndReplaceOutputSchema,
   annotations: {
@@ -606,11 +623,36 @@ export const REPLACE_TEXT = defineTool({
       `replace_text: '${truncatedPattern}'${dryLabel}` +
       ` \u00b7 ${String(structured.totalMatches)} match(es)` +
       ` in ${String(structured.summary.succeeded)} file(s)` +
-      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '');
+      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '') +
+      (structured.skippedBinary
+        ? ` \u00b7 ${String(structured.skippedBinary)} binary skipped`
+        : '');
+    // The structured half ships under `_meta`, which clients do not show the
+    // model, so the stop state and the diff preview must ride the text.
+    const lines = [summaryText];
+    const stop = structured.stoppedReason;
+    if (stop === 'timeout') lines.push(stoppedEarlyLine(stop));
+    else if (stop !== undefined) {
+      // maxResults/maxFiles here are the caller's own caps, so raising one is
+      // what reaches the rest; the search engine's advice to narrow is not.
+      lines.push(
+        `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,
+      );
+    }
+    // A failure's reason lives in `results`, which ships under `_meta`.
+    for (const r of structured.results.filter((x) => x.error).slice(0, 3)) {
+      if (r.error) lines.push(`// ${basename(r.path)}: ${r.error.code} ${r.error.message}`);
+    }
+    if (structured.diffTruncated) {
+      lines.push(
+        `// diff cut at ${String(MAX_DIFF_SIZE / 1024)} KB: some files' changes are not shown.`,
+      );
+    }
+    const text = lines.join('\n') + (structured.diff ? `\n\n${structured.diff}` : '');
     const isError = isTotalFailure(structured.summary);
     if (link) {
-      return { structured, text: summaryText, resources: [link], isError };
+      return { structured, text, resources: [link], isError };
     }
-    return { structured, text: summaryText, isError };
+    return { structured, text, isError };
   },
 });

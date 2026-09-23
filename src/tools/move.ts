@@ -474,12 +474,8 @@ export const MOVE = defineTool({
   name: 'move',
   title: 'Move or Copy Files',
   description:
-    'Move, rename, or copy files and directories to explicit destination paths (max 100 operations per call). ' +
-    'Pass moves: [{ source, destination }] — there is no single-pair form. ' +
-    'Parent directories are created automatically. Set copy=true to copy instead of move (sources are kept). ' +
-    'An existing destination prompts the user to confirm the overwrite, so the call returns without moving ' +
-    'anything until that confirmation comes back; copy=true with overwrite=true skips the prompt, move has no ' +
-    'such bypass. Self-moves are silently skipped.',
+    'Move, rename, or copy files and directories, like mv or cp -r. ' +
+    'Each destination is the full new path, not a folder to move into; missing parent directories are created.',
   input: MoveInputSchema,
   output: MoveOutputSchema,
   annotations: {

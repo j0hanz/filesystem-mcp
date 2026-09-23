@@ -7,6 +7,7 @@ import * as z from 'zod/v4';
 import { computeDiffStats, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
+import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import {
   defaultFalseBoolean,
   FileKind,
@@ -395,7 +396,10 @@ async function handleEditFile(
   if (editResult.unmatchedEdits.length > 0) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      `${editResult.unmatchedEdits.length} edit(s) failed to match. Verify oldText matches exact file content.`,
+      `no match for oldText ${joinRoster(
+        editResult.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
+        ', ',
+      )}; it must match the file exactly`,
       filePath,
     );
   }
@@ -443,7 +447,10 @@ function formatEditSummary(
     if (r.error) return `${basename(r.path)} FAILED`;
     const v = r.value;
     if (!v) return `${basename(r.path)} (no result)`;
-    if (v.unmatchedEdits && v.unmatchedEdits.length > 0) return `${basename(v.path)} NO MATCH`;
+    if (v.unmatchedEdits && v.unmatchedEdits.length > 0) {
+      const quoted = v.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t)));
+      return `${basename(v.path)} NO MATCH ${joinRoster(quoted, ', ')}`;
+    }
     const added = v.linesAdded ?? 0;
     const removed = v.linesRemoved ?? 0;
     if (added === 0 && removed === 0) return `${basename(v.path)} (no change)`;
@@ -453,19 +460,23 @@ function formatEditSummary(
   const failed = results.filter((r) => r.error !== undefined).length;
   const ok = results.length - failed;
   const ratio = failed > 0 ? ` (${String(ok)}/${String(results.length)} ok)` : '';
-  return `edit: ${tokens.join(' · ')}${ratio}${tag}`;
+  // Only a dry run carries a diff, and it is the preview the caller asked for:
+  // the structured value ships under `_meta`, which clients do not show the model.
+  // A no-op edit still yields a header-only diff; it previews nothing.
+  const diffs = results
+    .map((r) => r.value?.diff ?? '')
+    .filter((d) => d.includes('\n@@'))
+    .join('');
+  return `edit: ${tokens.join(' · ')}${ratio}${tag}${diffs ? `\n\n${diffs}` : ''}`;
 }
 
 export const EDIT = defineTool({
   name: 'edit',
   title: 'Edit Files',
   description:
-    'Apply sequential literal string replacements to one or more files (max 5 files per call). ' +
-    'Modes: single-file { path, edits } or per-file { files: [{ path, edits }] }. ' +
-    'oldText must match file content exactly and only once; include 3-5 lines of surrounding context, ' +
-    'or the edit fails listing the lines it matched. ' +
-    'Set dryRun=true to preview diffs without writing. ' +
-    'For glob-based bulk regex replacement across many files, use replace_text instead.',
+    'Edit text files in place by replacing exact oldText with newText, like str_replace. ' +
+    'Each oldText must match exactly once, and a file is written only if all its edits match. ' +
+    'replace_text replaces every occurrence across files.',
   input: EditFileInputSchema,
   output: EditFileOutputSchema,
   annotations: {
