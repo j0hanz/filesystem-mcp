@@ -27,6 +27,21 @@ Filesystem-MCP is a [Model Context Protocol](https://modelcontextprotocol.io) se
 | **File subscriptions** | Resource subscriptions push change notifications when watched files update                                 |
 | **Regex safety**       | RE2 in all search tools: linear-time matching, so no pattern can ReDoS the server                          |
 
+## Compared with the reference server
+
+How this server differs from [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem), checked against its README and source on 2026-09-24:
+
+| Capability                | filesystem-mcp                                   | Reference server                        |
+| :------------------------ | :----------------------------------------------- | :-------------------------------------- |
+| Search inside files       | `search_text`: RE2 regex or literal, linear time | None; `search_files` matches names only |
+| Secret files              | `.env`, `*.pem`, `*id_rsa*` denied by default    | Not blocked                             |
+| Read-only mode            | `--read-only` removes every mutating tool        | Docker `ro` mounts only                 |
+| Apply a unified diff      | `patch`                                          | None                                    |
+| Compare two files         | `diff`                                           | None                                    |
+| Replace across many files | `replace_text` over a glob                       | None                                    |
+| Watch files               | Resource subscriptions push change notifications | No resources                            |
+| Transport                 | stdio, or Streamable HTTP with `--port`          | stdio                                   |
+
 ## Built with
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com)
@@ -48,6 +63,7 @@ Filesystem-MCP is a [Model Context Protocol](https://modelcontextprotocol.io) se
 - [Scripts](#scripts)
 - [Security](#security)
 - [Contributing](#contributing)
+- [Privacy Policy](#privacy-policy)
 - [License](#license)
 
 ## Quick start
@@ -453,6 +469,16 @@ filesystem-mcp --port 3000
 5. Open a pull request.
 
 [![Contributors](https://contrib.rocks/image?repo=j0hanz/filesystem-mcp)](https://github.com/j0hanz/filesystem-mcp/graphs/contributors)
+
+## Privacy Policy
+
+filesystem-mcp runs entirely on your machine. This policy covers the npm package, the Docker image, and the `.mcpb` desktop extension.
+
+- **Data collection:** none. The server has no telemetry, analytics, or crash reporting, and makes no outbound network requests.
+- **Use and storage:** files are read and written only inside the directories you allow, and only when your MCP client calls a tool. Tool results go to that client and nowhere else. Short-lived result caches live in memory and disappear when the server exits.
+- **Third-party sharing:** none by this server. Your MCP client may send tool results to its model provider under that client's own privacy policy.
+- **Retention:** nothing is kept after the process exits. Diagnostic logs go to stderr on your machine.
+- **Contact:** open an issue at <https://github.com/j0hanz/filesystem-mcp/issues>, or report security problems privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories).
 
 ## License
 
