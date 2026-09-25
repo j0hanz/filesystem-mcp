@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-09-25
+
+A maintenance release: the MCP SDK moves to 2.1.0 and the bundle publishes to
+Smithery. The published surface (tools, capabilities, instructions, prompts,
+resources) is identical to 2.5.1, so nothing needs adapting before you
+upgrade.
+
+### Changed
+
+- **MCP SDK 2.1.0.** `@modelcontextprotocol/server` and
+  `@modelcontextprotocol/node` move from 2.0.0 to 2.1.0, and
+  `@modelcontextprotocol/express` from 2.0.0 to 2.0.1. `ignore` moves to
+  7.0.10.
+
+### Fixed
+
+- **Smithery publishing.** The Smithery CLI copies the bundle manifest's tools
+  into its server card, and Smithery rejects a card whose tools lack an
+  `inputSchema`, which the MCPB manifest cannot carry, so every CLI publish
+  failed with 400. The Release workflow now sends the unchanged bundle through
+  Smithery's API with a server card built from the server's own `tools/list`,
+  and fails with Smithery's reason when a publish is rejected.
+
 ## [2.5.1] - 2026-09-25
 
 A distribution release: the server now ships as a Claude Desktop extension
