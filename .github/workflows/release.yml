@@ -314,7 +314,7 @@ jobs:
             echo "::notice::SMITHERY_API_KEY not set — Smithery skipped"
             exit 0
           fi
-          npx -y smithery@1.2.0 --table mcp publish ./filesystem-mcp.mcpb -n j0hanz/filesystem-mcp
+          node scripts/publish-smithery.mjs
 
       - name: Summary
         run: |
