@@ -1,0 +1,59 @@
+{
+  "manifest_version": "0.3",
+  "name": "filesystem-mcp",
+  "display_name": "Filesystem MCP",
+  "version": "2.5.0",
+  "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files.",
+  "long_description": "Reads, writes, searches, diffs, and patches files inside the directories you choose. Paths outside those directories are refused, and sensitive files such as `.env`, `*.pem`, and SSH keys are denied by default. Content search uses RE2, so no pattern can hang the server. Requires Node.js 24 or later.",
+  "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
+  "repository": { "type": "git", "url": "https://github.com/j0hanz/filesystem-mcp" },
+  "homepage": "https://github.com/j0hanz/filesystem-mcp#readme",
+  "documentation": "https://github.com/j0hanz/filesystem-mcp#readme",
+  "support": "https://github.com/j0hanz/filesystem-mcp/issues",
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": ["filesystem", "files", "search", "grep", "diff", "patch", "security"],
+  "privacy_policies": ["https://github.com/j0hanz/filesystem-mcp#privacy-policy"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"]
+    }
+  },
+  "tools": [
+    { "name": "list_roots", "description": "List the allowed directories. Call this first." },
+    { "name": "list", "description": "List directory contents as entries and an ASCII tree." },
+    { "name": "find_files", "description": "Find files by glob pattern, such as **/*.ts." },
+    {
+      "name": "stat",
+      "description": "Get size, modified time, permissions, MIME type, and a token estimate."
+    },
+    {
+      "name": "search_text",
+      "description": "Search file contents with RE2 regex or literal text."
+    },
+    { "name": "diff", "description": "Compare two files as a unified diff." },
+    { "name": "read", "description": "Read text files whole, by line range, head, or tail." },
+    { "name": "create", "description": "Create, overwrite, or append to text files." },
+    { "name": "edit", "description": "Apply literal string replacements to files." },
+    { "name": "move", "description": "Move, rename, or copy files and directories." },
+    { "name": "delete", "description": "Permanently delete files or directories." },
+    { "name": "replace_text", "description": "Search and replace across files matching a glob." },
+    { "name": "patch", "description": "Apply a unified diff to one file." }
+  ],
+  "user_config": {
+    "allowed_directories": {
+      "type": "directory",
+      "title": "Allowed directories",
+      "description": "Directories the server may read and write. Everything else is refused.",
+      "multiple": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=24.0.0" }
+  }
+}

@@ -13,6 +13,7 @@ dist/
 .tsbuildinfo.examples
 .tsbuildinfo.tests
 temp_integration_config.json
+*.mcpb
 
 # Environment variables
 .env
