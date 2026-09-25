@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/filesystem-mcp@latest"]
+    }
+  }
+}

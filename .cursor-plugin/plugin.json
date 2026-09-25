@@ -1,0 +1,10 @@
+{
+  "name": "filesystem-mcp",
+  "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files. Requires Node.js 24+.",
+  "author": { "name": "j0hanz" },
+  "logo": "assets/logo.png",
+  "homepage": "https://github.com/j0hanz/filesystem-mcp#readme",
+  "repository": "https://github.com/j0hanz/filesystem-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "filesystem", "search", "diff", "patch", "security"]
+}
