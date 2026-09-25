@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-09-25
+
+A distribution release: the server now ships as a Claude Desktop extension
+and a Cursor plugin. No source file changed, so the published surface is
+byte-identical to 2.5.0 and nothing needs adapting before you upgrade.
+
+### Added
+
+- **Desktop extension bundle.** Each GitHub release now carries
+  `filesystem-mcp.mcpb`, an MCP Bundle with the server and its production
+  dependencies. Open it with Claude Desktop, pick the directories to allow,
+  and it runs on Claude Desktop's built-in Node.js. The README links the
+  latest bundle under Configure in Claude Desktop.
+- **Cursor plugin manifest.** `.cursor-plugin/plugin.json` and `mcp.json` at
+  the repo root let Cursor install the server as a plugin. It passes no
+  directory, so the server uses the workspace roots Cursor declares or asks
+  before touching a path.
+- **Smithery publishing.** The Release workflow publishes the bundle to
+  Smithery as `j0hanz/filesystem-mcp` when a `SMITHERY_API_KEY` secret is set.
+- **README: comparison with the reference server and a Privacy Policy.** The
+  comparison lists what differs from `@modelcontextprotocol/server-filesystem`;
+  the policy states that the server collects nothing, makes no outbound
+  requests, and keeps nothing after it exits.
+
 ## [2.5.0] - 2026-09-23
 
 A release for the model reading the tools: every tool description is
