@@ -15,19 +15,38 @@ const IN_PROGRESS = new Set(['PENDING', 'WORKING']);
 
 async function listTools() {
   const child = spawn(process.execPath, ['dist/index.js', tmpdir()], {
-    stdio: ['pipe', 'pipe', 'ignore'],
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-2_000);
   });
   const send = (msg) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
   try {
     return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('tools/list timed out')), 15_000);
-      child.on('exit', (code) => reject(new Error(`server exited (${code}) before tools/list`)));
+      const fail = (message) => {
+        clearTimeout(timer);
+        reject(new Error(stderr ? `${message}\n--- server stderr ---\n${stderr}` : message));
+      };
+      const timer = setTimeout(() => fail('tools/list timed out'), 15_000);
+      child.on('error', (err) => fail(`could not start the server: ${err.message}`));
+      child.on('exit', (code) => fail(`server exited (${code}) before tools/list`));
       let buffered = '';
       child.stdout.on('data', (chunk) => {
         const lines = (buffered + chunk).split('\n');
         buffered = lines.pop();
         for (const line of lines) {
-          const msg = JSON.parse(line);
+          let msg;
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            fail(`server wrote non-JSON to stdout: ${line.slice(0, 200)}`);
+            return;
+          }
+          if (msg.error) {
+            fail(`server answered request ${msg.id} with ${JSON.stringify(msg.error)}`);
+            return;
+          }
           if (msg.id === 1) {
             send({ method: 'notifications/initialized' });
             send({ id: 2, method: 'tools/list' });
@@ -82,21 +101,34 @@ const key = process.env.SMITHERY_API_KEY;
 if (!key) throw new Error('SMITHERY_API_KEY is not set');
 const headers = { Authorization: `Bearer ${key}` };
 
+async function readJson(res, what) {
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${what} failed: HTTP ${res.status} ${text.slice(0, 500)}`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${what} returned non-JSON: ${text.slice(0, 500)}`);
+  }
+}
+
 const form = new FormData();
 form.set('payload', JSON.stringify(payload));
 const bundle = await readFile('filesystem-mcp.mcpb');
 form.set('bundle', new Blob([bundle], { type: 'application/zip' }), 'server.mcpb');
-const res = await fetch(RELEASES, { method: 'PUT', headers, body: form });
-const release = await res.json();
-if (!res.ok) {
-  throw new Error(`Smithery publish failed: HTTP ${res.status} ${JSON.stringify(release)}`);
-}
+const release = await readJson(
+  await fetch(RELEASES, { method: 'PUT', headers, body: form }),
+  'Smithery publish',
+);
 
 // Stdio releases usually answer SUCCESS at once; poll the rest for up to 5 minutes.
 let { status } = release;
-for (let polls = 0; IN_PROGRESS.has(status) && polls < 60; polls++) {
+for (let polls = 0; IN_PROGRESS.has(status); polls++) {
+  if (polls === 60) {
+    throw new Error(`Smithery release ${release.deploymentId} still ${status} after 5 minutes`);
+  }
   await new Promise((resolve) => setTimeout(resolve, 5_000));
-  ({ status } = await (await fetch(`${RELEASES}/${release.deploymentId}`, { headers })).json());
+  const url = `${RELEASES}/${release.deploymentId}`;
+  ({ status } = await readJson(await fetch(url, { headers }), 'Smithery status check'));
 }
 if (status !== 'SUCCESS') {
   throw new Error(`Smithery release ${release.deploymentId} ended as ${status}`);
