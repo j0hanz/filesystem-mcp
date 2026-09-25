@@ -98,7 +98,8 @@ if (process.argv.includes('--dry-run')) {
 }
 
 const key = process.env.SMITHERY_API_KEY;
-if (!key) throw new Error('SMITHERY_API_KEY is not set');
+// GitHub passes a missing secret and an empty one alike as "".
+if (!key) throw new Error('SMITHERY_API_KEY is empty or not set');
 const headers = { Authorization: `Bearer ${key}` };
 
 async function readJson(res, what) {

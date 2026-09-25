@@ -309,12 +309,7 @@ jobs:
       - name: Publish to Smithery
         env:
           SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
-        run: |
-          if [ -z "$SMITHERY_API_KEY" ]; then
-            echo "::notice::SMITHERY_API_KEY not set — Smithery skipped"
-            exit 0
-          fi
-          node scripts/publish-smithery.mjs
+        run: node scripts/publish-smithery.mjs
 
       - name: Summary
         run: |
