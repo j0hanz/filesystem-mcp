@@ -78,7 +78,7 @@ jobs:
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "### Version: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Bump package.json and server.json
+      - name: Bump package.json, server.json and MCPB manifest
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -106,6 +106,14 @@ jobs:
           }
 
           fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
+
+          // String replace keeps Prettier's layout; the first "version" key is top-level.
+          const manifestPath = 'mcpb/manifest.json';
+          const manifest = fs.readFileSync(manifestPath, 'utf8');
+          fs.writeFileSync(
+            manifestPath,
+            manifest.replace(/"version": "[^"]*"/, `"version": "${process.env.VERSION}"`),
+          );
           NODE
           npm install --package-lock-only --ignore-scripts
 
@@ -118,7 +126,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          git add package.json package-lock.json server.json
+          git add package.json package-lock.json server.json mcpb/manifest.json
           git commit -m "release: v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
           git push origin main --follow-tags
@@ -264,4 +272,52 @@ jobs:
           |---|---|
           | **Server** | \`io.github.j0hanz/filesystem-mcp@$VERSION\` |
           | **Registry** | [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) |
+          EOF
+
+  # ─────────────────────────────────────────
+  # 5. Desktop extension bundle (.mcpb)
+  # ─────────────────────────────────────────
+  publish-mcpb:
+    name: MCPB
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Pack
+        run: |
+          npm ci
+          bash scripts/pack-mcpb.sh
+
+      - name: Attach to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v$VERSION" filesystem-mcp.mcpb --clobber
+
+      - name: Publish to Smithery
+        env:
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+        run: |
+          if [ -z "$SMITHERY_API_KEY" ]; then
+            echo "::notice::SMITHERY_API_KEY not set — Smithery skipped"
+            exit 0
+          fi
+          npx -y smithery@1.2.0 mcp publish ./filesystem-mcp.mcpb -n j0hanz/filesystem-mcp
+
+      - name: Summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## 🧩 Desktop extension
+          | | |
+          |---|---|
+          | **Bundle** | [\`filesystem-mcp.mcpb\`](https://github.com/${{ github.repository }}/releases/download/v$VERSION/filesystem-mcp.mcpb) |
           EOF

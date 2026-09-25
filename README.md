@@ -139,7 +139,9 @@ Add to `.vs\mcp.json` in your solution directory, or `%USERPROFILE%\.mcp.json` f
 
 ### Configure in Claude Desktop
 
-Add to your `claude_desktop_config.json`:
+One click: download [`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb), open it with Claude Desktop, and pick the directories to allow. Claude Desktop's built-in Node.js runs it.
+
+Or configure it by hand. Add to your `claude_desktop_config.json`:
 
 ```json
 {
