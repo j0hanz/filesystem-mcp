@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "filesystem-mcp",
   "display_name": "Filesystem MCP",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files.",
   "long_description": "Reads, writes, searches, diffs, and patches files inside the directories you choose. Paths outside those directories are refused unless you approve access when asked, and sensitive files such as `.env`, `*.pem`, and SSH keys are denied by default. Content search uses RE2, so no pattern can hang the server. Requires Node.js 24 or later.",
   "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
