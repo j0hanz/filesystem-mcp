@@ -18,4 +18,5 @@ Tests run on Node's built-in test runner; `npm test --
 ## Releases
 
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps
-`package.json` and `server.json` in sync. Never hand-edit either version.
+`package.json`, `server.json`, and `mcpb/manifest.json` in sync. Never
+hand-edit any of those versions.

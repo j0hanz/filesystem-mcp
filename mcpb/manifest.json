@@ -4,7 +4,7 @@
   "display_name": "Filesystem MCP",
   "version": "2.5.0",
   "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files.",
-  "long_description": "Reads, writes, searches, diffs, and patches files inside the directories you choose. Paths outside those directories are refused, and sensitive files such as `.env`, `*.pem`, and SSH keys are denied by default. Content search uses RE2, so no pattern can hang the server. Requires Node.js 24 or later.",
+  "long_description": "Reads, writes, searches, diffs, and patches files inside the directories you choose. Paths outside those directories are refused unless you approve access when asked, and sensitive files such as `.env`, `*.pem`, and SSH keys are denied by default. Content search uses RE2, so no pattern can hang the server. Requires Node.js 24 or later.",
   "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
   "repository": { "type": "git", "url": "https://github.com/j0hanz/filesystem-mcp" },
   "homepage": "https://github.com/j0hanz/filesystem-mcp#readme",
@@ -47,7 +47,7 @@
     "allowed_directories": {
       "type": "directory",
       "title": "Allowed directories",
-      "description": "Directories the server may read and write. Everything else is refused.",
+      "description": "Directories the server may read and write. Other paths need your approval first.",
       "multiple": true,
       "required": true
     }

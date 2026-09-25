@@ -479,7 +479,7 @@ filesystem-mcp runs entirely on your machine. This policy covers the npm package
 - **Data collection:** none. The server has no telemetry, analytics, or crash reporting, and makes no outbound network requests.
 - **Use and storage:** files are read and written only inside the directories you allow, and only when your MCP client calls a tool. Tool results go to that client and nowhere else. Short-lived result caches live in memory and disappear when the server exits.
 - **Third-party sharing:** none by this server. Your MCP client may send tool results to its model provider under that client's own privacy policy.
-- **Retention:** nothing is kept after the process exits. Diagnostic logs go to stderr on your machine.
+- **Retention:** nothing is kept after the process exits. Diagnostic logs go to stderr on your machine; your MCP client may save them in its own log files.
 - **Contact:** open an issue at <https://github.com/j0hanz/filesystem-mcp/issues>, or report security problems privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories).
 
 ## License

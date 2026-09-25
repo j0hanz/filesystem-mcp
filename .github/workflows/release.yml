@@ -282,12 +282,15 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release.outputs.version }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -311,7 +314,7 @@ jobs:
             echo "::notice::SMITHERY_API_KEY not set — Smithery skipped"
             exit 0
           fi
-          npx -y smithery@1.2.0 mcp publish ./filesystem-mcp.mcpb -n j0hanz/filesystem-mcp
+          npx -y smithery@1.2.0 --table mcp publish ./filesystem-mcp.mcpb -n j0hanz/filesystem-mcp
 
       - name: Summary
         run: |
