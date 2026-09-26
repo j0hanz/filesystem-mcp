@@ -3,7 +3,8 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 import { createTwoFilesPatch } from 'diff';
 
-import { computeDiffStats } from '../core/diff.ts';
+import { DIFF_TIMEOUT_MS, diffStatsFromPatch } from '../core/diff.ts';
+import { ErrorCode, FsError } from '../core/errors.ts';
 import { NonNegInt, PositiveInt, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
@@ -45,8 +46,7 @@ export const DIFF = defineTool({
         ctx.fs.readEditableText(args.b, { signal: ctx.signal, tool: 'diff' }),
       ]);
 
-    // createTwoFilesPatch returns the unified diff string synchronously on diff v9
-    // (the { callback } option does not fire on this version — verified).
+    // Synchronous Myers diff; `timeout` is the only thing that can stop it.
     const diffText = createTwoFilesPatch(
       basename(validA),
       basename(validB),
@@ -54,10 +54,17 @@ export const DIFF = defineTool({
       contentB,
       'a',
       'b',
-      { context: args.context },
+      { context: args.context, timeout: DIFF_TIMEOUT_MS },
     );
+    if (diffText === undefined) {
+      throw new FsError(
+        ErrorCode.TOO_LARGE,
+        `Diff not computed: the files differ in too many lines to diff within ${String(DIFF_TIMEOUT_MS)} ms. Compare smaller sections with read + startLine/endLine.`,
+        args.a,
+      );
+    }
 
-    const { linesAdded, linesRemoved } = computeDiffStats(contentA, contentB);
+    const { linesAdded, linesRemoved } = diffStatsFromPatch(diffText);
 
     // The text block is the one copy of the diff; a model reads that, and a
     // structured duplicate or a store entry would only ship the same bytes again.

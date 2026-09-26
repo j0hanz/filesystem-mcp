@@ -1262,6 +1262,18 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(diffText.includes('-y') && diffText.includes('+Y'));
   });
 
+  it('diff reports "too large" instead of freezing on files that share no lines', async () => {
+    const many = (p: string): string =>
+      Array.from({ length: 8000 }, (_, i) => `${p}${String(i)}`).join('\n') + '\n';
+    const a = await writeTestFile(tmpDir, 'diff_huge/a.txt', many('a'));
+    const b = await writeTestFile(tmpDir, 'diff_huge/b.txt', many('b'));
+    const started = Date.now();
+    const result = await harness.client.callTool({ name: 'diff', arguments: { a, b } });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Diff not computed/);
+    assert.ok(Date.now() - started < 5000, 'the call must return within the tool timeout');
+  });
+
   it('TC-FUNC-061: patch applies a unified diff', async () => {
     const f = join(tmpDir, 'patch_target.txt');
     await writeFile(f, 'a\nb\nc\n');
