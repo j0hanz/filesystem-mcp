@@ -111,6 +111,7 @@ const GrepOutputSchema = z.strictObject({
   skippedTooLarge: NonNegInt.optional().describe(
     'Files skipped unread because they exceed the text-file size limit; raise the limit or narrow pattern if a match was expected in one',
   ),
+  skippedBinary: NonNegInt.optional().describe('Files skipped because they are binary'),
   truncated: z
     .boolean()
     .optional()
@@ -193,6 +194,7 @@ function searchContentOutput(
     ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
     ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
     ...(metadata.skippedTooLarge ? { skippedTooLarge: metadata.skippedTooLarge } : {}),
+    ...(metadata.skippedBinary ? { skippedBinary: metadata.skippedBinary } : {}),
     ...(resourceUri !== undefined ? { resourceUri } : {}),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };

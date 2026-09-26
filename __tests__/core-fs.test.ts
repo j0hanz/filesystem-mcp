@@ -497,6 +497,28 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(outcome.matches.length, 3);
       assert.ok(outcome.matches.every((m) => m.content.includes('TARGET_LITERAL_STRING')));
     });
+
+    it('searchContent skips binary files, keeps Latin-1 text, and strips CR', async () => {
+      const dir = join(tmpDir, 'search_binary_dir');
+      await writeTestFile(dir, 'crlf.txt', 'NEEDLE;\r\nnext\r\n');
+      await writeFile(
+        join(dir, 'blob.bin'),
+        Buffer.from([0x00, 0x4e, 0x45, 0x45, 0x44, 0x4c, 0x45, 0x00]),
+      );
+      await writeFile(join(dir, 'latin1.txt'), Buffer.from('caf\xe9 NEEDLE\n', 'latin1'));
+
+      const outcome = await searchContent(dir, 'NEEDLE;$', { isRegex: true }, ctx.pathGuard);
+      assert.strictEqual(outcome.matches.length, 1);
+      assert.strictEqual(basename(outcome.matches[0]?.file ?? ''), 'crlf.txt');
+      assert.strictEqual(outcome.matches[0]?.content, 'NEEDLE;');
+
+      const all = await searchContent(dir, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      assert.deepStrictEqual(all.matches.map((m) => basename(m.file)).sort(), [
+        'crlf.txt',
+        'latin1.txt',
+      ]);
+      assert.strictEqual(all.summary.skippedBinary, 1);
+    });
   });
 
   describe('Delete guards (TC-FUNC-018–020)', () => {

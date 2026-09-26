@@ -194,6 +194,8 @@ export interface SearchContentOutcome {
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
+    /** Files skipped because they contain a NUL byte (binary). */
+    skippedBinary: number;
     /**
      * `StoppedReason` narrowed to the stops these scans can produce: both call
      * only `hitMaxResults`/`hitAbort` (see concurrency.ts) — never
@@ -235,6 +237,7 @@ export async function searchContent(
     let filesMatched = 0;
     let matchingLines = 0;
     let skippedTooLarge = 0;
+    let skippedBinary = 0;
     const counters = { skippedInaccessible: 0, stoppedByAbort: false };
 
     for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
@@ -256,8 +259,16 @@ export async function searchContent(
       filesScanned++;
 
       try {
-        const content = await readFile(entry.path, { encoding: 'utf-8', signal: options.signal });
-        const lines = content.split('\n');
+        const buffer = await readFile(entry.path, { signal: options.signal });
+        // A NUL byte marks a binary file, as it does for `read` and `grep -I`.
+        // Non-UTF-8 text is still searched: a lossy decode only affects the
+        // bytes a pattern could not have matched anyway.
+        if (buffer.includes(0)) {
+          skippedBinary++;
+          continue;
+        }
+        const content = buffer.toString('utf-8');
+        const lines = content.split(/\r?\n/u);
         // A trailing newline splits into a phantom empty last element; context
         // must not report it as a line the file has.
         const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
@@ -296,7 +307,7 @@ export async function searchContent(
           counters.stoppedByAbort = true;
           break;
         }
-        // ignore read errors (e.g. binary files)
+        // unreadable mid-scan (deleted, permission changed): skip the file
       }
     }
 
@@ -316,6 +327,7 @@ export async function searchContent(
         truncated: stoppedReason !== undefined,
         skippedInaccessible: counters.skippedInaccessible,
         skippedTooLarge,
+        skippedBinary,
         ...(stoppedReason ? { stoppedReason } : {}),
       },
     };

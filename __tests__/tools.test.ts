@@ -2405,6 +2405,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('search_text skips binary files and reports the count', async () => {
+    await writeTestFile(tmpDir, 'search_bin/text.txt', 'BINNEEDLE\n');
+    await writeFile(
+      join(tmpDir, 'search_bin', 'blob.bin'),
+      Buffer.from([0x00, ...Buffer.from('BINNEEDLE'), 0x00]),
+    );
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: join(tmpDir, 'search_bin'), searchPattern: 'BINNEEDLE' },
+    });
+    assert.strictEqual(firstTextBlock(result).text, 'text.txt:1: BINNEEDLE');
+    assert.strictEqual((result._meta as { skippedBinary?: number }).skippedBinary, 1);
+  });
+
   it('HTTP pagination survives the per-request server factory', async () => {
     const root = await createTestRoot();
     const http = await bootHttpTest([root]);
