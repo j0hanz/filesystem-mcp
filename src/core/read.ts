@@ -7,7 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.ts';
-import { isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
+import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import { getMaxTextFileSize } from './util.ts';
 
@@ -45,15 +45,6 @@ async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buff
   }
 
   return buffer.subarray(0, bytesRead);
-}
-
-async function isProbablyBinary(
-  filePath: string,
-  handle: FileHandle,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (isKnownBinaryExtension(filePath)) return true;
-  return isBinarySample(await readProbe(handle, signal));
 }
 
 export type ReadSpec =
@@ -432,9 +423,23 @@ async function assertNotBinary(
   normalized: ReadOptions,
 ): Promise<void> {
   normalized.signal?.throwIfAborted();
-  const isBinary = await isProbablyBinary(validPath, handle, normalized.signal);
-  if (!isBinary) return;
-  throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
+  if (isKnownBinaryExtension(validPath)) {
+    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
+  }
+  const probe = await readProbe(handle, normalized.signal);
+  // A UTF-16 BOM passes the binary probe (it is text), but every reader
+  // here (read and edit) decodes UTF-8 and would hand back U+FFFD and NULs
+  // as content.
+  if (hasUtf16Bom(probe)) {
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      'UTF-16 text file detected; convert it to UTF-8 first.',
+      filePath,
+    );
+  }
+  if (isBinarySample(probe)) {
+    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
+  }
 }
 
 function assertSizeWithinLimit(size: number, maxSize: number, filePath: string): void {

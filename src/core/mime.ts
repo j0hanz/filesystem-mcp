@@ -162,7 +162,7 @@ export function isKnownBinaryExtension(filePath: string): boolean {
   return KNOWN_BINARY_EXTENSIONS.has(ext);
 }
 
-function hasUtf16Bom(slice: Buffer): boolean {
+export function hasUtf16Bom(slice: Buffer): boolean {
   return (
     slice.length >= 2 &&
     ((slice[0] === 0xff && slice[1] === 0xfe) || (slice[0] === 0xfe && slice[1] === 0xff))

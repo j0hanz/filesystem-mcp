@@ -911,6 +911,26 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(structured?.results?.[0]?.error?.code, 'NOT_FOUND');
   });
 
+  it('read refuses a UTF-16 file with a message that names the encoding', async () => {
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('hello\nworld\n', 'utf16le'),
+    ]);
+    const file = join(tmpDir, 'utf16le.txt');
+    await writeFile(file, utf16);
+
+    for (const extra of [{}, { head: 1 }, { tail: 1 }, { startLine: 1, endLine: 1 }]) {
+      const result = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: file, ...extra },
+      });
+      assert.strictEqual(result.isError, true, `mode ${JSON.stringify(extra)} must refuse`);
+      const error = failedSummary(result)?.results?.[0]?.error;
+      assert.strictEqual(error?.code, 'INVALID_INPUT');
+      assert.match(error?.message ?? '', /UTF-16/);
+    }
+  });
+
   it('TC-FUNC-017: Delete file via MCP tool call', async () => {
     const file = join(tmpDir, 'delete.txt');
     await writeFile(file, 'to delete');
