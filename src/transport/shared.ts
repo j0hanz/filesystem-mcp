@@ -19,9 +19,9 @@ import {
  * bind address and no business holding a bearer secret.
  */
 export interface RuntimeConfig {
-  /** `--http-host` or `HTTP_HOST`. The HTTP bind defaults to loopback without it. */
+  /** `--http-host` or `FS_HTTP_HOST`. The HTTP bind defaults to loopback without it. */
   httpHost?: string;
-  /** `--api-key` or `API_KEY`. Unset means open access (loopback dev mode). */
+  /** `--api-key` or `FS_API_KEY`. Unset means open access (loopback dev mode). */
   apiKey?: string;
 }
 

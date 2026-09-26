@@ -48,7 +48,7 @@ export interface ToolCtx {
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
-  /** Emits a log line to stderr via `Logger.emit`, gated by `LOG_LEVEL`. */
+  /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
   readonly log?: (level: LoggingLevel, data: unknown, logger?: string) => void;
   readonly sendNotification?: (notification: Notification) => Promise<void>;
   readonly onProgress?: (params: { current: number; total?: number }) => void;

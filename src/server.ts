@@ -63,7 +63,7 @@ export async function createServer(
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
     /**
-     * The resolved HTTP credential, from `--api-key` or `API_KEY`. Lives here
+     * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
      * rather than on `ServerOptions` because that object is `PathGuard`'s
      * constructor argument and is exposed on its public `options` field — a
      * bearer secret has no business being reachable from a tool handler.

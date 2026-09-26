@@ -196,7 +196,7 @@ export function assertHttpHostPolicy(
 // ─── Protected-resource discovery (RFC 9728 / RFC 6750) ──────────────────────
 
 /**
- * This server is a resource server with no authorization server: `API_KEY` is a
+ * This server is a resource server with no authorization server: `FS_API_KEY` is a
  * static secret the operator hands out of band, not an issued token. So the
  * metadata document deliberately omits `authorization_servers` — RFC 9728 §2
  * makes it optional, and its absence is the accurate statement that a token

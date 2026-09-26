@@ -302,7 +302,7 @@ export async function startHttpServer(
   // per request, so a per-instance guard would discard every accepted access
   // grant the moment the request ended — re-prompting on each subsequent call
   // and leaving the listen-watcher path validating against a stale allowed set.
-  // Grant scope is therefore the endpoint, not the connection: with API_KEY set
+  // Grant scope is therefore the endpoint, not the connection: with FS_API_KEY set
   // every caller presents the same key (one auth context by construction), and
   // without it the bind is loopback-only. Split into per-auth-context guards if
   // this ever serves more than one credential.

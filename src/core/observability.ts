@@ -31,7 +31,7 @@ function parseLogLevel(raw: string | undefined): LoggingLevel {
 }
 
 // Seeded to the value `parseLogLevel(undefined)` returns, so an unset
-// LOG_LEVEL — the initial `cachedRaw` — needs no first-call special case.
+// FS_LOG_LEVEL — the initial `cachedRaw` — needs no first-call special case.
 let cachedRaw: string | undefined;
 let cachedLevel: LoggingLevel = 'info';
 
