@@ -22,10 +22,10 @@ connection, each already commented as legacy-only but with no date attached:
 [`src/transport/stdio.ts:63`](../../src/transport/stdio.ts#L63), wired only
 when `era === 'legacy'`, calls the deprecated `listRoots()` to push-seed
 allowed roots; the `resources/subscribe` / `resources/unsubscribe` request
-handlers in [`src/resources.ts:452-559`](../../src/resources.ts#L452-L559),
+handlers in [`src/resources.ts:490`](../../src/resources.ts#L490),
 registered only when `deps.era !== 'modern'`; and the deprecated
 `getClientCapabilities()` fallback in
-[`src/tools/define.ts:159-162`](../../src/tools/define.ts#L159-L162), reached
+[`src/tools/define.ts:169-170`](../../src/tools/define.ts#L169-L170), reached
 only when a request carries no modern capabilities envelope.
 
 They exist today because every mainstream MCP host still opens a connection
@@ -71,7 +71,7 @@ project.
   and roughly 4 lines from `src/tools/define.ts` (the fallback expression and
   its disable comment).
 - README's sentence about legacy roots seeding
-  ([`README.md:294`](../../README.md#L294)) and the `legacy_roots` line in
+  ([`README.md:319`](../../README.md#L319)) and the `legacy_roots` line in
   [`src/instructions.ts:67`](../../src/instructions.ts#L67) go with the
   removal — both describe a flow the removal deletes and become stale the
   moment it lands.

@@ -7,7 +7,7 @@
 
 The `--port` leg builds its modern handler with
 `createMcpHandler(..., { legacy: 'reject' })`
-([`http.ts:312`](../../src/transport/http.ts#L312)), a posture pinned by
+([`http.ts:334`](../../src/transport/http.ts#L334)), a posture pinned by
 `http-server.test.ts` test 4: a client that opens with the 2025 `initialize`
 handshake gets HTTP 400 with an unsupported-protocol-version error. Every
 mainstream host today — Claude Desktop, Cursor, VS Code, the MCP Inspector's
@@ -76,7 +76,7 @@ reach it.
 
 ## Decision
 
-Flip `src/transport/http.ts:312` to `legacy: 'stateless'`. Two guards make
+Flip `src/transport/http.ts:334` to `legacy: 'stateless'`. Two guards make
 the gap fail closed instead of half-working:
 
 - **Confirmations**: `src/tools/index.ts` forwards `era` into `ToolDeps`,
@@ -120,8 +120,8 @@ found` instead of being accepted onto a silently-dropped lease.
   request was refused before any instance was built, so this is new load,
   bounded by the existing rate limiter.
 - The rate limiter and auth layer (`http-policy.ts`) are era-blind and
-  unchanged: they count `initialize` (and every other request) per
-  session/IP exactly as before, so a legacy client's lack of a session
+  unchanged: they count `initialize` (and every other request) per IP
+  exactly as before, so a legacy client's lack of a session
   does not exempt it from the existing limits.
 - Reopening this means either accepting the sessionful-legacy cost above or
   narrowing which 2025-era clients get served (e.g. only over stdio) — the
