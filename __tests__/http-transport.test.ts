@@ -1,4 +1,10 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import type {
+  FetchLikeMcpHandler,
+  NodeIncomingMessageLike,
+  NodeServerResponseLike,
+} from '@modelcontextprotocol/node';
 
 import assert from 'node:assert/strict';
 import { access } from 'node:fs/promises';
@@ -204,5 +210,48 @@ describe('HTTP 2025-era (legacy) clients', () => {
       read.contents.length > 0,
       'the externalized result must be readable by a legacy client',
     );
+  });
+});
+
+describe('Node adapter (toNodeHandler)', () => {
+  it('a handler.fetch throw reaches the onerror hook and the response is a 500', async () => {
+    // The entry-level onerror (createMcpHandler) only sees failures inside the
+    // handler; this exercises the adapter's own 500 fallback, which the
+    // production wiring in src/transport/http.ts observes via the same option.
+    const stub = {
+      fetch: async () => {
+        throw new Error('adapter boom');
+      },
+      close: async () => {},
+    } as unknown as FetchLikeMcpHandler;
+    const seen: Error[] = [];
+    let statusCode: number | undefined;
+    // Only the interfaces' declared members. A parsed body (the `{}` below)
+    // skips the adapter's stream buffering, so the req mock's async iterator
+    // is never read.
+    const req: NodeIncomingMessageLike = {
+      method: 'POST',
+      url: '/mcp',
+      headers: {},
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: true, value: undefined }),
+      }),
+    };
+    const res: NodeServerResponseLike = {
+      writeHead: (code) => {
+        statusCode = code;
+      },
+      write: () => true,
+      end: () => {},
+      on: () => {},
+      destroyed: false,
+    };
+
+    const handler = toNodeHandler(stub, { onerror: (e) => seen.push(e) });
+    await handler(req, res, {});
+
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0]?.message, 'adapter boom');
+    assert.strictEqual(statusCode, 500);
   });
 });

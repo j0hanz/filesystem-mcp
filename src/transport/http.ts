@@ -319,7 +319,15 @@ export async function startHttpServer(
       },
     },
   );
-  const modernNodeHandler = toNodeHandler(modernHandler);
+  const modernNodeHandler = toNodeHandler(modernHandler, {
+    // The adapter answers 500 when request conversion or handler.fetch
+    // itself throws (e.g. a request racing handler.close()); the entry's
+    // own onerror above never sees those. Log the adapter-level refusal so
+    // the 500 is not silent.
+    onerror: (error: Error) => {
+      Logger.error('[HTTP] node adapter error:', formatUnknownErrorMessage(error));
+    },
+  });
 
   const app = setupExpressApp(
     httpHost,
