@@ -376,20 +376,23 @@ function maybeAppendPatchDiff(
   },
 ): void {
   if (!params.includeDiff) return;
-  const header = toPosixRelative(summary.root, params.filePath);
 
-  const patch = unifiedPatch(header, params.originalContent, params.updatedContent);
-
+  // Budget first: a full budget must not pay for a diff it will discard, and a
+  // diff past its deadline counts as truncated output, not a failed file.
   if (summary.diff.length >= MAX_DIFF_SIZE) {
     summary.diffTruncated = true;
     return;
   }
-
+  const header = toPosixRelative(summary.root, params.filePath);
+  const patch = unifiedPatch(header, params.originalContent, params.updatedContent);
+  if (patch === undefined) {
+    summary.diffTruncated = true;
+    return;
+  }
   if (summary.diff.length + patch.length <= MAX_DIFF_SIZE + DIFF_APPEND_BUFFER) {
     summary.diff += patch;
     return;
   }
-
   summary.diffTruncated = true;
 }
 
