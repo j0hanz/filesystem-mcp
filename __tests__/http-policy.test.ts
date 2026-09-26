@@ -15,6 +15,7 @@ import {
   createRateLimiter,
   isLoopbackHttpHost,
   isOriginAllowed,
+  protectedResourceUrl,
   resolveAllowedHosts,
   resolveTrustProxySetting,
   validateBearerAuthorization,
@@ -687,6 +688,15 @@ describe('HTTP Policy & Security', () => {
   });
 
   describe('Utility functions (isLoopbackHttpHost, splitCsvList, resolveTrustProxySetting)', () => {
+    it('protectedResourceUrl drops a fragment from FS_PUBLIC_URL (RFC 8707 §2)', () => {
+      const url = protectedResourceUrl(
+        createMockRequest(),
+        true,
+        'https://mcp.example.com/mcp#section',
+      );
+      assert.strictEqual(url?.href, 'https://mcp.example.com/mcp');
+    });
+
     it('isLoopbackHttpHost identifies loopback hosts correctly', () => {
       assert.strictEqual(isLoopbackHttpHost('127.0.0.1'), true);
       assert.strictEqual(isLoopbackHttpHost('localhost'), true);

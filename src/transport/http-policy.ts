@@ -2,6 +2,7 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/expr
 import {
   localhostAllowedHostnames,
   localhostAllowedOrigins,
+  resourceUrlFromServerUrl,
   validateOriginHeader,
 } from '@modelcontextprotocol/server';
 import type { AuthInfo } from '@modelcontextprotocol/server';
@@ -217,7 +218,8 @@ export function protectedResourceUrl(
 ): URL | null {
   if (configured) {
     const parsed = URL.parse(configured);
-    if (parsed) return parsed;
+    // RFC 8707 §2: a resource indicator must not carry a fragment.
+    if (parsed) return resourceUrlFromServerUrl(parsed);
     Logger.warn(
       `[HTTP] Ignoring unparseable FS_PUBLIC_URL: ${configured}. Deriving the resource identifier from the Host header instead.`,
     );
