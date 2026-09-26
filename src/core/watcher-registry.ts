@@ -1,5 +1,6 @@
 import type { FSWatcher } from 'node:fs';
 import { statSync, watch } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
 import { formatUnknownErrorMessage } from './errors.ts';
 import { extractPath } from './file-uri.ts';
@@ -190,16 +191,29 @@ export function createWatcherRegistry() {
 
   const attach = (uri: string, resolvedPath: string): boolean => {
     try {
-      // Watch directories recursively (children included) and files as-is.
+      // Directories: one recursive watch (children included). `{ recursive:
+      // true }` is honored on macOS, Windows, and — since Node 20.13 —
+      // Linux; `engines.node` is >=24, so all three are covered.
+      //
+      // Files: watch the PARENT directory and filter by name. A watch on
+      // the file itself binds to its inode on Linux/macOS, and every atomic
+      // write here renames a new inode over the path (fs.ts), after which
+      // the old watch never fires again (Node docs, fs.watch "Inodes").
+      // Windows' libuv already watches the parent; this makes the other two
+      // match. `filename` can be null on some platforms/events; then notify
+      // anyway — a spurious debounced notification beats a missed one.
+      //
       // `fs.watch` async errors arrive via the 'error' event below, not as a
-      // sync throw, so no recursive-fallback try/catch is needed here — the
-      // outer catch handles sync throws (inotify exhaustion, path-race).
-      // `{ recursive: true }` is honored on macOS, Windows, and — since Node
-      // 20.13 — Linux; `engines.node` is >=24, so all three are covered.
-      const recursive = statSync(resolvedPath).isDirectory();
-      const watcher = watch(resolvedPath, recursive ? { recursive: true } : undefined, () => {
-        notifyAll(uri);
-      });
+      // sync throw; the outer catch handles sync throws (inotify
+      // exhaustion, path-race).
+      const isDirectory = statSync(resolvedPath).isDirectory();
+      const watcher = isDirectory
+        ? watch(resolvedPath, { recursive: true }, () => {
+            notifyAll(uri);
+          })
+        : watch(dirname(resolvedPath), (_event, filename) => {
+            if (filename === null || filename === basename(resolvedPath)) notifyAll(uri);
+          });
       watcher.on('error', (err: Error) => {
         Logger.warn(`Watcher error for ${uri}: ${err.message}`);
         dropWatcher(uri, watcher);
