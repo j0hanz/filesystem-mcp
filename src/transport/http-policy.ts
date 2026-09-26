@@ -72,7 +72,7 @@ function isWildcardHttpHost(host: string): boolean {
 /**
  * True if `origin` (a raw `Origin` request header) may have
  * `Access-Control-Allow-Origin` reflected. `allowedHostnames` is the same
- * hostname-form list `createMcpExpressApp` receives as `allowedOrigins`, and
+ * hostname-form list `originValidation` receives in `http.ts`, and
  * the check is the SDK's own `validateOriginHeader`, so reflection matches
  * admission: the SDK gate runs first and answers 403 to any Origin outside
  * that list — localhost included once `FS_ALLOWED_ORIGINS` replaces the
@@ -325,7 +325,7 @@ export function computeAllowedOriginHostnames(originsEnv: string | undefined): s
  * carries `Access-Control-Allow-Origin` for an Origin {@link isOriginAllowed}
  * accepts (no wildcard fallback), and the
  * preflight answers only the exact endpoint. Reflection must happen here
- * because `createMcpExpressApp`'s `allowedOrigins` only gates which Origins
+ * because the SDK's `originValidation` gate only decides which Origins
  * are accepted, it never sets `Access-Control-Allow-Origin` on the actual
  * response, so without this a browser client would pass preflight and then
  * have the POST response body blocked by CORS. Mounted at a prefix, Express
