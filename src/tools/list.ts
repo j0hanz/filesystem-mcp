@@ -337,10 +337,9 @@ export const LIST = defineTool({
     'stat returns sizes and dates.',
   input: ListInputSchema,
   output: ListOutputSchema,
-  // Not published: every field is a plainly-named scalar (`entryCount`,
-  // `totalFiles`, `nextCursor`) that one sample response teaches, and the
-  // schema costs 1599 chars of every session start. Publishing is reserved for
-  // the value-XOR-error union shape a sample cannot convey.
+  // No outputSchema, like every tool here (define.ts): one sample response
+  // teaches these scalar fields, and the schema would cost ~1.6 KB of every
+  // session start.
   annotations: {
     readOnlyHint: true,
     openWorldHint: false,
@@ -366,6 +365,7 @@ export const LIST = defineTool({
         noun: 'entries',
         tool: 'list',
         nextCursor: structured.nextCursor,
+        nextArgs: args,
       }) +
       (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
     return {

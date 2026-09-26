@@ -1,5 +1,5 @@
 import { homedir, platform } from 'node:os';
-import { delimiter, join, parse, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, join, parse, resolve, sep } from 'node:path';
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
@@ -181,6 +181,20 @@ export function isSamePath(left: string, right: string): boolean {
   const leftResolved = normalizeCaseForComparison(resolve(left));
   const rightResolved = normalizeCaseForComparison(resolve(right));
   return leftResolved === rightResolved;
+}
+
+/**
+ * On a case-insensitive filesystem a write target that already exists is
+ * realpathed to its on-disk spelling, so a case-only rename (`foo.txt` ->
+ * `Foo.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only by case;
+ * otherwise the resolved target unchanged. Parent segments are not re-spelled.
+ */
+export function respellCaseOnlyTarget(requestedPath: string, resolvedTarget: string): string {
+  const requestedName = basename(requestedPath);
+  if (requestedName === basename(resolvedTarget)) return resolvedTarget;
+  const respelled = join(dirname(resolvedTarget), requestedName);
+  return isSamePath(respelled, resolvedTarget) ? respelled : resolvedTarget;
 }
 
 export function normalizeAllowedDirectory(dir: string): string {

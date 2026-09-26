@@ -9,7 +9,7 @@ import { MAX_SEARCH_DEPTH } from './util.ts';
 // (no AJV warning — it is a known format, unlike sha256_hex / base64url).
 // No `id` on this or any other shared schema below: an `id` hoists the schema
 // into `$defs` and leaves a `$ref` at every use site, which is exactly the wire
-// weight `toDraft202012` (tools/define.ts) publishes without.
+// weight the published JSON schema (tools/define.ts) leaves out.
 export const IsoDateTime = z.iso.datetime().meta({
   description: 'ISO 8601 UTC date-time string (e.g. 2024-01-15T12:00:00.000Z)',
   // `format: "date-time"` already pins the value; zod's ~330-char calendar
@@ -41,7 +41,7 @@ export const FileKind = z.enum(MIME_KINDS);
 
 const MAX_PATH_LENGTH = 4096;
 
-const SHELL_METACHAR_RE = /[\n\r;|`]/;
+const LINE_BREAK_RE = /[\n\r]/;
 
 export const isBlank = (val: string): boolean => val.trim().length === 0;
 
@@ -56,14 +56,17 @@ function refineSafeText(
       : val.includes('\0')
         ? `${label} cannot contain null bytes`
         : (specific(val) ??
-          (SHELL_METACHAR_RE.test(val)
-            ? `${label} contains prohibited characters (newlines or shell metacharacters)`
-            : undefined));
+          (LINE_BREAK_RE.test(val) ? `${label} cannot contain line breaks` : undefined));
     if (issue !== undefined) {
       ctx.addIssue({ code: 'custom', message: issue, fatal: true });
     }
   };
 }
+
+// Only a whole `..` segment is traversal. `..` inside a segment
+// (`[...slug]`, `v1..2.md`) is a plain file name; PathGuard re-checks
+// containment on the resolved path regardless.
+const hasTraversalSegment = (val: string): boolean => val.split(/[\\/]/u).includes('..');
 
 export const RequiredPath = z
   .string()
@@ -71,7 +74,7 @@ export const RequiredPath = z
   .max(MAX_PATH_LENGTH, { message: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
   .superRefine(
     refineSafeText('Path', (val) =>
-      val.includes('..') ? 'Directory traversal sequences ("..") are forbidden' : undefined,
+      hasTraversalSegment(val) ? 'Directory traversal sequences ("..") are forbidden' : undefined,
     ),
   )
   .describe('File or directory path inside an allowed workspace root.');

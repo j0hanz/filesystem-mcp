@@ -238,40 +238,23 @@ async function collectFileBudget(
   let total = 0;
   const skippedResults = new Map<number, PerPathResult<PerPathReadValue>>();
   const survivors: string[] = [];
-  let overflowed = false;
   for (let i = 0; i < filePaths.length; i += 1) {
     const path = filePaths[i];
     if (path === undefined) continue;
     const size = byIndex.get(i);
-    if (overflowed) {
-      // Only files that were actually stat'd get the TOO_LARGE result; a failed
-      // stat falls through to survivors so its read surfaces the real error —
-      // not a misleading TOO_LARGE.
-      if (size !== undefined) {
-        skippedResults.set(i, {
-          path,
-          error: {
-            code: ErrorCode.TOO_LARGE,
-            message: `Skipped: combined estimated read would exceed maxTotalSize (${String(maxTotalSize)} bytes)`,
-            path,
-          },
-        });
-      } else {
-        survivors.push(path);
-      }
-      continue;
-    }
+    // A failed stat falls through to survivors so its read surfaces the real
+    // error, not a misleading TOO_LARGE.
     if (size === undefined) {
       survivors.push(path);
       continue;
     }
+    // Skip this file only; a later, smaller file that still fits is read.
     if (total + size > maxTotalSize) {
-      overflowed = true;
       skippedResults.set(i, {
         path,
         error: {
           code: ErrorCode.TOO_LARGE,
-          message: `Skipped: combined estimated read would exceed maxTotalSize (${String(maxTotalSize)} bytes)`,
+          message: `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
           path,
         },
       });

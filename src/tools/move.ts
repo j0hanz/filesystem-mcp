@@ -27,6 +27,7 @@ import {
   isPathInsideDirectory,
   isSamePath,
   normalizeCaseForComparison,
+  respellCaseOnlyTarget,
 } from '../core/path-utils.ts';
 import { defaultFalseBoolean, PerFileErrorSchema, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -130,7 +131,15 @@ async function planTransfer(
   // opSource. validatePathForWrite resolves the destination through a symlink
   // too, so both sides of every check must be resolved to match.
   const resolvedSource = resolve(realSource);
-  const resolvedDest = resolve(validDest);
+  let resolvedDest = resolve(validDest);
+
+  // validatePathForWrite realpaths an existing destination to its on-disk
+  // spelling, so a case-only rename resolves to the source itself; re-spell
+  // it with the requested basename before deciding self vs. rename.
+  if (resolvedSource === resolvedDest) {
+    validDest = respellCaseOnlyTarget(pair.destination, validDest);
+    resolvedDest = resolve(validDest);
+  }
 
   const isSelf = resolvedSource === resolvedDest;
   const isCaseOnlyRename = !isSelf && isSamePath(resolvedSource, resolvedDest);
@@ -413,7 +422,7 @@ async function validateTransferSource(
   }
 }
 
-async function performRenameWithFallback(
+export async function performRenameWithFallback(
   validSource: string,
   validDest: string,
   fsOps: Pick<GuardedFileSystem, 'rename' | 'cp' | 'rm'>,

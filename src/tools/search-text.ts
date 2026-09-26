@@ -377,6 +377,7 @@ export const SEARCH_TEXT = defineTool({
         noun: 'matches',
         tool: 'search_text',
         nextCursor: structured.nextCursor,
+        nextArgs: args,
         stoppedReason: structured.stoppedReason,
         skippedTooLarge: structured.skippedTooLarge,
         skippedInaccessible: structured.skippedInaccessible,

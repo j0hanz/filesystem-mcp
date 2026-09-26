@@ -170,12 +170,13 @@ function classify(error: unknown): Problem {
     return build(ErrorCode.UNKNOWN, 'Unknown error');
   }
   if (isFsError(error)) return error.problem;
-  // No `ZodError` branch, deliberately. Tool arguments are validated by
-  // `safeParse` inside the SDK's validator seam (tools/define.ts), which never
-  // throws — it hands back `z.prettifyError`'s string — and nothing in `src/`
-  // calls `.parse()`. A ZodError reaching here would fall through to
-  // UNKNOWN with Zod's raw JSON-dump `.message`, so if a `.parse()`
-  // is ever added, add the branch back with it rather than discovering this.
+  // No `ZodError` branch, deliberately. Tool arguments are validated by the
+  // SDK from the zod schema `defineTool` hands it (tools/define.ts); the SDK
+  // formats issues itself and never throws a ZodError into a handler, and
+  // nothing in `src/` calls `.parse()`. A ZodError reaching here would fall
+  // through to UNKNOWN with Zod's raw JSON-dump `.message`, so if a
+  // `.parse()` is ever added, add the branch back with it rather than
+  // discovering this.
   if (!(error instanceof Error)) {
     return build(ErrorCode.UNKNOWN, typeof error === 'string' ? error : '[non-Error thrown]');
   }

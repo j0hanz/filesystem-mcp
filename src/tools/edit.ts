@@ -178,8 +178,8 @@ interface EditResult {
   content: string;
   appliedEdits: number;
   unmatchedEdits: string[];
-  linesAdded: number;
-  linesRemoved: number;
+  linesAdded?: number;
+  linesRemoved?: number;
   diff?: string;
 }
 
@@ -339,7 +339,9 @@ function buildEditFileValue(
     ...(meta.resourceUri !== undefined ? { resourceUri: meta.resourceUri } : {}),
     modified,
     appliedEdits: result.appliedEdits,
-    ...(result.appliedEdits > 0
+    ...(result.appliedEdits > 0 &&
+    result.linesAdded !== undefined &&
+    result.linesRemoved !== undefined
       ? { linesAdded: result.linesAdded, linesRemoved: result.linesRemoved }
       : {}),
     ...(result.unmatchedEdits.length > 0 ? { unmatchedEdits: result.unmatchedEdits } : {}),
@@ -409,9 +411,9 @@ function applyEdits(
     appliedEdits += 1;
   }
 
-  const { linesAdded, linesRemoved } =
+  const stats =
     appliedEdits > 0 ? computeDiffStats(content, newContent) : { linesAdded: 0, linesRemoved: 0 };
-  return { content: newContent, appliedEdits, unmatchedEdits, linesAdded, linesRemoved };
+  return { content: newContent, appliedEdits, unmatchedEdits, ...(stats ?? {}) };
 }
 
 interface EditFileOptions {
@@ -432,7 +434,8 @@ async function handleEditFile(
 
   if (options.dryRun) {
     if (editResult.appliedEdits > 0) {
-      editResult.diff = unifiedPatch(basename(validPath), content, editResult.content);
+      const patch = unifiedPatch(basename(validPath), content, editResult.content);
+      if (patch !== undefined) editResult.diff = patch;
     }
 
     // Nothing was written, so there is no updated content to point a
@@ -463,7 +466,7 @@ async function handleEditFile(
     });
     ctx.log?.(
       'info',
-      `edit: ${filePath} (${editResult.appliedEdits} edits, +${editResult.linesAdded}/-${editResult.linesRemoved})`,
+      `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
       'edit',
     );
   }

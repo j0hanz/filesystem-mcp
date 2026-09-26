@@ -100,7 +100,7 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
 }
 
 /**
- * Serve filesystem-mcp over stdio using modern protocol revision 2026-07-28.
+ * Serve filesystem-mcp over stdio: the 2026-07-28 revision, plus the 2025 era for legacy clients (ADR-002).
  *
  * The SDK's `StdioListenRouter` acknowledges `subscriptions/listen` and routes
  * the pinned instance's outbound change notifications onto the matching

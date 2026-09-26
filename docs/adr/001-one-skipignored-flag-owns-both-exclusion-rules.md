@@ -7,7 +7,7 @@
 
 Every file-walking tool exposes one input, `includeIgnored`, whose schema has a
 single owner at
-[`schema.ts:193`](../../src/core/schema.ts#L193). Its _meaning_ had none: the
+[`schema.ts:192`](../../src/core/schema.ts#L192). Its _meaning_ had none: the
 core walk took two separate options, `excludePatterns` and `respectGitignore`,
 and each of the four tools translated the one input into that pair itself.
 `list` translated it a third way — it passed `excludePatterns` but never
@@ -37,11 +37,11 @@ the pair wrong was the one whose divergence the missing owner had produced.
 
 We will express "what a walk should not surface" as exactly one boolean,
 `skipIgnored`, on `GlobEntriesOptions`
-([`glob.ts:202`](../../src/core/glob.ts#L202)) and on the search options that
+([`glob.ts:193`](../../src/core/glob.ts#L193)) and on the search options that
 forward to it. `glob.ts` is the sole owner of what it means: `skipIgnored`
 selects `DEFAULT_EXCLUDE_PATTERNS`
-([`glob.ts:308`](../../src/core/glob.ts#L308)) _and_ the `.gitignore` walk
-([`glob.ts:417`](../../src/core/glob.ts#L417)). Tools translate their public
+([`glob.ts:429`](../../src/core/glob.ts#L429)) _and_ the `.gitignore` walk
+([`glob.ts:410`](../../src/core/glob.ts#L410)). Tools translate their public
 `includeIgnored` input into it and decide nothing further — the only form a
 call site may take is `skipIgnored: !args.includeIgnored`.
 
@@ -59,17 +59,19 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
   list) cannot add a pattern at the call site. It must either extend
   `skipIgnored` into something richer or reintroduce a second field, and this
   record is what that change has to argue with.
-- **A second cost, discovered after landing:** with the array of patterns gone
-  from the public option, `createExcludeFilter`'s choice between returning a
-  pattern array and returning a predicate
-  ([`glob.ts:348-352`](../../src/core/glob.ts#L348-L352)) became invisible to
-  callers — and the two are not equivalent. Node's `fs.glob` drops a rejected
-  entry given an array, but given a function it prunes descent while still
-  yielding the rejected dirent and any rejected entry below the top level. The
-  presence of a `.gitignore` anywhere under the root silently switched modes.
-  The guard at [`glob.ts:404`](../../src/core/glob.ts#L404) makes the two forms
-  agree, and it is load-bearing for this decision: consolidating on one flag is
-  only safe while both branches of that filter mean the same thing.
+- **Resolved 2026-09-26: A second cost, discovered after landing:** with the
+  array of patterns gone from the public option, `createExcludeFilter`'s
+  choice between returning a pattern array and returning a predicate
+  ([`glob.ts:336-341`](../../src/core/glob.ts#L336-L341), now `createWalkFilter`)
+  became invisible to callers — and the two are not equivalent. Node's
+  `fs.glob` drops a rejected entry given an array, but given a function it
+  prunes descent while still yielding the rejected dirent and any rejected
+  entry below the top level. The presence of a `.gitignore` anywhere under the
+  root silently switched modes. The guard at
+  [`glob.ts:416`](../../src/core/glob.ts#L416) (the `createWalkFilter` call
+  site) makes the two forms agree, and it is load-bearing for this decision:
+  consolidating on one flag is only safe while both branches of that filter
+  mean the same thing.
 - Revisiting this means reintroducing a second field. Before doing so, check
   whether the new case genuinely varies twice — the first version of this option
   pair did not, which is what produced the finding.

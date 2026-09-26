@@ -72,6 +72,10 @@ describe('MCP Resources', () => {
       assert.match(constraints, /allowed_roots:/);
       assert.match(constraints, /sensitive_paths:/);
       assert.match(constraints, /enforced_limits:/);
+      assert.match(
+        constraints,
+        /content search scans up to 10000 matches, paged by maxResults \(default 500\)/,
+      );
       assert.match(constraints, /ephemeral_results:/);
       assert.match(constraints, /pagination: nextCursor appears in the result text and in _meta,/);
 
@@ -82,6 +86,10 @@ describe('MCP Resources', () => {
       assert.match(errorRecovery, /TOO_LARGE:/);
       assert.match(errorRecovery, /TIMEOUT:/);
       assert.match(errorRecovery, /INVALID_INPUT:/);
+      assert.match(
+        errorRecovery,
+        /TIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page\./,
+      );
     });
 
     it('TC-FUNC-055a: modern root guidance lists known roots and explicit bootstrap paths', () => {

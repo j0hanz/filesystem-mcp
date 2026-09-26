@@ -7,7 +7,14 @@ import { RE2 } from '@adguard/re2-wasm';
 import { resolveStopReason } from './concurrency.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
-import { getMaxTextFileSize } from './util.ts';
+import { getMaxTextFileSize, MIB } from './util.ts';
+
+/**
+ * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
+ * that references its parent, so a kept line would otherwise pin the whole
+ * file's text for as long as the match list lives (60 s in the page store).
+ */
+const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
 
 interface SearchResult {
   file: string;
@@ -25,6 +32,13 @@ export type Regex = RE2;
 
 /** Occurrence-counting bound, so one pathological line cannot spin forever. */
 const MAX_MATCHES_PER_LINE = 100_000;
+
+/**
+ * Largest input one RE2 call may scan as a single string. The input is copied
+ * into the same fixed 16 MB wasm heap as the patterns; about 10 MB of input
+ * aborts the module. 4 MiB leaves room for the copy and the pattern set.
+ */
+export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 
 /**
  * Compile a pattern on RE2 rather than on V8's irregexp.
@@ -270,11 +284,13 @@ export async function searchContent(
         }
         const content = buffer.toString('utf-8');
         const lines = content.split(/\r?\n/u);
-        // A trailing newline splits into a phantom empty last element; context
-        // must not report it as a line the file has.
-        const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
+        // A trailing newline splits into a phantom empty last element, and an
+        // empty file splits into one empty element: neither is a line the
+        // file has, for matching or for context.
+        const lineCount =
+          content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
         let matchedFile = false;
-        for (let i = 0; i < lines.length; i++) {
+        for (let i = 0; i < lineCount; i++) {
           const line = lines[i];
           if (line === undefined) continue;
           // One scan per line: findLineMatches resets lastIndex itself, so it
@@ -287,12 +303,12 @@ export async function searchContent(
               file: entry.path,
               line: i + 1,
               column: found.column,
-              content: line,
+              content: own(line),
               matchCount: found.count,
               ...(context > 0
                 ? {
-                    before: lines.slice(Math.max(0, i - context), i),
-                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)),
+                    before: lines.slice(Math.max(0, i - context), i).map(own),
+                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)).map(own),
                   }
                 : {}),
             });

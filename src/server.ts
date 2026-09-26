@@ -76,9 +76,11 @@ export async function createServer(
   // but never infers `subscribe`.
   //
   // `resources.subscribe` stays advertised on both eras: the verb itself is
-  // 2025-only, but with enforceStrictCapabilities the SDK also gates outbound
-  // `notifications/resources/updated` — which the modern `subscriptions/listen`
-  // stream delivers — on this same capability bit. The one exception is a
+  // 2025-only, but the SDK's listen router honors a `subscriptions/listen`
+  // resource filter only while this bit is advertised (dist: `allow(
+  // capabilities?.resources?.subscribe)` on `resourceSubscriptions`). The
+  // strict-capability gate on outbound `notifications/resources/updated`
+  // checks only that `resources` exists. The one exception is a
   // legacy instance on the HTTP leg (era 'legacy' with a notifier): it serves
   // one request, registers no subscribe handler (resources.ts, same
   // predicate) and sends no notification of any kind — there is no stream to

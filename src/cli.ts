@@ -7,11 +7,13 @@ import { cli } from './core/config.ts';
 import { formatUnknownErrorMessage } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
+  IS_WINDOWS,
   isWindowsDriveRelativePath,
   normalizePath,
   parseTrueEnvFlag,
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
+import { describeSensitivePolicy } from './core/sensitive.ts';
 import { getMaxTextFileSize } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
 
@@ -37,7 +39,7 @@ function validateCliPath(inputPath: string): void {
     );
   }
 
-  const reserved = getReservedDeviceNameForPath(inputPath);
+  const reserved = IS_WINDOWS ? getReservedDeviceNameForPath(inputPath) : undefined;
   if (reserved) {
     throw new CliExitError(`Windows reserved device name not allowed: ${reserved}.`);
   }
@@ -227,6 +229,15 @@ export async function runPrintConfig(options: {
     tools,
     apiKey: options.apiKey ? '***' : null,
     limits: { maxFileSizeBytes: getMaxTextFileSize() },
+    // Everything that can produce ACCESS_DENIED, read through the same
+    // sources the guard and the matcher use (flag beats env).
+    policy: {
+      ...describeSensitivePolicy(),
+      rootBoundary: cli.rootBoundary ?? process.env['FS_ROOT_BOUNDARY'] ?? null,
+      allowMissingRoots:
+        cli.allowMissingRoots ??
+        parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS'),
+    },
   };
 
   process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);

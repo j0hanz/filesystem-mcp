@@ -20,6 +20,7 @@ import {
   readAcceptedChoice,
 } from '../core/input-required.ts';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.ts';
+import { isSamePath } from '../core/path-utils.ts';
 import {
   FileKind,
   IsoDateTime,
@@ -71,13 +72,30 @@ const CreateFileResultSchema = z.strictObject({
   modified: IsoDateTime.describe('File last-modification timestamp (ISO 8601 UTC)'),
 });
 
-const CreateInputSchema = z.strictObject({
-  files: z
-    .array(CreateFileItemSchema)
-    .min(1)
-    .max(100)
-    .describe('List of files to create (max 100); each entry requires path and content'),
-});
+const CreateInputSchema = z
+  .strictObject({
+    files: z
+      .array(CreateFileItemSchema)
+      .min(1)
+      .max(100)
+      .describe('List of files to create (max 100); each entry requires path and content'),
+  })
+  .superRefine((value, ctx) => {
+    // Entries write in parallel and each replaces its file whole, so two
+    // entries for one path race: the last rename wins and the other's
+    // content is lost while both report success. One entry per file.
+    for (const [index, file] of value.files.entries()) {
+      const first = value.files.findIndex((other) => isSamePath(other.path, file.path));
+      if (first < index) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['files', index, 'path'],
+          message: `duplicate of files[${String(first)}].path; one entry per file`,
+          input: value,
+        });
+      }
+    }
+  });
 
 type CreateFailureItem = z.infer<typeof PathFailureSchema>;
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { paginate } from '../src/core/cursor.ts';
-import { ErrorCode } from '../src/core/errors.ts';
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { PageSnapshotStore } from '../src/core/store.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
@@ -114,5 +114,35 @@ describe('PageSnapshotStore', () => {
 
     assert.deepStrictEqual(result.page, ['complete']);
     assert.strictEqual(result.nextCursor, undefined);
+  });
+
+  it('a TOO_LARGE from externalize drops the resource but keeps the page', async () => {
+    const store = new PageSnapshotStore();
+    const base = {
+      store,
+      queryKey: '{"method":"list","path":"big"}',
+      cursor: undefined,
+      pageSize: 1,
+      produce: async () => ({ items: ['a', 'b'], metadata: undefined, truncated: false }),
+    };
+    const page = await paginate({
+      ...base,
+      externalize: () => {
+        throw new FsError(ErrorCode.TOO_LARGE, 'Resource too large to cache (1 bytes).');
+      },
+    });
+    assert.deepStrictEqual(page.page, ['a']);
+    assert.ok(page.nextCursor, 'paging must still work without the resource');
+    assert.strictEqual(page.resource, undefined);
+
+    await assert.rejects(
+      paginate({
+        ...base,
+        externalize: () => {
+          throw new FsError(ErrorCode.UNKNOWN, 'store exploded');
+        },
+      }),
+      fsErrorMatcher(ErrorCode.UNKNOWN, 'store exploded'),
+    );
   });
 });

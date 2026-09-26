@@ -1,3 +1,4 @@
+import { ErrorCode, isFsError } from './errors.ts';
 import type { PageSnapshot, PageSnapshotStore } from './store.ts';
 import { invalidCursor } from './store.ts';
 
@@ -100,7 +101,14 @@ export async function paginate<T, M, R>(params: {
           { items, metadata },
         );
   if (!incomplete || params.externalize === undefined) return first;
-  return { ...first, resource: params.externalize(produced.items, produced.metadata) };
+  try {
+    return { ...first, resource: params.externalize(produced.items, produced.metadata) };
+  } catch (error) {
+    // The store refuses an entry over its byte cap. The page itself is
+    // fine; the caller simply gets no full-set resource for this query.
+    if (isFsError(error) && error.code === ErrorCode.TOO_LARGE) return first;
+    throw error;
+  }
 }
 
 function decodePageCursor(cursor: string): PageCursor {

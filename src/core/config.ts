@@ -29,7 +29,7 @@ export interface CliOverrides {
   allowCwdWalk?: boolean;
   /** `--allow-missing-roots` */
   allowMissingRoots?: boolean;
-  /** `--deny` entries (merged with DENYLIST by the reader) */
+  /** `--deny` entries (merged with FS_DENYLIST by the reader) */
   denyPatterns?: readonly string[];
   /** `--allow` entries (merged with FS_ALLOWLIST by the reader; relieve built-ins only) */
   allowPatterns?: readonly string[];

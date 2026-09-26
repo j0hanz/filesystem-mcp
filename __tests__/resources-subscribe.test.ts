@@ -106,4 +106,34 @@ describe('Resource subscriptions round-trip', () => {
 
     await pair.client.unsubscribeResource({ uri });
   });
+
+  it("a subscription survives the server's own atomic replace and keeps notifying", async () => {
+    const filePath = await writeTestFile(tmpDir, 'replaced.txt', 'one\n');
+    const uri = buildFileResourceUri(filePath);
+    let count = 0;
+    pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
+      if ((n.params as { uri: string }).uri === uri) count += 1;
+    });
+    await pair.client.subscribeResource({ uri });
+
+    // Each edit commits by renaming a temp file over the path: a new inode.
+    const edit = (oldText: string, newText: string) =>
+      pair.client.callTool({
+        name: 'edit',
+        arguments: { path: filePath, edits: [{ oldText, newText }] },
+      });
+
+    const first = await edit('one', 'two');
+    assert.notStrictEqual(first.isError, true);
+    await waitFor(() => count >= 1, 3000);
+    assert.ok(count >= 1, 'the first replace must notify');
+
+    const seen = count;
+    const second = await edit('two', 'three');
+    assert.notStrictEqual(second.isError, true);
+    await waitFor(() => count > seen, 3000);
+    assert.ok(count > seen, 'the second replace must notify too (inode-bound watch went silent)');
+
+    await pair.client.unsubscribeResource({ uri });
+  });
 });

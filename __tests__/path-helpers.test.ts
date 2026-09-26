@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { parse, sep } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, join, parse, sep } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -7,6 +8,7 @@ import {
   isPathWithinDirectories,
   isSamePath,
   normalizePath,
+  respellCaseOnlyTarget,
 } from '../src/core/path-utils.ts';
 import { normalizeAllowedDirectories } from '../src/core/path.ts';
 
@@ -73,5 +75,23 @@ describe('PathGuard containment helpers', () => {
 
     // The '/foo' entry (deduped from both '/foo/' and '/foo') is present.
     assert.ok(result.some((d) => isSamePath(d, normalizePath('/foo'))));
+  });
+
+  it('TC-PH-009: respellCaseOnlyTarget re-spells a case-only match on a case-insensitive filesystem', (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-only re-spelling only applies on a case-insensitive filesystem');
+      return;
+    }
+    const resolvedTarget = join(tmpdir(), 'foo.txt');
+    const result = respellCaseOnlyTarget('x/Foo.txt', resolvedTarget);
+    assert.strictEqual(basename(result), 'Foo.txt');
+  });
+
+  it('TC-PH-010: respellCaseOnlyTarget leaves an unrelated basename unchanged', () => {
+    assert.strictEqual(respellCaseOnlyTarget('x/bar.txt', '/a/foo.txt'), '/a/foo.txt');
+  });
+
+  it('TC-PH-011: respellCaseOnlyTarget leaves an identical basename unchanged', () => {
+    assert.strictEqual(respellCaseOnlyTarget('x/foo.txt', '/a/foo.txt'), '/a/foo.txt');
   });
 });

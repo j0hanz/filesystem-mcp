@@ -2,8 +2,8 @@
 // normalization that feeds it, and the NTFS alternate-data-stream stripping
 // Windows needs. Split out of path.ts so the denylist has its own home — it
 // shares only isAlpha / toPosixPath / IS_WINDOWS with the primitives in
-// primitives.ts, not the allowed-directory assembly. path-completer.ts and
-// glob.ts reach it through PathGuard.isSensitive, which delegates here.
+// path-utils.ts, not the allowed-directory assembly. path.ts and
+// path-completer.ts reach it through PathGuard.isSensitive, which delegates here.
 import { normalize, posix, sep } from 'node:path';
 
 import { cli } from './config.ts';
@@ -239,8 +239,15 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '.env.*',
   '.npmrc',
   '.pypirc',
+  '.netrc',
+  '_netrc',
+  '.git-credentials',
+  '.pgpass',
   '.aws/credentials',
   '.aws/config',
+  '.docker/config.json',
+  '.kube/config',
+  'application_default_credentials.json',
   '.mcpregistry_*_token',
   '*.pem',
   '*.key',
@@ -250,6 +257,8 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '*.cer',
   '*id_rsa*',
   '*id_dsa*',
+  '*id_ecdsa*',
+  '*id_ed25519*',
 ] as const;
 
 // Built-ins and operator-supplied deny entries live in separate tiers because
@@ -317,6 +326,22 @@ function buildAllowPatterns(): readonly string[] {
     : [];
   const flagAllowlist = cli.allowPatterns ?? [];
   return [...new Set([...envAllowlist, ...flagAllowlist])];
+}
+
+/** The three pattern tiers as configured, for `--print-config`. Read-only view; the matcher compiles its own. */
+export function describeSensitivePolicy(): {
+  allowSensitive: boolean;
+  builtinDeny: readonly string[];
+  operatorDeny: readonly string[];
+  allow: readonly string[];
+} {
+  const tiers = buildDenyTiers();
+  return {
+    allowSensitive: tiers.builtin.length === 0,
+    builtinDeny: tiers.builtin,
+    operatorDeny: tiers.operator,
+    allow: buildAllowPatterns(),
+  };
 }
 
 const EMPTY_PATTERN_SET: CompiledPatternSet = { pathGlobs: [], nameGlobs: [] };

@@ -31,6 +31,7 @@ import {
 import { detectMimeFromContent } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
+import { respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import { assertFileStats, createTooLargeError, readFileWithStats } from './read.ts';
@@ -98,7 +99,16 @@ async function atomicWriteFile(
 
   try {
     signal?.throwIfAborted();
-    await fsWriteFile(tempPath, content, { encoding, signal });
+    // Create the temp file already narrowed to the target's mode: a 0600
+    // file's new bytes must never sit at 0644 while the write is in flight.
+    // `wx` fails on a name collision instead of overwriting; the chmod below
+    // still restores bits the umask masked off at creation.
+    await fsWriteFile(tempPath, content, {
+      encoding,
+      signal,
+      flag: 'wx',
+      ...(existingMode !== undefined ? { mode: existingMode } : {}),
+    });
     if (existingMode !== undefined) {
       await fsChmod(tempPath, existingMode);
     }
@@ -210,7 +220,9 @@ export class GuardedFileSystem {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
-    const validNew = await this.pathGuard.validatePathForWrite(newPath);
+    let validNew = await this.pathGuard.validatePathForWrite(newPath);
+    // Renaming a path onto itself is only meaningful as a case-only rename.
+    if (validOld === validNew) validNew = respellCaseOnlyTarget(newPath, validNew);
     await fsRename(validOld, validNew);
   }
 

@@ -19,6 +19,7 @@ import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
 import {
   getReservedDeviceNameForPath,
+  IS_WINDOWS,
   isPathWithinDirectories,
   isSamePath,
   isWindowsDriveRelativePath,
@@ -444,7 +445,8 @@ export class PathGuard {
         requestedPath,
       );
     }
-    const reservedDevice = getReservedDeviceNameForPath(requestedPath);
+    // A device name is only a device on Windows; on POSIX `aux.ts` is a file.
+    const reservedDevice = IS_WINDOWS ? getReservedDeviceNameForPath(requestedPath) : undefined;
     if (reservedDevice) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,

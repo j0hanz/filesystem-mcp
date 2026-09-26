@@ -173,9 +173,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         utf16,
         Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
       );
+      // UTF-16 is named at the shared probe, for edit as for read.
       await assert.rejects(
         fs.readEditableText(utf16),
-        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
+        fsErrorMatcher(
+          ErrorCode.INVALID_INPUT,
+          /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+        ),
       );
     });
   });

@@ -102,6 +102,21 @@ describe('Security (P0)', () => {
       );
     });
 
+    it('TC-SEC-014: a reserved device name is refused on Windows and ordinary elsewhere', async () => {
+      const auxPath = join(root, 'src', 'aux.ts');
+      if (process.platform === 'win32') {
+        // Not created: on Windows the name is a device, not a file.
+        await assert.rejects(
+          guard.validateExistingPath(auxPath),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Reserved Windows device name/),
+        );
+        return;
+      }
+      await writeTestFile(root, 'src/aux.ts', 'export const x = 1;\n');
+      const resolved = await guard.validateExistingPath(auxPath);
+      assert.ok(resolved.endsWith('aux.ts'));
+    });
+
     it('TC-SEC-020: a sibling whose name starts with the root name and a backslash stays outside', async (t) => {
       if (process.platform === 'win32') {
         t.skip('backslash is a separator on Windows');
@@ -364,6 +379,34 @@ describe('Security (P0)', () => {
         assert.strictEqual(matcher.isSensitive('.key'), true, '*.key must match .key');
         assert.strictEqual(matcher.isSensitive('server.pem'), true);
       });
+    });
+
+    it('the default denylist covers modern SSH keys and common credential stores', () => {
+      const matcher = new SensitiveMatcher();
+      const denied = [
+        'id_ed25519',
+        '.ssh/id_ed25519',
+        'id_ed25519_sk',
+        'id_ecdsa',
+        'ID_ECDSA.bak',
+        '.netrc',
+        '_netrc',
+        '.git-credentials',
+        '.pgpass',
+        '.docker/config.json',
+        '.kube/config',
+        'gcloud/application_default_credentials.json',
+      ];
+      for (const name of denied) {
+        assert.strictEqual(matcher.isSensitive(name), true, `${name} must be denied`);
+      }
+      // `*id_ed25519*` also catches `id_ed25519.pub`, exactly as `*id_rsa*`
+      // catches `id_rsa.pub` today — an accepted over-match, so no `.pub`
+      // or `.md` sibling is asserted readable here.
+      const allowed = ['docker/config.json', 'kube/config', 'netrc.txt', 'README.md'];
+      for (const name of allowed) {
+        assert.strictEqual(matcher.isSensitive(name), false, `${name} must stay readable`);
+      }
     });
 
     it('TC-ALLOW-010: wildcard allow relief reaches hidden files', async () => {

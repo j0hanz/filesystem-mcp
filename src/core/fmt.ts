@@ -110,6 +110,8 @@ export function pageTrailer(p: {
   noun: string;
   tool: string;
   nextCursor?: string | undefined;
+  /** The call's own arguments; printed merged with the cursor so the hint is sendable as-is. */
+  nextArgs?: Record<string, unknown> | undefined;
   stoppedReason?: string | undefined;
   skippedTooLarge?: number | undefined;
   skippedInaccessible?: number | undefined;
@@ -121,7 +123,7 @@ export function pageTrailer(p: {
     const next =
       p.nextCursor === undefined
         ? ''
-        : ` Next page: ${p.tool} ${JSON.stringify({ cursor: p.nextCursor })}`;
+        : ` Next page: ${p.tool} ${JSON.stringify({ ...p.nextArgs, cursor: p.nextCursor })}`;
     lines.push(
       `// showing ${String(p.offset + 1)}-${String(p.offset + p.shown)} of ${String(p.total)} ${p.noun}.${next}`,
     );
