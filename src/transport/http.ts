@@ -96,12 +96,11 @@ function setupExpressApp(
   // which mounts `express.json()` for the whole app: that would parse every
   // body before the rate limiter and bearer auth below can refuse it. Host
   // and Origin validation still run first and app-wide, mounted by the same
-  // rules `createMcpExpressApp` applies to these inputs; the parser moves
-  // onto the POST /mcp route, after auth.
+  // rules `createMcpExpressApp` applies to these inputs.
   const app = express();
-  if (allowedHosts.length > 0) app.use(hostHeaderValidation([...allowedHosts]));
+  if (allowedHosts.length > 0) app.use(hostHeaderValidation(allowedHosts));
   if (allowedOriginHostnames.length > 0) {
-    app.use(originValidation([...allowedOriginHostnames]));
+    app.use(originValidation(allowedOriginHostnames));
   } else if (isLoopbackHttpHost(httpHost)) {
     // An all-blank FS_ALLOWED_ORIGINS on a loopback bind keeps the localhost
     // default (see isOriginAllowed in http-policy.ts).
