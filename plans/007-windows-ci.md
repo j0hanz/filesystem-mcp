@@ -138,7 +138,9 @@ Create `.gitattributes` at the repo root with exactly:
 
 ### Step 2: Renormalize the index
 
-Run `git add --renormalize .` then `git status --short`.
+Run `git add --renormalize .`, then `git add .gitattributes` (renormalize only
+touches tracked files, so the new file needs its own add), then
+`git status --short`.
 
 **Verify**: the status lists exactly `A  .gitattributes`, `M  .gitignore`,
 `M  Dockerfile` (staged). If any other file appears, STOP.
