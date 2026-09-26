@@ -328,6 +328,22 @@ function buildAllowPatterns(): readonly string[] {
   return [...new Set([...envAllowlist, ...flagAllowlist])];
 }
 
+/** The three pattern tiers as configured, for `--print-config`. Read-only view; the matcher compiles its own. */
+export function describeSensitivePolicy(): {
+  allowSensitive: boolean;
+  builtinDeny: readonly string[];
+  operatorDeny: readonly string[];
+  allow: readonly string[];
+} {
+  const tiers = buildDenyTiers();
+  return {
+    allowSensitive: tiers.builtin.length === 0,
+    builtinDeny: tiers.builtin,
+    operatorDeny: tiers.operator,
+    allow: buildAllowPatterns(),
+  };
+}
+
 const EMPTY_PATTERN_SET: CompiledPatternSet = { pathGlobs: [], nameGlobs: [] };
 
 export class SensitiveMatcher {
