@@ -1,6 +1,10 @@
 // HTTP hosting: express app assembly, security middleware wiring, the modern
 // per-request server factory, and listen-filter watcher gating on POST /mcp.
-import { createMcpExpressApp } from '@modelcontextprotocol/express';
+import {
+  hostHeaderValidation,
+  localhostOriginValidation,
+  originValidation,
+} from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { McpHttpHandler, ServerNotifier } from '@modelcontextprotocol/server';
 import {
@@ -14,6 +18,7 @@ import {
 import type { Server } from 'node:http';
 import { createServer as createHttpServer } from 'node:http';
 
+import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 
 import { formatUnknownErrorMessage } from '../core/errors.ts';
@@ -36,6 +41,7 @@ import {
   computeAllowedOriginHostnames,
   corsMiddleware,
   createRateLimiter,
+  isLoopbackHttpHost,
   JSONRPC_SERVER_ERROR,
   protectedResourceUrl,
   resolveAllowedHosts,
@@ -86,15 +92,21 @@ function setupExpressApp(
   // http-policy holds no state and reads no env of its own.
   const publicUrl = process.env['FS_PUBLIC_URL'];
 
-  const app = createMcpExpressApp({
-    host: httpHost,
-    // The express parser limit derives from the SDK's own request-body
-    // bound, so it and the adapter/handler-core defaults
-    // (`DEFAULT_MAX_REQUEST_BODY_SIZE`, 4 MiB in 2.1.0) cannot drift apart.
-    jsonLimit: `${DEFAULT_MAX_REQUEST_BODY_SIZE}b`,
-    ...(allowedHosts.length > 0 ? { allowedHosts: [...allowedHosts] } : {}),
-    ...(allowedOriginHostnames.length > 0 ? { allowedOrigins: [...allowedOriginHostnames] } : {}),
-  });
+  // Assembled from the SDK's own gates rather than `createMcpExpressApp`,
+  // which mounts `express.json()` for the whole app: that would parse every
+  // body before the rate limiter and bearer auth below can refuse it. Host
+  // and Origin validation still run first and app-wide, mounted by the same
+  // rules `createMcpExpressApp` applies to these inputs; the parser moves
+  // onto the POST /mcp route, after auth.
+  const app = express();
+  if (allowedHosts.length > 0) app.use(hostHeaderValidation([...allowedHosts]));
+  if (allowedOriginHostnames.length > 0) {
+    app.use(originValidation([...allowedOriginHostnames]));
+  } else if (isLoopbackHttpHost(httpHost)) {
+    // An all-blank FS_ALLOWED_ORIGINS on a loopback bind keeps the localhost
+    // default (see isOriginAllowed in http-policy.ts).
+    app.use(localhostOriginValidation());
+  }
 
   const trustProxy = resolveTrustProxySetting(process.env['FS_TRUST_PROXY']);
   if (trustProxy !== undefined) {
@@ -150,7 +162,14 @@ function setupExpressApp(
     notifier.resourceUpdated(uri);
   };
 
-  app.post('/mcp', (req: Request, res: Response, next: NextFunction) => {
+  // The express parser limit derives from the SDK's own request-body
+  // bound, so it and the adapter/handler-core defaults
+  // (`DEFAULT_MAX_REQUEST_BODY_SIZE`, 4 MiB in 2.1.0) cannot drift apart.
+  // Mounted here, after CORS, the rate limiter and auth, so a refused
+  // request is answered without its body being read.
+  const parseJson = express.json({ limit: `${DEFAULT_MAX_REQUEST_BODY_SIZE}b` });
+
+  app.post('/mcp', parseJson, (req: Request, res: Response, next: NextFunction) => {
     void (async () => {
       if (!isJsonContentType(req.headers['content-type'])) {
         sendJsonRpcError(
