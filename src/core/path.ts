@@ -10,10 +10,9 @@ import {
   ErrorCode,
   FsError,
   isFsError,
-  isNodeError,
   isNotFoundErrno,
+  isSkippableErrno,
   rethrowIfAborted,
-  SKIPPABLE_ERRNOS,
   SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
@@ -255,8 +254,7 @@ export class PathGuard {
         if (SKIPPABLE_FS_CODES.has(error.code)) return false;
         throw error;
       }
-      if (isNodeError(error) && error.code !== undefined && SKIPPABLE_ERRNOS.has(error.code))
-        return false;
+      if (isSkippableErrno(error)) return false;
       throw error;
     }
   }

@@ -107,7 +107,7 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
   ErrorCode.SYMLINK_NOT_ALLOWED,
 ]);
 
-export const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
+const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
 
 /**
  * Walk `error` and its `cause` chain once for the three facts error handling
