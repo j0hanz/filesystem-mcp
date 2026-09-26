@@ -196,8 +196,17 @@ add `TC-SEC-020: a sibling whose name starts with the root name and a backslash 
 - `await writeFile(sibling, 'outside');` (import `writeFile` from
   `node:fs/promises`), and remove it in a `finally` with
   `await rm(sibling, { force: true })` (import `rm`).
-- Also create a sibling _directory_ with a file in it:
-  `const siblingDir = \`${root}\\dir\``(one literal backslash, as above),`await mkdir(siblingDir)`, `await writeFile(join(siblingDir, 'f.txt'), 'x')`(import`mkdir`), and remove it in the same `finally`with`await rm(siblingDir, { recursive: true, force: true })`.
+- Also create a sibling _directory_ with a file in it (import `mkdir`), and
+  remove it in the same `finally`:
+
+  ```ts
+  const siblingDir = `${root}\\dir`; // one literal backslash, as above
+  await mkdir(siblingDir);
+  await writeFile(join(siblingDir, 'f.txt'), 'x');
+  // in finally:
+  await rm(siblingDir, { recursive: true, force: true });
+  ```
+
 - Assert each of these rejects with `isFsError(err) && err.code === ErrorCode.ACCESS_DENIED`
   (same `assert.rejects` shape as TC-SEC-005):
   `guard.validateExistingPath(sibling)`, `guard.validatePathForWrite(sibling)`,
