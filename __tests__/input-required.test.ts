@@ -4,7 +4,7 @@ import { createRequestStateCodec, isInputRequiredResult } from '@modelcontextpro
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import {
   buildInputRequired,
   describeRefusal,
@@ -14,6 +14,7 @@ import {
   readAcceptedMultiChoice,
   requestStateCodec,
 } from '../src/core/input-required.ts';
+import { fsErrorMatcher } from './helpers.ts';
 
 /** The two fields `requestStateBinding` reads; everything else is unused. */
 function bindContext(method = 'tools/call', clientId?: string): ServerContext {
@@ -109,19 +110,16 @@ describe('input_required multi-round-trip infrastructure', () => {
   it('5. pendingRoundTrip same-op + different paths throws FsError(INVALID_INPUT) (R9)', async () => {
     const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
-    await assert.rejects(
-      async () => {
-        await pendingRoundTrip({
-          op: 'move',
-          pending: ['/y'],
-          requestState: () => decoded,
-          buildInputs: (paths) =>
-            paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
-          serverCtx: bindContext(),
-        });
-      },
-      (e: unknown) => isFsError(e) && e.code === ErrorCode.INVALID_INPUT,
-    );
+    await assert.rejects(async () => {
+      await pendingRoundTrip({
+        op: 'move',
+        pending: ['/y'],
+        requestState: () => decoded,
+        buildInputs: (paths) =>
+          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
+        serverCtx: bindContext(),
+      });
+    }, fsErrorMatcher(ErrorCode.INVALID_INPUT));
   });
 
   it('5b. pendingRoundTrip rejects a pending set that merely EXTENDS the bound one (R9)', async () => {
@@ -129,19 +127,16 @@ describe('input_required multi-round-trip infrastructure', () => {
     // /x must not authorize /x AND /y.
     const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
-    await assert.rejects(
-      async () => {
-        await pendingRoundTrip({
-          op: 'delete',
-          pending: ['/x', '/y'],
-          requestState: () => decoded,
-          buildInputs: (paths) =>
-            paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
-          serverCtx: bindContext(),
-        });
-      },
-      (e: unknown) => isFsError(e) && e.code === ErrorCode.INVALID_INPUT,
-    );
+    await assert.rejects(async () => {
+      await pendingRoundTrip({
+        op: 'delete',
+        pending: ['/x', '/y'],
+        requestState: () => decoded,
+        buildInputs: (paths) =>
+          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+        serverCtx: bindContext(),
+      });
+    }, fsErrorMatcher(ErrorCode.INVALID_INPUT));
   });
 
   it('6. pendingRoundTrip different-op mints fresh input_required', async () => {

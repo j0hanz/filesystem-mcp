@@ -16,6 +16,7 @@ import {
   cleanupTestRoot,
   createTestRoot,
   createTestServer,
+  fsErrorMatcher,
   trySymlink,
   withEnv,
   writeNLineFile,
@@ -110,10 +111,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
         await assert.rejects(
           fs.readEditableText(filePath),
-          (error) =>
-            isFsError(error) &&
-            error.code === ErrorCode.TOO_LARGE &&
-            error.message.includes('File too large for edit'),
+          fsErrorMatcher(ErrorCode.TOO_LARGE, 'File too large for edit'),
         );
       });
     });
@@ -124,10 +122,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       await assert.rejects(
         fs.readEditableText(filePath),
-        (error) =>
-          isFsError(error) &&
-          error.code === ErrorCode.INVALID_INPUT &&
-          error.message === 'Binary file detected.',
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary file detected\.$/),
       );
     });
 
@@ -167,10 +162,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       await assert.rejects(
         fs.readEditableText(filePath),
-        (error) =>
-          isFsError(error) &&
-          error.code === ErrorCode.INVALID_INPUT &&
-          error.message === 'Binary or non-UTF-8 file detected.',
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
       );
       // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
       const fullRead = await fs.readFile(filePath, { kind: 'full' });
@@ -183,10 +175,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       await assert.rejects(
         fs.readEditableText(utf16),
-        (error) =>
-          isFsError(error) &&
-          error.code === ErrorCode.INVALID_INPUT &&
-          error.message === 'Binary or non-UTF-8 file detected.',
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
       );
     });
   });
@@ -270,11 +259,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       if (!(await trySymlink(outside, linkPath, () => t.skip('symlink not permitted'), 'file')))
         return;
 
-      await assert.rejects(fs.appendFile(linkPath, 'nope'), (err: unknown) => {
-        assert(isFsError(err));
-        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-        return true;
-      });
+      await assert.rejects(
+        fs.appendFile(linkPath, 'nope'),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
     });
 
     it('TC-FUNC-052a: countFileLines matches countLines across the buffer boundary', async () => {
@@ -309,11 +297,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const envPath = join(tmpDir, '.env');
       await writeTestFile(tmpDir, '.env', 'SECRET=1\n');
 
-      await assert.rejects(fs.appendFile(envPath, 'LEAKED=1\n'), (err: unknown) => {
-        assert(isFsError(err));
-        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-        return true;
-      });
+      await assert.rejects(
+        fs.appendFile(envPath, 'LEAKED=1\n'),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
       // Verify with plain node fs — the guarded read would block on .env too.
       assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
     });
@@ -324,11 +311,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       if (!(await trySymlink(target, linkPath, () => t.skip('symlink not permitted'), 'file')))
         return;
 
-      await assert.rejects(fs.appendFile(linkPath, 'LEAKED=1\n'), (err: unknown) => {
-        assert(isFsError(err));
-        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-        return true;
-      });
+      await assert.rejects(
+        fs.appendFile(linkPath, 'LEAKED=1\n'),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
       assert.strictEqual(await readFile(target, 'utf-8'), 'SECRET=1\n');
     });
 
@@ -429,11 +415,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('TC-FUNC-053: appendFile to a non-regular file is rejected before the open', async () => {
       // 'a' on a FIFO blocks POSIX until a reader appears, unabortable; a
       // directory is the cross-platform stand-in for "target is not a file".
-      await assert.rejects(fs.appendFile(tmpDir, 'nope\n'), (err: unknown) => {
-        assert(isFsError(err));
-        assert.strictEqual(err.code, ErrorCode.NOT_FILE);
-        return true;
-      });
+      await assert.rejects(fs.appendFile(tmpDir, 'nope\n'), fsErrorMatcher(ErrorCode.NOT_FILE));
     });
 
     it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap', () => {
@@ -597,14 +579,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       await fs.rm(dirToDelete, { recursive: true, force: true });
 
-      await assert.rejects(
-        () => fs.stat(dirToDelete),
-        (err: unknown) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.NOT_FOUND);
-          return true;
-        },
-      );
+      await assert.rejects(() => fs.stat(dirToDelete), fsErrorMatcher(ErrorCode.NOT_FOUND));
     });
   });
 

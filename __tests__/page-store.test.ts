@@ -2,15 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { paginate } from '../src/core/cursor.ts';
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import { PageSnapshotStore } from '../src/core/store.ts';
-
-function assertInvalidCursor(error: unknown): boolean {
-  assert(isFsError(error));
-  assert.strictEqual(error.code, ErrorCode.INVALID_INPUT);
-  assert.match(error.message, /Request the first page without a cursor/);
-  return true;
-}
+import { fsErrorMatcher } from './helpers.ts';
 
 describe('PageSnapshotStore', () => {
   it('stores pages, rejects old and malformed cursors, and checks query keys', async () => {
@@ -38,19 +32,25 @@ describe('PageSnapshotStore', () => {
           throw new Error('produce must not run on replay');
         },
       });
-    await assert.rejects(() => replay(queryKeyTwo, cursor), assertInvalidCursor);
+    await assert.rejects(
+      () => replay(queryKeyTwo, cursor),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
+    );
     await assert.rejects(
       () => replay(queryKeyOne, Buffer.from(JSON.stringify({ offset: 1 })).toString('base64url')),
-      assertInvalidCursor,
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
     );
-    await assert.rejects(() => replay(queryKeyOne, 'not-a-cursor'), assertInvalidCursor);
+    await assert.rejects(
+      () => replay(queryKeyOne, 'not-a-cursor'),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
+    );
     await assert.rejects(
       () =>
         replay(
           queryKeyOne,
           Buffer.from(JSON.stringify({ snapshotId: 'evicted', offset: 0 })).toString('base64url'),
         ),
-      assertInvalidCursor,
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
     );
     const decodedCursor = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<
       string,
@@ -62,7 +62,7 @@ describe('PageSnapshotStore', () => {
           queryKeyOne,
           Buffer.from(JSON.stringify({ ...decodedCursor, offset: 99 })).toString('base64url'),
         ),
-      assertInvalidCursor,
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
     );
 
     const second = await paginate({
@@ -88,12 +88,18 @@ describe('PageSnapshotStore', () => {
     store.read(first, queryKey);
     const third = store.create({ queryKey, items: ['c'] });
 
-    assert.throws(() => store.read(second, queryKey), assertInvalidCursor);
+    assert.throws(
+      () => store.read(second, queryKey),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
+    );
     assert.deepStrictEqual(store.read(first, queryKey).items, ['a']);
     assert.deepStrictEqual(store.read(third, queryKey).items, ['c']);
 
     now = 10;
-    assert.throws(() => store.read(first, queryKey), assertInvalidCursor);
+    assert.throws(
+      () => store.read(first, queryKey),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
+    );
   });
 
   it('does not create a snapshot when the complete result fits one page', async () => {

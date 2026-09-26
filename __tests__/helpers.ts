@@ -16,7 +16,12 @@ import { createInterface } from 'node:readline';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { isNodeError } from '../src/core/errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  isFsError,
+  isNodeError,
+} from '../src/core/errors.ts';
 import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
 import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
@@ -68,6 +73,23 @@ export async function waitFor(condition: () => boolean, timeoutMs = 3000): Promi
   while (!condition() && Date.now() < deadline) {
     await setTimeout(20);
   }
+}
+
+/** An assert.rejects matcher: FsError with `code`; `message` is included (string) or matched (RegExp). */
+export function fsErrorMatcher(
+  code: ErrorCode,
+  message?: string | RegExp,
+): (error: unknown) => boolean {
+  return (error: unknown) => {
+    assert(isFsError(error), `expected FsError, got ${formatUnknownErrorMessage(error)}`);
+    assert.strictEqual(error.code, code);
+    if (typeof message === 'string') {
+      assert.ok(error.message.includes(message), `expected message to include: ${message}`);
+    } else if (message instanceof RegExp) {
+      assert.match(error.message, message);
+    }
+    return true;
+  };
 }
 
 /**

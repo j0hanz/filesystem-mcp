@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   trySymlink,
   writeTestFile,
@@ -234,19 +235,6 @@ describe('PathGuard grant round-trip', () => {
   });
 });
 
-// Shared assertion helper for the write/delete block.
-const assertAccessDenied = async (p: Promise<unknown>, msg: string): Promise<void> => {
-  await assert.rejects(
-    p,
-    (err: unknown) => {
-      assert(isFsError(err), `expected FsError, got ${String(err)}`);
-      assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-      return true;
-    },
-    msg,
-  );
-};
-
 describe('Write/Delete PathGuard', () => {
   let root: string;
   let guard: PathGuard;
@@ -267,8 +255,9 @@ describe('Write/Delete PathGuard', () => {
 
     const through = join(linkPath, 'newfile.txt');
 
-    await assertAccessDenied(
+    await assert.rejects(
       guard.validatePathForWrite(through),
+      fsErrorMatcher(ErrorCode.ACCESS_DENIED),
       'should deny writing through a symlink that escapes the root',
     );
   });
@@ -281,8 +270,9 @@ describe('Write/Delete PathGuard', () => {
     if (!(await trySymlink(envPath, linkPath, () => t.skip('symlink not permitted'), 'file')))
       return;
 
-    await assertAccessDenied(
+    await assert.rejects(
       guard.validatePathForWrite(linkPath),
+      fsErrorMatcher(ErrorCode.ACCESS_DENIED),
       'should deny writing through a symlink that resolves to a sensitive file',
     );
   });
@@ -309,8 +299,9 @@ describe('Write/Delete PathGuard', () => {
     await writeTestFile(outsideDir, 'target.txt', 'data');
     const through = join(linkPath, 'target.txt');
     try {
-      await assertAccessDenied(
+      await assert.rejects(
         guard.validatePathForDelete(through),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'should deny deleting a non-symlink whose realpath escapes the root',
       );
     } finally {

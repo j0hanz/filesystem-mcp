@@ -5,12 +5,13 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { cli } from '../src/core/config.ts';
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { SensitiveMatcher } from '../src/core/sensitive.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   trySymlink,
   withEnv,
@@ -42,11 +43,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(traversePath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject traversal outside allowed root',
       );
     });
@@ -60,11 +57,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(linkPath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject paths accessed through a symlink escaping the root',
       );
     });
@@ -74,11 +67,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(outsidePath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject absolute paths completely outside the root',
       );
     });
@@ -88,13 +77,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(envPath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          assert.match(err.message, /--allow-sensitive/);
-          assert.match(err.message, /FS_ALLOW_SENSITIVE=1/);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED, /--allow-sensitive[\s\S]*FS_ALLOW_SENSITIVE=1/),
         'Should reject access to .env',
       );
     });
@@ -104,11 +87,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(pemPath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject access to *.pem',
       );
     });
@@ -118,11 +97,7 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(rsaPath),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject access to id_rsa',
       );
     });
@@ -143,31 +118,19 @@ describe('Security (P0)', () => {
       try {
         await assert.rejects(
           guard.validateExistingPath(sibling),
-          (err) => {
-            assert(isFsError(err));
-            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-            return true;
-          },
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
           'Should reject a sibling file named "<root>\\secret.txt"',
         );
 
         await assert.rejects(
           guard.validatePathForWrite(sibling),
-          (err) => {
-            assert(isFsError(err));
-            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-            return true;
-          },
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
           'Should reject writing to a sibling file named "<root>\\secret.txt"',
         );
 
         await assert.rejects(
           guard.validatePathForDelete(join(siblingDir, 'f.txt')),
-          (err) => {
-            assert(isFsError(err));
-            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
-            return true;
-          },
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
           'Should reject deleting inside a sibling directory named "<root>\\dir"',
         );
       } finally {

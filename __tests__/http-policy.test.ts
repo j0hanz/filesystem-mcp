@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 
 import type { Request, Response } from 'express';
 
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import { splitCsvList } from '../src/core/util.ts';
 import {
   assertHttpBindingPolicy,
@@ -21,7 +21,7 @@ import {
   validateBearerAuthorization,
 } from '../src/transport/http-policy.ts';
 import { startHttpServer } from '../src/transport/http.ts';
-import { cleanupTestRoot, createTestRoot, withEnv } from './helpers.ts';
+import { cleanupTestRoot, createTestRoot, fsErrorMatcher, withEnv } from './helpers.ts';
 
 interface MockResponse {
   statusCode?: number;
@@ -269,33 +269,22 @@ describe('HTTP Policy & Security', () => {
     it('TC-SEC-026: Non-loopback binding is rejected without key, allowed with secure key', () => {
       assert.throws(
         () => assertHttpBindingPolicy('0.0.0.0', undefined),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          assert.match(err.message, /Refusing to bind HTTP server to non-loopback host/);
-          assert.match(err.message, /FS_API_KEY/);
-          return true;
-        },
+        fsErrorMatcher(
+          ErrorCode.PERMISSION_DENIED,
+          /Refusing to bind HTTP server to non-loopback host[\s\S]*FS_API_KEY/,
+        ),
         '0.0.0.0 without key should throw PERMISSION_DENIED',
       );
 
       assert.throws(
         () => assertHttpBindingPolicy('192.168.1.100', undefined),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED),
         'Private IP without key should throw PERMISSION_DENIED',
       );
 
       assert.throws(
         () => assertHttpBindingPolicy('example.com', undefined),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED),
         'Domain host without key should throw PERMISSION_DENIED',
       );
 
@@ -311,33 +300,19 @@ describe('HTTP Policy & Security', () => {
     it('TC-SEC-027: Rejects short API key (<16 chars) on both loopback and non-loopback hosts', () => {
       assert.throws(
         () => assertHttpBindingPolicy('127.0.0.1', shortKey),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          assert.match(err.message, /insecure/);
-          assert.match(err.message, /FS_API_KEY/);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED, /FS_API_KEY[\s\S]*insecure/),
         'Loopback with insecure key should throw PERMISSION_DENIED',
       );
 
       assert.throws(
         () => assertHttpBindingPolicy('0.0.0.0', shortKey),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED),
         'Non-loopback with insecure key should throw PERMISSION_DENIED',
       );
 
       assert.throws(
         () => assertHttpBindingPolicy('localhost', '123456789012345'), // 15 characters
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED),
         '15-character key should be rejected as insecure',
       );
     });
@@ -558,23 +533,13 @@ describe('HTTP Policy & Security', () => {
     it('TC-SEC-034: assertHttpHostPolicy rejects wildcard host without allowedHosts and allowUnrestricted=false', () => {
       assert.throws(
         () => assertHttpHostPolicy('0.0.0.0', [], false),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          assert.match(err.message, /Refusing to bind wildcard host '0\.0\.0\.0'/);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED, /Refusing to bind wildcard host '0\.0\.0\.0'/),
         '0.0.0.0 without allowedHosts should throw PERMISSION_DENIED',
       );
 
       assert.throws(
         () => assertHttpHostPolicy('::', [], false),
-        (err) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
-          assert.match(err.message, /Refusing to bind wildcard host '::'/);
-          return true;
-        },
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED, /Refusing to bind wildcard host '::'/),
         ':: without allowedHosts should throw PERMISSION_DENIED',
       );
     });
