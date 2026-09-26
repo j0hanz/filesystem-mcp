@@ -89,7 +89,7 @@ async function atomicWriteFile(
     // Anything else (EACCES, EIO) means the mode about to be overwritten could
     // not be read, and the write will silently widen the file — say so rather
     // than swallowing it.
-    if (!isNodeError(error) || error.code !== 'ENOENT') {
+    if (!isNotFoundErrno(error)) {
       Logger.warn(
         `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
       );
