@@ -30,7 +30,12 @@ const PatchOutputSchema = z.strictObject({
   lineCount: NonNegInt.describe('Number of lines in the file after patching'),
   mimeType: z.string().describe('Detected MIME type of the file'),
   kind: FileKind.describe('Broad file kind: text, binary, image, audio, or pdf'),
-  resourceUri: z.string().optional().describe('Resource URI pointing to the patched file content'),
+  resourceUri: z
+    .string()
+    .optional()
+    .describe(
+      'Resource URI pointing to the patched file content; omitted on dryRun or when the resulting file exceeds the text-size cap, which the store would reject',
+    ),
   modified: IsoDateTime.describe('Last modification timestamp after patching (ISO 8601 UTC)'),
   linesAdded: NonNegInt.describe('Number of lines added by the patch'),
   linesRemoved: NonNegInt.describe('Number of lines removed by the patch'),
