@@ -13,7 +13,7 @@ import { join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode } from '../src/core/errors.ts';
 import {
   buildFileResourceUri,
   encodeFileUriPath,
@@ -32,6 +32,7 @@ import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   waitFor,
   writeTestFile,
@@ -226,14 +227,7 @@ describe('MCP Resources', () => {
       const nonExistentUri = 'filesystem-mcp://result/00000000-0000-0000-0000-000000000000';
 
       // Direct store access throws FsError with NOT_FOUND
-      assert.throws(
-        () => store.getEntry(nonExistentUri),
-        (err: unknown) => {
-          assert(isFsError(err));
-          assert.strictEqual(err.code, ErrorCode.NOT_FOUND);
-          return true;
-        },
-      );
+      assert.throws(() => store.getEntry(nonExistentUri), fsErrorMatcher(ErrorCode.NOT_FOUND));
 
       // Contract read on missing result throws ResourceNotFoundError
       const contracts = getResourceContracts({
