@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
@@ -167,6 +168,59 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const structured = result.structuredContent as { failures?: { error?: { code?: string } }[] };
     assert.strictEqual(structured.failures?.[0]?.error?.code, 'ACCESS_DENIED');
     assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
+  });
+
+  it('sensitive files never surface through search_text, find_files, list, replace_text or resources/read', async () => {
+    const token = 'SENTINEL_ENV_9f3c1e';
+    const dir = join(tmpDir, 'boundary_walk');
+    const envFile = await writeTestFile(tmpDir, 'boundary_walk/.env', `SECRET=${token}\n`);
+    const plain = await writeTestFile(tmpDir, 'boundary_walk/plain.txt', `note ${token}\n`);
+
+    const search = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: token, includeHidden: true },
+    });
+    const matches = (search._meta as { matches?: { file: string }[] }).matches ?? [];
+    assert.deepStrictEqual(
+      matches.map((m) => m.file),
+      ['plain.txt'],
+      'search_text must not match inside .env',
+    );
+
+    const found = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: dir, pattern: '**/*', includeHidden: true },
+    });
+    const paths =
+      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.ok(paths.includes('plain.txt'));
+    assert.ok(!paths.includes('.env'), `find_files must not list .env: ${paths.join(',')}`);
+
+    const listed = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, includeHidden: true },
+    });
+    const names =
+      (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
+    assert.ok(names.includes('plain.txt'));
+    assert.ok(!names.includes('.env'), `list must not show .env: ${names.join(',')}`);
+
+    const replaced = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: token, replacement: 'REDACTED', includeHidden: true },
+    });
+    assert.notStrictEqual(replaced.isError, true);
+    assert.strictEqual(
+      await readFile(envFile, 'utf-8'),
+      `SECRET=${token}\n`,
+      '.env must be untouched',
+    );
+    assert.strictEqual(await readFile(plain, 'utf-8'), 'note REDACTED\n');
+
+    await assert.rejects(
+      harness.client.readResource({ uri: buildFileResourceUri(envFile) }),
+      'resources/read of a sensitive file must be refused',
+    );
   });
 
   it('TC-FUNC-009e: create with append:true appends to an existing file', async () => {
