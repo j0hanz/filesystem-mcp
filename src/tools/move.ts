@@ -413,7 +413,7 @@ async function validateTransferSource(
   }
 }
 
-async function performRenameWithFallback(
+export async function performRenameWithFallback(
   validSource: string,
   validDest: string,
   fsOps: Pick<GuardedFileSystem, 'rename' | 'cp' | 'rm'>,
