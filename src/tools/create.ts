@@ -273,7 +273,11 @@ export const CREATE = defineTool({
         const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
         created = fileStats.birthtime.toISOString();
         modified = fileStats.mtime.toISOString();
-        meta = buildWrittenFileMeta(written.validPath, content, ctx.resourceStore);
+        meta = buildWrittenFileMeta({
+          validPath: written.validPath,
+          content,
+          resourceStore: ctx.resourceStore,
+        });
       }
 
       const file: CreateFileResult = {

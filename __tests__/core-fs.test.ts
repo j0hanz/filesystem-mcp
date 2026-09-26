@@ -422,18 +422,36 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await assert.rejects(fs.appendFile(tmpDir, 'nope\n'), fsErrorMatcher(ErrorCode.NOT_FILE));
     });
 
-    it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap', () => {
+    it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap and on a dry run', () => {
       // An edit or patch can push a readable file past the text-size cap;
       // a resourceUri the store's readRaw would reject with TOO_LARGE must
       // never be advertised.
       const huge = 'x'.repeat(10 * 1024 * 1024 + 1);
-      const meta = buildWrittenFileMeta(join(tmpDir, 'huge.txt'), huge, undefined);
+      const meta = buildWrittenFileMeta({
+        validPath: join(tmpDir, 'huge.txt'),
+        content: huge,
+        resourceStore: undefined,
+      });
       assert.strictEqual(meta.size, huge.length);
       assert.strictEqual(meta.resourceUri, undefined);
       assert.strictEqual(meta.resourceLink, undefined);
 
-      const small = buildWrittenFileMeta(join(tmpDir, 'small.txt'), 'hi', undefined);
+      const small = buildWrittenFileMeta({
+        validPath: join(tmpDir, 'small.txt'),
+        content: 'hi',
+        resourceStore: undefined,
+      });
       assert.ok(small.resourceUri, 'under the cap the URI is advertised');
+
+      // A dry run describes the would-be content but advertises nothing.
+      const dry = buildWrittenFileMeta({
+        validPath: join(tmpDir, 'small.txt'),
+        content: 'hi',
+        resourceStore: undefined,
+        dryRun: true,
+      });
+      assert.strictEqual(dry.size, 2);
+      assert.strictEqual(dry.resourceUri, undefined);
     });
   });
 

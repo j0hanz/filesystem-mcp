@@ -417,13 +417,13 @@ async function handleEditFile(
     }
 
     // Nothing was written, so there is no updated content to point a
-    // resourceUri or a resource_link at — the file on disk is still the one the
-    // caller already has. No write, no link.
-    const meta: WrittenFileMeta = {
-      ...buildWrittenFileMeta(validPath, editResult.content, ctx.resourceStore),
-      resourceUri: undefined,
-      resourceLink: undefined,
-    };
+    // resourceUri or a resource_link at; dryRun drops both.
+    const meta = buildWrittenFileMeta({
+      validPath,
+      content: editResult.content,
+      resourceStore: ctx.resourceStore,
+      dryRun: true,
+    });
     return {
       file: buildEditFileValue(validPath, meta, new Date().toISOString(), editResult),
     };
@@ -455,7 +455,11 @@ async function handleEditFile(
   // writer it may reflect that writer's mtime while `size`/content below come from
   // this edit's atomic write. The file content itself is always consistent.
   const { stats: fileStats } = await ctx.fs.stat(filePath, { signal: ctx.signal });
-  const meta = buildWrittenFileMeta(validPath, editResult.content, ctx.resourceStore);
+  const meta = buildWrittenFileMeta({
+    validPath,
+    content: editResult.content,
+    resourceStore: ctx.resourceStore,
+  });
   return {
     file: buildEditFileValue(validPath, meta, fileStats.mtime.toISOString(), editResult),
     ...(meta.resourceLink ? { resourceLink: meta.resourceLink } : {}),

@@ -152,7 +152,11 @@ export const PATCH = defineTool({
     const fileStats = args.dryRun
       ? stats
       : (await ctx.fs.stat(args.path, { signal: ctx.signal })).stats;
-    const meta = buildWrittenFileMeta(validPath, patched, ctx.resourceStore);
+    const meta = buildWrittenFileMeta({
+      validPath,
+      content: patched,
+      resourceStore: ctx.resourceStore,
+    });
     return {
       structured: {
         path: validPath,

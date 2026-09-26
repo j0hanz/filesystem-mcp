@@ -96,28 +96,49 @@ export interface WrittenFileMeta {
 }
 
 /**
- * The five-step block every write tool runs on its post-write content: size,
- * line count, MIME, the file's resource URI, and the store-gated link block.
+ * The URI and link a write tool may advertise for the file it wrote. None on a
+ * dry run — nothing was written, so the file on disk is still the one the
+ * caller already has. None when the size is unknown or over the text-size cap —
+ * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
+ * No link without a store to link into.
  */
-export function buildWrittenFileMeta(
+export function writtenFileLinks(
   validPath: string,
-  content: string,
-  resourceStore: ResourceStore | undefined,
-): WrittenFileMeta {
+  mimeType: string,
+  size: number | undefined,
+  options: { resourceStore: ResourceStore | undefined; dryRun?: boolean | undefined },
+): Pick<WrittenFileMeta, 'resourceUri' | 'resourceLink'> {
+  if (options.dryRun || size === undefined || size > getMaxTextFileSize()) {
+    return { resourceUri: undefined, resourceLink: undefined };
+  }
+  return {
+    resourceUri: buildFileResourceUri(validPath),
+    resourceLink: options.resourceStore
+      ? buildFileResourceLink(validPath, mimeType, size)
+      : undefined,
+  };
+}
+
+/**
+ * The block every write tool reports for the content it wrote (or, with
+ * `dryRun`, would have written): size, line count, MIME, and whatever
+ * {@link writtenFileLinks} allows it to advertise. Named fields, because
+ * `validPath` and `content` are both strings and a positional swap type-checks.
+ */
+export function buildWrittenFileMeta(options: {
+  validPath: string;
+  content: string;
+  resourceStore: ResourceStore | undefined;
+  dryRun?: boolean | undefined;
+}): WrittenFileMeta {
+  const { validPath, content } = options;
   const size = Buffer.byteLength(content, 'utf-8');
-  const mimeInfo = detectMimeFromContent(validPath, content);
-  // An edit or patch can push a readable file past the text-size cap; the
-  // store serves the URI via readRaw, which would reject it with TOO_LARGE.
-  const servable = size <= getMaxTextFileSize();
+  const { mimeType, kind } = detectMimeFromContent(validPath, content);
   return {
     size,
     lineCount: countLines(content),
-    mimeType: mimeInfo.mimeType,
-    kind: mimeInfo.kind,
-    resourceUri: servable ? buildFileResourceUri(validPath) : undefined,
-    resourceLink:
-      resourceStore && servable
-        ? buildFileResourceLink(validPath, mimeInfo.mimeType, size)
-        : undefined,
+    mimeType,
+    kind,
+    ...writtenFileLinks(validPath, mimeType, size, options),
   };
 }

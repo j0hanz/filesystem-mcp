@@ -584,12 +584,14 @@ async function handleSearchAndReplace(
 
   const structured = buildSearchAndReplaceStructuredResult(summary, args);
 
-  // A dry run wrote nothing, so there is no updated file to link.
-  const link =
-    !args.dryRun && summary.primary
-      ? buildWrittenFileMeta(summary.primary.path, summary.primary.content, ctx.resourceStore)
-          .resourceLink
-      : undefined;
+  const link = summary.primary
+    ? buildWrittenFileMeta({
+        validPath: summary.primary.path,
+        content: summary.primary.content,
+        resourceStore: ctx.resourceStore,
+        dryRun: args.dryRun,
+      }).resourceLink
+    : undefined;
   return link ? { structured, link } : { structured };
 }
 
