@@ -173,9 +173,10 @@ function classify(error: unknown): Problem {
   // No `ZodError` branch, deliberately. Tool arguments are validated by the
   // SDK from the zod schema `defineTool` hands it (tools/define.ts); the SDK
   // formats issues itself and never throws a ZodError into a handler, and
-  // nothing in `src/` calls `.parse()`. A ZodError reaching here would fall through to
-  // UNKNOWN with Zod's raw JSON-dump `.message`, so if a `.parse()`
-  // is ever added, add the branch back with it rather than discovering this.
+  // nothing in `src/` calls `.parse()`. A ZodError reaching here would fall
+  // through to UNKNOWN with Zod's raw JSON-dump `.message`, so if a
+  // `.parse()` is ever added, add the branch back with it rather than
+  // discovering this.
   if (!(error instanceof Error)) {
     return build(ErrorCode.UNKNOWN, typeof error === 'string' ? error : '[non-Error thrown]');
   }

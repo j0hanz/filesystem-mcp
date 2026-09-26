@@ -22,7 +22,7 @@ connection, each already commented as legacy-only but with no date attached:
 [`src/transport/stdio.ts:63`](../../src/transport/stdio.ts#L63), wired only
 when `era === 'legacy'`, calls the deprecated `listRoots()` to push-seed
 allowed roots; the `resources/subscribe` / `resources/unsubscribe` request
-handlers in [`src/resources.ts:490`](../../src/resources.ts#L490),
+handlers in [`src/resources.ts:490-553`](../../src/resources.ts#L490-L553),
 registered only when `deps.era !== 'modern'`; and the deprecated
 `getClientCapabilities()` fallback in
 [`src/tools/define.ts:169-170`](../../src/tools/define.ts#L169-L170), reached

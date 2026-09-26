@@ -337,7 +337,9 @@ export const LIST = defineTool({
     'stat returns sizes and dates.',
   input: ListInputSchema,
   output: ListOutputSchema,
-  // No outputSchema, like every tool here (define.ts): one sample response teaches these scalar fields, and the schema would cost ~1.6 KB of every session start.
+  // No outputSchema, like every tool here (define.ts): one sample response
+  // teaches these scalar fields, and the schema would cost ~1.6 KB of every
+  // session start.
   annotations: {
     readOnlyHint: true,
     openWorldHint: false,
