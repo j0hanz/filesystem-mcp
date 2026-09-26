@@ -105,16 +105,9 @@ export interface RegexMatch {
 }
 
 /** Code-point length of `text`, i.e. its UTF-16 length minus its surrogate pairs. */
-function codePointLength(text: string): number {
-  let length = 0;
-  for (let i = 0; i < text.length; i++) {
-    if ((text.charCodeAt(i) & 0xfc00) === 0xd800 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      i++;
-    }
-    length++;
-  }
-  return length;
-}
+const codePointLength = (text: string): number =>
+  // eslint-disable-next-line @typescript-eslint/no-misused-spread -- code points are the intended unit (re2-wasm offsets count code points); grapheme segmentation would change the count, not preserve it.
+  [...text].length;
 
 /**
  * Iterate a global pattern's non-overlapping matches with offsets JS can use.

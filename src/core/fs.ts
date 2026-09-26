@@ -39,7 +39,6 @@ import { getMaxTextFileSize } from './util.ts';
 
 export type { FileType };
 export type { Stats };
-export type { FileHandle };
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
@@ -71,9 +70,9 @@ async function atomicWriteFile(
   filePath: string,
   content: string,
   pathGuard: PathGuard,
-  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+  options: { signal?: AbortSignal | undefined } = {},
 ): Promise<{ validPath: string }> {
-  const { encoding = 'utf-8', signal } = options;
+  const { signal } = options;
   const validPath = await resolveForWrite(pathGuard, filePath);
 
   const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
@@ -104,7 +103,6 @@ async function atomicWriteFile(
     // `wx` fails on a name collision instead of overwriting; the chmod below
     // still restores bits the umask masked off at creation.
     await fsWriteFile(tempPath, content, {
-      encoding,
       signal,
       flag: 'wx',
       ...(existingMode !== undefined ? { mode: existingMode } : {}),
@@ -131,11 +129,8 @@ async function atomicWriteFile(
   return { validPath };
 }
 
-export function isHidden(name: string): boolean {
-  return name.startsWith('.');
-}
-
 const CHAR_LF = 10;
+
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
 /**
@@ -147,7 +142,7 @@ const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
  * Matches read.ts's countLines semantics: a trailing newline does not open
  * a new line, an unterminated final line counts, an empty file is 0.
  */
-export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
+export async function countFileLines(filePath: string): Promise<number> {
   const handle = await fsOpen(filePath, 'r');
   try {
     let newlines = 0;
@@ -155,7 +150,6 @@ export async function countFileLines(filePath: string, signal?: AbortSignal): Pr
     let totalBytes = 0;
     const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
     for (;;) {
-      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
       totalBytes += bytesRead;
@@ -229,7 +223,7 @@ export class GuardedFileSystem {
   async writeFile(
     filePath: string,
     content: string,
-    options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+    options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     return atomicWriteFile(filePath, content, this.pathGuard, options);
   }
@@ -243,9 +237,9 @@ export class GuardedFileSystem {
   async appendFile(
     filePath: string,
     content: string,
-    options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+    options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
-    const { encoding = 'utf-8', signal } = options;
+    const { signal } = options;
     const validPath = await resolveForWrite(this.pathGuard, filePath);
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
@@ -292,7 +286,7 @@ export class GuardedFileSystem {
       // signal would trade that for a silently-completed write; a client
       // that retries is double-appending either way, so the abortable
       // write stays.
-      await handle.writeFile(content, { encoding, signal });
+      await handle.writeFile(content, { signal });
     } catch (error) {
       if (created) {
         await fsUnlink(validPath).catch((unlinkError: unknown) => {
@@ -313,15 +307,10 @@ export class GuardedFileSystem {
    * file — an append's result must describe the resulting file (which may be
    * a multi-GB log), not the chunk that was appended.
    */
-  async readLeadingSample(
-    filePath: string,
-    size: number,
-    options: { signal?: AbortSignal | undefined } = {},
-  ): Promise<Buffer> {
-    const { validPath } = await this.stat(filePath, options);
+  async readLeadingSample(filePath: string, size: number): Promise<Buffer> {
+    const { validPath } = await this.stat(filePath);
     const handle = await fsOpen(validPath, 'r');
     try {
-      options.signal?.throwIfAborted();
       const buffer = Buffer.alloc(size);
       const { bytesRead } = await handle.read(buffer, 0, size, 0);
       return buffer.subarray(0, bytesRead);

@@ -18,7 +18,7 @@ import {
   FileKind,
   NonNegInt,
   OperationSummarySchema,
-  PerFileErrorSchema,
+  perPathEnvelope,
   PositiveInt,
   Sha256Hex,
   singleOrBatchAccessPaths,
@@ -115,11 +115,10 @@ const ReadPerPathValueSchema = z.strictObject({
   ),
 });
 
-const ReadPerPathSchema = z.strictObject({
-  path: z.string().describe('Requested file path'),
-  value: ReadPerPathValueSchema.optional().describe('Read result; present on success'),
-  error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
-});
+const ReadPerPathSchema = perPathEnvelope(
+  ReadPerPathValueSchema,
+  'Read result; present on success',
+);
 
 const ReadFileOutputSchema = z.strictObject({
   results: z.array(ReadPerPathSchema).describe('Per-path results ordered to match the input paths'),
@@ -432,8 +431,8 @@ export const READ = defineTool({
         : await runOverPaths<undefined, PerPathReadValue>(
             batchInput,
             ctx,
+            ErrorCode.NOT_FILE,
             ({ path }) => readOnePath(path, args, ctx, known.get(path)),
-            { defaultErrorCode: ErrorCode.NOT_FILE },
           );
 
     const resultMap = new Map(batch.results.map((r) => [r.path, r]));

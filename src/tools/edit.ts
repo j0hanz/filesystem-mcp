@@ -16,12 +16,11 @@ import {
   IsoDateTime,
   NonNegInt,
   OperationSummarySchema,
-  PerFileErrorSchema,
+  perPathEnvelope,
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
-import type { ResourceStore } from '../core/store.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -154,11 +153,7 @@ const PerFileResultSchema = z.strictObject({
     .describe('oldText values that did not match any content in the file'),
 });
 
-const EditPerPathSchema = z.strictObject({
-  path: z.string().describe('Requested file path'),
-  value: PerFileResultSchema.optional().describe('Edit result; present on success'),
-  error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
-});
+const EditPerPathSchema = perPathEnvelope(PerFileResultSchema, 'Edit result; present on success');
 
 const EditFileOutputSchema = z.strictObject({
   results: z
@@ -349,23 +344,6 @@ function buildEditFileValue(
   };
 }
 
-function buildEditFileMetadata(
-  content: string,
-  validPath: string,
-  appliedEdits: number,
-  resourceStore: ResourceStore | undefined,
-): WrittenFileMeta {
-  const meta = buildWrittenFileMeta(validPath, content, resourceStore);
-  // Omitted rather than empty-stringed when nothing matched: `""` satisfied the
-  // schema's `string` and then failed every resources/read a client tried it on.
-  const written = appliedEdits > 0;
-  return {
-    ...meta,
-    resourceUri: written ? meta.resourceUri : undefined,
-    resourceLink: written ? meta.resourceLink : undefined,
-  };
-}
-
 // A file whose every newline is CRLF gets LF-only edit text converted to match
 // — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
 // and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
@@ -440,9 +418,12 @@ async function handleEditFile(
 
     // Nothing was written, so there is no updated content to point a
     // resourceUri or a resource_link at — the file on disk is still the one the
-    // caller already has. Same rule the appliedEdits-is-0 case follows: no
-    // write, no link.
-    const meta = buildEditFileMetadata(editResult.content, validPath, 0, ctx.resourceStore);
+    // caller already has. No write, no link.
+    const meta: WrittenFileMeta = {
+      ...buildWrittenFileMeta(editResult.content, validPath, ctx.resourceStore),
+      resourceUri: undefined,
+      resourceLink: undefined,
+    };
     return {
       file: buildEditFileValue(validPath, meta, new Date().toISOString(), editResult),
     };
@@ -461,7 +442,6 @@ async function handleEditFile(
 
   if (editResult.appliedEdits > 0) {
     await ctx.fs.writeFile(filePath, editResult.content, {
-      encoding: 'utf-8',
       signal: ctx.signal,
     });
     ctx.log?.(
@@ -475,12 +455,7 @@ async function handleEditFile(
   // writer it may reflect that writer's mtime while `size`/content below come from
   // this edit's atomic write. The file content itself is always consistent.
   const { stats: fileStats } = await ctx.fs.stat(filePath, { signal: ctx.signal });
-  const meta = buildEditFileMetadata(
-    editResult.content,
-    validPath,
-    editResult.appliedEdits,
-    ctx.resourceStore,
-  );
+  const meta = buildWrittenFileMeta(validPath, editResult.content, ctx.resourceStore);
   return {
     file: buildEditFileValue(validPath, meta, fileStats.mtime.toISOString(), editResult),
     ...(meta.resourceLink ? { resourceLink: meta.resourceLink } : {}),
@@ -564,11 +539,8 @@ export const EDIT = defineTool({
     const batch = await runOverPaths<
       { edits: z.infer<typeof EditSpecSchema>[] },
       { file: EditFileValue; resourceLink?: ContentBlock }
-    >(
-      batchInput,
-      ctx,
-      ({ path, override }) => handleEditFile(path, override?.edits ?? sharedEdits, options, ctx),
-      { defaultErrorCode: ErrorCode.UNKNOWN },
+    >(batchInput, ctx, ErrorCode.UNKNOWN, ({ path, override }) =>
+      handleEditFile(path, override?.edits ?? sharedEdits, options, ctx),
     );
 
     const perPathResults: z.infer<typeof EditPerPathSchema>[] = [];

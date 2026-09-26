@@ -13,10 +13,6 @@ export interface BatchResult<T> {
 type BatchInput<TOverride> =
   { path: string } | { paths: string[] } | { files: ({ path: string } & TOverride)[] };
 
-interface RunOverPathsOptions {
-  defaultErrorCode?: ErrorCode;
-}
-
 function normalizeBatchItems<TOverride>(
   args: BatchInput<TOverride>,
 ): { path: string; override?: TOverride }[] {
@@ -33,8 +29,8 @@ function normalizeBatchItems<TOverride>(
 export async function runOverPaths<TOverride, TPerPath>(
   args: BatchInput<TOverride>,
   ctx: ToolCtx,
+  defaultErrorCode: ErrorCode,
   perPath: (item: { path: string; override?: TOverride }, ctx: ToolCtx) => Promise<TPerPath>,
-  options?: RunOverPathsOptions,
 ): Promise<BatchResult<TPerPath>> {
   const items = normalizeBatchItems(args);
   if (items.length === 0) {
@@ -43,8 +39,6 @@ export async function runOverPaths<TOverride, TPerPath>(
       "runOverPaths: at least one of 'path', 'paths', or 'files' must be provided",
     );
   }
-
-  const defaultErrorCode = options?.defaultErrorCode ?? ErrorCode.UNKNOWN;
 
   const total = items.length;
   let completed = 0;

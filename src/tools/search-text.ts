@@ -355,7 +355,6 @@ export const SEARCH_TEXT = defineTool({
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
-  defaultErrorCode: ErrorCode.UNKNOWN,
   progress: (args) => ({
     label: 'Search',
     subject: truncateProgressPattern(args.searchPattern),

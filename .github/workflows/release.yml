@@ -44,7 +44,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
       # The publish step pushes HEAD to main, so a dispatch from any other
       # branch would fast-forward main onto that branch's tip.

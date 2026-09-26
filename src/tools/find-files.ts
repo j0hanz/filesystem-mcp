@@ -2,7 +2,6 @@ import * as z from 'zod/v4';
 
 import { SearchStoppedReasonSchema } from '../core/concurrency.ts';
 import { paginate } from '../core/cursor.ts';
-import { ErrorCode } from '../core/errors.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
 import { toPosixRelative } from '../core/path.ts';
 import {
@@ -173,7 +172,6 @@ export const FIND_FILES = defineTool({
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
-  defaultErrorCode: ErrorCode.UNKNOWN,
   progress: (args) => ({
     label: 'Find',
     subject: truncateProgressPattern(args.pattern),

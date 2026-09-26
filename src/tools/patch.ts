@@ -142,7 +142,7 @@ export const PATCH = defineTool({
     const summaryText = `patch: ${basename(args.path)} +${String(linesAdded)} -${String(linesRemoved)}`;
 
     if (!args.dryRun) {
-      await ctx.fs.writeFile(args.path, patched, { encoding: 'utf-8', signal: ctx.signal });
+      await ctx.fs.writeFile(args.path, patched, { signal: ctx.signal });
       ctx.log?.('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
     }
 

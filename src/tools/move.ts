@@ -496,7 +496,6 @@ export const MOVE = defineTool({
     }
     return { label, subject: `${String(args.moves.length)} files` };
   },
-  defaultErrorCode: ErrorCode.UNKNOWN,
   accessPaths: (args) => args.moves.flatMap((m) => [m.source, m.destination]),
   run: async (args, ctx) => {
     const op: PairOp = args.copy ? 'copy' : 'move';

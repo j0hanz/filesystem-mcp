@@ -24,7 +24,7 @@ import {
   NonNegInt,
   OperationSummarySchema,
   OptionalPath,
-  PerFileErrorSchema,
+  perPathEnvelope,
   SafeGlobPattern,
 } from '../core/schema.ts';
 import type { Regex } from '../core/search.ts';
@@ -90,14 +90,10 @@ const SearchAndReplaceInputSchema = z.strictObject({
   maxDepth: MaxDepth,
 });
 
-const ReplacePerPathSchema = z.strictObject({
-  path: z.string().describe('File path relative to the search root'),
-  value: z
-    .strictObject({ matches: NonNegInt.describe('Replacements applied in this file') })
-    .optional()
-    .describe('Replacement outcome; present on success'),
-  error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
-});
+const ReplacePerPathSchema = perPathEnvelope(
+  z.strictObject({ matches: NonNegInt.describe('Replacements applied in this file') }),
+  'Replacement outcome; present on success',
+);
 
 // The same `{ results, summary }` envelope `read`, `stat`, and `delete` use, so
 // a caller learns one shape for every tool that spans many paths. The former
@@ -313,7 +309,6 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
 
     if (!options.dryRun) {
       await ctx.fs.writeFile(entryPath, plan.updatedContent, {
-        encoding: 'utf-8',
         signal,
       });
     }
@@ -613,7 +608,6 @@ export const REPLACE_TEXT = defineTool({
     openWorldHint: false,
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
-  defaultErrorCode: ErrorCode.UNKNOWN,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     return {

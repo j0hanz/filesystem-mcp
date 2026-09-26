@@ -26,7 +26,7 @@ import { resolveEntryType } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
   OperationSummarySchema,
-  PerFileErrorSchema,
+  perPathEnvelope,
   RequiredPath,
 } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -52,11 +52,10 @@ const DeletePerPathValueSchema = z.strictObject({
   deleted: z.boolean().describe('True when the path was removed; false when the user chose Skip'),
 });
 
-const DeletePerPathSchema = z.strictObject({
-  path: z.string().describe('Requested path'),
-  value: DeletePerPathValueSchema.optional().describe('Delete outcome; present on success'),
-  error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
-});
+const DeletePerPathSchema = perPathEnvelope(
+  DeletePerPathValueSchema,
+  'Delete outcome; present on success',
+);
 
 // One envelope for every batch tool: `read` and `stat` already answer with
 // `{ results, summary }`, so `delete` does too. The old shape switched between
@@ -406,7 +405,6 @@ export const DELETE = defineTool({
     destructiveHint: true,
     openWorldHint: false,
   },
-  defaultErrorCode: ErrorCode.UNKNOWN,
   progress: (args) => ({
     label: 'Delete',
     subject:

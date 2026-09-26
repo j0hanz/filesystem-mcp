@@ -1,5 +1,5 @@
 import { homedir, platform } from 'node:os';
-import { basename, delimiter, dirname, join, parse, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, join, parse, resolve, sep, win32 } from 'node:path';
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
@@ -128,21 +128,10 @@ export function getReservedDeviceNameForPath(requestedPath: string): string | un
 export function isWindowsDriveRelativePath(requestedPath: string): boolean {
   // Check on all platforms so cross-platform clients cannot smuggle drive-relative
   // inputs (e.g. C:relative) to a POSIX-hosted server where path.resolve would
-  // silently expand them relative to CWD.
-  if (requestedPath.length < 2) {
-    return false;
-  }
-  if (requestedPath.charCodeAt(1) !== CHAR_COLON) {
-    return false;
-  }
-  if (!isAlpha(requestedPath.charCodeAt(0))) {
-    return false;
-  }
-
-  if (requestedPath.length === 2) {
-    return true;
-  }
-  return !isSlash(requestedPath.charCodeAt(2));
+  // silently expand them relative to CWD. win32.parse is the platform-independent
+  // binding, so this reads the same on a POSIX host.
+  const { root } = win32.parse(requestedPath);
+  return root.length === 2;
 }
 
 function expandHome(filepath: string): string {

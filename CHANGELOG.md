@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+An internal cleanup release: the 21 surviving cuts from the 2026-09-26
+over-engineering audit, each adversarially verified before applying. No
+protocol, tool, or schema surface changed, so nothing needs adapting before
+you upgrade.
+
+### Changed
+
+- **Leaner publish check.** `scripts/publish-smithery.mjs` replaces its
+  hand-rolled stdio JSON-RPC client with `Client` and `StdioClientTransport`
+  from `@modelcontextprotocol/client`, per-request 15s timeouts, the same
+  `<n> tools` output and exit codes.
+- **Tighter configs.** `tsconfig.json` keeps only the `lib` entries the code
+  uses (`es2024`, `ES2025.RegExp`), and both tsconfigs drop `exclude` keys
+  that filtered nothing. The release job's inert `registry-url` is gone.
+- **Simpler core.** Drive-relative-path detection uses `win32.parse` instead
+  of a hand-rolled parser; code-point counting uses string spread; the
+  `encoding` option nobody varied, the `isHidden` delegate, two unwired
+  signal params, and a dead `FileHandle` re-export are gone; the batch tools
+  share one `perPathEnvelope` schema factory and a positional
+  `defaultErrorCode`.
+- **Deduplicated tests.** `stdio.test.ts` shares one modern-era client meta
+  const and one `server/discover` helper; hand-rolled timeout races and
+  `AbortSignal.timeout`/`console.error` stubs use `node:test`'s
+  `t.mock.method`.
+
 ## [2.5.2] - 2026-09-25
 
 A maintenance release: the MCP SDK moves to 2.1.0 and the bundle publishes to

@@ -5,7 +5,9 @@
 //
 // Run from the repo root after scripts/pack-mcpb.sh (needs dist/ and
 // filesystem-mcp.mcpb). Needs SMITHERY_API_KEY unless --dry-run.
-import { spawn } from 'node:child_process';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -14,60 +16,17 @@ const RELEASES = `https://api.smithery.ai/servers/${encodeURIComponent(SERVER)}/
 const IN_PROGRESS = new Set(['PENDING', 'WORKING']);
 
 async function listTools() {
-  const child = spawn(process.execPath, ['dist/index.js', tmpdir()], {
-    stdio: ['pipe', 'pipe', 'pipe'],
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['dist/index.js', tmpdir()],
   });
-  let stderr = '';
-  child.stderr.on('data', (chunk) => {
-    stderr = (stderr + chunk).slice(-2_000);
-  });
-  const send = (msg) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
+  const client = new Client({ name: 'publish-smithery', version: '0' });
   try {
-    return await new Promise((resolve, reject) => {
-      const fail = (message) => {
-        clearTimeout(timer);
-        reject(new Error(stderr ? `${message}\n--- server stderr ---\n${stderr}` : message));
-      };
-      const timer = setTimeout(() => fail('tools/list timed out'), 15_000);
-      child.on('error', (err) => fail(`could not start the server: ${err.message}`));
-      child.on('exit', (code) => fail(`server exited (${code}) before tools/list`));
-      let buffered = '';
-      child.stdout.on('data', (chunk) => {
-        const lines = (buffered + chunk).split('\n');
-        buffered = lines.pop();
-        for (const line of lines) {
-          let msg;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            fail(`server wrote non-JSON to stdout: ${line.slice(0, 200)}`);
-            return;
-          }
-          if (msg.error) {
-            fail(`server answered request ${msg.id} with ${JSON.stringify(msg.error)}`);
-            return;
-          }
-          if (msg.id === 1) {
-            send({ method: 'notifications/initialized' });
-            send({ id: 2, method: 'tools/list' });
-          } else if (msg.id === 2) {
-            clearTimeout(timer);
-            resolve(msg.result.tools);
-          }
-        }
-      });
-      send({
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-06-18',
-          capabilities: {},
-          clientInfo: { name: 'publish-smithery', version: '0' },
-        },
-      });
-    });
+    await client.connect(transport, { timeout: 15_000 });
+    const { tools } = await client.listTools(undefined, { timeout: 15_000 });
+    return tools;
   } finally {
-    child.kill();
+    await client.close();
   }
 }
 

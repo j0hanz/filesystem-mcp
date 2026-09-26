@@ -1638,47 +1638,35 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
   });
 
-  it('TC-FUNC-063a: list does not return a successful partial result after abort', async () => {
-    const originalTimeout = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout');
-    assert.ok(originalTimeout);
-    Object.defineProperty(AbortSignal, 'timeout', {
-      configurable: true,
-      value: () => AbortSignal.abort(new DOMException('test timeout', 'TimeoutError')),
+  it('TC-FUNC-063a: list does not return a successful partial result after abort', async (t) => {
+    t.mock.method(AbortSignal, 'timeout', () =>
+      AbortSignal.abort(new DOMException('test timeout', 'TimeoutError')),
+    );
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: tmpDir, includeIgnored: true },
     });
-    try {
-      const result = await harness.client.callTool({
-        name: 'list',
-        arguments: { path: tmpDir, includeIgnored: true },
-      });
 
-      assert.strictEqual(result.isError, true);
-      assert.strictEqual(result.structuredContent, undefined);
-    } finally {
-      Object.defineProperty(AbortSignal, 'timeout', originalTimeout);
-    }
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(result.structuredContent, undefined);
   });
 
-  it('TC-LOG-001: Tool execution logs to stderr', async () => {
+  it('TC-LOG-001: Tool execution logs to stderr', async (t) => {
     const file = join(tmpDir, 'log-test.txt');
     await writeFile(file, 'initial line\n');
-    const origErr = console.error;
     const lines: string[] = [];
-    console.error = (...args: unknown[]) => {
+    t.mock.method(console, 'error', (...args: unknown[]) => {
       lines.push(args.map(String).join(' '));
-    };
-    try {
-      const result = await harness.client.callTool({
-        name: 'edit',
-        arguments: { path: file, edits: [{ oldText: 'initial', newText: 'updated' }] },
-      });
-      assert.notStrictEqual(result.isError, true);
-      assert.ok(
-        lines.some((l) => /^\[\w+\] \[req [^\]]+\] \[edit\] edit:/.test(l)),
-        'stderr should carry the edit log line tagged with its request id',
-      );
-    } finally {
-      console.error = origErr;
-    }
+    });
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'initial', newText: 'updated' }] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.ok(
+      lines.some((l) => /^\[\w+\] \[req [^\]]+\] \[edit\] edit:/.test(l)),
+      'stderr should carry the edit log line tagged with its request id',
+    );
   });
 
   it('TC-FUNC-064: copy skip via choice round-trip leaves dst untouched', async () => {

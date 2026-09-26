@@ -23,21 +23,30 @@ import {
   writeTestFile,
 } from './helpers.ts';
 
-async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
-  let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = globalThis.setTimeout(
-          () => reject(new Error(`operation did not settle within ${milliseconds}ms`)),
-          milliseconds,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+const MODERN_META = {
+  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+  'io.modelcontextprotocol/clientCapabilities': {},
+  'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
+};
+
+const within = <T>(p: Promise<T>, ms: number) =>
+  Promise.race([
+    p,
+    setTimeout(ms).then(() => {
+      throw new Error(`operation did not settle within ${ms}ms`);
+    }),
+  ]);
+
+async function discoverModern(harness: Awaited<ReturnType<typeof createRawStdioServer>>) {
+  await harness.send({
+    jsonrpc: '2.0',
+    id: 'discover',
+    method: 'server/discover',
+    params: { _meta: MODERN_META },
+  });
+  const response = await harness.nextMessage();
+  assert.ok('result' in response, JSON.stringify(response));
+  return response;
 }
 
 describe('Stdio Transport (real subprocess)', () => {
@@ -297,26 +306,14 @@ describe('Stdio subscription lease lifecycle', () => {
       const invalidFile = await writeTestFile(tmpDir, 'invalid-listen.txt', 'invalid');
       const validFile = await writeTestFile(tmpDir, 'valid-listen.txt', 'valid');
 
-      const meta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-      };
-      await harness.send({
-        jsonrpc: '2.0',
-        id: 'discover',
-        method: 'server/discover',
-        params: { _meta: meta },
-      });
-      const discover = await harness.nextMessage();
-      assert.ok('result' in discover, JSON.stringify(discover));
+      await discoverModern(harness);
 
       await harness.send({
         jsonrpc: '2.0',
         id: 'invalid',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(invalidFile), 42 as never],
           },
@@ -330,7 +327,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'valid',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(validFile)],
           },
@@ -353,26 +350,14 @@ describe('Stdio subscription lease lifecycle', () => {
     try {
       const fileA = await writeTestFile(tmpDir, 'cancel-a.txt', 'A');
       const fileB = await writeTestFile(tmpDir, 'cancel-b.txt', 'B');
-      const meta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-      };
-
-      await harness.send({
-        jsonrpc: '2.0',
-        id: 'discover',
-        method: 'server/discover',
-        params: { _meta: meta },
-      });
-      assert.ok('result' in (await harness.nextMessage()));
+      await discoverModern(harness);
 
       await harness.send({
         jsonrpc: '2.0',
         id: 'first',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(fileA)],
           },
@@ -392,7 +377,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'second',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(fileB)],
           },
@@ -415,19 +400,7 @@ describe('Stdio subscription lease lifecycle', () => {
     try {
       const fileA = await writeTestFile(tmpDir, 'pending-a.txt', 'A');
       const fileB = await writeTestFile(tmpDir, 'pending-b.txt', 'B');
-      const meta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-      };
-
-      await harness.send({
-        jsonrpc: '2.0',
-        id: 'discover',
-        method: 'server/discover',
-        params: { _meta: meta },
-      });
-      assert.ok('result' in (await harness.nextMessage()));
+      await discoverModern(harness);
 
       await harness.sendMany([
         {
@@ -435,7 +408,7 @@ describe('Stdio subscription lease lifecycle', () => {
           id: 'pending',
           method: 'subscriptions/listen',
           params: {
-            _meta: meta,
+            _meta: MODERN_META,
             notifications: {
               resourceSubscriptions: [buildFileResourceUri(fileA)],
             },
@@ -453,7 +426,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'after-pending-cancel',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(fileB)],
           },
@@ -482,19 +455,7 @@ describe('Stdio subscription lease lifecycle', () => {
       const otherFile = await writeTestFile(tmpDir, 'other.txt', 'other');
       const sharedUri = buildFileResourceUri(sharedFile);
       const otherUri = buildFileResourceUri(otherFile);
-      const meta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-      };
-
-      await harness.send({
-        jsonrpc: '2.0',
-        id: 'discover',
-        method: 'server/discover',
-        params: { _meta: meta },
-      });
-      assert.ok('result' in (await harness.nextMessage()));
+      await discoverModern(harness);
 
       for (const id of ['shared-1', 'shared-2']) {
         await harness.send({
@@ -502,7 +463,7 @@ describe('Stdio subscription lease lifecycle', () => {
           id,
           method: 'subscriptions/listen',
           params: {
-            _meta: meta,
+            _meta: MODERN_META,
             notifications: { resourceSubscriptions: [sharedUri] },
           },
         });
@@ -519,7 +480,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'blocked',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: { resourceSubscriptions: [otherUri] },
         },
       });
@@ -537,7 +498,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'released',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: { resourceSubscriptions: [otherUri] },
         },
       });
@@ -558,20 +519,7 @@ describe('Stdio subscription lease lifecycle', () => {
     try {
       const rejectedFile = await writeTestFile(tmpDir, 'version-rejected.txt', 'rejected');
       const validFile = await writeTestFile(tmpDir, 'version-valid.txt', 'valid');
-      const clientInfo = { name: 'raw-stdio-test', version: '1.0.0' };
-      const validMeta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': clientInfo,
-      };
-
-      await harness.send({
-        jsonrpc: '2.0',
-        id: 'discover',
-        method: 'server/discover',
-        params: { _meta: validMeta },
-      });
-      assert.ok('result' in (await harness.nextMessage()));
+      await discoverModern(harness);
 
       await harness.send({
         jsonrpc: '2.0',
@@ -579,7 +527,7 @@ describe('Stdio subscription lease lifecycle', () => {
         method: 'subscriptions/listen',
         params: {
           _meta: {
-            ...validMeta,
+            ...MODERN_META,
             'io.modelcontextprotocol/protocolVersion': '1900-01-01',
           },
           notifications: {
@@ -596,7 +544,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'after-version-rejection',
         method: 'subscriptions/listen',
         params: {
-          _meta: validMeta,
+          _meta: MODERN_META,
           notifications: {
             resourceSubscriptions: [buildFileResourceUri(validFile)],
           },
@@ -617,18 +565,13 @@ describe('Stdio subscription lease lifecycle', () => {
     try {
       const file = await writeTestFile(tmpDir, 'first-request-listen.txt', 'before');
       const uri = buildFileResourceUri(file);
-      const meta = {
-        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-        'io.modelcontextprotocol/clientCapabilities': {},
-        'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-      };
 
       await harness.send({
         jsonrpc: '2.0',
         id: 'first-request-listen',
         method: 'subscriptions/listen',
         params: {
-          _meta: meta,
+          _meta: MODERN_META,
           notifications: { resourceSubscriptions: [uri] },
         },
       });
@@ -637,12 +580,7 @@ describe('Stdio subscription lease lifecycle', () => {
       assert.strictEqual(acknowledged.method, 'notifications/subscriptions/acknowledged');
 
       await writeFile(file, 'after');
-      const updated = await Promise.race([
-        harness.nextMessage(),
-        setTimeout(750).then(() => {
-          throw new Error('timed out waiting for the first-request watcher');
-        }),
-      ]);
+      const updated = await within(harness.nextMessage(), 750);
       assert.ok('method' in updated, JSON.stringify(updated));
       assert.strictEqual(updated.method, 'notifications/resources/updated');
       assert.strictEqual(updated.params?.['uri'], uri);

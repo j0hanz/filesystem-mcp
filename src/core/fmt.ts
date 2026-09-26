@@ -78,8 +78,8 @@ export function joinRoster(items: readonly string[], separator = ' · '): string
   return `${shown}${separator}+${String(items.length - MAX_ROSTER_ITEMS)} more`;
 }
 
-export function truncateProgressPattern(pattern: string, maxLength = 40): string {
-  return pattern.length <= maxLength ? pattern : `${pattern.slice(0, maxLength)}…`;
+export function truncateProgressPattern(pattern: string): string {
+  return pattern.length <= 40 ? pattern : `${pattern.slice(0, 40)}…`;
 }
 
 /**

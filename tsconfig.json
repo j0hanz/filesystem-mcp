@@ -1,15 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2024",
-    "lib": [
-      "es2024",
-      "ES2025.RegExp",
-      "ESNext.Array",
-      "ESNext.Collection",
-      "ESNext.Error",
-      "ESNext.Iterator",
-      "ESNext.Promise"
-    ],
+    "lib": ["es2024", "ES2025.RegExp"],
     "module": "NodeNext",
     "moduleDetection": "force",
     "verbatimModuleSyntax": true,
@@ -38,6 +30,5 @@
     "noEmitOnError": true,
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "__tests__"]
+  "include": ["src/**/*"]
 }

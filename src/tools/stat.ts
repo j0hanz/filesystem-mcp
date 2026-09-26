@@ -4,14 +4,13 @@ import * as z from 'zod/v4';
 
 import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
 import type { GuardedFileSystem, Stats } from '../core/fs.ts';
-import { isHidden } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { resolveEntryType } from '../core/path-utils.ts';
 import {
   FileInfoSchema,
   NonNegInt,
   OperationSummarySchema,
-  PerFileErrorSchema,
+  perPathEnvelope,
   singleOrBatchAccessPaths,
   singleOrBatchPathsInput,
 } from '../core/schema.ts';
@@ -25,11 +24,7 @@ type FileInfo = z.infer<typeof FileInfoSchema>;
 
 const StatInputSchema = singleOrBatchPathsInput({});
 
-const StatPerPathSchema = z.strictObject({
-  path: z.string().describe('Requested path'),
-  value: FileInfoSchema.optional().describe('File metadata; present on success'),
-  error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
-});
+const StatPerPathSchema = perPathEnvelope(FileInfoSchema, 'File metadata; present on success');
 
 const StatOutputSchema = z.strictObject({
   results: z
@@ -68,7 +63,7 @@ function buildFileInfoResult(
     modified: stats.mtime.toISOString(),
     accessed: stats.atime.toISOString(),
     permissions: getPermissions(stats.mode),
-    isHidden: isHidden(name),
+    isHidden: name.startsWith('.'),
     ...(mimeType !== undefined ? { mimeType } : {}),
     ...(symlinkTarget !== undefined ? { symlinkTarget } : {}),
   };
@@ -179,8 +174,8 @@ export const STAT = defineTool({
     const batch = await runOverPaths<undefined, FileInfo>(
       batchInput,
       ctx,
+      ErrorCode.NOT_FOUND,
       async ({ path }) => getFileInfo(path, ctx),
-      { defaultErrorCode: ErrorCode.NOT_FOUND },
     );
 
     const { fileCount, dirCount } = classifyTypeCounts(batch.results);

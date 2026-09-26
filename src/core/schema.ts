@@ -127,6 +127,29 @@ export const PerFileErrorSchema = z.strictObject({
   suggestion: z.string().optional(),
 });
 
+/**
+ * The `{ path, value, error }` envelope every per-path tool (`delete`, `edit`,
+ * `read`, `stat`, `replace_text`) wraps its results in: the requested path, the
+ * tool-specific value on success, the error detail on failure.
+ */
+export function perPathEnvelope<TValue extends z.ZodType>(
+  value: TValue,
+  valueDescription: string,
+): z.ZodObject<
+  {
+    path: z.ZodString;
+    value: z.ZodOptional<TValue>;
+    error: z.ZodOptional<typeof PerFileErrorSchema>;
+  },
+  z.core.$strict
+> {
+  return z.strictObject({
+    path: z.string().describe('Requested path'),
+    value: value.optional().describe(valueDescription),
+    error: PerFileErrorSchema.optional().describe('Error details; present on failure'),
+  });
+}
+
 /** One entry of a tool's `failures[]`: the path that failed and why. */
 export const PathFailureSchema = z.strictObject({
   path: z.string(),
