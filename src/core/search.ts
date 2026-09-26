@@ -284,11 +284,13 @@ export async function searchContent(
         }
         const content = buffer.toString('utf-8');
         const lines = content.split(/\r?\n/u);
-        // A trailing newline splits into a phantom empty last element; context
-        // must not report it as a line the file has.
-        const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
+        // A trailing newline splits into a phantom empty last element, and an
+        // empty file splits into one empty element: neither is a line the
+        // file has, for matching or for context.
+        const lineCount =
+          content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
         let matchedFile = false;
-        for (let i = 0; i < lines.length; i++) {
+        for (let i = 0; i < lineCount; i++) {
           const line = lines[i];
           if (line === undefined) continue;
           // One scan per line: findLineMatches resets lastIndex itself, so it

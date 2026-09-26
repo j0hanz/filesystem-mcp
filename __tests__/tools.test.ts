@@ -2336,6 +2336,29 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(structured.matches?.[0]?.content?.includes('NEEDLE_MARK'));
   });
 
+  it('search_text: an empty-line pattern sees no phantom line after a trailing newline', async () => {
+    const dir = join(tmpDir, 'phantom_line');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'trailing.txt'), 'alpha\nbeta\n');
+    await writeFile(join(dir, 'blank.txt'), 'alpha\n\nbeta\n');
+    await writeFile(join(dir, 'empty.txt'), '');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: '^$', isRegex: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const structured = result._meta as {
+      matches?: { file: string; line: number }[];
+      totalMatches?: number;
+    };
+    assert.deepStrictEqual(
+      structured.matches?.map((m) => `${m.file}:${String(m.line)}`),
+      ['blank.txt:2'],
+    );
+    assert.strictEqual(structured.totalMatches, 1);
+  });
+
   it('search_text pages are stable and reject cursor query replay', async () => {
     const file = await writeTestFile(tmpDir, 'search_pages.txt', 'NEEDLE bravo\nNEEDLE charlie\n');
     const first = await harness.client.callTool({
