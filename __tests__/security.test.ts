@@ -102,7 +102,7 @@ describe('Security (P0)', () => {
       );
     });
 
-    it('TC-SEC-011: a reserved device name is refused on Windows and ordinary elsewhere', async () => {
+    it('TC-SEC-014: a reserved device name is refused on Windows and ordinary elsewhere', async () => {
       const auxPath = join(root, 'src', 'aux.ts');
       if (process.platform === 'win32') {
         // Not created: on Windows the name is a device, not a file.
