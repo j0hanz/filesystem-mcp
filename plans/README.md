@@ -16,7 +16,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 002  | edit ignoreWhitespace keeps edge blank lines and indentation | P1       | S      | —          | DONE   |
 | 003  | Root containment treats `\` as a separator only on Windows   | P1       | S      | —          | TODO   |
 | 004  | edit refuses a batch naming the same file twice              | P1       | S      | —          | DONE   |
-| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | TODO   |
+| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | DONE   |
 | 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | TODO   |
 | 007  | CI runs the full check on Windows too                        | P2       | S      | —          | TODO   |
 | 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | TODO   |
