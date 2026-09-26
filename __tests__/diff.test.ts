@@ -16,6 +16,16 @@ describe('core/diff', () => {
     assert.deepStrictEqual(computeDiffStats(a, b), { linesAdded: 2, linesRemoved: 1 });
   });
 
+  it('counts content lines that start with -- or ++ (not just the file header)', () => {
+    const a = '---\ntitle: x\n---\nbody\n';
+    const b = 'title: x\nbody\n++new\n';
+    const patch = unifiedPatch('f', a, b);
+    assert.ok(patch);
+    const expected = { linesAdded: 1, linesRemoved: 2 };
+    assert.deepStrictEqual(diffStatsFromPatch(patch), expected);
+    assert.deepStrictEqual(computeDiffStats(a, b), expected);
+  });
+
   it('gives up past the deadline instead of blocking', () => {
     const a = lines('a', 4000);
     const b = lines('b', 4000);

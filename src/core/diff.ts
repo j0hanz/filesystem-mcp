@@ -43,8 +43,15 @@ export function unifiedPatch(
 export function diffStatsFromPatch(patch: string): { linesAdded: number; linesRemoved: number } {
   let linesAdded = 0;
   let linesRemoved = 0;
+  // The file header (---/+++) precedes the first hunk; only hunk bodies count,
+  // so a content line that itself starts with -- or ++ is never mistaken for it.
+  let inHunk = false;
   for (const line of patch.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
     if (line.startsWith('+')) linesAdded++;
     else if (line.startsWith('-')) linesRemoved++;
   }

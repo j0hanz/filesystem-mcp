@@ -339,7 +339,9 @@ function buildEditFileValue(
     ...(meta.resourceUri !== undefined ? { resourceUri: meta.resourceUri } : {}),
     modified,
     appliedEdits: result.appliedEdits,
-    ...(result.linesAdded !== undefined && result.linesRemoved !== undefined
+    ...(result.appliedEdits > 0 &&
+    result.linesAdded !== undefined &&
+    result.linesRemoved !== undefined
       ? { linesAdded: result.linesAdded, linesRemoved: result.linesRemoved }
       : {}),
     ...(result.unmatchedEdits.length > 0 ? { unmatchedEdits: result.unmatchedEdits } : {}),
