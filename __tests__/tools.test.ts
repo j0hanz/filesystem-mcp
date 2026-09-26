@@ -59,6 +59,31 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(firstBlock.text?.includes('Hello\nWorld\n'));
   });
 
+  it('read accepts legal file names containing .. ; and backtick, refuses a .. segment', async () => {
+    const cases = [
+      'app/blog/[...slug]/page.tsx',
+      'docs/v1..2.md',
+      'semi;colon.txt',
+      'back`tick.txt',
+    ];
+    for (const rel of cases) {
+      const file = await writeTestFile(tmpDir, `legal-names/${rel}`, `content of ${rel}\n`);
+      const result = await harness.client.callTool({ name: 'read', arguments: { path: file } });
+      assert.notStrictEqual(result.isError, true, `${rel} must be readable`);
+      assert.ok(firstTextBlock(result).text?.includes(`content of ${rel}`), rel);
+    }
+
+    // A whole ".." segment is still refused at the schema, before any fs access.
+    // Built by string concatenation: `join` would collapse the `..` lexically.
+    const traversal = `${tmpDir.replaceAll('\\', '/')}/legal-names/../legal-names/docs/v1..2.md`;
+    const refused = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: traversal },
+    });
+    assert.strictEqual(refused.isError, true);
+    assert.match(firstTextBlock(refused).text ?? '', /Directory traversal/);
+  });
+
   it('TC-FUNC-002: Read image file returns an image content block with base64 data', async () => {
     // Minimal 1x1 transparent PNG (known-good bytes).
     const pngBytes = Buffer.from(
