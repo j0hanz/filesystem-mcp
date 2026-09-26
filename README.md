@@ -252,7 +252,7 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 | Tool           | Description                                                                                                                                                                                                          |
 | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `create`       | Create one or more files, creating parent directories as needed. An existing file prompts the user to confirm the overwrite; `overwrite: true` on an entry skips the prompt, `append: true` adds to the end instead. |
-| `edit`         | Apply sequential literal string replacements to one or more files (max 5 per call).                                                                                                                                  |
+| `edit`         | Apply sequential literal string replacements to one or more files (up to 5 files per call, 100 edits per file).                                                                                                      |
 | `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.                                                                                                                         |
 | `delete`       | Permanently delete one or more files or directories. This action is irreversible.                                                                                                                                    |
 | `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                                                                                                                                        |
@@ -276,30 +276,37 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 ```text
 filesystem-mcp/
-├── __tests__/        Test suites
+├── __tests__/          Test suites (node --test) and shared helpers
+├── docs/adr/           Architecture decision records
+├── mcpb/manifest.json  Claude Desktop extension manifest
+├── scripts/            Release-path scripts (MCPB pack, Smithery publish)
 ├── src/
-│   ├── core/         Path guarding, filesystem abstraction, concurrency, observability
-│   ├── tools/        Tool definitions and registration
-│   ├── index.ts      Process entrypoint and transport selection
-│   ├── server.ts     Server factory and registrar composition
-│   ├── transport/    stdio and Streamable HTTP transport setup
-│   ├── prompts.ts    Prompt definitions and registration
-│   └── resources.ts  Resource definitions and registration
-└── Dockerfile        Multi-stage alpine build, non-root user
+│   ├── core/           Path guarding, filesystem facade, search, stores, watchers
+│   ├── tools/          One file per tool, plus define.ts (registration) and batch.ts
+│   ├── transport/      stdio.ts, http.ts, http-policy.ts (auth, Origin, rate limit), shared.ts
+│   ├── cli.ts          Argument parsing and --print-config
+│   ├── cli-help.ts     --help / --version text
+│   ├── index.ts        Process entrypoint, shutdown, transport selection
+│   ├── instructions.ts Server instructions sent to every client
+│   ├── prompts.ts      Prompt definitions and registration
+│   ├── resources.ts    Resource definitions, subscriptions, completion
+│   ├── server.ts       Server factory and registrar composition
+│   └── transport.ts    Facade re-exporting startServer / startHttpServer
+└── Dockerfile          Multi-stage alpine build, non-root user
 ```
 
-Runtime composition flows from `src/index.ts` to `src/transport.ts`, then to
+Runtime composition flows from `src/index.ts` to `src/transport/` (stdio or HTTP), then to
 `src/server.ts`, the registrars, and finally `src/core/`. Each registrar owns
 the narrow dependency contract it consumes.
 
-| Path                  | Purpose                                                        |
-| :-------------------- | :------------------------------------------------------------- |
-| `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots       |
-| `src/core/fs.ts`      | `GuardedFileSystem` — guarded filesystem facade                |
-| `src/tools/define.ts` | Tool registration and execution framework                      |
-| `src/tools/batch.ts`  | Batch helpers (runOverPaths, isTotalFailure)                   |
-| `src/server.ts`       | Builds shared dependencies and invokes the three registrars    |
-| `src/transport.ts`    | Owns stdio and Streamable HTTP setup around the server factory |
+| Path                  | Purpose                                                                         |
+| :-------------------- | :------------------------------------------------------------------------------ |
+| `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots                        |
+| `src/core/fs.ts`      | `GuardedFileSystem` — guarded filesystem facade                                 |
+| `src/tools/define.ts` | Tool registration and execution framework                                       |
+| `src/tools/batch.ts`  | Batch helpers (runOverPaths, isTotalFailure)                                    |
+| `src/server.ts`       | Builds shared dependencies and invokes the three registrars                     |
+| `src/transport/`      | stdio (`stdio.ts`), Streamable HTTP (`http.ts`), HTTP policy (`http-policy.ts`) |
 
 ## Configuration
 
