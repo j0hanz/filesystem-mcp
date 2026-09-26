@@ -720,6 +720,42 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), original);
   });
 
+  it('edit converts LF edit text to CRLF in a CRLF file', async () => {
+    const literalFile = await writeTestFile(tmpDir, 'crlf/literal.txt', 'one\r\ntwo\r\nthree\r\n');
+    const literalResult = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: literalFile,
+        edits: [{ oldText: 'one\ntwo', newText: 'uno\ndos' }],
+      },
+    });
+    assert.notStrictEqual(literalResult.isError, true);
+    assert.strictEqual(await readFile(literalFile, 'utf-8'), 'uno\r\ndos\r\nthree\r\n');
+
+    const blankLineFile = await writeTestFile(tmpDir, 'crlf/blank-line.txt', 'a\r\n\r\nb\r\n');
+    const blankLineResult = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: blankLineFile,
+        edits: [{ oldText: 'a\n\nb', newText: 'c\n\nd' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(blankLineResult.isError, true);
+    assert.strictEqual(await readFile(blankLineFile, 'utf-8'), 'c\r\n\r\nd\r\n');
+
+    const mixedFile = await writeTestFile(tmpDir, 'crlf/mixed.txt', 'mixed\r\nlf\n');
+    const mixedResult = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: mixedFile,
+        edits: [{ oldText: 'mixed\nlf', newText: 'x' }],
+      },
+    });
+    assert.strictEqual(mixedResult.isError, true);
+    assert.strictEqual(await readFile(mixedFile, 'utf-8'), 'mixed\r\nlf\n');
+  });
+
   it('edit refuses a batch that names the same file twice', async () => {
     const original = 'alpha\nbeta\n';
     const file = await writeTestFile(tmpDir, 'dup-batch/dup.txt', original);

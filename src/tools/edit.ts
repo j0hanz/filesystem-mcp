@@ -198,10 +198,12 @@ interface EditMatches {
  * pieces of text it stays flexible — at least one newline, as many as the file
  * has. At either edge of oldText it matches exactly the newlines written: a
  * flexible edge swallows the blank lines around the match and, at the trailing
- * edge, the next line's indentation, all of which newText then replaces.
+ * edge, the next line's indentation, all of which newText then replaces. Each
+ * newline may carry horizontal whitespace before it, which covers the `\r` of
+ * a CRLF file and a blank line with stray spaces.
  */
 function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
-  if (!edge.leading && !edge.trailing) return '[^\\S\\n]*\\n+[^\\S\\n]*';
+  if (!edge.leading && !edge.trailing) return '(?:[^\\S\\n]*\\n)+[^\\S\\n]*';
   const count = token.split('\n').length - 1;
   const lines = `(?:[^\\S\\n]*\\n){${String(count)}}`;
   // Nothing after the final newline unless the caller wrote indentation there.
@@ -362,6 +364,19 @@ function buildEditFileMetadata(
   };
 }
 
+// A file whose every newline is CRLF gets LF-only edit text converted to match
+// — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
+// and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
+// already carries a `\r` is taken as written. Mixed-ending files are not
+// converted: there is no one ending to convert to.
+function usesCrlf(content: string): boolean {
+  return content.includes('\r\n') && !/(?<!\r)\n/u.test(content);
+}
+
+function toCrlf(text: string): string {
+  return text.includes('\r') ? text : text.replaceAll('\n', '\r\n');
+}
+
 function applyEdits(
   content: string,
   edits: z.infer<typeof EditSpecSchema>[],
@@ -370,9 +385,12 @@ function applyEdits(
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
+  const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
-    const found = findEditMatches(newContent, edit.oldText, ignoreWhitespace);
+    const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
+    const newText = crlf ? toCrlf(edit.newText) : edit.newText;
+    const found = findEditMatches(newContent, oldText, ignoreWhitespace);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
@@ -386,7 +404,7 @@ function applyEdits(
     const first = found.first;
     newContent =
       newContent.slice(0, first.startIndex) +
-      edit.newText +
+      newText +
       newContent.slice(first.startIndex + first.length);
     appliedEdits += 1;
   }
