@@ -323,6 +323,62 @@ describe('Real HTTP Server integration', () => {
     assert.strictEqual(body.error?.code, ProtocolErrorCode.InvalidParams);
     assert.ok(body.error?.message?.includes('watcher slots'));
   });
+
+  async function requestWithHost(
+    path: string,
+    method: 'GET' | 'POST',
+    host: string,
+  ): Promise<{ status: number | undefined; body: unknown }> {
+    const response = Promise.withResolvers<{ status: number | undefined; body: unknown }>();
+    const req = request(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        method,
+        headers: {
+          host,
+          authorization: ['Bearer', TEST_API_KEY].join(' '),
+          'content-type': 'application/json',
+        },
+      },
+      (res) => {
+        void json(res).then(
+          (body: unknown) => response.resolve({ status: res.statusCode, body }),
+          response.reject,
+        );
+      },
+    );
+    req.on('error', response.reject);
+    req.end(method === 'POST' ? '{}' : undefined);
+    return response.promise;
+  }
+
+  for (const [method, path] of [
+    ['POST', '/mcp'],
+    ['GET', '/healthz'],
+  ] as const) {
+    it(`refuses a foreign Host header on ${method} ${path} with 403`, async () => {
+      const result = await requestWithHost(path, method, 'evil.example');
+      assert.strictEqual(result.status, 403);
+      assert.strictEqual((result.body as { error?: { code?: number } }).error?.code, -32000);
+    });
+  }
+
+  it('refuses a foreign Origin on POST /mcp with 403 under the loopback default', async () => {
+    const r = await fetch(base, {
+      method: 'POST',
+      headers: {
+        origin: 'http://evil.example',
+        'content-type': 'application/json',
+        authorization: ['Bearer', TEST_API_KEY].join(' '),
+      },
+      body: '{}',
+    });
+    assert.strictEqual(r.status, 403);
+    const body = (await r.json()) as { error?: { code?: number } };
+    assert.strictEqual(body.error?.code, -32000);
+  });
 });
 
 // The bearer credential reaches the server as `RuntimeConfig.apiKey`, never
