@@ -13,8 +13,6 @@ import {
 import type { PathGuard } from './path.ts';
 import { resolveRealPath } from './path.ts';
 
-const MAX_COMPLETION_ITEMS = 100;
-
 // ─── pure path-completion helpers ───────────────────────────────────────────
 
 function hasTrailingSeparator(value: string): boolean {
@@ -133,11 +131,12 @@ async function findMatchesInDirectory(
   const matches: string[] = [];
   if (!(await isAllowedCompletionDirectory(searchDir, allowed))) return matches;
   try {
-    // Stream via opendir and collect every match; the MAX_COMPLETION_ITEMS
-    // cap is applied AFTER the alphabetical sort in mergeCompletionMatches
-    // (slice at the call site). Capping here would keep the opendir-first
-    // 100, not the alphabetically-first 100 — the sort would only reorder
-    // an already-arbitrary subset.
+    // Stream via opendir and collect every match. Do not cap here: the
+    // SDK's completion result keeps the first 100 values and reports the
+    // full length as `total` / `hasMore`, so the list must reach it whole
+    // and already sorted (mergeCompletionMatches). Capping here would
+    // keep the opendir-first 100, not the alphabetically-first 100, and
+    // hide the true count from the client.
     const dir = await opendir(searchDir);
     try {
       const lowerPrefix = prefix.toLowerCase();
@@ -182,19 +181,20 @@ function getSearchContext(
 
 /**
  * Path suggestions for `completion/complete` on the file template. One
- * `opendir` per call; clients debounce, so nothing is cached here.
+ * `opendir` per call; clients debounce, so nothing is cached here. Returns
+ * every match, sorted; the SDK truncates to 100 and reports the total.
  */
 export async function suggestPaths(pathGuard: PathGuard, value: string): Promise<string[]> {
   const allowed = pathGuard.getAllowedDirectories();
 
   try {
     if (!value) {
-      return allowed.slice(0, MAX_COMPLETION_ITEMS);
+      return allowed;
     }
 
     const context = getSearchContext(value, allowed);
     if (!context) {
-      return findRootPrefixMatches(value, allowed).slice(0, MAX_COMPLETION_ITEMS);
+      return findRootPrefixMatches(value, allowed);
     }
 
     const { searchDir, prefix } = context;
@@ -202,7 +202,7 @@ export async function suggestPaths(pathGuard: PathGuard, value: string): Promise
       pathGuard.isSensitive(p),
     );
     const rootMatches = findMatchingRoots(searchDir, prefix, allowed);
-    return mergeCompletionMatches(dirMatches, rootMatches).slice(0, MAX_COMPLETION_ITEMS);
+    return mergeCompletionMatches(dirMatches, rootMatches);
   } catch (error) {
     rethrowIfAborted(error);
     Logger.warn('suggestPaths: completion failed, returning empty list', {
