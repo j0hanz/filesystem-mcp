@@ -20,7 +20,14 @@ import {
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError, isNodeError } from './errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  isFsError,
+  isNodeError,
+  isNotFoundErrno,
+} from './errors.ts';
 import { detectMimeFromContent } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
@@ -51,7 +58,7 @@ async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<
       validPath = await pathGuard.validatePathForWrite(resolvedTarget);
     }
   } catch (error) {
-    if (!isNodeError(error) || error.code !== 'ENOENT') {
+    if (!isNotFoundErrno(error)) {
       throw error;
     }
   }
@@ -238,7 +245,7 @@ export class GuardedFileSystem {
     try {
       assertFileStats(validPath, await fsLstat(validPath));
     } catch (error) {
-      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+      if (!isNotFoundErrno(error)) throw error;
       existed = false;
     }
     // fs.promises.appendFile takes no signal, so a withAbort race would
@@ -432,9 +439,7 @@ export async function destExists(
     await fs.stat(path);
     return true;
   } catch (err) {
-    const missing =
-      (isNodeError(err) && err.code === 'ENOENT') ||
-      (isFsError(err) && err.code === ErrorCode.NOT_FOUND);
+    const missing = isNotFoundErrno(err) || (isFsError(err) && err.code === ErrorCode.NOT_FOUND);
     if (!missing) {
       Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
     }
