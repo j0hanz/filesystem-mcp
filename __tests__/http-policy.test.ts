@@ -21,7 +21,7 @@ import {
   validateBearerAuthorization,
 } from '../src/transport/http-policy.ts';
 import { startHttpServer } from '../src/transport/http.ts';
-import { cleanupTestRoot, createTestRoot } from './helpers.ts';
+import { cleanupTestRoot, createTestRoot, withEnv } from './helpers.ts';
 
 interface MockResponse {
   statusCode?: number;
@@ -733,71 +733,69 @@ describe('keyless bind rate limiting', () => {
   // authenticated binds. A keyless bind is loopback-only, so its cap is looser
   // than the authenticated 120/min — but it exists.
   it('TC-SEC-036b: a keyless server still mounts the rate limiter', async () => {
-    const saved = process.env['FS_RATE_LIMIT_RPM'];
-    process.env['FS_RATE_LIMIT_RPM'] = '2';
-    const dir = await createTestRoot();
-    const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
-    const port = (httpServer.address() as AddressInfo).port;
-    const post = async (): Promise<number> => {
-      const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
-      });
-      await res.text();
-      return res.status;
-    };
-    try {
-      await post();
-      await post();
-      assert.strictEqual(await post(), 429, 'the third request must be rate limited');
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => {
-          if (error) reject(error);
-          else resolve();
+    await withEnv({ FS_RATE_LIMIT_RPM: '2' }, async () => {
+      const dir = await createTestRoot();
+      const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
+      const port = (httpServer.address() as AddressInfo).port;
+      const post = async (): Promise<number> => {
+        const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
         });
-      });
-      await cleanupTestRoot(dir);
-      if (saved === undefined) Reflect.deleteProperty(process.env, 'FS_RATE_LIMIT_RPM');
-      else process.env['FS_RATE_LIMIT_RPM'] = saved;
-    }
+        await res.text();
+        return res.status;
+      };
+      try {
+        await post();
+        await post();
+        assert.strictEqual(await post(), 429, 'the third request must be rate limited');
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          httpServer.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+        await cleanupTestRoot(dir);
+      }
+    });
   });
 });
 
 describe('CORS reflection agrees with the SDK Origin gate', () => {
   it('TC-SEC-031b: with FS_ALLOWED_ORIGINS set, localhost is refused and the listed origin reflected', async () => {
-    const saved = process.env['FS_ALLOWED_ORIGINS'];
-    process.env['FS_ALLOWED_ORIGINS'] = 'app.example.com';
-    const dir = await createTestRoot();
-    const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
-    const port = (httpServer.address() as AddressInfo).port;
-    const preflight = async (origin: string): Promise<{ status: number; allow: string | null }> => {
-      const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
-        method: 'OPTIONS',
-        headers: { origin },
-      });
-      await res.text();
-      return { status: res.status, allow: res.headers.get('access-control-allow-origin') };
-    };
-    try {
-      const local = await preflight('http://localhost:5173');
-      assert.strictEqual(local.status, 403, 'the SDK gate refuses an unlisted localhost origin');
-      assert.strictEqual(local.allow, null);
-
-      const listed = await preflight('https://app.example.com');
-      assert.strictEqual(listed.status, 204);
-      assert.strictEqual(listed.allow, 'https://app.example.com');
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => {
-          if (error) reject(error);
-          else resolve();
+    await withEnv({ FS_ALLOWED_ORIGINS: 'app.example.com' }, async () => {
+      const dir = await createTestRoot();
+      const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
+      const port = (httpServer.address() as AddressInfo).port;
+      const preflight = async (
+        origin: string,
+      ): Promise<{ status: number; allow: string | null }> => {
+        const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+          method: 'OPTIONS',
+          headers: { origin },
         });
-      });
-      await cleanupTestRoot(dir);
-      if (saved === undefined) Reflect.deleteProperty(process.env, 'FS_ALLOWED_ORIGINS');
-      else process.env['FS_ALLOWED_ORIGINS'] = saved;
-    }
+        await res.text();
+        return { status: res.status, allow: res.headers.get('access-control-allow-origin') };
+      };
+      try {
+        const local = await preflight('http://localhost:5173');
+        assert.strictEqual(local.status, 403, 'the SDK gate refuses an unlisted localhost origin');
+        assert.strictEqual(local.allow, null);
+
+        const listed = await preflight('https://app.example.com');
+        assert.strictEqual(listed.status, 204);
+        assert.strictEqual(listed.allow, 'https://app.example.com');
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          httpServer.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+        await cleanupTestRoot(dir);
+      }
+    });
   });
 });

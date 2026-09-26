@@ -13,6 +13,7 @@ import {
   createTestRoot,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -264,31 +265,11 @@ describe('Security (P0)', () => {
   });
 
   describe('SensitiveMatcher allow-list relief (--allow / FS_ALLOWLIST)', () => {
-    // Pin env vars for the duration of one block and restore them after.
-    // FS_ALLOW_SENSITIVE is always pinned so a developer machine running
-    // with it set cannot flip these assertions.
-    // Restores synchronously in a finally, NOT via t.after: node:test runs
-    // after hooks FIFO in registration order, so with two blocks in one test
-    // block 1's restore would run before block 2's and re-apply its synthetic
-    // values over the restore — every test after it inherits contaminated
-    // env. run() is synchronous, so a finally restores in the right order.
-    const withEnv = (vars: Record<string, string | undefined>, run: () => void): void => {
-      const saved: Record<string, string | undefined> = {};
-      for (const [name, value] of Object.entries(vars)) {
-        saved[name] = process.env[name];
-        // Reflect over `delete`: unset must mean the key is gone entirely.
-        if (value === undefined) Reflect.deleteProperty(process.env, name);
-        else process.env[name] = value;
-      }
-      try {
-        run();
-      } finally {
-        for (const [name, value] of Object.entries(saved)) {
-          if (value === undefined) Reflect.deleteProperty(process.env, name);
-          else process.env[name] = value;
-        }
-      }
-    };
+    // Pin env vars via helpers.withEnv for the duration of one block and
+    // restore them after. FS_ALLOW_SENSITIVE is always pinned so a developer
+    // machine running with it set cannot flip these assertions. Why the
+    // restore is a finally and never t.after (FIFO hook ordering) is pinned
+    // in withEnv's doc in helpers.ts.
 
     it('TC-ALLOW-001: an allow pattern relieves only the built-ins it matches', () => {
       const matcher = new SensitiveMatcher(['.env', '.env.*'], ['.env.example']);
@@ -300,27 +281,30 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('.env'), true, '.env itself stays sensitive');
     });
 
-    it('TC-ALLOW-002: FS_ALLOWLIST relieves built-ins via the default construction', () => {
-      withEnv({ FS_ALLOWLIST: '.env.example, dev.pem', FS_ALLOW_SENSITIVE: undefined }, () => {
-        const matcher = new SensitiveMatcher();
-        assert.strictEqual(matcher.isSensitive('.env.example'), false);
-        assert.strictEqual(matcher.isSensitive('dev.pem'), false);
-        assert.strictEqual(matcher.isSensitive('.env'), true);
-        assert.strictEqual(
-          matcher.isSensitive('server.pem'),
-          true,
-          'allow relief is per-pattern, not a global switch',
-        );
-        assert.strictEqual(
-          matcher.isSensitive('.env.development'),
-          true,
-          'allow is exact-pattern, not prefix-wide',
-        );
-      });
+    it('TC-ALLOW-002: FS_ALLOWLIST relieves built-ins via the default construction', async () => {
+      await withEnv(
+        { FS_ALLOWLIST: '.env.example, dev.pem', FS_ALLOW_SENSITIVE: undefined },
+        () => {
+          const matcher = new SensitiveMatcher();
+          assert.strictEqual(matcher.isSensitive('.env.example'), false);
+          assert.strictEqual(matcher.isSensitive('dev.pem'), false);
+          assert.strictEqual(matcher.isSensitive('.env'), true);
+          assert.strictEqual(
+            matcher.isSensitive('server.pem'),
+            true,
+            'allow relief is per-pattern, not a global switch',
+          );
+          assert.strictEqual(
+            matcher.isSensitive('.env.development'),
+            true,
+            'allow is exact-pattern, not prefix-wide',
+          );
+        },
+      );
     });
 
-    it('TC-ALLOW-003: FS_DENYLIST entries are never relieved by an allow pattern', () => {
-      withEnv(
+    it('TC-ALLOW-003: FS_DENYLIST entries are never relieved by an allow pattern', async () => {
+      await withEnv(
         {
           FS_DENYLIST: '.env.example',
           FS_ALLOWLIST: '.env.example',
@@ -365,8 +349,8 @@ describe('Security (P0)', () => {
       );
     });
 
-    it('TC-ALLOW-005: a typo in the allow pattern fails closed', () => {
-      withEnv({ FS_ALLOWLIST: 'env.example', FS_ALLOW_SENSITIVE: undefined }, () => {
+    it('TC-ALLOW-005: a typo in the allow pattern fails closed', async () => {
+      await withEnv({ FS_ALLOWLIST: 'env.example', FS_ALLOW_SENSITIVE: undefined }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(
           matcher.isSensitive('.env.example'),
@@ -376,24 +360,24 @@ describe('Security (P0)', () => {
       });
     });
 
-    it('TC-ALLOW-006: without an allow list the built-ins apply exactly as before', () => {
-      withEnv({ FS_ALLOWLIST: undefined, FS_ALLOW_SENSITIVE: undefined }, () => {
+    it('TC-ALLOW-006: without an allow list the built-ins apply exactly as before', async () => {
+      await withEnv({ FS_ALLOWLIST: undefined, FS_ALLOW_SENSITIVE: undefined }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('.env.example'), true);
         assert.strictEqual(matcher.isSensitive('.env'), true);
       });
     });
 
-    it('TC-ALLOW-007: FS_ALLOW_SENSITIVE still suppresses all built-ins regardless of allow entries', () => {
-      withEnv({ FS_ALLOW_SENSITIVE: '1', FS_ALLOWLIST: '.env.example' }, () => {
+    it('TC-ALLOW-007: FS_ALLOW_SENSITIVE still suppresses all built-ins regardless of allow entries', async () => {
+      await withEnv({ FS_ALLOW_SENSITIVE: '1', FS_ALLOWLIST: '.env.example' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('.env'), false);
         assert.strictEqual(matcher.isSensitive('.env.example'), false);
       });
     });
 
-    it('TC-ALLOW-008: wildcard denies match hidden files (dot segments match like any other)', () => {
-      withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+    it('TC-ALLOW-008: wildcard denies match hidden files (dot segments match like any other)', async () => {
+      await withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(
           matcher.isSensitive('/root/secrets/.env'),
@@ -404,14 +388,14 @@ describe('Security (P0)', () => {
         assert.strictEqual(matcher.isSensitive('/root/secrets/readme.txt'), true);
         assert.strictEqual(matcher.isSensitive('/root/public/.env'), false);
       });
-      withEnv({ FS_DENYLIST: '**', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: '**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('/root/.htpasswd'), true);
       });
     });
 
-    it('TC-ALLOW-009: built-in star patterns deny dot-leading basenames', () => {
-      withEnv({ FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
+    it('TC-ALLOW-009: built-in star patterns deny dot-leading basenames', async () => {
+      await withEnv({ FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('.id_rsa'), true, '*id_rsa* must match .id_rsa');
         assert.strictEqual(matcher.isSensitive('.key'), true, '*.key must match .key');
@@ -419,8 +403,8 @@ describe('Security (P0)', () => {
       });
     });
 
-    it('TC-ALLOW-010: wildcard allow relief reaches hidden files', () => {
-      withEnv({ FS_ALLOWLIST: 'fixtures/**', FS_ALLOW_SENSITIVE: undefined }, () => {
+    it('TC-ALLOW-010: wildcard allow relief reaches hidden files', async () => {
+      await withEnv({ FS_ALLOWLIST: 'fixtures/**', FS_ALLOW_SENSITIVE: undefined }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(
           matcher.isSensitive('/r/fixtures/.env.example'),
@@ -451,8 +435,8 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('/root/data/w/secret'), false);
     });
 
-    it('TC-ALLOW-013: path-tier patterns still match UNC-style double-slash roots', () => {
-      withEnv({ FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
+    it('TC-ALLOW-013: path-tier patterns still match UNC-style double-slash roots', async () => {
+      await withEnv({ FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(
           matcher.isSensitive('//server/share/.aws/credentials'),
@@ -460,28 +444,31 @@ describe('Security (P0)', () => {
           'builtin path-tier deny must match a UNC allowed root',
         );
       });
-      withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('//server/share/secrets/.env'), true);
         assert.strictEqual(matcher.isSensitive('//server/share/public/readme.txt'), false);
       });
     });
 
-    it('TC-ALLOW-014: brace alternatives in env lists survive the comma split', () => {
+    it('TC-ALLOW-014: brace alternatives in env lists survive the comma split', async () => {
       // '*.{pem,key}' is one pattern, not '*.{pem' + 'key}' — the depth-0
       // split must not tear a documented brace group apart.
-      withEnv({ FS_ALLOWLIST: '*.{pem,key}, .env.example', FS_ALLOW_SENSITIVE: undefined }, () => {
-        const matcher = new SensitiveMatcher();
-        assert.strictEqual(matcher.isSensitive('server.pem'), false);
-        assert.strictEqual(matcher.isSensitive('server.key'), false);
-        assert.strictEqual(matcher.isSensitive('.env.example'), false);
-        assert.strictEqual(
-          matcher.isSensitive('.env'),
-          true,
-          'relief stays scoped to the listed patterns',
-        );
-      });
-      withEnv({ FS_DENYLIST: '*.{pem,key}', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv(
+        { FS_ALLOWLIST: '*.{pem,key}, .env.example', FS_ALLOW_SENSITIVE: undefined },
+        () => {
+          const matcher = new SensitiveMatcher();
+          assert.strictEqual(matcher.isSensitive('server.pem'), false);
+          assert.strictEqual(matcher.isSensitive('server.key'), false);
+          assert.strictEqual(matcher.isSensitive('.env.example'), false);
+          assert.strictEqual(
+            matcher.isSensitive('.env'),
+            true,
+            'relief stays scoped to the listed patterns',
+          );
+        },
+      );
+      await withEnv({ FS_DENYLIST: '*.{pem,key}', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('server.pem'), true);
         assert.strictEqual(matcher.isSensitive('server.key'), true);
@@ -507,11 +494,11 @@ describe('Security (P0)', () => {
       assert.strictEqual(nested.isSensitive('a.new'), false);
     });
 
-    it('TC-ALLOW-016: terminal ** denies match paths containing newlines', () => {
+    it('TC-ALLOW-016: terminal ** denies match paths containing newlines', async () => {
       // '.' never matches a newline without the regex 's' flag, so a deny
       // ending in '/**' must compile its globstar newline-safe — filenames
       // can legally contain '\n' on both POSIX and NTFS.
-      withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: 'secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('/r/secrets/plan\nnotes'), true);
         assert.strictEqual(matcher.isSensitive('/r/secrets/plan\rnotes'), true);
@@ -519,11 +506,11 @@ describe('Security (P0)', () => {
       });
     });
 
-    it('TC-ALLOW-017: class commas in env lists survive the split', () => {
+    it('TC-ALLOW-017: class commas in env lists survive the split', async () => {
       // 'x[1,2].env' is one pattern: the depth-0 comma split must skip the
       // class interior, matching the --deny flag's behavior for the same
       // pattern instead of tearing into 'x[1' and '2].env'.
-      withEnv({ FS_DENYLIST: 'x[1,2].env', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: 'x[1,2].env', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('/r/x1.env'), true);
         assert.strictEqual(matcher.isSensitive('/r/x2.env'), true);
@@ -531,11 +518,11 @@ describe('Security (P0)', () => {
       });
     });
 
-    it('TC-ALLOW-018: --deny/--allow flag tiers follow the same relief rules as env', () => {
+    it('TC-ALLOW-018: --deny/--allow flag tiers follow the same relief rules as env', async () => {
       // The flag tier (cli.denyPatterns/cli.allowPatterns) merges into the
       // same two tiers as the env vars — an explicit --deny is never
       // relieved by --allow, and --allow relieves built-ins only.
-      withEnv(
+      await withEnv(
         { FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined, FS_ALLOWLIST: undefined },
         () => {
           const savedDeny = cli.denyPatterns ?? [];
@@ -586,32 +573,32 @@ describe('Security (P0)', () => {
       assert.strictEqual(caret.isSensitive('x.env'), false);
     });
 
-    it('TC-ALLOW-022: an unbalanced brace in an env list drops only itself', () => {
+    it('TC-ALLOW-022: an unbalanced brace in an env list drops only itself', async () => {
       // '{bad, secrets/**' has no closing brace; the brace-aware split must
       // not swallow every separator behind it into one bogus literal and
       // silently drop the real 'secrets/**' deny.
-      withEnv({ FS_DENYLIST: '{bad, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: '{bad, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const unmatchedOpen = new SensitiveMatcher();
         assert.strictEqual(unmatchedOpen.isSensitive('/r/secrets/plan'), true);
         assert.strictEqual(unmatchedOpen.isSensitive('/r/public/plan'), false);
       });
-      withEnv({ FS_DENYLIST: 'x}, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: 'x}, secrets/**', FS_ALLOW_SENSITIVE: '1' }, () => {
         const strayClose = new SensitiveMatcher();
         assert.strictEqual(strayClose.isSensitive('/r/secrets/plan'), true);
         assert.strictEqual(strayClose.isSensitive('/r/public/plan'), false);
       });
     });
 
-    it('TC-ALLOW-020: absolute patterns stay rooted — no **/ alias over-relief', () => {
+    it('TC-ALLOW-020: absolute patterns stay rooted — no **/ alias over-relief', async () => {
       // '/abs/secret' must not gain the '**/abs/secret' unrooted alias: that
       // matches 'other/abs/secret' too, and on the allow side it relieves
       // files the operator never named.
-      withEnv({ FS_DENYLIST: '/abs/secret', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: '/abs/secret', FS_ALLOW_SENSITIVE: '1' }, () => {
         const deny = new SensitiveMatcher();
         assert.strictEqual(deny.isSensitive('/abs/secret'), true);
         assert.strictEqual(deny.isSensitive('/x/abs/secret'), false);
       });
-      withEnv({ FS_ALLOWLIST: '/r/ok.pem' }, () => {
+      await withEnv({ FS_ALLOWLIST: '/r/ok.pem' }, () => {
         const allow = new SensitiveMatcher();
         assert.strictEqual(allow.isSensitive('/r/ok.pem'), false);
         assert.strictEqual(allow.isSensitive('/x/r/ok.pem'), true);
@@ -619,17 +606,33 @@ describe('Security (P0)', () => {
       });
     });
 
-    it('TC-ALLOW-021: mid-pattern ** matches zero or more whole segments', () => {
+    it('TC-ALLOW-021: mid-pattern ** matches zero or more whole segments', async () => {
       // 'secrets/**/credentials' denies secrets/credentials and any depth of
       // subdirectory under secrets/ — the globstar consumes its separator,
       // so no double slash may sneak into the compiled regex.
-      withEnv({ FS_DENYLIST: 'secrets/**/credentials', FS_ALLOW_SENSITIVE: '1' }, () => {
+      await withEnv({ FS_DENYLIST: 'secrets/**/credentials', FS_ALLOW_SENSITIVE: '1' }, () => {
         const matcher = new SensitiveMatcher();
         assert.strictEqual(matcher.isSensitive('/r/secrets/credentials'), true);
         assert.strictEqual(matcher.isSensitive('/r/secrets/a/credentials'), true);
         assert.strictEqual(matcher.isSensitive('/r/secrets/a/b/credentials'), true);
         assert.strictEqual(matcher.isSensitive('/r/credentials'), false);
       });
+    });
+  });
+
+  describe('helpers.withEnv restore semantics', () => {
+    it('withEnv restores unset by deleting and empty string as set', async () => {
+      Reflect.deleteProperty(process.env, 'FS_PIN_TEST');
+      await withEnv({ FS_PIN_TEST: 'x' }, () => {
+        assert.strictEqual(process.env['FS_PIN_TEST'], 'x');
+      });
+      assert.ok(!('FS_PIN_TEST' in process.env));
+      process.env['FS_PIN_TEST'] = '';
+      await withEnv({ FS_PIN_TEST: 'x' }, () => {
+        assert.strictEqual(process.env['FS_PIN_TEST'], 'x');
+      });
+      assert.strictEqual(process.env['FS_PIN_TEST'], '');
+      Reflect.deleteProperty(process.env, 'FS_PIN_TEST');
     });
   });
 });

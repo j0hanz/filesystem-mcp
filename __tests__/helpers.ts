@@ -70,16 +70,37 @@ export async function waitFor(condition: () => boolean, timeoutMs = 3000): Promi
   }
 }
 
-/** Run `fn` with FS_ROOT_BOUNDARY set to `boundary`, restoring the prior value after. */
-export async function withBoundary<T>(boundary: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env['FS_ROOT_BOUNDARY'];
-  process.env['FS_ROOT_BOUNDARY'] = boundary;
+/**
+ * Run `fn` with the named env vars pinned, restoring every prior value after.
+ * `undefined` in `vars` unsets the var; a prior value that was unset restores
+ * by deleting, an empty-string prior restores as set. Restores in a finally
+ * when the awaited call returns, never via t.after: node:test runs after hooks
+ * FIFO, so hook-based restore re-applies a later block's pins over an earlier
+ * block's restore (the two-block suite in security.test.ts pins this).
+ */
+export async function withEnv<T>(
+  vars: Record<string, string | undefined>,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const [name, value] of Object.entries(vars)) {
+    saved[name] = process.env[name];
+    if (value === undefined) Reflect.deleteProperty(process.env, name);
+    else process.env[name] = value;
+  }
   try {
     return await fn();
   } finally {
-    if (previous === undefined) Reflect.deleteProperty(process.env, 'FS_ROOT_BOUNDARY');
-    else process.env['FS_ROOT_BOUNDARY'] = previous;
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = value;
+    }
   }
+}
+
+/** Run `fn` with FS_ROOT_BOUNDARY set to `boundary`, restoring the prior value after. */
+export function withBoundary<T>(boundary: string, fn: () => Promise<T>): Promise<T> {
+  return withEnv({ FS_ROOT_BOUNDARY: boundary }, fn);
 }
 
 /** A PathGuard initialized straight from `dirs` — no CLI/env recompute. */

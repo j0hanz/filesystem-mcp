@@ -22,6 +22,7 @@ import {
   type TestClientContext,
   trySymlink,
   withBoundary,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -2380,10 +2381,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   it('search_text names the files it skipped in the text, with or without matches', async () => {
     // A lone match in a file over the size cap read as "No matches": the skip
     // count lived only in `_meta`, which no client shows the model.
-    const previous = process.env['FS_MAX_FILE_SIZE'];
     const limit = 1024 * 1024;
-    process.env['FS_MAX_FILE_SIZE'] = String(limit);
-    try {
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
       const dir = join(tmpDir, 'skipped_big');
       await writeTestFile(tmpDir, 'skipped_big/big.txt', `BIGNEEDLE\n${'a'.repeat(limit)}`);
       const skipLine = '// skipped 1 file over the text size limit; results may be incomplete.';
@@ -2399,10 +2398,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
       });
       assert.strictEqual(firstTextBlock(beside).text, `small.txt:1: BIGNEEDLE\n\n${skipLine}`);
-    } finally {
-      if (previous === undefined) delete process.env['FS_MAX_FILE_SIZE'];
-      else process.env['FS_MAX_FILE_SIZE'] = previous;
-    }
+    });
   });
 
   it('search_text skips binary files and reports the count', async () => {

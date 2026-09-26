@@ -17,6 +17,7 @@ import {
   createTestRoot,
   createTestServer,
   trySymlink,
+  withEnv,
   writeNLineFile,
   writeTestFile,
 } from './helpers.ts';
@@ -102,10 +103,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     });
 
     it('readEditableText rejects files above the configured text limit', async () => {
-      const previous = process.env['FS_MAX_FILE_SIZE'];
       const limit = 1024 * 1024;
-      process.env['FS_MAX_FILE_SIZE'] = String(limit);
-      try {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
         const filePath = join(tmpDir, 'too-large.txt');
         await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
 
@@ -116,10 +115,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
             error.code === ErrorCode.TOO_LARGE &&
             error.message.includes('File too large for edit'),
         );
-      } finally {
-        if (previous === undefined) delete process.env['FS_MAX_FILE_SIZE'];
-        else process.env['FS_MAX_FILE_SIZE'] = previous;
-      }
+      });
     });
 
     it('readEditableText rejects binary files', async () => {
@@ -613,47 +609,41 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   });
 
   describe('Invalid setting warnings (TC-FUNC-019b)', () => {
-    it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', () => {
-      const priorLevel = process.env['FS_LOG_LEVEL'];
-      const priorBytes = process.env['FS_MAX_FILE_SIZE'];
-      const realError = console.error;
-      const collected: string[] = [];
+    it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', async () => {
+      await withEnv({ FS_LOG_LEVEL: 'error', FS_MAX_FILE_SIZE: 'not-a-number' }, () => {
+        const realError = console.error;
+        const collected: string[] = [];
 
-      process.env['FS_LOG_LEVEL'] = 'error';
-      process.env['FS_MAX_FILE_SIZE'] = 'not-a-number';
-      console.error = (...args: unknown[]) => {
-        collected.push(args.map(String).join(' '));
-      };
+        console.error = (...args: unknown[]) => {
+          collected.push(args.map(String).join(' '));
+        };
 
-      try {
-        const first = getMaxTextFileSize();
-        const second = getMaxTextFileSize();
+        try {
+          const first = getMaxTextFileSize();
+          const second = getMaxTextFileSize();
 
-        assert.strictEqual(first, 10 * 1024 * 1024, 'falls back to the documented default');
-        assert.strictEqual(second, first);
+          assert.strictEqual(first, 10 * 1024 * 1024, 'falls back to the documented default');
+          assert.strictEqual(second, first);
 
-        const warnings = collected.filter((line) =>
-          line.includes('Invalid FS_MAX_FILE_SIZE value'),
-        );
-        // Once per (setting, value), not once per call — and it reaches stderr
-        // despite FS_LOG_LEVEL=error, which used to suppress this one warning
-        // while leaving FS_ALLOW_SENSITIVE and FS_LOG_LEVEL typos visible.
-        assert.strictEqual(
-          warnings.length,
-          1,
-          `expected one warning, got ${JSON.stringify(collected)}`,
-        );
-        assert.match(
-          warnings[0] ?? '',
-          /^\[warning\] Invalid FS_MAX_FILE_SIZE value: not-a-number \(must be 1048576-104857600\)\. Using default: 10485760$/,
-        );
-      } finally {
-        console.error = realError;
-        if (priorLevel === undefined) delete process.env['FS_LOG_LEVEL'];
-        else process.env['FS_LOG_LEVEL'] = priorLevel;
-        if (priorBytes === undefined) delete process.env['FS_MAX_FILE_SIZE'];
-        else process.env['FS_MAX_FILE_SIZE'] = priorBytes;
-      }
+          const warnings = collected.filter((line) =>
+            line.includes('Invalid FS_MAX_FILE_SIZE value'),
+          );
+          // Once per (setting, value), not once per call — and it reaches stderr
+          // despite FS_LOG_LEVEL=error, which used to suppress this one warning
+          // while leaving FS_ALLOW_SENSITIVE and FS_LOG_LEVEL typos visible.
+          assert.strictEqual(
+            warnings.length,
+            1,
+            `expected one warning, got ${JSON.stringify(collected)}`,
+          );
+          assert.match(
+            warnings[0] ?? '',
+            /^\[warning\] Invalid FS_MAX_FILE_SIZE value: not-a-number \(must be 1048576-104857600\)\. Using default: 10485760$/,
+          );
+        } finally {
+          console.error = realError;
+        }
+      });
     });
   });
 });
