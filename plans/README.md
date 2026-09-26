@@ -20,7 +20,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | TODO   |
 | 007  | CI runs the full check on Windows too                        | P2       | S      | —          | TODO   |
 | 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | DONE   |
-| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | TODO   |
+| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE   |
 | 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | TODO   |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |

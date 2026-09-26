@@ -205,8 +205,7 @@ predicate): `node_modules/`, `src/node_modules/` and `dist/` must be absent
 in both.
 
 **Verify**: `node --test __tests__/glob.test.ts` → 14 tests, all pass (12 new
-
-- 2 from plan 008), on the **first** run, with no source change.
+plus 2 from plan 008), on the **first** run, with no source change.
 
 ### Step 3: Format and full gate
 
