@@ -980,6 +980,35 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(failedSummary(result)?.summary?.failed, 1);
   });
 
+  it('batch read budget: ranged reads are not pre-estimated, and one oversized file skips only itself', async () => {
+    const big = await writeTestFile(tmpDir, 'budget/big.txt', 'x'.repeat(600 * 1024) + '\nlast\n');
+    const small = await writeTestFile(tmpDir, 'budget/small.txt', 'tiny\n');
+
+    const ranged = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [big, small], head: 1 },
+    });
+    assert.notStrictEqual(ranged.isError, true, 'head reads must not be budgeted by file size');
+    assert.strictEqual(failedSummary(ranged)?.summary?.failed, 0);
+
+    const full = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [big, small] },
+    });
+    assert.notStrictEqual(full.isError, true, 'the small file must still be read');
+    const results = failedSummary(full)?.results ?? [];
+    assert.strictEqual(results[0]?.error?.code, 'TOO_LARGE');
+    assert.strictEqual(
+      results[1]?.error,
+      undefined,
+      'the file after the oversized one must succeed',
+    );
+    assert.ok(firstTextBlock(full).text?.includes('tiny'));
+
+    const alone = await harness.client.callTool({ name: 'read', arguments: { paths: [big] } });
+    assert.strictEqual(alone.isError, true, 'a lone oversized file is still refused');
+  });
+
   it('TC-FUNC-052: List roots via MCP tool call', async () => {
     const result = await harness.client.callTool({ name: 'list_roots' });
     assert.notStrictEqual(result.isError, true);
