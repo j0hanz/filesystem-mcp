@@ -148,7 +148,7 @@ function scanCauseChain(error: unknown): {
 }
 
 /** The scan's facts as a Problem: an abort wins, then a timeout, then errno. */
-function classifyCauseChain(error: unknown): Problem {
+export function classifyCauseChain(error: unknown): Problem {
   const message = formatUnknownErrorMessage(error);
   const { aborted, timedOut, errno } = scanCauseChain(error);
   if (aborted) return Problem.cancelled(message);
@@ -192,6 +192,11 @@ export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 /** True when `error` is a Node errno error with code `ENOENT` (path not found). */
 export function isNotFoundErrno(error: unknown): error is NodeJS.ErrnoException {
   return isNodeError(error) && error.code === 'ENOENT';
+}
+
+/** True when `error` is a Node errno error whose code is in `SKIPPABLE_ERRNOS`. */
+export function isSkippableErrno(error: unknown): error is NodeJS.ErrnoException {
+  return isNodeError(error) && error.code !== undefined && SKIPPABLE_ERRNOS.has(error.code);
 }
 
 /**
