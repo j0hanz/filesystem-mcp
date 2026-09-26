@@ -366,6 +366,7 @@ export const LIST = defineTool({
         noun: 'entries',
         tool: 'list',
         nextCursor: structured.nextCursor,
+        nextArgs: args,
       }) +
       (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
     return {

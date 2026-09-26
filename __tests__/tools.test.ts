@@ -1503,13 +1503,19 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: sub, maxEntries: 2 },
     });
     const firstText = firstTextBlock(first).text ?? '';
-    const match = /^\/\/ showing 1-2 of 4 entries\. Next page: list \{"cursor":"([^"]+)"\}$/m.exec(
-      firstText,
-    );
+    const match =
+      /^\/\/ showing 1-2 of 4 entries\. Next page: list (\{.*"cursor":"([^"]+)".*\})$/m.exec(
+        firstText,
+      );
     assert.ok(match, `first page text should carry its position and cursor: ${firstText}`);
-    const cursor = match[1];
+    const cursor = match[2];
     // The model passes back verbatim what it read, so the two must agree.
     assert.strictEqual(cursor, (first._meta as { nextCursor?: string }).nextCursor);
+
+    // The printed call must be sendable as-is.
+    const printed = JSON.parse(match[1] ?? '{}') as Record<string, unknown>;
+    const literal = await harness.client.callTool({ name: 'list', arguments: printed });
+    assert.notStrictEqual(literal.isError, true, 'the trailer must print a callable request');
 
     const second = await harness.client.callTool({
       name: 'list',
@@ -2536,7 +2542,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.match(
       firstTextBlock(first).text ?? '',
-      /^\/\/ showing 1-4 of 9 matches\. Next page: search_text \{"cursor":"/m,
+      /^\/\/ showing 1-4 of 9 matches\. Next page: search_text \{.*"searchPattern":"NEEDLE".*"cursor":"/m,
     );
 
     const cursor = (first._meta as { nextCursor?: string }).nextCursor;
@@ -2581,7 +2587,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.match(
       firstTextBlock(files).text ?? '',
-      /^\/\/ showing 1-1 of 2 files\. Next page: find_files \{"cursor":"/m,
+      /^\/\/ showing 1-1 of 2 files\. Next page: find_files \{.*"pattern":"\*\*\/\*".*"cursor":"/m,
     );
   });
 

@@ -197,6 +197,7 @@ export const FIND_FILES = defineTool({
         noun: 'files',
         tool: 'find_files',
         nextCursor: structured.nextCursor,
+        nextArgs: args,
         stoppedReason: structured.stoppedReason,
         skippedInaccessible: structured.skippedInaccessible,
       });
