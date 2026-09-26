@@ -12,7 +12,7 @@ import {
   cleanupTestRoot,
   createTestRoot,
   type HttpTestContext,
-  waitFor,
+  waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
@@ -68,19 +68,12 @@ describe('HTTP shared PathGuard (grant persistence + watcher visibility)', () =>
 
   it('the listen-watcher path sees the grant applied by an earlier request', async () => {
     const uri = buildFileResourceUri(outFile);
-    let received: string | undefined;
-    client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
 
     subscription = await client.listen({ resourceSubscriptions: [uri] });
     await writeFile(outFile, 'changed');
 
-    await waitFor(() => received !== undefined);
-    assert.strictEqual(
-      received,
-      uri,
-      'no update means prepareListenWatchers validated against a guard without the grant',
-    );
+    // No update means prepareListenWatchers validated against a guard
+    // without the grant.
+    await waitForResourceUpdate(client, uri);
   });
 });

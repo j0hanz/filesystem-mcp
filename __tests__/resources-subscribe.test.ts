@@ -10,6 +10,7 @@ import {
   createTestClientPair,
   createTestRoot,
   waitFor,
+  waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
@@ -31,24 +32,19 @@ describe('Resource subscriptions round-trip', () => {
   it('subscribe -> file modification -> notification -> unsubscribe', async () => {
     const filePath = join(tmpDir, 'watch.txt');
     const uri = buildFileResourceUri(filePath);
-    let received: string | undefined;
-
-    pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
 
     await pair.client.subscribeResource({ uri });
 
     // Trigger file modification
     await writeFile(filePath, 'changed');
+    await waitForResourceUpdate(pair.client, uri);
 
-    // Poll for the debounced notification (50ms debounce)
-    await waitFor(() => received !== undefined, 2000);
-
-    assert.strictEqual(received, uri, 'Expected notification with matching uri before 2s deadline');
-
-    // Reset and unsubscribe
-    received = undefined;
+    // Unsubscribe, then prove the silence with a fresh local handler (the
+    // helper call above replaced any handler registered for the method).
+    let received: string | undefined;
+    pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
+      received = (n.params as { uri: string }).uri;
+    });
     await pair.client.unsubscribeResource({ uri });
 
     // Trigger second modification

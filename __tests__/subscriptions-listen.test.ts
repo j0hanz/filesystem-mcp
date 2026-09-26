@@ -19,6 +19,7 @@ import {
   type HttpTestContext,
   TEST_API_KEY,
   waitFor,
+  waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
@@ -92,15 +93,10 @@ describe('HTTP watcher fan-out and listen admission', () => {
       },
     );
 
-    let received: string | undefined;
-    client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
     const subscription = await client.listen({ resourceSubscriptions: [validUri] });
     try {
       await writeFile(filePath, 'changed');
-      await waitFor(() => received !== undefined);
-      assert.strictEqual(received, validUri);
+      await waitForResourceUpdate(client, validUri);
     } finally {
       await subscription.close();
     }
@@ -328,19 +324,11 @@ describe('HTTP recursive directory watch', () => {
 
   it('subscriber is notified when a child file is created under the directory', async () => {
     const dirUri = buildFileResourceUri(tmpDir);
-    let received: string | undefined;
-
-    client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
-
     subscription = await client.listen({ resourceSubscriptions: [dirUri] });
 
     const childPath = join(tmpDir, 'child.txt');
     await writeFile(childPath, 'new child');
-
-    await waitFor(() => received !== undefined);
-    assert.strictEqual(received, dirUri, 'directory subscriber must be notified of a child change');
+    await waitForResourceUpdate(client, dirUri);
   });
 });
 
@@ -478,17 +466,11 @@ describe('HTTP duplicate listen does not consume capacity', () => {
   it('a batch mixing an already-watched URI with capacity-filling new URIs is accepted', async () => {
     const filePath = join(tmpDir, 'duplisten.txt');
     const uri = buildFileResourceUri(filePath);
-    let received: string | undefined;
-    client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
-
     // Establish the watcher for `uri` first and prove it is live through a
     // delivered notification.
     sub = await client.listen({ resourceSubscriptions: [uri] });
     await writeFile(filePath, 'first-change');
-    await waitFor(() => received !== undefined);
-    assert.strictEqual(received, uri, 'the real watcher must be live before the batch check');
+    await waitForResourceUpdate(client, uri);
 
     // `uri` now occupies exactly one slot. Fill every remaining slot with real
     // files and include `uri` again in the same batch. The already-watched URI
@@ -540,14 +522,9 @@ describe('HTTP re-listen after full release', () => {
     await first.close();
     await setTimeout(100);
 
-    let received: string | undefined;
-    client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
     sub = await client.listen({ resourceSubscriptions: [uri] });
     await writeFile(filePath, 'changed-after-relisten');
-    await waitFor(() => received !== undefined);
-    assert.strictEqual(received, uri, 're-listen after release must receive updates');
+    await waitForResourceUpdate(client, uri);
   });
 });
 

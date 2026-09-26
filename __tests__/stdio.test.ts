@@ -19,6 +19,7 @@ import {
   createTestRoot,
   firstTextBlock,
   waitFor,
+  waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
@@ -76,17 +77,11 @@ describe('Stdio Transport (real subprocess)', () => {
     // so one gets attached. Without that tap this never fires.
     const filePath = await writeTestFile(tmpDir, 'listen.txt', 'initial');
     const uri = buildFileResourceUri(filePath);
-    let received: string | undefined;
-
-    harness.client.setNotificationHandler('notifications/resources/updated', (n) => {
-      received = (n.params as { uri: string }).uri;
-    });
 
     subscriptions.push(await harness.client.listen({ resourceSubscriptions: [uri] }));
     await writeFile(filePath, 'changed');
 
-    await waitFor(() => received !== undefined, 5000);
-    assert.strictEqual(received, uri, 'the listen stream must receive the file-change update');
+    await waitForResourceUpdate(harness.client, uri);
   });
 
   it('STDIO-004: re-listening on one URI registers one watcher callback, not one per listen', async () => {

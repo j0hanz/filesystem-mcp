@@ -75,6 +75,20 @@ export async function waitFor(condition: () => boolean, timeoutMs = 3000): Promi
   }
 }
 
+/** Resolve when `client` receives notifications/resources/updated for `uri`. Replaces any handler registered for the method. */
+export async function waitForResourceUpdate(
+  client: Client,
+  uri: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  let arrived = false;
+  client.setNotificationHandler('notifications/resources/updated', (n) => {
+    if ((n.params as { uri: string }).uri === uri) arrived = true;
+  });
+  await waitFor(() => arrived, timeoutMs);
+  assert.ok(arrived, `no notifications/resources/updated for ${uri} within ${timeoutMs}ms`);
+}
+
 /** An assert.rejects matcher: FsError with `code`; `message` is included (string) or matched (RegExp). */
 export function fsErrorMatcher(
   code: ErrorCode,
