@@ -192,6 +192,23 @@ describe('Real HTTP Server integration', () => {
     });
   });
 
+  it('authenticates an unfinished JSON upload before reading its body', async () => {
+    const result = await postWithoutEndingUpload(
+      base,
+      { 'content-type': 'application/json', 'content-length': 1024 * 1024 },
+      (req) => {
+        req.flushHeaders();
+        req.write('{');
+      },
+    );
+    assert.strictEqual(result.status, 401);
+    assert.deepStrictEqual(result.body, {
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32000, message: 'Unauthorized' },
+    });
+  });
+
   it('3. Full MCP handshake + tool call over real HTTP with bearer', async () => {
     const client = await http.makeClient('http-server-test');
     try {
@@ -488,5 +505,24 @@ describe('rate limiting', () => {
     assert.strictEqual(r3.status, 429);
     const r3body = (await r3.json()) as { error?: { code?: number } };
     assert.ok(r3body.error, '429 must carry a JSON-RPC error object');
+  });
+
+  it('rate-limits an unfinished JSON upload before reading its body', async () => {
+    const headers = {
+      'content-type': 'application/json',
+      Authorization: `Bearer ${TEST_API_KEY}`,
+    };
+    // Spend the two-request budget on quick, complete requests.
+    await (await fetch(base, { method: 'POST', headers, body: '{}' })).text();
+    await (await fetch(base, { method: 'POST', headers, body: '{}' })).text();
+    const result = await postWithoutEndingUpload(
+      base,
+      { ...headers, 'content-length': 1024 * 1024 },
+      (req) => {
+        req.flushHeaders();
+        req.write('{');
+      },
+    );
+    assert.strictEqual(result.status, 429);
   });
 });
