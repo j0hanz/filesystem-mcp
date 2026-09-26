@@ -282,4 +282,20 @@ describe('globEntries characterization', () => {
       ['src/b.ts', 'src/deep/c.ts', 'src/deep/deeper/d.ts'],
     );
   });
+
+  it('a default-excluded name below a dot-directory is excluded too', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['.hidden/node_modules/q.js', '.hidden/keep.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/*', skipIgnored: true, includeHidden: true }),
+        ['.hidden/keep.txt'],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });

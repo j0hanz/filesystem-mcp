@@ -1,5 +1,5 @@
 import { glob as fsGlob, readFile as fsReadFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
@@ -63,18 +63,22 @@ class GitignoreManager {
   }
 
   /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
-  static async load(root: string, signal?: AbortSignal): Promise<GitignoreManager | null> {
+  static async load(
+    root: string,
+    signal?: AbortSignal,
+    maxDepth?: number,
+  ): Promise<GitignoreManager | null> {
     const manager = new GitignoreManager();
     try {
       const gitignorePaths: string[] = [];
       const gitignoreEntries = fsGlob('**/.gitignore', {
         cwd: root,
+        // Skip what the walk itself skips, and stop one level past its depth
+        // bound: a .gitignore at depth d only affects entries at depth >= d.
         exclude: (entry: string) => {
           const name = basename(entry);
-          if (name === 'node_modules' || name === '.git' || name === '.hg' || name === '.svn') {
-            return true;
-          }
-          return false;
+          if (name === '.hg' || name === '.svn' || DEFAULT_EXCLUDED_NAMES.has(name)) return true;
+          return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
         },
       });
       for await (const match of gitignoreEntries) {
@@ -176,7 +180,7 @@ export interface GlobEntriesOptions {
   maxDepth?: number;
   onlyFiles?: boolean;
   suppressErrors?: boolean;
-  /** Skip what a walk should not surface: DEFAULT_EXCLUDE_PATTERNS and .gitignore. */
+  /** Skip what a walk should not surface: DEFAULT_EXCLUDED_NAMES and .gitignore. */
   skipIgnored?: boolean;
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
@@ -185,7 +189,6 @@ export interface GlobEntriesOptions {
 interface NormalizedGlob {
   cwd: string;
   patterns: readonly string[];
-  exclude: readonly string[];
   suppressErrors: boolean;
   maxDepth?: number;
 }
@@ -283,7 +286,6 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
   const normalized: NormalizedGlob = {
     cwd,
     patterns,
-    exclude: options.skipIgnored ? DEFAULT_EXCLUDE_PATTERNS.map(toPosixPath) : [],
     suppressErrors: options.suppressErrors ?? false,
   };
 
@@ -315,38 +317,46 @@ function* processDirentMatch(
   yield { path: absolutePath, dirent: match };
 }
 
-function createExcludeFilter(
+interface WalkFilter {
+  /** Given to fs.glob: true stops descent into a directory. */
+  prune: (match: GlobDirentLike) => boolean;
+  /** Re-applied to yielded entries: the ignore rules only, never the depth bound. */
+  isExcluded: (match: GlobDirentLike) => boolean;
+}
+
+function createWalkFilter(
   cwd: string,
-  excludePatterns: readonly string[],
-  gitignoreMatcher?: GitignoreManager | null,
-): ((match: GlobDirentLike) => boolean) | readonly string[] {
-  if (!gitignoreMatcher) {
-    return excludePatterns;
-  }
+  skipIgnored: boolean,
+  gitignoreMatcher: GitignoreManager | null,
+  maxDepth: number | undefined,
+): WalkFilter | undefined {
+  if (!skipIgnored && maxDepth === undefined) return undefined;
 
-  return (match: GlobDirentLike) => {
-    // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
-    // root, not the process cwd — when it re-visits a directory under `**` whose
-    // name also exists in the process cwd. Resolving against `cwd` names the
-    // entry the dirent describes; `join` would resolve it against the process.
-    const relPath = relative(cwd, resolve(cwd, match.parentPath, match.name));
+  // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
+  // root, not the process cwd — when it re-visits a directory under `**` whose
+  // name also exists in the process cwd. Resolving against `cwd` names the
+  // entry the dirent describes; `join` would resolve it against the process.
+  const relativeOf = (match: GlobDirentLike): string =>
+    toPosixPath(relative(cwd, resolve(cwd, match.parentPath, match.name)));
+  // Every default exclude is a bare name that applies at any depth, so a Set
+  // lookup per segment replaces compiling dozens of globs per entry.
+  const excluded = (posixRel: string, isDir: boolean): boolean =>
+    skipIgnored &&
+    (posixRel.split('/').some((segment) => DEFAULT_EXCLUDED_NAMES.has(segment)) ||
+      (gitignoreMatcher?.isIgnored(posixRel, isDir) ?? false));
 
-    const posixRel = toPosixPath(relPath);
-
-    // Gitignore check
-    const isDir = match.isDirectory();
-    if (gitignoreMatcher.isIgnored(posixRel, isDir)) {
-      return true;
-    }
-
-    // Also check explicit exclude patterns
-    if (excludePatterns.length > 0) {
-      for (const ex of excludePatterns) {
-        if (posix.matchesGlob(posixRel, ex)) return true;
-      }
-    }
-
-    return false;
+  return {
+    prune: (match) => {
+      const posixRel = relativeOf(match);
+      const isDir = match.isDirectory();
+      if (excluded(posixRel, isDir)) return true;
+      // Stop descent one level past the depth bound. Pruning a directory *at*
+      // the bound would drop it where fs.glob treats it as top-level, so prune
+      // its children instead; processDirentMatch drops that extra level.
+      if (maxDepth === undefined || !isDir) return false;
+      return posixRel.split('/').length - 1 > maxDepth;
+    },
+    isExcluded: (match) => excluded(relativeOf(match), match.isDirectory()),
   };
 }
 
@@ -355,14 +365,14 @@ async function* processGlobPattern(
   plan: NormalizedGlob,
   seen: Set<string>,
   onlyFiles: boolean,
-  excludeFunc: ((match: GlobDirentLike) => boolean) | readonly string[],
+  filter: WalkFilter | undefined,
 ): AsyncGenerator<GlobEntry> {
   const { cwd, maxDepth, suppressErrors } = plan;
   let iterable: AsyncIterable<GlobDirentLike>;
   try {
     iterable = fsGlob(pattern, {
       cwd,
-      exclude: excludeFunc,
+      ...(filter ? { exclude: filter.prune } : {}),
       withFileTypes: true,
     }) as AsyncIterable<GlobDirentLike>;
   } catch (error) {
@@ -374,8 +384,8 @@ async function* processGlobPattern(
     for await (const match of iterable) {
       // A function `exclude` only prunes descent in fs.glob — it still yields
       // the rejected dirent itself, and any rejected entry below the top level.
-      // An array `exclude` drops both. Re-apply the predicate so the two agree.
-      if (typeof excludeFunc === 'function' && excludeFunc(match)) continue;
+      // Re-apply the ignore rules (not the depth bound) to drop those.
+      if (filter?.isExcluded(match)) continue;
       yield* processDirentMatch(match, cwd, maxDepth, seen, onlyFiles);
     }
   } catch (error) {
@@ -388,59 +398,47 @@ async function* processGlobPattern(
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
   const gitignoreMatcher = options.skipIgnored
-    ? await GitignoreManager.load(options.cwd, options.signal)
+    ? await GitignoreManager.load(options.cwd, options.signal, options.maxDepth)
     : null;
 
   const plan = normalizeGlobOptions(options);
   const seen = new Set<string>();
   const onlyFiles = options.onlyFiles ?? true;
-  const excludeFunc = createExcludeFilter(plan.cwd, plan.exclude, gitignoreMatcher);
+  const filter = createWalkFilter(
+    plan.cwd,
+    options.skipIgnored ?? false,
+    gitignoreMatcher,
+    plan.maxDepth,
+  );
 
   for (const pattern of plan.patterns) {
-    yield* processGlobPattern(pattern, plan, seen, onlyFiles, excludeFunc);
+    yield* processGlobPattern(pattern, plan, seen, onlyFiles, filter);
   }
 }
 
-const DEFAULT_EXCLUDE_PATTERNS = [
-  '**/node_modules',
-  '**/node_modules/**',
-  '**/dist',
-  '**/dist/**',
-  '**/build',
-  '**/build/**',
-  '**/coverage',
-  '**/coverage/**',
-  '**/.git',
-  '**/.git/**',
-  '**/.vscode',
-  '**/.vscode/**',
-  '**/.idea',
-  '**/.idea/**',
-  '**/.DS_Store',
-  '**/.next',
-  '**/.next/**',
-  '**/.nuxt',
-  '**/.nuxt/**',
-  '**/.output',
-  '**/.output/**',
-  '**/.svelte-kit',
-  '**/.svelte-kit/**',
-  '**/.cache',
-  '**/.cache/**',
-  '**/.yarn',
-  '**/.yarn/**',
-  '**/jspm_packages',
-  '**/jspm_packages/**',
-  '**/bower_components',
-  '**/bower_components/**',
-  '**/out',
-  '**/out/**',
-  '**/tmp',
-  '**/tmp/**',
-  '**/.temp',
-  '**/.temp/**',
-  '**/npm-debug.log',
-  '**/yarn-debug.log',
-  '**/yarn-error.log',
-  '**/Thumbs.db',
-];
+/** Names a `skipIgnored` walk never enters or yields, at any depth. */
+const DEFAULT_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.git',
+  '.vscode',
+  '.idea',
+  '.DS_Store',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.svelte-kit',
+  '.cache',
+  '.yarn',
+  'jspm_packages',
+  'bower_components',
+  'out',
+  'tmp',
+  '.temp',
+  'npm-debug.log',
+  'yarn-debug.log',
+  'yarn-error.log',
+  'Thumbs.db',
+]);

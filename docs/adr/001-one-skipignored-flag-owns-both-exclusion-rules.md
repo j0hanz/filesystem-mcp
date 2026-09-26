@@ -73,3 +73,9 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
 - Revisiting this means reintroducing a second field. Before doing so, check
   whether the new case genuinely varies twice — the first version of this option
   pair did not, which is what produced the finding.
+- **Amended 2026-09-26:** the array form is gone. `glob.ts` now applies both
+  rules (default excluded names and `.gitignore`) through one predicate,
+  `createWalkFilter`, which also prunes descent past `maxDepth`. The
+  array-vs-predicate divergence described above can no longer occur. The
+  defaults became a name set (`DEFAULT_EXCLUDED_NAMES`) matched per path
+  segment, which also excludes such a name below a dot-directory.
