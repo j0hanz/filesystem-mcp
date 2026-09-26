@@ -4,7 +4,7 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
@@ -718,6 +718,39 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       /2 places \(lines 1, 4\)/u,
     );
     assert.strictEqual(await readFile(file, 'utf-8'), original);
+  });
+
+  it('edit refuses a batch that names the same file twice', async () => {
+    const original = 'alpha\nbeta\n';
+    const file = await writeTestFile(tmpDir, 'dup-batch/dup.txt', original);
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        files: [
+          { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
+          { path: file, edits: [{ oldText: 'beta', newText: 'B' }] },
+        ],
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /duplicate of files\[0\]\.path/u);
+    assert.strictEqual(await readFile(file, 'utf-8'), original);
+
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      const upper = join(dirname(file), 'DUP.TXT');
+      const caseResult = await harness.client.callTool({
+        name: 'edit',
+        arguments: {
+          files: [
+            { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
+            { path: upper, edits: [{ oldText: 'beta', newText: 'B' }] },
+          ],
+        },
+      });
+      assert.strictEqual(caseResult.isError, true);
+      assert.match(firstTextBlock(caseResult).text ?? '', /duplicate of files\[0\]\.path/u);
+      assert.strictEqual(await readFile(file, 'utf-8'), original);
+    }
   });
 
   it('TC-FUNC-015: Read non-existent file returns error in per-path results', async () => {

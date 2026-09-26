@@ -8,6 +8,7 @@ import { computeDiffStats, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
+import { isSamePath } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
   FileKind,
@@ -107,6 +108,21 @@ const EditFileInputSchema = z
         message: "'edits' not allowed with 'files'; each file carries its own edits",
         input: value,
       });
+    }
+    // Batch entries run in parallel and each rewrites its file whole, so two
+    // entries for one file race: the last write wins and the other's edits are
+    // lost while both report success. One entry per file.
+    const files = value.files ?? [];
+    for (const [index, file] of files.entries()) {
+      const first = files.findIndex((other) => isSamePath(other.path, file.path));
+      if (first < index) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['files', index, 'path'],
+          message: `duplicate of files[${String(first)}].path; put every edit for one file in a single entry`,
+          input: value,
+        });
+      }
     }
   })
   // Mirror the superRefine on the wire: exactly one input mode, and single-file
