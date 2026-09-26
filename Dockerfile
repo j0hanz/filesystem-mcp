@@ -4,7 +4,7 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Install dependencies first (layer caching)
-# --ignore-scripts avoids triggering `prepare` (build) before source is copied
+# --ignore-scripts: no lifecycle script here needs to run, and none should while node_modules is untrusted input
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 

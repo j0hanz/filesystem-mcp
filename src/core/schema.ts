@@ -9,7 +9,7 @@ import { MAX_SEARCH_DEPTH } from './util.ts';
 // (no AJV warning — it is a known format, unlike sha256_hex / base64url).
 // No `id` on this or any other shared schema below: an `id` hoists the schema
 // into `$defs` and leaves a `$ref` at every use site, which is exactly the wire
-// weight `toDraft202012` (tools/define.ts) publishes without.
+// weight the published JSON schema (tools/define.ts) leaves out.
 export const IsoDateTime = z.iso.datetime().meta({
   description: 'ISO 8601 UTC date-time string (e.g. 2024-01-15T12:00:00.000Z)',
   // `format: "date-time"` already pins the value; zod's ~330-char calendar

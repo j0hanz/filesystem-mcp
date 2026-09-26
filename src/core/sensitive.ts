@@ -2,8 +2,8 @@
 // normalization that feeds it, and the NTFS alternate-data-stream stripping
 // Windows needs. Split out of path.ts so the denylist has its own home — it
 // shares only isAlpha / toPosixPath / IS_WINDOWS with the primitives in
-// primitives.ts, not the allowed-directory assembly. path-completer.ts and
-// glob.ts reach it through PathGuard.isSensitive, which delegates here.
+// path-utils.ts, not the allowed-directory assembly. path.ts and
+// path-completer.ts reach it through PathGuard.isSensitive, which delegates here.
 import { normalize, posix, sep } from 'node:path';
 
 import { cli } from './config.ts';
