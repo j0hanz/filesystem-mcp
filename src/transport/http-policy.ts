@@ -1,5 +1,9 @@
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/express';
-import { localhostAllowedHostnames, validateOriginHeader } from '@modelcontextprotocol/server';
+import {
+  localhostAllowedHostnames,
+  localhostAllowedOrigins,
+  validateOriginHeader,
+} from '@modelcontextprotocol/server';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -81,7 +85,7 @@ function isWildcardHttpHost(host: string): boolean {
  * absent `Origin` as allowed, which is right for admission but not for echoing.
  */
 export function isOriginAllowed(origin: string, allowedHostnames: readonly string[]): boolean {
-  const allowed = allowedHostnames.length > 0 ? [...allowedHostnames] : localhostAllowedHostnames();
+  const allowed = allowedHostnames.length > 0 ? [...allowedHostnames] : localhostAllowedOrigins();
   return origin !== '' && validateOriginHeader(origin, allowed).ok;
 }
 
@@ -314,7 +318,7 @@ export function computeAllowedOriginHostnames(originsEnv: string | undefined): s
   // empty allow-list — no remote origin is reflected, and a non-loopback bind
   // then mounts no SDK Origin gate (see isOriginAllowed) — while an unset or ""
   // value falls back to the loopback defaults.
-  return originsEnv ? splitCsvList(originsEnv) : localhostAllowedHostnames();
+  return originsEnv ? splitCsvList(originsEnv) : localhostAllowedOrigins();
 }
 
 /** Mounted at the `/mcp` prefix: every response — not just the OPTIONS preflight —
