@@ -76,7 +76,7 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',
 };
 
-export const ERRNO_MAP: Readonly<Record<string, ErrorCode>> = {
+const ERRNO_MAP: Readonly<Record<string, ErrorCode>> = {
   ENOENT: ErrorCode.NOT_FOUND,
   EACCES: ErrorCode.PERMISSION_DENIED,
   EPERM: ErrorCode.PERMISSION_DENIED,

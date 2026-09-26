@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
 import {
-  ERRNO_MAP,
+  classifyCauseChain,
   ErrorCode,
   FsError,
   isFsError,
@@ -513,10 +513,9 @@ export class PathGuard {
       throw new FsError(ErrorCode.NOT_FOUND, 'Path not found', requestedPath, error);
     }
 
-    const mapped =
-      isNodeError(error) && error.code !== undefined ? ERRNO_MAP[error.code] : undefined;
+    const mapped = classifyCauseChain(error);
     throw new FsError(
-      mapped ?? ErrorCode.UNKNOWN,
+      mapped.code,
       'Cannot access path',
       requestedPath,
       error instanceof Error ? error : undefined,
@@ -664,7 +663,7 @@ export class PathGuard {
           }
           // ENOENT is expected during ancestor walk — the entry simply doesn't exist.
           // Any other error (EACCES, EIO, ELOOP) is unexpected; fail safe.
-          if (!isNodeError(lstatErr) || lstatErr.code !== 'ENOENT') {
+          if (!isNotFoundErrno(lstatErr)) {
             throw new FsError(
               ErrorCode.UNKNOWN,
               'Cannot probe symlink ancestor',
