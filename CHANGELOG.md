@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.6.1] - 2026-09-26
+
+A fix release for the dry-run metadata of the editing tools. `edit`'s dry
+run regressed in 2.6.0 and reported metadata for the wrong input. Read
+**Fixed** before upgrading if a client reads `resourceUri` from a `patch` dry
+run: that field and the `resource_link` block are no longer returned there.
+The declared surface (tools, capabilities, instructions, prompts, resources)
+is identical to 2.6.0 apart from two output-schema field descriptions.
 
 ### Fixed
 
@@ -15,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`patch` dry run no longer links the file.** A dry run advertised a
   `resourceUri` and a `resource_link` for content it never wrote, matching
   neither `edit` nor `replace_text`.
+- **`resourceUri` descriptions.** The `edit` and `patch` output schemas now
+  say the field is omitted on a dry run or over the text-size cap. `edit`'s
+  previous text ("omitted when no edit matched") never matched its behavior.
 
 ## [2.6.0] - 2026-09-26
 
