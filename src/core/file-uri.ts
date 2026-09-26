@@ -62,11 +62,7 @@ export function buildFileResourceLinkFor(
   };
 }
 
-export function buildFileResourceLink(
-  validPath: string,
-  mimeType: string,
-  size: number,
-): ContentBlock {
+function buildFileResourceLink(validPath: string, mimeType: string, size: number): ContentBlock {
   return buildFileResourceLinkFor(
     buildFileResourceUri(validPath),
     basename(validPath),
