@@ -9,6 +9,7 @@ import {
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
+  trySymlink,
 } from './helpers.ts';
 
 /** Walk and return root-relative POSIX paths, sorted, directories with a trailing `/`. */
@@ -81,6 +82,36 @@ describe('globEntries', () => {
         await harness.close();
       }
     });
+  });
+
+  it('ignores a .gitignore that is a symlink or oversized', async (t) => {
+    const root = await createTestRoot();
+    const outside = await createTestRoot();
+    try {
+      await mkdir(join(root, 'linked'));
+      await writeFile(join(root, 'linked', 'keep.txt'), 'x');
+      await writeFile(join(outside, 'rules'), '*.txt\n');
+      const linked = await trySymlink(
+        join(outside, 'rules'),
+        join(root, 'linked', '.gitignore'),
+        () => t.diagnostic('symlink not permitted; symlink case skipped'),
+        'file',
+      );
+
+      await mkdir(join(root, 'huge'));
+      await writeFile(join(root, 'huge', 'keep.txt'), 'x');
+      // 1 MiB of comment, then a rule: the rule must never take effect.
+      await writeFile(join(root, 'huge', '.gitignore'), `${'#'.repeat(1024 * 1024)}\n*.txt\n`);
+
+      const seen = await walk({ cwd: root, pattern: '**/*', skipIgnored: true, onlyFiles: true });
+      assert.ok(seen.includes('huge/keep.txt'), 'an oversized .gitignore must be skipped');
+      if (linked) {
+        assert.ok(seen.includes('linked/keep.txt'), 'a symlinked .gitignore must be skipped');
+      }
+    } finally {
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(outside);
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { glob as fsGlob, readFile as fsReadFile } from 'node:fs/promises';
+import { glob as fsGlob, readFile as fsReadFile, lstat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { Ignore } from 'ignore';
@@ -9,6 +9,7 @@ import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import { isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
+import { MIB } from './util.ts';
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
@@ -29,6 +30,9 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   return true;
 }
 
+/** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
+const MAX_GITIGNORE_BYTES = MIB;
+
 async function loadGitignoreFiles(
   root: string,
   gitignorePaths: readonly string[],
@@ -40,6 +44,11 @@ async function loadGitignoreFiles(
     async (relPath) => {
       const absPath = join(root, relPath);
       try {
+        // lstat, not stat: a symlinked .gitignore may point at a device, a
+        // FIFO or a huge file outside the root. Only a plain, small file is a
+        // rule set worth reading.
+        const info = await lstat(absPath);
+        if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) return;
         const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
         const matcher = ignore();
         matcher.add(contents);
