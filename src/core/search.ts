@@ -27,6 +27,13 @@ export type Regex = RE2;
 const MAX_MATCHES_PER_LINE = 100_000;
 
 /**
+ * Largest input one RE2 call may scan as a single string. The input is copied
+ * into the same fixed 16 MB wasm heap as the patterns; about 10 MB of input
+ * aborts the module. 4 MiB leaves room for the copy and the pattern set.
+ */
+export const RE2_MAX_INPUT_BYTES = 4 * MIB;
+
+/**
  * Compile a pattern on RE2 rather than on V8's irregexp.
  *
  * Patterns arrive from the MCP client, so a backtracking engine would let one
@@ -47,14 +54,6 @@ const MAX_MATCHES_PER_LINE = 100_000;
  * the rest of the process. Every caller MUST pass the result to
  * {@link freeRegex} when it is done with it.
  */
-
-/**
- * Largest input one RE2 call may scan as a single string. The input is copied
- * into the same fixed 16 MB wasm heap as the patterns; about 10 MB of input
- * aborts the module. 4 MiB leaves room for the copy and the pattern set.
- */
-export const RE2_MAX_INPUT_BYTES = 4 * MIB;
-
 export function compileRegex(pattern: string, options: { caseSensitive?: boolean } = {}): Regex {
   const flags = options.caseSensitive ? 'gu' : 'giu';
   try {
