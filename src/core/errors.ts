@@ -1,5 +1,3 @@
-import { ProtocolErrorCode } from '@modelcontextprotocol/server';
-
 export const ErrorCode = {
   ACCESS_DENIED: 'ACCESS_DENIED',
   NOT_FOUND: 'NOT_FOUND',
@@ -165,11 +163,6 @@ function classifyCauseChain(error: unknown): Problem {
 
 export function isFsError(error: unknown): error is FsError {
   return error instanceof FsError;
-}
-
-/** FsError traces to a caller-supplied argument; anything else is server-side. */
-export function fsErrorCode(error: unknown): ProtocolErrorCode {
-  return isFsError(error) ? ProtocolErrorCode.InvalidParams : ProtocolErrorCode.InternalError;
 }
 
 function classify(error: unknown): Problem {

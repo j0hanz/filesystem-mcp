@@ -597,6 +597,19 @@ describe('MCP Resources', () => {
       });
     });
 
+    it('client.readResource() on a not-file URI rejects with structured error.data', async () => {
+      const uri = buildFileResourceUri(clientTmpDir); // a directory, not a file
+      await assert.rejects(harness.client.readResource({ uri }), (err: unknown) => {
+        assert.ok(ProtocolError.isInstance(err), 'expected ProtocolError');
+        assert.strictEqual(err.code, ProtocolErrorCode.InvalidParams);
+        const data = (err as { data?: unknown }).data as Record<string, unknown>;
+        assert.strictEqual(data['code'], ErrorCode.NOT_FILE);
+        assert.ok(typeof data['path'] === 'string');
+        assert.strictEqual(data['suggestion'], 'Target is a directory, not a file.');
+        return true;
+      });
+    });
+
     it('resources/subscribe refuses a result URI as unsubscribable, not as missing', async () => {
       // `filesystem-mcp://result/{id}` is listed and readable, so a subscribe
       // must say it has no watcher, not that the resource does not exist.

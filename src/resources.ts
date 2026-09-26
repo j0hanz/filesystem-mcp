@@ -20,7 +20,7 @@ import {
 } from '@modelcontextprotocol/server';
 
 import type { FsError } from './core/errors.ts';
-import { ErrorCode, formatUnknownErrorMessage, fsErrorCode, isFsError } from './core/errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, isFsError } from './core/errors.ts';
 import {
   decodeFileUriPath,
   encodeFileUriPath,
@@ -405,9 +405,20 @@ function wrapRead(contract: ResourceContract) {
       }
       // A remaining FsError (NOT_FILE, TOO_LARGE, ...) traces to the
       // caller-supplied URI; anything else is a server-side failure and must
-      // not be blamed on the request.
-      const msg = isFsError(error) ? error.message : formatUnknownErrorMessage(error);
-      throw new ProtocolError(fsErrorCode(error), msg);
+      // not be blamed on the request. The Problem's identity fields ride the
+      // SDK's error.data channel: `message` stays the wire message, and
+      // code/path/suggestion give clients a machine-readable view. Keyed by
+      // `code`, so it cannot collide with the ResourceNotFoundError
+      // convention (data: { uri } and nothing else).
+      if (isFsError(error)) {
+        const { code, path, suggestion } = error.problem;
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, error.message, {
+          code,
+          ...(path !== undefined ? { path } : {}),
+          ...(suggestion !== undefined ? { suggestion } : {}),
+        });
+      }
+      throw new ProtocolError(ProtocolErrorCode.InternalError, formatUnknownErrorMessage(error));
     }
   };
 }
