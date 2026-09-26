@@ -381,6 +381,34 @@ describe('Security (P0)', () => {
       });
     });
 
+    it('the default denylist covers modern SSH keys and common credential stores', () => {
+      const matcher = new SensitiveMatcher();
+      const denied = [
+        'id_ed25519',
+        '.ssh/id_ed25519',
+        'id_ed25519_sk',
+        'id_ecdsa',
+        'ID_ECDSA.bak',
+        '.netrc',
+        '_netrc',
+        '.git-credentials',
+        '.pgpass',
+        '.docker/config.json',
+        '.kube/config',
+        'gcloud/application_default_credentials.json',
+      ];
+      for (const name of denied) {
+        assert.strictEqual(matcher.isSensitive(name), true, `${name} must be denied`);
+      }
+      // `*id_ed25519*` also catches `id_ed25519.pub`, exactly as `*id_rsa*`
+      // catches `id_rsa.pub` today — an accepted over-match, so no `.pub`
+      // or `.md` sibling is asserted readable here.
+      const allowed = ['docker/config.json', 'kube/config', 'netrc.txt', 'README.md'];
+      for (const name of allowed) {
+        assert.strictEqual(matcher.isSensitive(name), false, `${name} must stay readable`);
+      }
+    });
+
     it('TC-ALLOW-010: wildcard allow relief reaches hidden files', async () => {
       await withEnv({ FS_ALLOWLIST: 'fixtures/**', FS_ALLOW_SENSITIVE: undefined }, () => {
         const matcher = new SensitiveMatcher();

@@ -239,8 +239,15 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '.env.*',
   '.npmrc',
   '.pypirc',
+  '.netrc',
+  '_netrc',
+  '.git-credentials',
+  '.pgpass',
   '.aws/credentials',
   '.aws/config',
+  '.docker/config.json',
+  '.kube/config',
+  'application_default_credentials.json',
   '.mcpregistry_*_token',
   '*.pem',
   '*.key',
@@ -250,6 +257,8 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '*.cer',
   '*id_rsa*',
   '*id_dsa*',
+  '*id_ecdsa*',
+  '*id_ed25519*',
 ] as const;
 
 // Built-ins and operator-supplied deny entries live in separate tiers because
