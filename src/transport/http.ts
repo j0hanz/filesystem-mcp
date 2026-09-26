@@ -5,6 +5,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { McpHttpHandler, ServerNotifier } from '@modelcontextprotocol/server';
 import {
   createMcpHandler,
+  DEFAULT_MAX_REQUEST_BODY_SIZE,
   DEFAULT_REQUEST_TIMEOUT_MSEC,
   isJsonContentType,
   ProtocolErrorCode,
@@ -21,7 +22,7 @@ import { parseTrueEnvFlag } from '../core/path-utils.ts';
 import { PathGuard } from '../core/path.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { MIB, parseEnvInt } from '../core/util.ts';
+import { parseEnvInt } from '../core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -44,7 +45,6 @@ import {
 import type { RuntimeConfig } from './shared.ts';
 import { jsonRpcRequestId, listenSubscriptionUris, prepareListenWatchers } from './shared.ts';
 
-const MAX_REQUEST_BODY_BYTES = 4 * MIB;
 // Must exceed the idle timeout of any proxy in front of this server, or the
 // proxy reuses connections the server already closed (intermittent 502s).
 const KEEPALIVE_TIMEOUT_MS = 5_000;
@@ -88,7 +88,10 @@ function setupExpressApp(
 
   const app = createMcpExpressApp({
     host: httpHost,
-    jsonLimit: `${MAX_REQUEST_BODY_BYTES}b`,
+    // The express parser limit derives from the SDK's own request-body
+    // bound, so it and the adapter/handler-core defaults
+    // (`DEFAULT_MAX_REQUEST_BODY_SIZE`, 4 MiB in 2.1.0) cannot drift apart.
+    jsonLimit: `${DEFAULT_MAX_REQUEST_BODY_SIZE}b`,
     ...(allowedHosts.length > 0 ? { allowedHosts: [...allowedHosts] } : {}),
     ...(allowedOriginHostnames.length > 0 ? { allowedOrigins: [...allowedOriginHostnames] } : {}),
   });

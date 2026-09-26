@@ -256,7 +256,7 @@ describe('Real HTTP Server integration', () => {
   });
 
   it('5. POST /mcp with an oversized body -> 413', async () => {
-    const tooBig = 'x'.repeat(5 * 1024 * 1024); // > default 4 MiB FS_MAX_REQUEST_BYTES
+    const tooBig = 'x'.repeat(5 * 1024 * 1024); // > DEFAULT_MAX_REQUEST_BODY_SIZE (4 MiB)
     const r = await fetch(base, {
       method: 'POST',
       headers: {
