@@ -156,6 +156,7 @@ export const PATCH = defineTool({
       validPath,
       content: patched,
       resourceStore: ctx.resourceStore,
+      dryRun: args.dryRun,
     });
     return {
       structured: {

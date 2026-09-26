@@ -1409,6 +1409,26 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(result.isError, true);
   });
 
+  it('patch dryRun advertises no resourceUri or resource_link for the unwritten file', async () => {
+    const f = join(tmpDir, 'patch_dry.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
+    const dry = await harness.client.callTool({
+      name: 'patch',
+      arguments: { path: f, diff, dryRun: true },
+    });
+    assert.notStrictEqual(dry.isError, true);
+    assert.strictEqual((dry._meta as { resourceUri?: string }).resourceUri, undefined);
+    assert.ok(
+      !(dry.content as { type: string }[]).some((block) => block.type === 'resource_link'),
+      'a dry run links nothing',
+    );
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\n');
+
+    const real = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
+    assert.ok((real._meta as { resourceUri?: string }).resourceUri, 'a real write still links');
+  });
+
   it('patch rejects out-of-order hunks instead of duplicating text', async () => {
     const f = join(tmpDir, 'patch_order.txt');
     const original = 'abcdefghijklmnopqrst'.split('').join('\n') + '\n';
