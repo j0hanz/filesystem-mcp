@@ -10,20 +10,25 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 
 ## Execution order & status
 
-| Plan | Title                                                        | Priority | Effort | Depends on | Status                           |
-| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | -------------------------------- |
-| 001  | edit/patch/diff refuse non-UTF-8 files instead of corrupting | P1       | S      | —          | DONE                             |
-| 002  | edit ignoreWhitespace keeps edge blank lines and indentation | P1       | S      | —          | DONE                             |
-| 003  | Root containment treats `\` as a separator only on Windows   | P1       | S      | —          | DONE                             |
-| 004  | edit refuses a batch naming the same file twice              | P1       | S      | —          | DONE                             |
-| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | DONE                             |
-| 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | DONE                             |
-| 007  | CI runs the full check on Windows too                        | P2       | S      | —          | DONE (Windows job red until 011) |
-| 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | DONE                             |
-| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE                             |
-| 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | DONE                             |
-| 011  | A root configured through an alias counts as one root        | P1       | S      | —          | DONE                             |
-| 012  | Close the four small SDK gaps (audit 2026-09-26)             | P3       | S      | —          | DONE                             |
+| Plan | Title                                                        | Priority | Effort | Depends on | Status                                            |
+| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | ------------------------------------------------- |
+| 001  | edit/patch/diff refuse non-UTF-8 files instead of corrupting | P1       | S      | —          | DONE                                              |
+| 002  | edit ignoreWhitespace keeps edge blank lines and indentation | P1       | S      | —          | DONE                                              |
+| 003  | Root containment treats `\` as a separator only on Windows   | P1       | S      | —          | DONE                                              |
+| 004  | edit refuses a batch naming the same file twice              | P1       | S      | —          | DONE                                              |
+| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | DONE                                              |
+| 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | DONE                                              |
+| 007  | CI runs the full check on Windows too                        | P2       | S      | —          | DONE (Windows job red until 011)                  |
+| 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | DONE                                              |
+| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE                                              |
+| 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | DONE                                              |
+| 011  | A root configured through an alias counts as one root        | P1       | S      | —          | DONE                                              |
+| 012  | Close the four small SDK gaps (audit 2026-09-26)             | P3       | S      | —          | DONE                                              |
+| 013  | HTTP parses a body only after rate limiting and auth         | P1       | S      | —          | DONE (branch `advisor/013-http-parse-after-auth`) |
+| 014  | A cancelled write never reports failure after its commit     | P1       | S      | —          | DONE (branch `advisor/014-atomic-write-commit`)   |
+| 015  | Path completion reports the true match count and `hasMore`   | P2       | S      | —          | DONE (branch `advisor/015-completion-has-more`)   |
+| 016  | Error messages and comments name the real env vars           | P2       | S      | —          | DONE (branch `advisor/016-real-env-names`)        |
+| 017  | SDK error/URL gaps: subscribe error data, fragmentless id    | P3       | S      | —          | DONE (branch `advisor/017-sdk-error-url-gaps`)    |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -55,6 +60,32 @@ abandoned)
   root reads as "multiple roots", so path-less tool calls fail); the other six
   compare resolved paths with the unresolved `tmpdir()` spelling. 011 fixes
   both. `main` stays red on the Windows job until it lands.
+- **013–017 come from the SDK re-audit at `1eb94134`** (2026-09-26, after
+  012 landed). None depends on another, but **013, 016 and 017 all edit
+  `src/transport/http-policy.ts`** (013: two comments; 016: two message
+  strings and a comment; 017: the import list and `protectedResourceUrl`),
+  and **013 and 016 both edit `src/transport/http.ts`** (013: app assembly;
+  016: one comment at line 286). The lines do not overlap, but run them one
+  after another rather than in parallel worktrees. Suggested order: 013, 014,
+  015, 016, 017.
+- **Execution record (2026-09-26):** 013–017 were run as a stack. Each
+  branch starts from the previous approved one (`main` → 013 → 014 → 015 →
+  016 → 017). `advisor/017-sdk-error-url-gaps` therefore carries all five:
+  13 commits, 15 files, `npm run check` exit 0 (393 pass, 3 platform skips).
+  Each plan was reviewed on its own diff (`advisor/01N-1..advisor/01N`).
+  Notes for the record:
+  - 013's done criteria `grep -rn "createMcpExpressApp" src/` and "exactly
+    one `express.json`" were over-broad: both also match the explanatory
+    comment the plan itself dictated. The intent holds: no
+    `createMcpExpressApp(` call remains, and the only `express.json(` call is
+    route-level.
+  - A one-off bare `test failed` in `__tests__/tools.test.ts` ("HTTP
+    pagination survives the per-request server factory") appeared once in
+    about 25 full runs across `main` and the stack, and never reproduced.
+    Watch for it.
+- 014 was already listed under "Found but not planned" from the first run
+  (`src/core/fs.ts:98`). The re-audit reproduced it deterministically, and
+  it was selected this time.
 
 ## Findings considered and rejected
 
@@ -109,6 +140,33 @@ only`. Dead end — skip permanently unless the SDK revives it.
   and `createServerNotifier` (implemented in `dist/mcp-*.mjs`, exported from
   no installed d.mts).
 
+From the SDK re-audit at `1eb94134` (2026-09-26; four agents, every cited
+line re-read by the advisor; the docs site's package-level export list
+matched the installed `server/dist/index.d.mts:773` exactly, 412 names):
+
+- The doc-only set is unchanged: `parseListenFilter` / `createListenRouter`
+  and `createServerNotifier`. Every other doc-only name on the per-module
+  doc pages is an internal helper that no package entry re-exports.
+- Duplicate unrestricted-host warning (`src/transport/http.ts:104-108` plus
+  the SDK's `console.warn`): moot once 013 lands, since 013 drops
+  `createMcpExpressApp`.
+- `isLoopbackHttpHost` → SDK `localhostAllowedHostnames()`: the Host-header
+  form is not the bind-address form (no bare `::1`). Not equivalent.
+- `RegisteredTool.disable()` for the `--read-only` gate
+  (`src/tools/index.ts:36-43`): the config is static, and filtering at
+  registration is simpler.
+- SDK private `createToolError` for handler throws
+  (`src/tools/define.ts:289-298`): it returns the bare message only and would
+  drop the error code, the suggestion and the progress fail frame.
+- `MissingRequiredClientCapabilityError` for the elicitation pre-check
+  (`src/core/input-required.ts:196-230`): a protocol error the model never
+  sees; the custom `isError` result is actionable.
+- `UriTemplate.expand` for file-URI encoding (`src/core/file-uri.ts:24-40`):
+  the SDK's `{+path}` expansion leaves `#` and `?` raw, which truncates the
+  path.
+- `inputRequired.listRoots()` for modern-era roots: the client `roots`
+  capability is deprecated (SEP-2577).
+
 ## Found but not planned (available for a later run)
 
 - File subscriptions go silent after an atomic replace on Linux/macOS
@@ -125,9 +183,38 @@ only`. Dead end — skip permanently unless the SDK revives it.
   `move`'s EXDEV fallback (`move.ts:416`).
 - `replace_text` computes each diff before checking the diff budget
   (`replace-text.ts:381`).
-- An abort racing the atomic rename reports a completed write as failed
-  (`src/core/fs.ts:98`).
 - ADR line anchors drifted (all six in ADR-001).
+
+From the SDK re-audit at `1eb94134`:
+
+- Dead code, three spots:
+  - A second, never-firing 5 s timeout at `src/tools/list.ts:283` (the tool's
+    `timeoutMs` already bounds `ctx.signal`).
+  - A duplicate `validateExistingPath` at `src/resources.ts:220` (`readRaw`
+    validates again at `src/core/fs.ts:365`).
+  - Notifier branches that cannot run in production at
+    `src/server.ts:151-154` and `src/resources.ts:497-500`.
+- Stale docs:
+  - ADR-002 anchors (`resources.ts:452-559` is now 475-547; `define.ts:159-162`
+    is now 166-177; `README.md:294` is now 312-314).
+  - ADR-003 anchors (`http.ts:312` is now 316) and its "per session/IP"
+    limiter wording (per-IP only).
+  - Wrong comments at `src/tools/list.ts:340-343`, `src/transport/http.ts:240-243`,
+    `src/server.ts:78-81`, `src/core/schema.ts:10-12`,
+    `src/core/errors.ts:173-178` and `src/transport/stdio.ts:103`.
+  - `README.md:291,302` still refer to `src/transport.ts` as the transport
+    module.
+- Elicitation answer readers accept values that were never offered
+  (`src/core/input-required.ts:116-118`). Validating with the SDK's
+  `acceptedContent(schema)` against the offered `z.enum` would put the check
+  in one place instead of four call sites. Every current caller is correct;
+  this is hardening.
+- Cosmetic reuse of SDK types:
+  - `ProtocolEra` / `CacheScope` for the hand-written unions at
+    `src/server.ts:64,91` and `src/resources.ts:66,72`.
+  - `NodeMcpRequestHandler` for `src/transport/http.ts:79`.
+  - `satisfies OAuthProtectedResourceMetadata` on the metadata body at
+    `src/transport/http.ts:128-132`.
 
 ## Not audited this run
 
