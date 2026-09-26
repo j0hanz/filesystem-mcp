@@ -420,7 +420,7 @@ async function handleEditFile(
     // resourceUri or a resource_link at — the file on disk is still the one the
     // caller already has. No write, no link.
     const meta: WrittenFileMeta = {
-      ...buildWrittenFileMeta(editResult.content, validPath, ctx.resourceStore),
+      ...buildWrittenFileMeta(validPath, editResult.content, ctx.resourceStore),
       resourceUri: undefined,
       resourceLink: undefined,
     };

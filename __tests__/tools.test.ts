@@ -2149,6 +2149,13 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const editText = firstTextBlock(edit).text ?? '';
     assert.ok(editText.includes('NO MATCH "gamma"'), editText);
     assert.match(editText, /^\+ALPHA$/mu);
+    // Dry-run metadata describes the would-be file, and advertises no URI for
+    // content that was never written.
+    const editValue = (
+      edit._meta as { results: { value?: { size?: number; resourceUri?: string } }[] }
+    ).results[0]?.value;
+    assert.strictEqual(editValue?.size, 'ALPHA\nbeta\n'.length);
+    assert.strictEqual(editValue?.resourceUri, undefined);
     // A real edit fails the file instead, and must still say which oldText missed.
     const applied = await harness.client.callTool({
       name: 'edit',
