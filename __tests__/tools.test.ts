@@ -1841,6 +1841,57 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(content, 'QUX bar QUX\n');
   });
 
+  it('replace_text expands $ tokens exactly like String.prototype.replace', async () => {
+    const twelve = '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)';
+    const cases: { input: string; pattern: string; replacement: string }[] = [
+      { input: 'xaby', pattern: '(a)(b)', replacement: '[$1|$2]' },
+      { input: 'xaby', pattern: '(a)(b)', replacement: '<$&>' },
+      { input: 'xaby', pattern: '(a)(b)', replacement: '{$`}' },
+      { input: 'xaby', pattern: '(a)(b)', replacement: "{$'}" },
+      { input: 'xaby', pattern: '(a)(b)', replacement: '$$1' },
+      { input: 'xaby', pattern: '(a)', replacement: '$12' },
+      { input: 'xaby', pattern: '(a)', replacement: '$0' },
+      { input: 'xaby', pattern: '(a)', replacement: '$100' },
+      { input: 'xaby', pattern: '(a)', replacement: 'end$' },
+      { input: 'xaby', pattern: '(a)', replacement: '$3' },
+      { input: 'abcdefghijkl', pattern: twelve, replacement: '$12' },
+      { input: '\u{1F600}ab', pattern: '(a)', replacement: '$`' },
+    ];
+    for (const [i, c] of cases.entries()) {
+      const file = await writeTestFile(tmpDir, `dollar/case${String(i)}.txt`, c.input);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.pattern,
+          replacement: c.replacement,
+          isRegex: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, `case ${String(i)} errored`);
+      const expected = c.input.replace(new RegExp(c.pattern, 'g'), c.replacement);
+      assert.strictEqual(
+        await readFile(file, 'utf-8'),
+        expected,
+        `case ${String(i)}: ${c.replacement}`,
+      );
+    }
+
+    // A literal search reaches the regex matcher when it is case-insensitive,
+    // and there the replacement must stay verbatim.
+    const literal = await writeTestFile(tmpDir, 'dollar/literal.txt', 'Alpha alpha');
+    await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: literal,
+        searchPattern: 'ALPHA',
+        replacement: '$1',
+        caseSensitive: false,
+      },
+    });
+    assert.strictEqual(await readFile(literal, 'utf-8'), '$1 $1');
+  });
+
   // Decoding these as UTF-8 and writing the result back swaps every invalid
   // byte for U+FFFD, corrupting the file even though the match itself is ASCII.
   it('replace_text leaves binary and non-UTF-8 files untouched', async () => {
