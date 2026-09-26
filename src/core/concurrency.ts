@@ -8,12 +8,21 @@ export type StoppedReason = 'maxResults' | 'maxFiles' | 'timeout';
 export const StoppedReasonSchema = z.enum(['maxResults', 'maxFiles', 'timeout']).optional();
 
 /**
- * The subset `search_text` and `find_files` can actually emit. Their scans call
- * only `hitMaxResults` and `hitAbort` (search.ts), never `hitMaxFiles`, so the
- * three-value enum published a value no response can carry and disagreed with
- * both tools' own descriptions.
+ * The subset `search_text` and `find_files` can actually emit. Both scans
+ * resolve the stop through `resolveStopReason` below, which answers only
+ * `maxResults` or `timeout` — never `maxFiles` — so the three-value enum
+ * published a value no response can carry and disagreed with both tools' own
+ * descriptions.
  */
 export const SearchStoppedReasonSchema = z.enum(['maxResults', 'timeout']).optional();
+
+/** The one precedence both scans share: the result cap wins over an abort that fired the same iteration. */
+export function resolveStopReason(
+  hitCap: boolean,
+  aborted: boolean,
+): 'maxResults' | 'timeout' | undefined {
+  return hitCap ? 'maxResults' : aborted ? 'timeout' : undefined;
+}
 
 interface ParallelResult<R> {
   results: { index: number; value: R }[];

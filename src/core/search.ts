@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
+import { resolveStopReason } from './concurrency.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
 import { getMaxTextFileSize } from './util.ts';
@@ -197,9 +198,9 @@ export interface SearchContentOutcome {
     /** Files skipped because they contain a NUL byte (binary). */
     skippedBinary: number;
     /**
-     * `StoppedReason` narrowed to the stops these scans can produce: both call
-     * only `hitMaxResults`/`hitAbort` (see concurrency.ts) — never
-     * `hitMaxFiles`, which belongs to `replace_text`'s per-file cap.
+     * `StoppedReason` narrowed to the stops these scans can produce: both
+     * resolve the stop through `resolveStopReason` (concurrency.ts) — never
+     * `maxFiles`, which belongs to `replace_text`'s per-file cap.
      */
     stoppedReason?: 'maxResults' | 'timeout';
   };
@@ -311,11 +312,9 @@ export async function searchContent(
       }
     }
 
-    // The result cap is the definite cause even when the abort fired on the same
-    // iteration, matching StopReasonTracker's precedence for the two stops this
-    // scan can record (see the summary type's narrowing note).
-    const stoppedReason =
-      matches.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
+    // The result cap is the definite cause even when the abort fired on the
+    // same iteration (see the summary type's narrowing note).
+    const stoppedReason = resolveStopReason(matches.length >= maxResults, counters.stoppedByAbort);
 
     return {
       basePath: directory,
@@ -380,7 +379,7 @@ export async function searchFiles(
     filesScanned: number;
     truncated: boolean;
     skippedInaccessible: number;
-    /** Narrowed like SearchContentOutcome's — scans never hit `hitMaxFiles`. */
+    /** Narrowed like SearchContentOutcome's — scans never `maxFiles`. */
     stoppedReason?: 'maxResults' | 'timeout';
   };
 }> {
@@ -414,8 +413,7 @@ export async function searchFiles(
   }
 
   // Same precedence as above: the result cap wins over a same-iteration abort.
-  const stoppedReason =
-    results.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
+  const stoppedReason = resolveStopReason(results.length >= maxResults, counters.stoppedByAbort);
 
   return {
     basePath: directory,
