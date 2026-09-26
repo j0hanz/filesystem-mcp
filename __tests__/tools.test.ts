@@ -2,7 +2,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -933,6 +933,26 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(newRead.isError, true);
     const block = firstTextBlock(newRead);
     assert.ok(block.text?.includes('move me'));
+  });
+
+  it('move performs a case-only rename on a case-insensitive filesystem', async (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-only rename is only special on a case-insensitive filesystem');
+      return;
+    }
+    const dir = join(tmpDir, 'case_rename');
+    const lower = await writeTestFile(tmpDir, 'case_rename/foo.txt', 'same bytes\n');
+    const upper = join(dir, 'Foo.txt');
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: lower, destination: upper }] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const moves = (result._meta as { moves?: { to: string }[] }).moves ?? [];
+    assert.strictEqual(moves.length, 1, 'a case-only rename is real work, not a no-op');
+    assert.deepStrictEqual(await readdir(dir), ['Foo.txt']);
+    assert.strictEqual(await readFile(upper, 'utf-8'), 'same bytes\n');
   });
 
   it("read's resource_link and resourceUri name the same file", async () => {

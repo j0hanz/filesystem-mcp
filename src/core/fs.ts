@@ -31,6 +31,7 @@ import {
 import { detectMimeFromContent } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
+import { respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import { assertFileStats, createTooLargeError, readFileWithStats } from './read.ts';
@@ -210,7 +211,9 @@ export class GuardedFileSystem {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
-    const validNew = await this.pathGuard.validatePathForWrite(newPath);
+    let validNew = await this.pathGuard.validatePathForWrite(newPath);
+    // Renaming a path onto itself is only meaningful as a case-only rename.
+    if (validOld === validNew) validNew = respellCaseOnlyTarget(newPath, validNew);
     await fsRename(validOld, validNew);
   }
 
