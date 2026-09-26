@@ -9,6 +9,13 @@ import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
 import { getMaxTextFileSize, MIB } from './util.ts';
 
+/**
+ * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
+ * that references its parent, so a kept line would otherwise pin the whole
+ * file's text for as long as the match list lives (60 s in the page store).
+ */
+const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
+
 interface SearchResult {
   file: string;
   line: number;
@@ -294,12 +301,12 @@ export async function searchContent(
               file: entry.path,
               line: i + 1,
               column: found.column,
-              content: line,
+              content: own(line),
               matchCount: found.count,
               ...(context > 0
                 ? {
-                    before: lines.slice(Math.max(0, i - context), i),
-                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)),
+                    before: lines.slice(Math.max(0, i - context), i).map(own),
+                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)).map(own),
                   }
                 : {}),
             });
