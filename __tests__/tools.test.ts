@@ -620,6 +620,38 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n  go();\n}\n');
   });
 
+  it('edit with ignoreWhitespace keeps the blank line and indentation after a trailing newline', async () => {
+    const file = await writeTestFile(
+      tmpDir,
+      'ambiguous/trailing-edge.py',
+      'def f():\n    x = 1\n\n    y = 2\n',
+    );
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: '    x = 1\n', newText: '    x = 3\n' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'def f():\n    x = 3\n\n    y = 2\n');
+  });
+
+  it('edit with ignoreWhitespace keeps the blank lines before a leading newline', async () => {
+    const file = await writeTestFile(tmpDir, 'ambiguous/leading-edge.txt', 'a\n\n\n    y = 2\n');
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: '\n    y = 2', newText: '\n    y = 3' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'a\n\n\n    y = 3\n');
+  });
+
   it('edit names the ambiguous edit and flags lines shifted by earlier edits', async () => {
     const original = 'x\nfoo\nfoo\n';
     const file = await writeTestFile(tmpDir, 'ambiguous/index.txt', original);

@@ -178,6 +178,21 @@ interface EditMatches {
 }
 
 /**
+ * Pattern for a whitespace run of oldText that contains a newline. Between two
+ * pieces of text it stays flexible — at least one newline, as many as the file
+ * has. At either edge of oldText it matches exactly the newlines written: a
+ * flexible edge swallows the blank lines around the match and, at the trailing
+ * edge, the next line's indentation, all of which newText then replaces.
+ */
+function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
+  if (!edge.leading && !edge.trailing) return '[^\\S\\n]*\\n+[^\\S\\n]*';
+  const count = token.split('\n').length - 1;
+  const lines = `(?:[^\\S\\n]*\\n){${String(count)}}`;
+  // Nothing after the final newline unless the caller wrote indentation there.
+  return edge.trailing && token.endsWith('\n') ? lines : `${lines}[^\\S\\n]*`;
+}
+
+/**
  * Where `oldText` matches. `count` is non-overlapping occurrences, except that a
  * lone match with a second one overlapping it counts two (`abab` in `ababab`),
  * since either is a span the caller could have meant — the count is exact only
@@ -200,13 +215,19 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // line. Horizontal whitespace stays mandatory between word characters so
     // adjacent identifiers are not merged. Built token by token: `split` on
     // whitespace puts text at even indices and whitespace runs at odd ones.
+    // A newline run at either edge of oldText matches exactly, so the edit
+    // cannot reach past the lines the caller named.
     const tokens = oldText.split(/(\s+)/u);
+    const last = tokens.length - 1;
     let pattern = '';
     for (const [i, token] of tokens.entries()) {
       if (i % 2 === 0) {
         pattern += RegExp.escape(token);
       } else if (token.includes('\n')) {
-        pattern += '[^\\S\\n]*\\n+[^\\S\\n]*';
+        pattern += newlineRunPattern(token, {
+          leading: i === 1 && tokens[0] === '',
+          trailing: i === last - 1 && tokens[last] === '',
+        });
       } else if (/\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '')) {
         pattern += '[^\\S\\n]+';
       } else {
