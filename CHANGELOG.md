@@ -5,32 +5,119 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.6.0] - 2026-09-26
 
-An internal cleanup release: the 21 surviving cuts from the 2026-09-26
-over-engineering audit, each adversarially verified before applying. No
-protocol, tool, or schema surface changed, so nothing needs adapting before
-you upgrade.
+A hardening and stability release. Five security fixes close fail-open
+access gaps, the walking and editing tools gain a batch of correctness
+fixes, and the 21 verified over-engineering audit cuts land with no
+published surface change. The declared surface (tools, capabilities,
+instructions, prompts, resources) is identical to 2.5.2. Read **Changed**
+before upgrading: HTTP requests are refused before their body is parsed,
+several tools now refuse files they previously mishandled (UTF-16,
+non-UTF-8, oversized regex inputs, duplicate batch paths), and `edit`'s
+diff fields are now optional.
+
+### Security
+
+- **POSIX path containment.** `isPathInsideDirectory` treated `\` as a
+  path separator on every platform, so on POSIX a pre-existing sibling
+  directory named `<root>\x` outside the sandbox was judged inside the
+  root — allowing reads, writes, and deletes outside it. A backslash now
+  separates path components only on Windows.
+- **Sensitive files denied by default.** Modern SSH key types and common
+  credential stores are refused by the sensitive-file guard.
+- **Safer grant targets.** Grants for ancestors of the home and system
+  directories, and for subtrees of well-known secret files, are refused
+  outright.
+- **Windows reserved device names.** `CON`, `PRN`, `AUX`, and friends are
+  refused on Windows only, so the same name on POSIX stays usable.
+- **Hardened .gitignore loading.** The walker loads only regular
+  `.gitignore` files under 1 MiB, so a special file or a huge generated
+  ignore list can no longer stall or poison the walk.
+
+### Added
+
+- **`--print-config` reports the access policy.** The deny and allow glob
+  lists and the configured boundary print alongside the roots.
+- **Structured resources errors.** Protocol errors carry the Problem
+  identity fields in `error.data`.
+- **Coalesced `list_changed`.** Same-tick `resources/list_changed`
+  notifications are debounced into one.
+- **HTTP error observability.** Node-adapter 500s reach the logger via
+  the SDK's `onerror` hook.
 
 ### Changed
 
-- **Leaner publish check.** `scripts/publish-smithery.mjs` replaces its
-  hand-rolled stdio JSON-RPC client with `Client` and `StdioClientTransport`
-  from `@modelcontextprotocol/client`, per-request 15s timeouts, the same
-  `<n> tools` output and exit codes.
-- **Tighter configs.** `tsconfig.json` keeps only the `lib` entries the code
-  uses (`es2024`, `ES2025.RegExp`), and both tsconfigs drop `exclude` keys
-  that filtered nothing. The release job's inert `registry-url` is gone.
-- **Simpler core.** Drive-relative-path detection uses `win32.parse` instead
-  of a hand-rolled parser; code-point counting uses string spread; the
-  `encoding` option nobody varied, the `isHidden` delegate, two unwired
-  signal params, and a dead `FileHandle` re-export are gone; the batch tools
-  share one `perPathEnvelope` schema factory and a positional
-  `defaultErrorCode`.
-- **Deduplicated tests.** `stdio.test.ts` shares one modern-era client meta
-  const and one `server/discover` helper; hand-rolled timeout races and
-  `AbortSignal.timeout`/`console.error` stubs use `node:test`'s
-  `t.mock.method`.
+- **Request bodies are parsed after auth.** `POST /mcp` now mounts its
+  JSON parser after CORS, rate limiting, and bearer auth: an
+  unauthenticated or rate-limited request is refused without its body
+  being read, malformed JSON from an unauthenticated caller gets 401
+  instead of 400, and parser refusals carry the CORS header.
+- **Tighter default exclusion in walks.** A default-excluded name (e.g.
+  `node_modules`) is now also excluded below a dot-directory, and the walk
+  prunes past `maxDepth`. Large-tree walks drop from ~3.7 s to ~0.43 s.
+- **`search_text` skips binary files.** Files containing a NUL byte are
+  skipped (counted in a new `skippedBinary` field) and CRLF lines split
+  correctly, so `$`-anchored patterns match.
+- **`read` refuses UTF-16 files by name.** They previously decoded as
+  lossy UTF-8; they now answer `INVALID_INPUT`.
+- **`edit`, `patch`, and `diff` refuse non-UTF-8 files.** A stray Latin-1
+  byte used to be silently rewritten as U+FFFD on save; these tools now
+  answer `INVALID_INPUT`. `read` keeps its tolerant behavior.
+- **Every diff is bounded by 1 s.** A pathological diff degrades instead
+  of freezing: the `diff` tool answers `TOO_LARGE`, and `edit`'s
+  `linesAdded`/`linesRemoved`/`diff` fields are now optional and may be
+  absent.
+- **`replace_text` guards the regex engine's input size.** Regex-mode
+  replacements above RE2's safe input size answer `TOO_LARGE` and name
+  the `caseSensitive: true` workaround.
+- **Path validation refuses only a whole `..` segment.** `;`, `|`, and
+  backtick are ordinary characters again, so
+  `app/blog/[...slug]/page.tsx` and `docs/v1..2.md` are legal.
+- **Duplicate paths rejected in batch mode.** `create` and `edit` refuse
+  a batch that names one file twice instead of racing the entries.
+- **Aliased roots count once.** A root configured through a symlink or an
+  8.3 short name lists once in `list_roots` and `--print-config`.
+- **Malformed subscribe paths answer `-32602`** with `error.data`,
+  matching `resources/read`.
+- **`FS_PUBLIC_URL` fragments are stripped**, per RFC 8707.
+- **Leaner internals from the over-engineering audit.** 21 verified cuts,
+  net -201 lines: the Smithery publish check uses the SDK's stdio client,
+  tsconfig keeps only the `lib` entries in use, `win32.parse` replaces a
+  hand-rolled drive-spec parser, and the batch tools share one
+  `perPathEnvelope` schema factory.
+
+### Fixed
+
+- **Watchers survive atomic replaces.** A file subscription watches the
+  parent directory, so replace-by-rename still notifies.
+- **`edit` matches CRLF files.** Consistently-CRLF files match and keep
+  their line endings.
+- **`edit` edge newlines under `ignoreWhitespace`.** A newline run at the
+  very start or end of `oldText` matches exactly, without swallowing
+  surrounding blank lines.
+- **Case-only renames work.** `move` performs a case-only rename instead
+  of reporting nothing.
+- **Pagination survives an oversized cache.** A page larger than the
+  cache returns instead of failing.
+- **Batch read budgets by returned bytes.** Ranged reads are bounded
+  again, and a batch skips only the file that does not fit.
+- **Walk dirents anchor to the walk root.** A dirent whose parent path
+  came back relative no longer crashes the `ignore` library.
+- **Atomic writes commit unraced.** An abort that fires mid-rename
+  reports cancelled without double-applying on retry, and the temp file
+  keeps the target's mode.
+- **No phantom last match.** `search_text` no longer matches the empty
+  line after a trailing newline, and match lines own their strings.
+- **Path completion reports `hasMore`.** Completions past 100 matches say
+  so instead of truncating silently.
+- **Refusals name the real env vars.** Error messages point at
+  `FS_ALLOW_SENSITIVE` and `FS_API_KEY`, and the next-page hint prints a
+  callable form.
+- **Diff stats count lines only inside hunks.** Content lines starting
+  with `--` or `++` are no longer dropped.
+- **An empty Smithery key fails the publish step** instead of passing
+  green.
 
 ## [2.5.2] - 2026-09-25
 
