@@ -123,6 +123,9 @@ jobs:
           npm ci --ignore-scripts
           npm run check
 
+      - name: Release-only build paths (Docker, MCPB, Smithery dry run)
+        run: bash scripts/check-release-paths.sh
+
       - name: Commit, tag & push
         env:
           VERSION: ${{ steps.ver.outputs.version }}
