@@ -23,6 +23,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE                             |
 | 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | DONE                             |
 | 011  | A root configured through an alias counts as one root        | P1       | S      | —          | DONE                             |
+| 012  | Close the four small SDK gaps (audit 2026-09-26)             | P3       | S      | —          | DONE                             |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -46,6 +47,8 @@ abandoned)
   Mark it REJECTED if you do not want it — 009 then needs fixture names that
   cannot collide.
 - 003, 006 and 007 are independent of everything else.
+- 012 is independent of everything else; it comes from the 2026-09-26
+  SDK-vs-codebase audit (commit `8d9bd0c2`), not the original run.
 - **011 was found by 007.** The first Windows CI run (run 36232184074, on
   `16698cbe`) failed 7 tests. The runner's `tmpdir()` is an 8.3 short path, so
   every test root is an alias. One failure is a product bug (a single aliased
@@ -68,6 +71,43 @@ abandoned)
 - Previously settled (do not re-propose): `exactOptionalPropertyTypes`
   spreads, the `resources.ts` contract layer, the local `LoggingLevel` union,
   `destructiveHint` annotations, the watcher registry's URI-only keying.
+
+From the 2026-09-26 SDK audit (against installed server 2.1.0 / node 2.1.0 /
+express 2.0.1; every claim verified against `dist/*.d.mts`, not the docs
+site — the docs run ahead):
+
+- Tasks API cluster (`Task`, `ToolExecution`, `tasks/*` wire methods,
+  `RELATED_TASK_META_KEY`): every export is `@deprecated 2025-11-25 wire
+vocabulary with no SDK runtime; kept importable for interoperability
+only`. Dead end — skip permanently unless the SDK revives it.
+- `requireBearerAuth` / `verifyBearerToken` / `bearerAuthChallengeResponse` /
+  `buildOAuthProtectedResourceMetadata` / `mcpAuthMetadataRouter`:
+  mechanically unfit for the static-operator-key model (verifier and
+  `oauthMetadata` are required inputs; the 401 body is OAuth JSON, not a
+  JSON-RPC envelope). The hand-rolled middleware is documented at
+  `src/transport/http-policy.ts:258-264` and stays.
+- `isJSONRPCResultResponse` / `isJSONRPCErrorResponse` in the stdio
+  send-wrap (`src/transport/stdio.ts:223`): SDK covers it, but the guards
+  deep-parse every outbound message; the O(1) `'id' in message` check is
+  deliberately kept.
+- `specTypeSchemas.CancelledNotification` for the cancelled-request parse
+  (`src/transport/stdio.ts:42`): hand-parse is the cheap path on the
+  every-message hot line; migrating buys strict-shape validation only.
+- `maxSubscriptions` tuning (both legs): default 1024 already active; the
+  binding constraint is `MAX_WATCHERS` (256).
+- `scopeChallenge` / `requireScopes`, `icons` (implementation/tool/prompt),
+  `responseMode`, `bus` injection, `EventStore` + sessionful transports
+  (ADR-003), `inputRequired.{maxRounds,roundTimeoutMs,legacyShim}` tuning
+  (defaults are load-bearing), `preloadSchemas` / `fromJsonSchema` /
+  `SdkError` / sampling: no story for this server.
+- `debouncedNotificationMethods` for `resources/updated` (as opposed to
+  `list_changed`, which plan 012 adopts): the watcher registry already
+  debounces per-URI across ticks.
+- Doc-only symbols (docs site ahead of 2.1.0 — re-check on the next SDK
+  bump): `parseListenFilter` / `createListenRouter` (listenRouter module,
+  would replace `listenSubscriptionUris` in `src/transport/shared.ts:58-66`)
+  and `createServerNotifier` (implemented in `dist/mcp-*.mjs`, exported from
+  no installed d.mts).
 
 ## Found but not planned (available for a later run)
 
