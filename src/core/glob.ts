@@ -301,7 +301,7 @@ function* processDirentMatch(
   seen: Set<string>,
   onlyFiles: boolean,
 ): Generator<GlobEntry> {
-  const absolutePath = resolve(match.parentPath, match.name);
+  const absolutePath = resolve(cwd, match.parentPath, match.name);
 
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);
@@ -325,9 +325,11 @@ function createExcludeFilter(
   }
 
   return (match: GlobDirentLike) => {
-    const relPath = match.parentPath
-      ? relative(cwd, join(match.parentPath, match.name))
-      : match.name;
+    // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
+    // root, not the process cwd — when it re-visits a directory under `**` whose
+    // name also exists in the process cwd. Resolving against `cwd` names the
+    // entry the dirent describes; `join` would resolve it against the process.
+    const relPath = relative(cwd, resolve(cwd, match.parentPath, match.name));
 
     const posixRel = toPosixPath(relPath);
 
