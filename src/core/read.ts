@@ -1,4 +1,5 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
+import { isUtf8 } from 'node:buffer';
 import type { Stats } from 'node:fs';
 import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -56,7 +57,7 @@ async function isProbablyBinary(
 }
 
 export type ReadSpec =
-  | { kind: 'full'; signal?: AbortSignal }
+  | { kind: 'full'; signal?: AbortSignal; strictUtf8?: boolean }
   | { kind: 'head'; lines: number; signal?: AbortSignal }
   | { kind: 'tail'; lines: number; signal?: AbortSignal }
   | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
@@ -411,9 +412,15 @@ async function readFullContent(
   handle: FileHandle,
   maxSize: number,
   requestedPath: string,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  strictUtf8: boolean,
 ): Promise<{ content: string; totalLines: number }> {
   const buffer = await readFileBufferWithLimit(handle, maxSize, requestedPath, signal);
+  // The binary probe samples only the first 512 bytes. A caller that writes the
+  // text back must refuse any byte the decode would replace with U+FFFD.
+  if (strictUtf8 && (!isUtf8(buffer) || buffer.includes(0))) {
+    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary or non-UTF-8 file detected.', requestedPath);
+  }
   const content = buffer.toString('utf-8');
   return { content, totalLines: countLines(content) };
 }
@@ -455,6 +462,7 @@ async function readByMode(
         options.maxSize,
         filePath,
         options.signal,
+        spec.strictUtf8 === true,
       );
       return {
         path: validPath,

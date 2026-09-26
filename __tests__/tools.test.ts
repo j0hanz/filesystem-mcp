@@ -1721,6 +1721,41 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
   });
 
+  it('edit, patch and diff refuse a non-UTF-8 file and leave its bytes intact', async () => {
+    const dir = join(tmpDir, 'nonutf8');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'late.txt');
+    // First 512 bytes are plain ASCII; the bad byte (0xe9) lands past the binary probe.
+    const bytes = Buffer.concat([
+      Buffer.from('a'.repeat(600) + '\nhello\n'),
+      Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
+    ]);
+    await writeFile(path, bytes);
+
+    const edited = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path, edits: [{ oldText: 'hello', newText: 'bye' }] },
+    });
+    assert.strictEqual(edited.isError, true);
+    assert.strictEqual(failedSummary(edited)?.results?.[0]?.error?.code, 'INVALID_INPUT');
+    assert.deepStrictEqual(await readFile(path), bytes);
+
+    // Line 1 is the 600 `a`s, line 2 is `hello`; this hunk would apply cleanly to
+    // a UTF-8 file, so a refusal here can only come from the new strict-UTF-8 check.
+    const patched = await harness.client.callTool({
+      name: 'patch',
+      arguments: { path, diff: '--- f\n+++ f\n@@ -2,1 +2,1 @@\n-hello\n+bye\n' },
+    });
+    assert.strictEqual(patched.isError, true);
+    assert.deepStrictEqual(await readFile(path), bytes);
+
+    const diffed = await harness.client.callTool({
+      name: 'diff',
+      arguments: { a: path, b: path },
+    });
+    assert.strictEqual(diffed.isError, true);
+  });
+
   // Both tools author their own text, so the structured half ships under
   // `_meta`, which a client like Claude Code never shows the model. The dry-run
   // diff, the unmatched oldText, and replace_text's stop reason lived only there.

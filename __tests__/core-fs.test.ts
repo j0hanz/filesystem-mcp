@@ -155,6 +155,42 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         (error) => isFsError(error) && error.message === 'Binary file detected.',
       );
     });
+
+    it('readEditableText rejects non-UTF-8 bytes past the binary probe', async () => {
+      const filePath = join(tmpDir, 'latin1-late.txt');
+      await writeFile(
+        filePath,
+        Buffer.concat([
+          Buffer.alloc(600, 0x61),
+          Buffer.from('\ncaf'),
+          Buffer.from([0xe9]),
+          Buffer.from('\n'),
+        ]),
+      );
+      await assert.rejects(
+        fs.readEditableText(filePath),
+        (error) =>
+          isFsError(error) &&
+          error.code === ErrorCode.INVALID_INPUT &&
+          error.message === 'Binary or non-UTF-8 file detected.',
+      );
+      // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
+      const fullRead = await fs.readFile(filePath, { kind: 'full' });
+      assert.ok(fullRead.content.endsWith('caf\uFFFD\n'));
+
+      const utf16 = join(tmpDir, 'utf16le.txt');
+      await writeFile(
+        utf16,
+        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
+      );
+      await assert.rejects(
+        fs.readEditableText(utf16),
+        (error) =>
+          isFsError(error) &&
+          error.code === ErrorCode.INVALID_INPUT &&
+          error.message === 'Binary or non-UTF-8 file detected.',
+      );
+    });
   });
 
   describe('Create nested & overwrite (TC-FUNC-010–011)', () => {
