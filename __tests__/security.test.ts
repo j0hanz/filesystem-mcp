@@ -90,6 +90,8 @@ describe('Security (P0)', () => {
         (err) => {
           assert(isFsError(err));
           assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+          assert.match(err.message, /--allow-sensitive/);
+          assert.match(err.message, /FS_ALLOW_SENSITIVE=1/);
           return true;
         },
         'Should reject access to .env',

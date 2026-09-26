@@ -619,7 +619,7 @@ export class PathGuard {
     if (this.isSensitive(checkPath)) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        'Sensitive file blocked. Set ALLOW_SENSITIVE=1 to override.',
+        'Sensitive file blocked. Start the server with --allow-sensitive (or FS_ALLOW_SENSITIVE=1) to override.',
         requestedPath,
       );
     }

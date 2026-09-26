@@ -272,6 +272,7 @@ describe('HTTP Policy & Security', () => {
           assert(isFsError(err));
           assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
           assert.match(err.message, /Refusing to bind HTTP server to non-loopback host/);
+          assert.match(err.message, /FS_API_KEY/);
           return true;
         },
         '0.0.0.0 without key should throw PERMISSION_DENIED',
@@ -313,6 +314,7 @@ describe('HTTP Policy & Security', () => {
           assert(isFsError(err));
           assert.strictEqual(err.code, ErrorCode.PERMISSION_DENIED);
           assert.match(err.message, /insecure/);
+          assert.match(err.message, /FS_API_KEY/);
           return true;
         },
         'Loopback with insecure key should throw PERMISSION_DENIED',

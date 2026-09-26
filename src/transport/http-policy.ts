@@ -124,7 +124,7 @@ export function assertHttpBindingPolicy(host: string, apiKey: string | undefined
     if (apiKey !== undefined && !isSecureApiKey(apiKey)) {
       throw new FsError(
         ErrorCode.PERMISSION_DENIED,
-        'API_KEY is configured but is insecure (minimum 16 characters).',
+        'The configured API key (--api-key / FS_API_KEY) is insecure (minimum 16 characters).',
       );
     }
     return;
@@ -132,7 +132,7 @@ export function assertHttpBindingPolicy(host: string, apiKey: string | undefined
   if (isSecureApiKey(apiKey)) return;
   throw new FsError(
     ErrorCode.PERMISSION_DENIED,
-    `Refusing to bind HTTP server to non-loopback host '${host}' without a secure API_KEY (minimum 16 characters).`,
+    `Refusing to bind HTTP server to non-loopback host '${host}' without a secure API key (set --api-key or FS_API_KEY, minimum 16 characters).`,
   );
 }
 
