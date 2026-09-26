@@ -99,7 +99,16 @@ async function atomicWriteFile(
 
   try {
     signal?.throwIfAborted();
-    await fsWriteFile(tempPath, content, { encoding, signal });
+    // Create the temp file already narrowed to the target's mode: a 0600
+    // file's new bytes must never sit at 0644 while the write is in flight.
+    // `wx` fails on a name collision instead of overwriting; the chmod below
+    // still restores bits the umask masked off at creation.
+    await fsWriteFile(tempPath, content, {
+      encoding,
+      signal,
+      flag: 'wx',
+      ...(existingMode !== undefined ? { mode: existingMode } : {}),
+    });
     if (existingMode !== undefined) {
       await fsChmod(tempPath, existingMode);
     }
