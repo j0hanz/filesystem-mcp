@@ -644,6 +644,20 @@ describe('MCP Resources', () => {
       serverContext.disposeRuntimeState();
       await serverContext.mcp.close();
     });
+
+    it('two same-tick resources/list_changed sends coalesce into one client notification', async () => {
+      const seen: unknown[] = [];
+      harness.client.setNotificationHandler('notifications/resources/list_changed', (n) => {
+        seen.push(n);
+      });
+      void harness.serverCtx.mcp.server.sendResourceListChanged();
+      void harness.serverCtx.mcp.server.sendResourceListChanged();
+      await waitFor(() => seen.length >= 1);
+      // Room for a straggler: if the second send was not coalesced it
+      // lands in this window and fails the strict assert below.
+      await new Promise((r) => setTimeout(r, 50));
+      assert.strictEqual(seen.length, 1);
+    });
   });
 
   it('legacy resource registration refuses to replace an existing request handler', async () => {

@@ -114,6 +114,17 @@ export async function createServer(
     // `ctx.mcpReq.requestState<T>()`.
     // eslint-disable-next-line @typescript-eslint/unbound-method
     requestState: { verify: requestStateCodec.verify },
+    // The ResourceStore fires list-changed on every externalization and on
+    // every expiry prune (store.ts), so parallel tools/call on one
+    // connection can send the same notification several times in one tick;
+    // each copy makes the client refetch an unchanged list. The SDK
+    // coalesces same-tick duplicates for methods listed here.
+    // ponytail: same-tick coalescing only — cross-tick bursts (batch
+    // externalizations separated by fs awaits) still fan out; a store-level
+    // debounce is the fix if clients ever report that. The modern HTTP leg
+    // publishes through the ServerEventBus, which this option does not
+    // touch, so it protects the stdio/in-memory leg.
+    debouncedNotificationMethods: ['notifications/resources/list_changed'],
   };
 
   serverConfig.instructions =
