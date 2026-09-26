@@ -95,7 +95,12 @@ async function atomicWriteFile(
     if (existingMode !== undefined) {
       await fsChmod(tempPath, existingMode);
     }
-    await withAbort(fsRename(tempPath, validPath), signal);
+    // Last cancellation point. The rename IS the commit: once it starts the
+    // target may already be replaced, so it is never raced against the
+    // signal — a withAbort race would report a finished write as failed, and
+    // a client retry would apply it twice (same reasoning as appendFile).
+    signal?.throwIfAborted();
+    await fsRename(tempPath, validPath);
   } catch (error) {
     try {
       await fsUnlink(tempPath);
