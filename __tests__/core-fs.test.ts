@@ -384,6 +384,35 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
     });
 
+    it('TC-FUNC-047e: an abort before the rename leaves the target untouched', async () => {
+      const filePath = await writeTestFile(tmpDir, 'commit_precheck.txt', 'old\n');
+      const controller = new AbortController();
+      const originalWriteFile = fsPromises.writeFile;
+      mock.method(
+        fsPromises,
+        'writeFile',
+        async (...args: Parameters<typeof fsPromises.writeFile>): Promise<void> => {
+          await originalWriteFile(...args);
+          controller.abort(new Error('abort before commit'));
+        },
+      );
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(
+          fs.writeFile(filePath, 'new\n', { signal: controller.signal }),
+          /abort before commit/,
+        );
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('commit_precheck.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
+    });
+
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
       const emptyPath = await writeTestFile(tmpDir, 'count_lines_empty.txt', '');
       assert.strictEqual(await countFileLines(emptyPath), 0);
