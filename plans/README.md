@@ -10,18 +10,19 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 
 ## Execution order & status
 
-| Plan | Title                                                        | Priority | Effort | Depends on | Status                                  |
-| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | --------------------------------------- |
-| 001  | edit/patch/diff refuse non-UTF-8 files instead of corrupting | P1       | S      | —          | DONE                                    |
-| 002  | edit ignoreWhitespace keeps edge blank lines and indentation | P1       | S      | —          | DONE                                    |
-| 003  | Root containment treats `\` as a separator only on Windows   | P1       | S      | —          | DONE                                    |
-| 004  | edit refuses a batch naming the same file twice              | P1       | S      | —          | DONE                                    |
-| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | DONE                                    |
-| 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | DONE                                    |
-| 007  | CI runs the full check on Windows too                        | P2       | S      | —          | DONE (CI legs verified only after push) |
-| 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | DONE                                    |
-| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE                                    |
-| 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | DONE                                    |
+| Plan | Title                                                        | Priority | Effort | Depends on | Status                           |
+| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | -------------------------------- |
+| 001  | edit/patch/diff refuse non-UTF-8 files instead of corrupting | P1       | S      | —          | DONE                             |
+| 002  | edit ignoreWhitespace keeps edge blank lines and indentation | P1       | S      | —          | DONE                             |
+| 003  | Root containment treats `\` as a separator only on Windows   | P1       | S      | —          | DONE                             |
+| 004  | edit refuses a batch naming the same file twice              | P1       | S      | —          | DONE                             |
+| 005  | edit matches and preserves CRLF line endings                 | P2       | S      | 002        | DONE                             |
+| 006  | search_text skips binary files, strips `\r`                  | P2       | S      | —          | DONE                             |
+| 007  | CI runs the full check on Windows too                        | P2       | S      | —          | DONE (Windows job red until 011) |
+| 008  | Walks survive fs.glob's relative dirent                      | P1       | S      | —          | DONE                             |
+| 009  | Characterization tests for `globEntries`                     | P2       | S      | 008        | DONE                             |
+| 010  | Walks match excludes by name and prune past maxDepth         | P2       | M      | 008, 009   | DONE                             |
+| 011  | A root configured through an alias counts as one root        | P1       | S      | —          | DONE                             |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -45,6 +46,12 @@ abandoned)
   Mark it REJECTED if you do not want it — 009 then needs fixture names that
   cannot collide.
 - 003, 006 and 007 are independent of everything else.
+- **011 was found by 007.** The first Windows CI run (run 36232184074, on
+  `16698cbe`) failed 7 tests. The runner's `tmpdir()` is an 8.3 short path, so
+  every test root is an alias. One failure is a product bug (a single aliased
+  root reads as "multiple roots", so path-less tool calls fail); the other six
+  compare resolved paths with the unresolved `tmpdir()` spelling. 011 fixes
+  both. `main` stays red on the Windows job until it lands.
 
 ## Findings considered and rejected
 
