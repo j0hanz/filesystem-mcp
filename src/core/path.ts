@@ -152,6 +152,8 @@ export async function resolveAllowedDirectoriesState(
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;
+  /** One entry per configured or granted root, without the realpath aliases. */
+  private rootsState: string[] | undefined;
   private readonly sensitive = new SensitiveMatcher();
   /**
    * Directories added by an accepted access grant (R8) — from the tool
@@ -181,8 +183,13 @@ export class PathGuard {
     this.options = options;
   }
 
-  initialize(expanded: readonly string[]): void {
+  /**
+   * `expanded` is the containment set (each root plus its realpath alias);
+   * `roots` is what a caller choosing "the root" sees, one entry per root.
+   */
+  initialize(expanded: readonly string[], roots: readonly string[] = expanded): void {
     this.allowedDirectoriesState = normalizeAllowedDirectories(expanded);
+    this.rootsState = normalizeAllowedDirectories(roots);
   }
 
   isInitialized(): boolean {
@@ -208,6 +215,15 @@ export class PathGuard {
       return [];
     }
     return [...this.allowedDirectoriesState];
+  }
+
+  /**
+   * The roots as configured or granted, one per root. getAllowedDirectories()
+   * also holds each root's realpath alias for containment, so an aliased root
+   * (symlink, junction, 8.3 short name) appears there twice.
+   */
+  getRoots(): string[] {
+    return this.rootsState ? [...this.rootsState] : [];
   }
 
   isSensitive(filePath: string): boolean {
@@ -568,7 +584,7 @@ export class PathGuard {
     if (pathValue && pathValue.trim().length > 0) {
       return pathValue;
     }
-    const roots = this.getAllowedDirectories();
+    const roots = this.getRoots();
     if (roots.length === 0) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -810,6 +826,6 @@ export class PathGuard {
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
     this.rootBoundaries = boundaries;
-    this.initialize(nextState);
+    this.initialize(nextState, combined);
   }
 }

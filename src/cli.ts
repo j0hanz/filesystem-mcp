@@ -211,7 +211,7 @@ export async function runPrintConfig(options: {
     cliAllowedDirs: options.allowedDirs,
   });
   await pathGuard.recomputeAllowedDirectories();
-  const allowedRoots = pathGuard.getAllowedDirectories();
+  const allowedRoots = pathGuard.getRoots();
 
   const tools = registeredTools(options.readOnly).map((t) => t.name);
 

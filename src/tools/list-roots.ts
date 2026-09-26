@@ -27,7 +27,7 @@ export const LIST_ROOTS = defineTool({
     openWorldHint: false,
   },
   run: (_args, ctx) => {
-    const dirs = ctx.fs.pathGuard.getAllowedDirectories();
+    const dirs = ctx.fs.pathGuard.getRoots();
     // No `text` on purpose. A newline-joined path list and the JSON say the
     // same thing, and the JSON is the shape every caller of this tool parses.
     // Supplying no text makes this a data tool, so `define.ts` renders the JSON
