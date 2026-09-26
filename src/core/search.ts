@@ -7,7 +7,7 @@ import { RE2 } from '@adguard/re2-wasm';
 import { resolveStopReason } from './concurrency.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
-import { getMaxTextFileSize } from './util.ts';
+import { getMaxTextFileSize, MIB } from './util.ts';
 
 interface SearchResult {
   file: string;
@@ -47,6 +47,14 @@ const MAX_MATCHES_PER_LINE = 100_000;
  * the rest of the process. Every caller MUST pass the result to
  * {@link freeRegex} when it is done with it.
  */
+
+/**
+ * Largest input one RE2 call may scan as a single string. The input is copied
+ * into the same fixed 16 MB wasm heap as the patterns; about 10 MB of input
+ * aborts the module. 4 MiB leaves room for the copy and the pattern set.
+ */
+export const RE2_MAX_INPUT_BYTES = 4 * MIB;
+
 export function compileRegex(pattern: string, options: { caseSensitive?: boolean } = {}): Regex {
   const flags = options.caseSensitive ? 'gu' : 'giu';
   try {

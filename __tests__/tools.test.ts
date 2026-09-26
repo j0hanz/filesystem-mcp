@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
@@ -1927,6 +1928,27 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.strictEqual(await readFile(literal, 'utf-8'), '$1 $1');
+  });
+
+  it('replace_text regex mode on a file past the RE2 input cap fails that file with TOO_LARGE', async () => {
+    const size = RE2_MAX_INPUT_BYTES + 1;
+    const big = await writeTestFile(tmpDir, 'regex_cap/big.txt', 'x'.repeat(size - 5) + 'FIND\n');
+    const asRegex = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: big, searchPattern: 'FIND', replacement: 'FOUND', isRegex: true },
+    });
+    assert.strictEqual(asRegex.isError, true);
+    const failure = failedSummary(asRegex)?.results?.[0]?.error;
+    assert.strictEqual(failure?.code, 'TOO_LARGE');
+    assert.match(failure?.message ?? '', /regex/i);
+    assert.ok((await readFile(big, 'utf-8')).endsWith('FIND\n'), 'file must be untouched');
+
+    const literal = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: big, searchPattern: 'FIND', replacement: 'FOUND', caseSensitive: true },
+    });
+    assert.notStrictEqual(literal.isError, true, 'the literal matcher has no input cap');
+    assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
   });
 
   // Decoding these as UTF-8 and writing the result back swaps every invalid

@@ -28,7 +28,7 @@ import {
   SafeGlobPattern,
 } from '../core/schema.ts';
 import type { Regex } from '../core/search.ts';
-import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
+import { compileRegex, execMatches, freeRegex, RE2_MAX_INPUT_BYTES } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
@@ -215,6 +215,12 @@ function createRegexReplacementMatcher(
 ): ReplacementMatcher {
   return {
     testBuffer(buffer: Buffer): boolean {
+      if (buffer.length > RE2_MAX_INPUT_BYTES) {
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or the default caseSensitive: false; pass caseSensitive: true with a literal searchPattern, or split the file.`,
+        );
+      }
       // The regex is global and shared across every file in the batch, so a
       // previous file's match would otherwise start this scan mid-string.
       regex.lastIndex = 0;
