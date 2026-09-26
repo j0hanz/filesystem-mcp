@@ -198,6 +198,10 @@ export function normalizeAllowedDirectory(dir: string): string {
   return normalized.length > 1 && normalized.endsWith(sep) ? normalized.slice(0, -1) : normalized;
 }
 
+// `\` separates path segments only on Windows. On POSIX it is a filename
+// character, so `/root\x` names a sibling of `/root`, not a child.
+const isPathSeparator = (code: number): boolean => code === 47 || (IS_WINDOWS && code === 92);
+
 export function isPathInsideDirectory(
   normalizedDirectory: string,
   normalizedCandidate: string,
@@ -208,8 +212,8 @@ export function isPathInsideDirectory(
   if (root === candidate) return true;
   if (!candidate.startsWith(root)) return false;
 
-  if (isSlash(root.charCodeAt(root.length - 1))) return true;
-  return isSlash(candidate.charCodeAt(root.length));
+  if (isPathSeparator(root.charCodeAt(root.length - 1))) return true;
+  return isPathSeparator(candidate.charCodeAt(root.length));
 }
 
 export function isPathWithinDirectories(

@@ -37,6 +37,21 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(isPathWithinDirectories('/foo/bar', ['/foo']), true);
   });
 
+  it('TC-PH-007: backslash after the root is a separator only on Windows', () => {
+    // On POSIX `\` is a filename character: `/foo\bar` is a sibling of `/foo`.
+    assert.strictEqual(isPathInsideDirectory('/foo', '/foo\\bar'), process.platform === 'win32');
+  });
+
+  it('TC-PH-008: Windows-shaped paths nest with either separator on Windows', (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('Windows path shapes only resolve on win32');
+      return;
+    }
+    assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foo\\bar'), true);
+    assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foo/bar'), true);
+    assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foobar'), false);
+  });
+
   it('TC-PH-006: normalizeAllowedDirectories dedups, strips trailing separators, preserves root', () => {
     const fsRoot = parse(normalizePath('/')).root;
     const result = normalizeAllowedDirectories(['/foo/', '/foo', '/']);

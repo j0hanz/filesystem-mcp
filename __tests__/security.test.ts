@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -121,6 +122,55 @@ describe('Security (P0)', () => {
         },
         'Should reject access to id_rsa',
       );
+    });
+
+    it('TC-SEC-020: a sibling whose name starts with the root name and a backslash stays outside', async (t) => {
+      if (process.platform === 'win32') {
+        t.skip('backslash is a separator on Windows');
+        return;
+      }
+
+      const sibling = `${root}\\secret.txt`;
+      const siblingDir = `${root}\\dir`; // one literal backslash, as above
+
+      await writeFile(sibling, 'outside');
+      await mkdir(siblingDir);
+      await writeFile(join(siblingDir, 'f.txt'), 'x');
+
+      try {
+        await assert.rejects(
+          guard.validateExistingPath(sibling),
+          (err) => {
+            assert(isFsError(err));
+            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+            return true;
+          },
+          'Should reject a sibling file named "<root>\\secret.txt"',
+        );
+
+        await assert.rejects(
+          guard.validatePathForWrite(sibling),
+          (err) => {
+            assert(isFsError(err));
+            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+            return true;
+          },
+          'Should reject writing to a sibling file named "<root>\\secret.txt"',
+        );
+
+        await assert.rejects(
+          guard.validatePathForDelete(join(siblingDir, 'f.txt')),
+          (err) => {
+            assert(isFsError(err));
+            assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+            return true;
+          },
+          'Should reject deleting inside a sibling directory named "<root>\\dir"',
+        );
+      } finally {
+        await rm(sibling, { force: true });
+        await rm(siblingDir, { recursive: true, force: true });
+      }
     });
   });
 
