@@ -870,6 +870,36 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('create refuses a batch that names the same file twice', async () => {
+    const file = join(tmpDir, 'dup-create', 'dup.txt');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: {
+        files: [
+          { path: file, content: 'AAAA' },
+          { path: file, content: 'BBBB' },
+        ],
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /duplicate of files\[0\]\.path/u);
+    await assert.rejects(access(file), 'nothing may be written when the batch is refused');
+
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      const caseResult = await harness.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: file, content: 'AAAA' },
+            { path: join(tmpDir, 'dup-create', 'DUP.TXT'), content: 'BBBB' },
+          ],
+        },
+      });
+      assert.strictEqual(caseResult.isError, true);
+      assert.match(firstTextBlock(caseResult).text ?? '', /duplicate of files\[0\]\.path/u);
+    }
+  });
+
   it('TC-FUNC-015: Read non-existent file returns error in per-path results', async () => {
     const missing = join(tmpDir, 'missing.txt');
     const result = await harness.client.callTool({
