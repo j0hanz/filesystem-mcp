@@ -4,7 +4,14 @@ import { dirname, join, parse } from 'node:path';
 
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
-import { isPathWithinDirectories, isSamePath, normalizePath, splitDirList } from './path-utils.ts';
+import {
+  IS_WINDOWS,
+  isPathInsideDirectory,
+  isPathWithinDirectories,
+  isSamePath,
+  normalizePath,
+  splitDirList,
+} from './path-utils.ts';
 
 // Resolve a configured env-var directory list (FS_ALLOWED_DIRS / FS_ROOT_BOUNDARY)
 // into normalized, verified directories. Each entry is stat'd; a non-directory
@@ -43,38 +50,38 @@ export async function resolveConfiguredDirs(
   return result;
 }
 
+// Directories a grant (or --allow-cwd) must never admit, as subtrees: a target
+// inside one of these is unsafe, and so is a target that *contains* one — the
+// nearest existing ancestor of a made-up path under C:\Users is C:\Users.
+//
+// Per platform on purpose: on POSIX `normalizePath('C:\\Windows')` resolves
+// against the cwd, so a cross-platform list would make the cwd itself
+// "contain a system dir" and refuse --allow-cwd.
+const UNSAFE_SYSTEM_DIRS = IS_WINDOWS
+  ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
+  : ['/usr', '/etc', '/bin', '/sbin', '/System'];
+
+// Subtrees of home that hold credentials. Home itself and its other
+// subdirectories stay grantable: projects live there.
+const UNSAFE_HOME_SUBDIRS = ['.ssh', '.aws', '.gnupg', '.kube', '.docker', '.config/gcloud'];
+
 export function isUnsafeCwdPath(normalizedCwd: string): boolean {
-  const norm = normalizedCwd.toLowerCase();
+  const candidate = normalizePath(normalizedCwd);
 
-  // 1. Filesystem root check
-  const root = parse(normalizedCwd).root;
-  if (isSamePath(normalizedCwd, root)) {
-    return true;
+  // 1. A filesystem root, or anything that contains home or a system dir.
+  const home = normalizePath(homedir());
+  if (isSamePath(candidate, parse(candidate).root)) return true;
+  if (isPathInsideDirectory(candidate, home)) return true;
+  for (const dir of UNSAFE_SYSTEM_DIRS) {
+    const system = normalizePath(dir);
+    if (isPathInsideDirectory(candidate, system)) return true;
+    if (isPathInsideDirectory(system, candidate)) return true;
   }
 
-  // 2. Home directory check
-  if (isSamePath(normalizedCwd, homedir())) {
-    return true;
+  // 2. Credential subtrees of home.
+  for (const sub of UNSAFE_HOME_SUBDIRS) {
+    if (isPathInsideDirectory(normalizePath(join(home, sub)), candidate)) return true;
   }
-
-  // 3. Hard-coded unsafe paths check
-  const unsafePaths = new Set(
-    [
-      '/usr',
-      '/etc',
-      '/bin',
-      '/sbin',
-      '/System',
-      'C:\\Windows',
-      'C:\\Program Files',
-      'C:\\Program Files (x86)',
-    ].map((p) => normalizePath(p).toLowerCase()),
-  );
-
-  if (unsafePaths.has(norm)) {
-    return true;
-  }
-
   return false;
 }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, parse } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
@@ -232,6 +232,29 @@ describe('PathGuard grant round-trip', () => {
       !containsPath(allowed, unsafeDir),
       'the resolved unsafe path must not appear in allowed dirs',
     );
+  });
+
+  it('TC-PG-013: precheckAccess never offers an ancestor of home, a subtree of a system dir, or a secret subtree of home', async () => {
+    delete process.env['FS_ROOT_BOUNDARY'];
+    const guard = new PathGuard({ cliAllowedDirs: [root] });
+    await guard.recomputeAllowedDirectories();
+
+    const home = homedir();
+    // The nearest existing ancestor of a made-up sibling of home is home's
+    // parent (C:\Users, /home, /Users) — the directory that contains home.
+    const homeParentProbe = join(dirname(home), 'no-such-user-9f3c', 'project', 'file.txt');
+    const systemChild =
+      process.platform === 'win32'
+        ? 'C:\\Windows\\System32\\drivers\\etc\\hosts'
+        : '/etc/ssh/ssh_config';
+    const secret = join(home, '.ssh', 'id_ed25519');
+
+    for (const probe of [homeParentProbe, systemChild, secret]) {
+      const grants = await guard.precheckAccess([probe]);
+      assert.deepStrictEqual(grants, [], `must not offer a grant for ${probe}`);
+    }
+    assert.strictEqual(await guard.applyGrant(dirname(home)), false);
+    assert.strictEqual(await guard.applyGrant(join(home, '.ssh')), false);
   });
 });
 
