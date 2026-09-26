@@ -6,12 +6,7 @@ import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from '../core/errors.ts';
-import {
-  buildFileResourceLink,
-  buildFileResourceUri,
-  buildWrittenFileMeta,
-  type WrittenFileMeta,
-} from '../core/file-uri.ts';
+import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import { countFileLines, destExists, type Stats } from '../core/fs.ts';
 import {
   confirmKey,
@@ -246,22 +241,15 @@ export const CREATE = defineTool({
           mimeType = mimeInfo.mimeType;
           kind = mimeInfo.kind;
         }
-        // The resource store serves this URI via readRaw, which rejects
-        // files over the text-size cap with TOO_LARGE — never advertise a
-        // link the store deterministically cannot serve. A failed stat
-        // leaves the size unknown, so nothing is advertised either.
-        const servable = stats !== undefined && stats.size <= getMaxTextFileSize();
-        const size = stats?.size ?? 0;
+        // A failed stat leaves the size unknown, so nothing is advertised.
         meta = {
-          size,
+          size: stats?.size ?? 0,
           lineCount,
           mimeType,
           kind,
-          resourceUri: servable ? buildFileResourceUri(appended.validPath) : undefined,
-          resourceLink:
-            servable && ctx.resourceStore
-              ? buildFileResourceLink(appended.validPath, mimeType, size)
-              : undefined,
+          ...writtenFileLinks(appended.validPath, mimeType, stats?.size, {
+            resourceStore: ctx.resourceStore,
+          }),
         };
         created = (stats?.birthtime ?? EPOCH).toISOString();
         modified = (stats?.mtime ?? EPOCH).toISOString();
@@ -273,7 +261,11 @@ export const CREATE = defineTool({
         const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
         created = fileStats.birthtime.toISOString();
         modified = fileStats.mtime.toISOString();
-        meta = buildWrittenFileMeta(written.validPath, content, ctx.resourceStore);
+        meta = buildWrittenFileMeta({
+          validPath: written.validPath,
+          content,
+          resourceStore: ctx.resourceStore,
+        });
       }
 
       const file: CreateFileResult = {

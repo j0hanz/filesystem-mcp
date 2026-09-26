@@ -140,7 +140,7 @@ const PerFileResultSchema = z.strictObject({
     .string()
     .optional()
     .describe(
-      'Resource URI pointing to the updated file content; omitted when no edit matched (appliedEdits is 0) and the file was left untouched',
+      'Resource URI pointing to the updated file content; omitted on dryRun or when the resulting file exceeds the text-size cap, which the store would reject',
     ),
   modified: IsoDateTime.describe('Last modification timestamp after edits (ISO 8601 UTC)'),
   appliedEdits: NonNegInt.describe('Number of edits successfully applied'),
@@ -415,49 +415,45 @@ async function handleEditFile(
       const patch = unifiedPatch(basename(validPath), content, editResult.content);
       if (patch !== undefined) editResult.diff = patch;
     }
+  } else {
+    if (editResult.unmatchedEdits.length > 0) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `no match for oldText ${joinRoster(
+          editResult.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
+          ', ',
+        )}; it must match the file exactly`,
+        filePath,
+      );
+    }
 
-    // Nothing was written, so there is no updated content to point a
-    // resourceUri or a resource_link at — the file on disk is still the one the
-    // caller already has. No write, no link.
-    const meta: WrittenFileMeta = {
-      ...buildWrittenFileMeta(editResult.content, validPath, ctx.resourceStore),
-      resourceUri: undefined,
-      resourceLink: undefined,
-    };
-    return {
-      file: buildEditFileValue(validPath, meta, new Date().toISOString(), editResult),
-    };
-  }
-
-  if (editResult.unmatchedEdits.length > 0) {
-    throw new FsError(
-      ErrorCode.INVALID_INPUT,
-      `no match for oldText ${joinRoster(
-        editResult.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
-        ', ',
-      )}; it must match the file exactly`,
-      filePath,
-    );
-  }
-
-  if (editResult.appliedEdits > 0) {
-    await ctx.fs.writeFile(filePath, editResult.content, {
-      signal: ctx.signal,
-    });
-    ctx.log?.(
-      'info',
-      `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
-      'edit',
-    );
+    if (editResult.appliedEdits > 0) {
+      await ctx.fs.writeFile(filePath, editResult.content, {
+        signal: ctx.signal,
+      });
+      ctx.log?.(
+        'info',
+        `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
+        'edit',
+      );
+    }
   }
 
   // `modified` is read from a post-write stat and is advisory: under a concurrent
   // writer it may reflect that writer's mtime while `size`/content below come from
-  // this edit's atomic write. The file content itself is always consistent.
-  const { stats: fileStats } = await ctx.fs.stat(filePath, { signal: ctx.signal });
-  const meta = buildWrittenFileMeta(validPath, editResult.content, ctx.resourceStore);
+  // this edit's atomic write. The file content itself is always consistent. A dry
+  // run wrote nothing, so it reports the time of the preview.
+  const modified = options.dryRun
+    ? new Date().toISOString()
+    : (await ctx.fs.stat(filePath, { signal: ctx.signal })).stats.mtime.toISOString();
+  const meta = buildWrittenFileMeta({
+    validPath,
+    content: editResult.content,
+    resourceStore: ctx.resourceStore,
+    dryRun: options.dryRun,
+  });
   return {
-    file: buildEditFileValue(validPath, meta, fileStats.mtime.toISOString(), editResult),
+    file: buildEditFileValue(validPath, meta, modified, editResult),
     ...(meta.resourceLink ? { resourceLink: meta.resourceLink } : {}),
   };
 }

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`edit` dry-run metadata.** A dry run reported the size, line count and
+  MIME type of the file's path string instead of the would-be content.
+  Regressed in 2.6.0.
+- **`patch` dry run no longer links the file.** A dry run advertised a
+  `resourceUri` and a `resource_link` for content it never wrote, matching
+  neither `edit` nor `replace_text`.
+
 ## [2.6.0] - 2026-09-26
 
 A hardening and stability release. Five security fixes close fail-open
