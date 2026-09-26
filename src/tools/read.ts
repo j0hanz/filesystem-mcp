@@ -254,7 +254,7 @@ async function collectFileBudget(
         path,
         error: {
           code: ErrorCode.TOO_LARGE,
-          message: `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it separately, or with head/tail/startLine.`,
+          message: `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
           path,
         },
       });
@@ -407,22 +407,15 @@ export const READ = defineTool({
 
     if (args.paths !== undefined) {
       pathList = args.paths;
-      // A ranged read returns a few lines whatever the file size, and each line
-      // is already bounded by the per-line cap in core/read.ts. Only a full read
-      // is budgeted by size.
-      if (buildReadSpec(args).kind === 'full') {
-        const budget = await collectFileBudget(
-          pathList,
-          READ_MANY_MAX_TOTAL_BYTES,
-          getMaxTextFileSize(),
-          ctx,
-        );
-        known = budget.known;
-        skippedResults = budget.skippedResults;
-        survivors = budget.survivors;
-      } else {
-        survivors = [...pathList];
-      }
+      const budget = await collectFileBudget(
+        pathList,
+        READ_MANY_MAX_TOTAL_BYTES,
+        getMaxTextFileSize(),
+        ctx,
+      );
+      known = budget.known;
+      skippedResults = budget.skippedResults;
+      survivors = budget.survivors;
     } else {
       pathList = [args.path ?? ''];
       survivors = [...pathList];
