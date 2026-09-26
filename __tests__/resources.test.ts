@@ -7,14 +7,19 @@ import {
 import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
-import { buildFileResourceUri, encodeFileUriPath, extractPath } from '../src/core/file-uri.ts';
+import {
+  buildFileResourceUri,
+  encodeFileUriPath,
+  extractPath,
+  FILESYSTEM_FILE_URI_TEMPLATE,
+} from '../src/core/file-uri.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { ResourceStore } from '../src/core/store.ts';
@@ -736,5 +741,29 @@ describe('filesystem resource path completion', () => {
     );
     assert.ok(match, `no suggestion round-tripped to ${hashFile}: ${JSON.stringify(suggestions)}`);
     assert.ok(!match.includes('#'), `'#' must be percent-encoded in the template value: ${match}`);
+  });
+
+  it('reports the full match count and hasMore past 100 suggestions', async () => {
+    const dir = join(root, 'many');
+    await mkdir(dir);
+    for (let i = 0; i < 150; i += 1) {
+      await writeFile(join(dir, `f${String(i).padStart(3, '0')}.txt`), 'x');
+    }
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(`${dir}${sep}`) },
+      });
+      assert.strictEqual(result.completion.values.length, 100);
+      assert.strictEqual(result.completion.total, 150);
+      assert.strictEqual(result.completion.hasMore, true);
+      // Still the alphabetically-first 100: the local sort runs before the
+      // SDK slices.
+      assert.ok(result.completion.values[0]?.endsWith('f000.txt'));
+      assert.ok(result.completion.values[99]?.endsWith('f099.txt'));
+    } finally {
+      await harness.close();
+    }
   });
 });
