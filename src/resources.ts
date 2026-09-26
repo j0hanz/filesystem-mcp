@@ -273,6 +273,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
           if (isNotFoundish(err)) {
             throw new ResourceNotFoundError(uri, `Cannot subscribe to ${uri}: ${err.message}`);
           }
+          if (isFsError(err)) throw fsErrorToProtocolError(err);
           Logger.warn(
             `Unexpected error validating path for watcher ${uri}: ${formatUnknownErrorMessage(err)}`,
           );
@@ -388,6 +389,22 @@ export function getResourceContracts(options: ResourceRegistrationOptions): Reso
 // registrar
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * A caller-traceable FsError as the SDK's InvalidParams error. The Problem's
+ * identity fields ride the SDK's error.data channel: `message` stays the
+ * wire message, and code/path/suggestion give clients a machine-readable
+ * view. Keyed by `code`, so it cannot collide with the
+ * ResourceNotFoundError convention (data: { uri } and nothing else).
+ */
+function fsErrorToProtocolError(error: FsError): ProtocolError {
+  const { code, path, suggestion } = error.problem;
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, error.message, {
+    code,
+    ...(path !== undefined ? { path } : {}),
+    ...(suggestion !== undefined ? { suggestion } : {}),
+  });
+}
+
 function wrapRead(contract: ResourceContract) {
   return async (uri: URL, variables: Record<string, string | string[]>, ctx: ServerContext) => {
     try {
@@ -405,19 +422,8 @@ function wrapRead(contract: ResourceContract) {
       }
       // A remaining FsError (NOT_FILE, TOO_LARGE, ...) traces to the
       // caller-supplied URI; anything else is a server-side failure and must
-      // not be blamed on the request. The Problem's identity fields ride the
-      // SDK's error.data channel: `message` stays the wire message, and
-      // code/path/suggestion give clients a machine-readable view. Keyed by
-      // `code`, so it cannot collide with the ResourceNotFoundError
-      // convention (data: { uri } and nothing else).
-      if (isFsError(error)) {
-        const { code, path, suggestion } = error.problem;
-        throw new ProtocolError(ProtocolErrorCode.InvalidParams, error.message, {
-          code,
-          ...(path !== undefined ? { path } : {}),
-          ...(suggestion !== undefined ? { suggestion } : {}),
-        });
-      }
+      // not be blamed on the request.
+      if (isFsError(error)) throw fsErrorToProtocolError(error);
       throw new ProtocolError(ProtocolErrorCode.InternalError, formatUnknownErrorMessage(error));
     }
   };

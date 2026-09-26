@@ -654,6 +654,21 @@ describe('MCP Resources', () => {
       );
     });
 
+    it('resources/subscribe answers a malformed path as InvalidParams with structured error.data', async () => {
+      // `C:relative` is refused on every platform (isWindowsDriveRelativePath
+      // checks regardless of OS), so this reaches the watcher's path
+      // validation everywhere and is the caller's mistake, not a server fault.
+      const uri = 'filesystem-mcp://file/C:relative';
+      await assert.rejects(harness.client.subscribeResource({ uri }), (err: unknown) => {
+        assert.ok(ProtocolError.isInstance(err), 'expected ProtocolError');
+        assert.strictEqual(err.code, ProtocolErrorCode.InvalidParams);
+        const data = (err as { data?: unknown }).data as Record<string, unknown>;
+        assert.strictEqual(data['code'], ErrorCode.INVALID_INPUT);
+        assert.strictEqual(data['path'], 'C:relative');
+        return true;
+      });
+    });
+
     it('advertises resources.subscribe and resources.listChanged capabilities', async () => {
       const serverContext = await createServer({ cliAllowedDirs: [clientTmpDir] });
       const capabilities = serverContext.mcp.server.getCapabilities();
