@@ -8,7 +8,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,9 +29,9 @@ import { startHttpServer } from '../src/transport.ts';
 /** Every registered tool's name - the inventory tests assert `tools/list` against. */
 export const ALL_REGISTERED_TOOL_NAMES: readonly string[] = ALL_TOOLS.map((t) => t.name);
 
-/** Create an isolated temp directory for a test. */
+/** Create an isolated temp directory for a test, as its real path (no 8.3 or symlink alias). */
 export async function createTestRoot(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'fsmcp-test-'));
+  return realpath(await mkdtemp(join(tmpdir(), 'fsmcp-test-')));
 }
 
 /** Remove a test root directory. */
