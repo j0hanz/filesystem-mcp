@@ -102,6 +102,21 @@ describe('Security (P0)', () => {
       );
     });
 
+    it('TC-SEC-011: a reserved device name is refused on Windows and ordinary elsewhere', async () => {
+      const auxPath = join(root, 'src', 'aux.ts');
+      if (process.platform === 'win32') {
+        // Not created: on Windows the name is a device, not a file.
+        await assert.rejects(
+          guard.validateExistingPath(auxPath),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Reserved Windows device name/),
+        );
+        return;
+      }
+      await writeTestFile(root, 'src/aux.ts', 'export const x = 1;\n');
+      const resolved = await guard.validateExistingPath(auxPath);
+      assert.ok(resolved.endsWith('aux.ts'));
+    });
+
     it('TC-SEC-020: a sibling whose name starts with the root name and a backslash stays outside', async (t) => {
       if (process.platform === 'win32') {
         t.skip('backslash is a separator on Windows');

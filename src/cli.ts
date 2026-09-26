@@ -7,6 +7,7 @@ import { cli } from './core/config.ts';
 import { formatUnknownErrorMessage } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
+  IS_WINDOWS,
   isWindowsDriveRelativePath,
   normalizePath,
   parseTrueEnvFlag,
@@ -37,7 +38,7 @@ function validateCliPath(inputPath: string): void {
     );
   }
 
-  const reserved = getReservedDeviceNameForPath(inputPath);
+  const reserved = IS_WINDOWS ? getReservedDeviceNameForPath(inputPath) : undefined;
   if (reserved) {
     throw new CliExitError(`Windows reserved device name not allowed: ${reserved}.`);
   }
