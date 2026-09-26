@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
+import type { PathLike } from 'node:fs';
+import fsPromises, { chmod, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { basename, dirname, join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { buildWrittenFileMeta } from '../src/core/file-uri.ts';
@@ -355,6 +357,31 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         assert(isFsError(err) || (err as NodeJS.ErrnoException).code === 'ENOENT');
         return true;
       });
+    });
+
+    it('TC-FUNC-047d: an abort landing mid-rename still reports the committed write', async () => {
+      const filePath = await writeTestFile(tmpDir, 'commit_race.txt', 'old\n');
+      const controller = new AbortController();
+      const originalRename = fsPromises.rename;
+      // The real rename completes, THEN the signal fires — before the rename's
+      // promise settles to its caller. Racing that promise against the signal
+      // would reject even though the file was already replaced.
+      mock.method(fsPromises, 'rename', async (from: PathLike, to: PathLike): Promise<void> => {
+        await originalRename(from, to);
+        controller.abort(new Error('late abort'));
+      });
+      syncBuiltinESMExports();
+      try {
+        await fs.writeFile(filePath, 'new\n', { signal: controller.signal });
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'new\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('commit_race.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
     });
 
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
