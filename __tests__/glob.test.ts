@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { globEntries, type GlobEntriesOptions } from '../src/core/glob.ts';
+import { globEntries, isSafeGlobSyntax, type GlobEntriesOptions } from '../src/core/glob.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -53,6 +53,26 @@ describe('globEntries', () => {
         'shared/inner.txt',
         'top.txt',
       ]);
+    });
+  });
+
+  describe('isSafeGlobSyntax', () => {
+    it('accepts .. inside a segment or a character class', () => {
+      for (const ok of ['app/**/[...slug]/page.tsx', 'docs/v1..2.md', '**/[..]x', 'a/..b/c', '**/*.ts']) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
+    it('refuses a whole .. segment or brace alternative', () => {
+      for (const bad of ['..', '../x', 'a/../b', 'a/..', '{a,..}/x', 'x/{..,b}', '..\\x']) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('still refuses absolute and drive-relative patterns', () => {
+      assert.strictEqual(isSafeGlobSyntax('/etc/*'), false);
+      assert.strictEqual(isSafeGlobSyntax('C:foo/*'), false);
+      assert.strictEqual(isSafeGlobSyntax('   '), false);
     });
   });
 

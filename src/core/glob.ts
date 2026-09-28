@@ -11,6 +11,9 @@ import type { DirentLike } from './path-utils.ts';
 import { isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
 import { MIB } from './util.ts';
 
+/** `..` bounded on both sides by a separator, a brace delimiter, or the pattern edge. */
+const TRAVERSAL_DOTDOT_RE = /(?:^|[/\\{,])\.\.(?=[/\\},]|$)/u;
+
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
     return false;
@@ -21,10 +24,11 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   if (isWindowsDriveRelativePath(pattern)) {
     return false;
   }
-  // Covers every engine-specific traversal form too — `{a,..}` and `[..]` both
-  // contain '..', so they are rejected here. Keep this check whole-string: the
-  // per-form guards that used to follow it were unreachable because of it.
-  if (pattern.includes('..')) {
+  // Only a whole `..` — a path segment, or one alternative of a `{a,..}`
+  // brace set — can traverse. `..` inside a segment (`[...slug]`, `v1..2.md`,
+  // `[..]`) is a literal name or a character class, and PathGuard re-checks
+  // containment on every resolved entry regardless.
+  if (TRAVERSAL_DOTDOT_RE.test(pattern)) {
     return false;
   }
   return true;
