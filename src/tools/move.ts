@@ -125,7 +125,7 @@ async function planTransfer(
   let validDest: string;
   try {
     ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
-    if ((await stat(realSource)).isDirectory()) {
+    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
       await assertTreeHasNoProtectedEntries(op, realSource, pair.source, fs, signal);
     }
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
