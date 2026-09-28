@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before.
 - **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
 
+### Changed
+
+- **`search_text` is faster on large trees.** Files are read with bounded concurrency and each file is tested once as a whole before its lines are scanned, so a search over thousands of non-matching files no longer approaches the 5 s limit. Results are unchanged; `filesScanned` may count a few files past the result cap.
+
 ## [2.6.3] - 2026-09-28
 
 A small release for plugin hosts. A root argument written as `${NAME}` now
