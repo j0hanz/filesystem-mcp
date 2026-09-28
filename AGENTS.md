@@ -15,6 +15,9 @@ npm test             # Node test runner; pass native flags after --
 Tests run on Node's built-in test runner; `npm test --
 --test-name-pattern="resources"` filters like the old wrapper did.
 
+`__tests__/dist-smoke.test.ts` boots `dist/index.js`; it skips when `dist/`
+is absent, so run `npm run build` (or `npm run check`) first to exercise it.
+
 ## Releases
 
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps

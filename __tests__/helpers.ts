@@ -420,7 +420,8 @@ export async function bootHttpTest(
 }
 
 /**
- * Spawn the real stdio server (no build step: Node runs the .ts) and connect a client.
+ * Spawn the real stdio server — `src/index.ts` (Node strips the types) or, with
+ * `entry: 'dist'`, the built `dist/index.js` that `npx` runs — and connect a client.
  * stdio has no in-process shortcut — the only honest coverage spawns a real
  * process, mirroring `node src/index.ts <flags> <allowedDir>`.
  * `cliFlags` land before the positional root, which is where argv-only
@@ -430,11 +431,14 @@ export async function createStdioClient(
   allowedDir: string,
   extraEnv: Record<string, string> = {},
   cliFlags: readonly string[] = [],
+  entry: 'src' | 'dist' = 'src',
 ) {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  const entryPath =
+    entry === 'dist' ? join(repoRoot, 'dist', 'index.js') : join(repoRoot, 'src', 'index.ts');
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [join(repoRoot, 'src', 'index.ts'), ...cliFlags, allowedDir],
+    args: [entryPath, ...cliFlags, allowedDir],
     cwd: repoRoot,
     env: { ...getDefaultEnvironment(), ...extraEnv },
   });
