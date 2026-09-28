@@ -1221,6 +1221,54 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('move and copy refuse a directory whose tree contains a path-denied file', async () => {
+    // `secrets/**` is path-based: it denies secrets/x.txt but not public/x.txt,
+    // so moving the directory used to carry the file out of the rule.
+    await withEnv({ FS_DENYLIST: 'secrets/**' }, async () => {
+      const root = await createTestRoot();
+      const own = await createTestClientPair([root]);
+      try {
+        const secret = await writeTestFile(root, 'secrets/inner/x.txt', 'top secret\n');
+        const plainDir = join(root, 'plain');
+        await writeTestFile(root, 'plain/ok.txt', 'ok\n');
+
+        for (const copy of [false, true]) {
+          const label = `copy=${String(copy)}`;
+          const result = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: join(root, 'secrets'), destination: join(root, 'public') }],
+              copy,
+            },
+          });
+          assert.strictEqual(result.isError, true, `${label} must be refused`);
+          const { failures = [] } = result._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
+          assert.match(failures[0]?.error.message ?? '', /protected/i, label);
+          await assert.rejects(access(join(root, 'public')), `${label} created nothing`);
+          assert.strictEqual(
+            await readFile(secret, 'utf-8'),
+            'top secret\n',
+            `${label} left the source`,
+          );
+        }
+
+        // A clean tree still moves: the pre-walk must not refuse everything.
+        const moved = await own.client.callTool({
+          name: 'move',
+          arguments: { moves: [{ source: plainDir, destination: join(root, 'moved') }] },
+        });
+        assert.notStrictEqual(moved.isError, true);
+        assert.strictEqual(await readFile(join(root, 'moved', 'ok.txt'), 'utf-8'), 'ok\n');
+      } finally {
+        await own.close();
+        await cleanupTestRoot(root);
+      }
+    });
+  });
+
   // idempotentHint is gone from the declarations (production never read it); pin
   // that it stays off the wire too — it costs every client tokens without
   // changing what any tool does.
