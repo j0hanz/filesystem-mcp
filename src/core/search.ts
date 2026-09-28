@@ -4,10 +4,10 @@ import { basename } from 'node:path';
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
-import { resolveStopReason } from './concurrency.ts';
+import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
-import { escapeRegExp, getMaxTextFileSize, MIB } from './util.ts';
+import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
  * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
@@ -225,6 +225,87 @@ export interface SearchContentOutcome {
   };
 }
 
+type FileScan =
+  | { kind: 'inaccessible' }
+  | { kind: 'tooLarge' }
+  | { kind: 'binary' }
+  | { kind: 'scanned'; matches: SearchResult[] };
+
+interface ScanContext {
+  pathGuard: PathGuard;
+  signal: AbortSignal | undefined;
+  maxFileSize: number;
+  regex: Regex;
+  prefilter: Regex;
+  source: string;
+  context: number;
+}
+
+async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
+  try {
+    await scanCtx.pathGuard.validateExistingPath(entryPath);
+  } catch {
+    return { kind: 'inaccessible' };
+  }
+
+  try {
+    const stats = await fsStat(entryPath);
+    if (stats.size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+  } catch {
+    return { kind: 'inaccessible' };
+  }
+
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(entryPath, { signal: scanCtx.signal });
+  } catch (error) {
+    if (scanCtx.signal?.aborted) throw error;
+    return { kind: 'inaccessible' };
+  }
+
+  // A NUL byte marks a binary file, as it does for `read` and `grep -I`.
+  // Non-UTF-8 text is still searched: a lossy decode only affects the
+  // bytes a pattern could not have matched anyway.
+  if (buffer.includes(0)) return { kind: 'binary' };
+
+  const content = buffer.toString('utf-8');
+  if (canPrefilter(scanCtx.source, buffer)) {
+    scanCtx.prefilter.lastIndex = 0;
+    if (scanCtx.prefilter.exec(content) === null) return { kind: 'scanned', matches: [] };
+  }
+
+  const lines = content.split(/\r?\n/u);
+  // A trailing newline splits into a phantom empty last element, and an
+  // empty file splits into one empty element: neither is a line the
+  // file has, for matching or for context.
+  const lineCount =
+    content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
+  const matches: SearchResult[] = [];
+  for (let i = 0; i < lineCount; i++) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    // One scan per line: findLineMatches resets lastIndex itself, so it
+    // doubles as the "does this line match" test.
+    const found = findLineMatches(scanCtx.regex, line);
+    if (found) {
+      matches.push({
+        file: entryPath,
+        line: i + 1,
+        column: found.column,
+        content: own(line),
+        matchCount: found.count,
+        ...(scanCtx.context > 0
+          ? {
+              before: lines.slice(Math.max(0, i - scanCtx.context), i).map(own),
+              after: lines.slice(i + 1, Math.min(lineCount, i + 1 + scanCtx.context)).map(own),
+            }
+          : {}),
+      });
+    }
+  }
+  return { kind: 'scanned', matches };
+}
+
 export async function searchContent(
   directory: string,
   pattern: string,
@@ -271,88 +352,64 @@ export async function searchContent(
     let matchingLines = 0;
     let skippedTooLarge = 0;
     let skippedBinary = 0;
-    const counters = { skippedInaccessible: 0, stoppedByAbort: false };
+    const scanCtx: ScanContext = {
+      pathGuard,
+      signal: options.signal,
+      maxFileSize,
+      regex,
+      prefilter,
+      source,
+      context,
+    };
+    const perFile = new Map<number, FileScan>();
+    let dispatched = 0;
+    let collected = 0;
+    const stopped = await processEntriesConcurrently(entries, {
+      signal: options.signal,
+      concurrency: PARALLEL_CONCURRENCY,
+      shouldStop: () => collected >= maxResults,
+      onEntry: () => {
+        dispatched++;
+      },
+      onError: () => undefined,
+      runEntry: async (entryPath) => {
+        const index = dispatched - 1;
+        const scan = await scanFile(entryPath, scanCtx);
+        perFile.set(index, scan);
+        if (scan.kind === 'scanned') collected += scan.matches.length;
+      },
+    });
 
-    for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
-      if (matches.length >= maxResults) break;
-
-      // Skip oversized files before reading to avoid unbounded memory use. Count
-      // them: "no matches" for a reason other than the pattern must be visible.
-      try {
-        const stats = await fsStat(entry.path);
-        if (stats.size > maxFileSize) {
-          skippedTooLarge++;
-          continue;
-        }
-      } catch {
-        counters.skippedInaccessible++;
-        continue;
-      }
-
-      filesScanned++;
-
-      try {
-        const buffer = await readFile(entry.path, { signal: options.signal });
-        // A NUL byte marks a binary file, as it does for `read` and `grep -I`.
-        // Non-UTF-8 text is still searched: a lossy decode only affects the
-        // bytes a pattern could not have matched anyway.
-        if (buffer.includes(0)) {
-          skippedBinary++;
-          continue;
-        }
-        const content = buffer.toString('utf-8');
-        if (canPrefilter(source, buffer)) {
-          prefilter.lastIndex = 0;
-          if (prefilter.exec(content) === null) continue;
-        }
-        const lines = content.split(/\r?\n/u);
-        // A trailing newline splits into a phantom empty last element, and an
-        // empty file splits into one empty element: neither is a line the
-        // file has, for matching or for context.
-        const lineCount =
-          content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-        let matchedFile = false;
-        for (let i = 0; i < lineCount; i++) {
-          const line = lines[i];
-          if (line === undefined) continue;
-          // One scan per line: findLineMatches resets lastIndex itself, so it
-          // doubles as the "does this line match" test.
-          const found = findLineMatches(regex, line);
-          if (found) {
-            matchedFile = true;
-            matchingLines++;
-            matches.push({
-              file: entry.path,
-              line: i + 1,
-              column: found.column,
-              content: own(line),
-              matchCount: found.count,
-              ...(context > 0
-                ? {
-                    before: lines.slice(Math.max(0, i - context), i).map(own),
-                    after: lines.slice(i + 1, Math.min(lineCount, i + 1 + context)).map(own),
-                  }
-                : {}),
-            });
-            if (matches.length >= maxResults) break;
-          }
-        }
-        if (matchedFile) filesMatched++;
-      } catch {
-        // A read failure while the signal is aborted IS the abort, not an
-        // unreadable file — stop rather than spend another iteration and then
-        // report a cut-short scan as complete.
-        if (options.signal?.aborted) {
-          counters.stoppedByAbort = true;
+    let skippedInaccessible = 0;
+    for (let i = 0; i < dispatched; i++) {
+      const scan = perFile.get(i);
+      if (!scan) continue;
+      switch (scan.kind) {
+        case 'inaccessible':
+          skippedInaccessible++;
           break;
-        }
-        // unreadable mid-scan (deleted, permission changed): skip the file
+        case 'tooLarge':
+          skippedTooLarge++;
+          break;
+        case 'binary':
+          skippedBinary++;
+          break;
+        case 'scanned':
+          filesScanned++;
+          if (scan.matches.length > 0) filesMatched++;
+          for (const match of scan.matches) {
+            if (matches.length >= maxResults) break;
+            matches.push(match);
+            matchingLines++;
+          }
+          break;
       }
     }
 
-    // The result cap is the definite cause even when the abort fired on the
-    // same iteration (see the summary type's narrowing note).
-    const stoppedReason = resolveStopReason(matches.length >= maxResults, counters.stoppedByAbort);
+    const stoppedReason = resolveStopReason(
+      matches.length >= maxResults,
+      stopped === 'timeout' || Boolean(options.signal?.aborted),
+    );
 
     return {
       basePath: directory,
@@ -362,7 +419,7 @@ export async function searchContent(
         filesScanned,
         filesMatched,
         truncated: stoppedReason !== undefined,
-        skippedInaccessible: counters.skippedInaccessible,
+        skippedInaccessible,
         skippedTooLarge,
         skippedBinary,
         ...(stoppedReason ? { stoppedReason } : {}),

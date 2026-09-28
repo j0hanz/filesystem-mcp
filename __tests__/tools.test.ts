@@ -2785,10 +2785,14 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       ['crlf.txt:2:5'],
       'CRLF: $ matches before the stripped \r',
     );
-    assert.deepStrictEqual(await run('\bimport\b', true), ['lf.txt:2:0', 'lf.txt:3:2']);
+    assert.deepStrictEqual(await run(String.raw`\bimport\b`, true), ['lf.txt:2:0', 'lf.txt:3:2']);
     assert.deepStrictEqual(await run('IMPORT', false, false), ['lf.txt:2:0', 'lf.txt:3:2']);
     assert.deepStrictEqual(await run('foo$bar', false), ['lf.txt:4:0'], 'literal $ is escaped');
-    assert.deepStrictEqual(await run('\Aimport', true), ['lf.txt:2:0'], '\A is start of each line');
+    assert.deepStrictEqual(
+      await run(String.raw`\Aimport`, true),
+      ['lf.txt:2:0'],
+      String.raw`\A is start of each line`,
+    );
   });
 
   it('search_text: the match set under maxResults is deterministic across runs', async () => {
