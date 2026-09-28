@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { globEntries, isSafeGlobSyntax, type GlobEntriesOptions } from '../src/core/glob.ts';
+import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -58,7 +58,13 @@ describe('globEntries', () => {
 
   describe('isSafeGlobSyntax', () => {
     it('accepts .. inside a segment or a character class', () => {
-      for (const ok of ['app/**/[...slug]/page.tsx', 'docs/v1..2.md', '**/[..]x', 'a/..b/c', '**/*.ts']) {
+      for (const ok of [
+        'app/**/[...slug]/page.tsx',
+        'docs/v1..2.md',
+        '**/[..]x',
+        'a/..b/c',
+        '**/*.ts',
+      ]) {
         assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
       }
     });
