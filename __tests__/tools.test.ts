@@ -2794,6 +2794,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       ['lf.txt:2:0'],
       String.raw`\A is start of each line`,
     );
+    assert.deepStrictEqual(
+      await run('(?-m)^import', true),
+      ['lf.txt:2:0'],
+      'an inline flag group cannot turn ^ into a buffer anchor',
+    );
+    assert.deepStrictEqual(await run('(?i)IMPORT', true), ['lf.txt:2:0', 'lf.txt:3:2']);
   });
 
   it('search_text: the match set under maxResults is deterministic across runs', async () => {

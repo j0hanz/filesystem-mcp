@@ -41,6 +41,8 @@ const MAX_MATCHES_PER_LINE = 100_000;
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 
 const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
+/** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
+const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
 const CR = 13;
 
 /**
@@ -318,8 +320,9 @@ export async function searchContent(
   });
   // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
   // buffer hit (the converse can be false — a false positive just falls through
-  // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, and $
-  // cannot see past a \r, so those inputs skip the prefilter (see canPrefilter).
+  // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
+  // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
+  // the prefilter (see canPrefilter).
   const prefilter = compileRegex(source, {
     caseSensitive: Boolean(options.caseSensitive),
     multiline: true,
@@ -435,6 +438,7 @@ export async function searchContent(
 function canPrefilter(source: string, buffer: Buffer): boolean {
   if (buffer.length > RE2_MAX_INPUT_BYTES) return false;
   if (BUFFER_ANCHOR_RE.test(source)) return false;
+  if (INLINE_FLAGS_RE.test(source)) return false;
   if (source.includes('$') && buffer.includes(CR)) return false;
   return true;
 }
