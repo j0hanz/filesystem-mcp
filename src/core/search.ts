@@ -40,6 +40,9 @@ const MAX_MATCHES_PER_LINE = 100_000;
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 
+const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
+const CR = 13;
+
 /**
  * Compile a pattern on RE2 rather than on V8's irregexp.
  *
@@ -61,8 +64,11 @@ export const RE2_MAX_INPUT_BYTES = 4 * MIB;
  * the rest of the process. Every caller MUST pass the result to
  * {@link freeRegex} when it is done with it.
  */
-export function compileRegex(pattern: string, options: { caseSensitive?: boolean } = {}): Regex {
-  const flags = options.caseSensitive ? 'gu' : 'giu';
+export function compileRegex(
+  pattern: string,
+  options: { caseSensitive?: boolean; multiline?: boolean } = {},
+): Regex {
+  const flags = `g${options.multiline ? 'm' : ''}${options.caseSensitive ? '' : 'i'}u`;
   try {
     return new RE2(pattern, flags);
   } catch (error) {
@@ -225,8 +231,17 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const regex = compileRegex(options.isRegex ? pattern || '' : escapeRegExp(pattern || ''), {
+  const source = options.isRegex ? pattern || '' : escapeRegExp(pattern || '');
+  const regex = compileRegex(source, {
     caseSensitive: Boolean(options.caseSensitive),
+  });
+  // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
+  // buffer hit (the converse can be false — a false positive just falls through
+  // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, and $
+  // cannot see past a \r, so those inputs skip the prefilter (see canPrefilter).
+  const prefilter = compileRegex(source, {
+    caseSensitive: Boolean(options.caseSensitive),
+    multiline: true,
   });
   try {
     const matches: SearchResult[] = [];
@@ -286,6 +301,10 @@ export async function searchContent(
           continue;
         }
         const content = buffer.toString('utf-8');
+        if (canPrefilter(source, buffer)) {
+          prefilter.lastIndex = 0;
+          if (prefilter.exec(content) === null) continue;
+        }
         const lines = content.split(/\r?\n/u);
         // A trailing newline splits into a phantom empty last element, and an
         // empty file splits into one empty element: neither is a line the
@@ -350,8 +369,17 @@ export async function searchContent(
       },
     };
   } finally {
+    freeRegex(prefilter);
     freeRegex(regex);
   }
+}
+
+/** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
+function canPrefilter(source: string, buffer: Buffer): boolean {
+  if (buffer.length > RE2_MAX_INPUT_BYTES) return false;
+  if (BUFFER_ANCHOR_RE.test(source)) return false;
+  if (source.includes('$') && buffer.includes(CR)) return false;
+  return true;
 }
 
 async function* guardedEntries(
