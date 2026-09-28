@@ -1711,6 +1711,51 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.doesNotMatch(text, /drop\.log/);
   });
 
+  it("find_files, search_text, list and replace_text honor the allowed root's .gitignore below it", async () => {
+    // tmpDir is the allowed root; the walk is scoped to a subdirectory.
+    await writeFile(join(tmpDir, '.gitignore'), 'scoped_ignored/*.log\n');
+    const sub = join(tmpDir, 'scoped_ignored');
+    await writeTestFile(tmpDir, 'scoped_ignored/keep.txt', 'NEEDLE_G\n');
+    const dropped = await writeTestFile(tmpDir, 'scoped_ignored/drop.log', 'NEEDLE_G\n');
+
+    const found = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: sub, pattern: '**/*' },
+    });
+    const paths =
+      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(paths, ['keep.txt']);
+
+    const searched = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: sub, searchPattern: 'NEEDLE_G' },
+    });
+    const files =
+      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
+    assert.deepStrictEqual(files, ['keep.txt']);
+
+    const listed = await harness.client.callTool({ name: 'list', arguments: { path: sub } });
+    const names =
+      (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
+    assert.deepStrictEqual(names, ['keep.txt']);
+
+    const replaced = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: sub, searchPattern: 'NEEDLE_G', replacement: 'X' },
+    });
+    assert.notStrictEqual(replaced.isError, true);
+    assert.strictEqual(await readFile(dropped, 'utf-8'), 'NEEDLE_G\n', 'ignored file untouched');
+
+    // includeIgnored lifts it, as before.
+    const all = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: sub, pattern: '**/*', includeIgnored: true },
+    });
+    const allPaths =
+      (all._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(allPaths.sort(), ['drop.log', 'keep.txt']);
+  });
+
   it('TC-FUNC-075: list text carries nextCursor', async () => {
     const sub = join(tmpDir, 'cursor_text_dir');
     await mkdir(sub, { recursive: true });
