@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`search_text` on a file whose name contains glob characters.** Naming `pages/[slug].tsx` searched other same-directory files (the name was read as a glob); it now searches exactly that file.
+- **Globs may contain `..` inside a segment.** `docs/v1..2.md` and `**/[..]x` are accepted by `find_files`, `search_text` and `replace_text`; only a whole `..` segment or brace alternative is refused. (Brackets remain a character class, as in any glob.)
 - **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before.
 - **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
 
