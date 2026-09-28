@@ -7,7 +7,7 @@ import { RE2 } from '@adguard/re2-wasm';
 import { resolveStopReason } from './concurrency.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
-import { getMaxTextFileSize, MIB } from './util.ts';
+import { escapeRegExp, getMaxTextFileSize, MIB } from './util.ts';
 
 /**
  * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
@@ -219,7 +219,7 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const regex = compileRegex(options.isRegex ? pattern || '' : RegExp.escape(pattern || ''), {
+  const regex = compileRegex(options.isRegex ? pattern || '' : escapeRegExp(pattern || ''), {
     caseSensitive: Boolean(options.caseSensitive),
   });
   try {

@@ -55,6 +55,52 @@ export function splitCsvList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const REGEXP_SYNTAX = /[\\^$.*+?()[\]{}|/]/;
+const REGEXP_OTHER_PUNCTUATORS = /[,\-=<>#&!%:;@~'`"]/;
+const REGEXP_CONTROL_ESCAPES: Readonly<Record<string, string>> = {
+  '\t': 't',
+  '\n': 'n',
+  '\v': 'v',
+  '\f': 'f',
+  '\r': 'r',
+};
+
+const hexEscape = (code: number, width: 2 | 4): string =>
+  `\\${width === 2 ? 'x' : 'u'}${code.toString(16).padStart(width, '0')}`;
+
+function encodeForRegExpEscape(ch: string): string {
+  if (REGEXP_SYNTAX.test(ch)) return `\\${ch}`;
+  const control = REGEXP_CONTROL_ESCAPES[ch];
+  if (control !== undefined) return `\\${control}`;
+  const code = ch.codePointAt(0) ?? 0;
+  const loneSurrogate = ch.length === 1 && code >= 0xd800 && code <= 0xdfff;
+  if (!REGEXP_OTHER_PUNCTUATORS.test(ch) && !/\s/.test(ch) && !loneSurrogate) return ch;
+  if (code <= 0xff) return hexEscape(code, 2);
+  return ch
+    .split('')
+    .map((unit) => hexEscape(unit.charCodeAt(0), 4))
+    .join('');
+}
+
+/** The TC39 `RegExp.escape` algorithm, for runtimes that lack it. */
+export function escapeRegExpFallback(input: string): string {
+  let out = '';
+  for (const ch of input) {
+    out +=
+      out === '' && /[0-9A-Za-z]/.test(ch)
+        ? hexEscape(ch.charCodeAt(0), 2)
+        : encodeForRegExpEscape(ch);
+  }
+  return out;
+}
+
+/**
+ * `RegExp.escape` shipped in Node 24. Older runtimes still load the published
+ * package (npm only warns on `engines`), so fall back rather than crash.
+ */
+export const escapeRegExp: (input: string) => string =
+  typeof RegExp.escape === 'function' ? (input) => RegExp.escape(input) : escapeRegExpFallback;
+
 export const PARALLEL_CONCURRENCY = Math.min(Math.max(availableParallelism(), 4), 32);
 
 export const ROOTS_TIMEOUT_MS = 5000;

@@ -21,6 +21,7 @@ import {
   singleOrBatchAccessPaths,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
+import { escapeRegExp } from '../core/util.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -235,7 +236,7 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     let pattern = '';
     for (const [i, token] of tokens.entries()) {
       if (i % 2 === 0) {
-        pattern += RegExp.escape(token);
+        pattern += escapeRegExp(token);
       } else if (token.includes('\n')) {
         pattern += newlineRunPattern(token, {
           leading: i === 1 && tokens[0] === '',
