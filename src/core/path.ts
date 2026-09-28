@@ -86,6 +86,35 @@ async function filterRootsWithin(
   return normalizedRoots.filter((_, i) => results[i]);
 }
 
+/**
+ * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
+ * existing root must *resolve* inside the boundary; a root that does not exist
+ * yet (allowed by FS_ALLOW_MISSING_ROOTS) can only be checked lexically, and
+ * access-time validation realpaths every path under it anyway.
+ */
+async function partitionStartupRoots(
+  roots: readonly string[],
+  bounds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ kept: string[]; dropped: string[] }> {
+  const normalizedBounds = normalizeAllowedDirectories(bounds);
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const root of roots.map(normalizePath)) {
+    let inside: boolean;
+    try {
+      signal?.throwIfAborted();
+      const realPath = await withAbort(realpath(root), signal);
+      inside = isPathWithinDirectories(normalizePath(realPath), normalizedBounds);
+    } catch (error) {
+      rethrowIfAborted(error);
+      inside = isNotFoundErrno(error) && isPathWithinDirectories(root, normalizedBounds);
+    }
+    (inside ? kept : dropped).push(root);
+  }
+  return { kept, dropped };
+}
+
 /** `path.relative` with forward slashes, so displayed paths match across platforms. */
 export function toPosixRelative(from: string, to: string): string {
   return toPosixPath(relative(from, to));
@@ -809,9 +838,19 @@ export class PathGuard {
       }
     }
 
-    const baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
-
     const signal = AbortSignal.timeout(ROOTS_TIMEOUT_MS);
+    let baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
+    if (boundaries.length > 0) {
+      const { kept, dropped } = await partitionStartupRoots(baseline, boundaries, signal);
+      for (const root of dropped) {
+        Logger.emit(
+          'warning',
+          `Skipped allowed root outside FS_ROOT_BOUNDARY (${boundaries.join(', ')}): ${root}`,
+        );
+      }
+      baseline = kept;
+    }
+
     // FS_ROOT_BOUNDARY is the only filter grants answer to (see
     // `grantedDirectories`); without one they pass through as accepted.
     const grantsToInclude =

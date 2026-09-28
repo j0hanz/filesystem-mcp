@@ -13,6 +13,7 @@ import {
   fsErrorMatcher,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -203,7 +204,49 @@ describe('PathGuard grant round-trip', () => {
     assert.ok(!containsPath(allowed, unsafeDir), 'unsafe path must not appear in allowed dirs');
   });
 
-  it('TC-PG-012: an unsafe path aliased behind a symlink is refused by both grant gates', async (t) => {
+  it('TC-PG-012: FS_ROOT_BOUNDARY drops an outside positional root at startup', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const outside = await mkDir(createdDirs, 'fsmcp-pg012-');
+
+    const guard = new PathGuard({ cliAllowedDirs: [root, outside] });
+    await guard.recomputeAllowedDirectories();
+
+    assert.ok(containsPath(guard.getRoots(), root), 'in-boundary root stays');
+    assert.ok(!containsPath(guard.getRoots(), outside), 'outside root is dropped');
+
+    const f = await writeTestFile(outside, 'f.txt', 'x');
+    await assert.rejects(guard.validateExistingPath(f), fsErrorMatcher(ErrorCode.ACCESS_DENIED));
+  });
+
+  it('TC-PG-013: FS_ROOT_BOUNDARY drops an outside FS_ALLOWED_DIRS root at startup', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const outside = await mkDir(createdDirs, 'fsmcp-pg013-');
+
+    await withEnv({ FS_ALLOWED_DIRS: outside }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+
+      assert.ok(containsPath(guard.getRoots(), root), 'in-boundary root stays');
+      assert.ok(!containsPath(guard.getRoots(), outside), 'outside root is dropped');
+
+      const f = await writeTestFile(outside, 'f.txt', 'x');
+      await assert.rejects(guard.validateExistingPath(f), fsErrorMatcher(ErrorCode.ACCESS_DENIED));
+    });
+  });
+
+  it('TC-PG-014: FS_ROOT_BOUNDARY keeps a missing startup root inside the boundary', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const missing = join(root, 'not-yet');
+
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [root, missing] });
+      await guard.recomputeAllowedDirectories();
+
+      assert.ok(containsPath(guard.getRoots(), missing), 'missing in-boundary root stays');
+    });
+  });
+
+  it('TC-PG-015: an unsafe path aliased behind a symlink is refused by both grant gates', async (t) => {
     // TC-PG-011 grants the unsafe path by its literal name. This grants a link
     // that merely *resolves* there: the denylist used to run on the lexical
     // string while expandAllowedDirectories pushed each root's realpath into the
@@ -234,7 +277,7 @@ describe('PathGuard grant round-trip', () => {
     );
   });
 
-  it('TC-PG-013: precheckAccess never offers an ancestor of home, a subtree of a system dir, or a secret subtree of home', async () => {
+  it('TC-PG-016: precheckAccess never offers an ancestor of home, a subtree of a system dir, or a secret subtree of home', async () => {
     delete process.env['FS_ROOT_BOUNDARY'];
     const guard = new PathGuard({ cliAllowedDirs: [root] });
     await guard.recomputeAllowedDirectories();

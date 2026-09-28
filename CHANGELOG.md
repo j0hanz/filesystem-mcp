@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
+
 ## [2.6.3] - 2026-09-28
 
 A small release for plugin hosts. A root argument written as `${NAME}` now
