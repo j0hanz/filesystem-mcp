@@ -449,16 +449,25 @@ async function assertTreeHasNoProtectedEntries(
     includeHidden: true,
     skipIgnored: false,
     onlyFiles: false,
-    suppressErrors: true,
     ...(signal ? { signal } : {}),
   });
-  for await (const entry of entries) {
-    signal?.throwIfAborted();
-    const requestedPath = resolve(requestedSource, relative(realSource, entry.path));
-    if (fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedPath)) {
-      protectedCount++;
-      break;
+  try {
+    for await (const entry of entries) {
+      signal?.throwIfAborted();
+      const requestedPath = resolve(requestedSource, relative(realSource, entry.path));
+      if (fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedPath)) {
+        protectedCount++;
+        break;
+      }
     }
+  } catch (error) {
+    rethrowIfAborted(error);
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `${VERB[op]} refused: the directory could not be fully inspected for protected entries`,
+      requestedSource,
+      error,
+    );
   }
   if (protectedCount > 0) {
     throw new FsError(
