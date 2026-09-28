@@ -377,11 +377,12 @@ async function* guardedEntries(
 }
 
 /** One named file as a walk result; `guardedEntries` re-validates it like any other. */
+// eslint-disable-next-line @typescript-eslint/require-await -- nothing to await: the async shape is what guardedEntries consumes.
 async function* singleEntry(path: string): AsyncGenerator<GlobEntry> {
-  yield await Promise.resolve({
+  yield {
     path,
     dirent: { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
-  });
+  };
 }
 
 export async function searchFiles(
