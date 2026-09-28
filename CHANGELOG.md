@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.6.3] - 2026-09-28
+
+A small release for plugin hosts. A root argument written as `${NAME}` now
+reads that variable from the environment, which lets the Copilot CLI and
+Antigravity CLI plugins start the server with the project as its root.
+Nothing changes for other arguments, and the declared surface (tools,
+capabilities, instructions, prompts, resources) is identical to 2.6.2.
 
 ### Added
 
