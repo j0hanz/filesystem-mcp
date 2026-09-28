@@ -2554,6 +2554,38 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(structured.matches?.[0]?.content?.includes('NEEDLE_MARK'));
   });
 
+  it('search_text on a file whose name has glob metacharacters searches that file', async () => {
+    const target = await writeTestFile(tmpDir, 'globby/[slug].tsx', 'export const NEEDLE_A = 1;\n');
+    // A same-directory decoy that the character class `[slug]` would match.
+    await writeTestFile(tmpDir, 'globby/s.tsx', 'export const NEEDLE_A = 2;\n');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: target, searchPattern: 'NEEDLE_A' },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const matches = (result._meta as { matches?: { file: string; line: number }[] }).matches ?? [];
+    assert.deepStrictEqual(
+      matches.map((m) => m.file),
+      ['[slug].tsx'],
+      'exactly the named file, not the decoy',
+    );
+  });
+
+  it('find_files accepts a literal file name containing .. inside a segment', async () => {
+    // `[...slug]` stays a character class (as in any glob), so the accepted
+    // pattern that is also *useful* is a literal name with `..` inside it.
+    await writeTestFile(tmpDir, 'globby/docs/v1..2.md', 'x\n');
+    const result = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: join(tmpDir, 'globby'), pattern: 'docs/v1..2.md' },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const paths =
+      (result._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(paths, ['docs/v1..2.md']);
+  });
+
   it('search_text: an empty-line pattern sees no phantom line after a trailing newline', async () => {
     const dir = join(tmpDir, 'phantom_line');
     await mkdir(dir, { recursive: true });

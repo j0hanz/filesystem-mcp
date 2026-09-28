@@ -180,6 +180,12 @@ export interface SearchContentOptions {
   skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
+  /**
+   * Search exactly this file (absolute, already guard-validated) instead of
+   * walking `directory` with `filePattern`. Set when the caller named a file:
+   * its name must not be interpreted as a glob.
+   */
+  explicitFile?: string;
   /** Lines of context to carry either side of each match; 0 (default) carries none. */
   context?: number;
   signal?: AbortSignal;
@@ -228,18 +234,20 @@ export async function searchContent(
     const maxFileSize = getMaxTextFileSize();
     const context = options.context ?? 0;
 
-    const entries = globEntries({
-      cwd: directory,
-      pattern: options.filePattern ?? '**/*',
-      // Same rule as replace_text, so a search with the same glob previews the
-      // files a replace would touch: a slash-free glob matches at any depth.
-      baseNameMatch: true,
-      includeHidden: Boolean(options.includeHidden),
-      skipIgnored: Boolean(options.skipIgnored),
-      ...(options.signal ? { signal: options.signal } : {}),
-      maxDepth: options.maxDepth ?? 100,
-      suppressErrors: true,
-    });
+    const entries = options.explicitFile
+      ? singleEntry(options.explicitFile)
+      : globEntries({
+          cwd: directory,
+          pattern: options.filePattern ?? '**/*',
+          // Same rule as replace_text, so a search with the same glob previews the
+          // files a replace would touch: a slash-free glob matches at any depth.
+          baseNameMatch: true,
+          includeHidden: Boolean(options.includeHidden),
+          skipIgnored: Boolean(options.skipIgnored),
+          ...(options.signal ? { signal: options.signal } : {}),
+          maxDepth: options.maxDepth ?? 100,
+          suppressErrors: true,
+        });
 
     let filesScanned = 0;
     let filesMatched = 0;
@@ -366,6 +374,14 @@ async function* guardedEntries(
     }
     yield entry;
   }
+}
+
+/** One named file as a walk result; `guardedEntries` re-validates it like any other. */
+async function* singleEntry(path: string): AsyncGenerator<GlobEntry> {
+  yield await Promise.resolve({
+    path,
+    dirent: { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+  });
 }
 
 export async function searchFiles(
