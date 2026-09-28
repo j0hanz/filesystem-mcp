@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.6.2] - 2026-09-28
+
+A fix release so the server starts on runtimes older than Node 24. Nothing
+changes on Node 24 and later, and the declared surface (tools, capabilities,
+instructions, prompts, resources) is identical to 2.6.1.
 
 ### Fixed
 
