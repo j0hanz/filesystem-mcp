@@ -284,7 +284,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
-    // One scan per line: findLineMatches resets lastIndex itself, so it
+    // One scan per line: the helper resets lastIndex itself, so it
     // doubles as the "does this line match" test.
     const found = findLineMatches(scanCtx.regex, line);
     if (found) {
