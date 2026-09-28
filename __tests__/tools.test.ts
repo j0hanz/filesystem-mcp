@@ -4,11 +4,11 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
+import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
@@ -21,6 +21,7 @@ import {
   createTestRoot,
   failedSummary,
   firstTextBlock,
+  makeGuard,
   type TestClientContext,
   trySymlink,
   withBoundary,
@@ -2819,6 +2820,25 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const b = await once();
     assert.deepStrictEqual(a.first, b.first);
     assert.strictEqual(a.first.length, 25);
+  });
+
+  it('searchContent under its own cap keeps the first matches in walk order', async () => {
+    const root = await createTestRoot();
+    try {
+      for (let i = 0; i < 30; i++) {
+        await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
+      }
+      const guard = await makeGuard([root]);
+      const a = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const b = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const key = (r: typeof a) => r.matches.map((m) => `${basename(m.file)}:${m.line}`);
+      assert.deepStrictEqual(key(a), key(b));
+      assert.strictEqual(a.matches.length, 7);
+      assert.strictEqual(a.summary.stoppedReason, 'maxResults');
+      assert.strictEqual(a.summary.truncated, true);
+    } finally {
+      await cleanupTestRoot(root);
+    }
   });
 
   it('search_text rejects a cursor minted under a different context', async () => {
