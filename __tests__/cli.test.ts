@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { normalizePath } from '../src/core/path-utils.ts';
 import { cleanupTestRoot, createTestRoot } from './helpers.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -81,6 +82,30 @@ describe('CLI (real subprocess)', () => {
     };
     assert.strictEqual(config.policy.allowSensitive, true);
     assert.deepStrictEqual(config.policy.builtinDeny, []);
+  });
+
+  // Plugin hosts pass `${NAME}` args through unexpanded when they don't know
+  // the variable (Antigravity CLI always; Copilot CLI when PWD is unset).
+  it('a positional ${NAME} placeholder resolves from the environment', async () => {
+    const { code, stdout, stderr } = await runCli(
+      ['--print-config', '${FS_TEST_PLACEHOLDER_ROOT}'],
+      {
+        FS_TEST_PLACEHOLDER_ROOT: root,
+      },
+    );
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { allowedRoots: string[] };
+    assert.deepStrictEqual(config.allowedRoots, [normalizePath(root)]);
+  });
+
+  it('a positional ${NAME} placeholder for an unset variable is dropped, not treated as a path', async () => {
+    const { code, stdout, stderr } = await runCli([
+      '--print-config',
+      '${FS_TEST_PLACEHOLDER_UNSET}',
+    ]);
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { allowedRoots: string[] };
+    assert.deepStrictEqual(config.allowedRoots, []);
   });
 
   it('--port outside 1-65535 exits 1 with a message naming the flag', async () => {

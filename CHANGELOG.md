@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`${NAME}` placeholders in root arguments.** A positional root given as
+  exactly `${NAME}` is now read from the server's environment, and dropped
+  when the variable is unset or empty. Plugin hosts that pass their
+  variables through unexpanded (Antigravity CLI, or Copilot CLI launched from
+  PowerShell) no longer produce a nonexistent root or a startup failure.
+  This lets the Copilot CLI and Antigravity CLI plugins start the server
+  with `${PWD}` as the project root.
+
 ## [2.6.2] - 2026-09-28
 
 A fix release so the server starts on runtimes older than Node 24. Nothing

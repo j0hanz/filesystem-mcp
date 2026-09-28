@@ -92,6 +92,22 @@ function parsePortOption(raw: unknown): number | undefined {
   return n;
 }
 
+const ENV_PLACEHOLDER = /^\$\{([A-Za-z_]\w*)\}$/;
+
+/**
+ * Plugin hosts start servers outside the project and substitute only the
+ * variables they know: Antigravity CLI passes `${PWD}` through verbatim, and
+ * Copilot CLI does when the launching shell exported no PWD (PowerShell, cmd).
+ * A whole-argument `${NAME}` resolves from this process's environment; unset
+ * or empty drops it, so it never becomes a bogus relative root.
+ */
+function expandEnvPlaceholder(arg: string): string[] {
+  const name = ENV_PLACEHOLDER.exec(arg)?.[1];
+  if (name === undefined) return [arg];
+  const value = process.env[name];
+  return value ? [value] : [];
+}
+
 const CLI_PARSER_CONFIG = {
   options: {
     'allow-cwd': { type: 'boolean', default: false },
@@ -135,7 +151,8 @@ export async function parseArgs(): Promise<{
       printVersionAndExit();
     }
 
-    for (const positional of parsed.positionals) {
+    const positionals = parsed.positionals.flatMap(expandEnvPlaceholder);
+    for (const positional of positionals) {
       validateCliPath(positional);
     }
 
@@ -173,9 +190,7 @@ export async function parseArgs(): Promise<{
       parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
 
     const allowedDirs =
-      parsed.positionals.length > 0
-        ? await normalizeAndValidateDirs(parsed.positionals, allowMissingRoots)
-        : [];
+      positionals.length > 0 ? await normalizeAndValidateDirs(positionals, allowMissingRoots) : [];
 
     return {
       allowedDirs,
