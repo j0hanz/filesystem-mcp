@@ -1287,6 +1287,31 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           }
         }
 
+        const credentialsDir = join(root, 'credentials-dir');
+        const credentials = await writeTestFile(root, 'credentials-dir/credentials', 'key\n');
+        for (const copy of [false, true]) {
+          const label = `destination copy=${String(copy)}`;
+          const result = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: credentialsDir, destination: join(root, '.aws') }],
+              copy,
+            },
+          });
+          assert.strictEqual(result.isError, true, `${label} must be refused`);
+          const { failures = [] } = result._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
+          assert.match(failures[0]?.error.message ?? '', /protected/i, label);
+          await assert.rejects(access(join(root, '.aws')), `${label} created nothing`);
+          assert.strictEqual(
+            await readFile(credentials, 'utf-8'),
+            'key\n',
+            `${label} left the source`,
+          );
+        }
+
         // A clean tree still moves: the pre-walk must not refuse everything.
         const moved = await own.client.callTool({
           name: 'move',

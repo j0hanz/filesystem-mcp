@@ -126,7 +126,14 @@ async function planTransfer(
   try {
     ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
     if ((await stat(realSource)).isDirectory()) {
-      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, fs, signal);
+      await assertTreeHasNoProtectedEntries(
+        op,
+        realSource,
+        pair.source,
+        pair.destination,
+        fs,
+        signal,
+      );
     }
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
   } catch (error) {
@@ -431,14 +438,16 @@ async function validateTransferSource(
 /**
  * Path-based deny rules (`secrets/**`, `.aws/credentials`) follow the path,
  * not the file: moving or copying their parent directory would relocate the
- * protected entries to paths the rules no longer match. Walk the tree once
- * before any mutation and fail the pair closed if anything in it is denied.
+ * protected entries to paths the rules no longer match; destination-shaped
+ * entries can also become denied after the transfer. Walk the tree once before
+ * any mutation and fail the pair closed if anything in it is denied.
  * Name-based rules need no help — they match after the move too.
  */
 async function assertTreeHasNoProtectedEntries(
   op: PairOp,
   realSource: string,
   requestedSource: string,
+  requestedDestination: string,
   fs: ToolCtx['fs'],
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -454,8 +463,14 @@ async function assertTreeHasNoProtectedEntries(
   try {
     for await (const entry of entries) {
       signal?.throwIfAborted();
-      const requestedPath = resolve(requestedSource, relative(realSource, entry.path));
-      if (fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedPath)) {
+      const entryRelativePath = relative(realSource, entry.path);
+      const requestedSourcePath = resolve(requestedSource, entryRelativePath);
+      const requestedDestinationPath = resolve(requestedDestination, entryRelativePath);
+      if (
+        fs.pathGuard.isSensitive(entry.path) ||
+        fs.pathGuard.isSensitive(requestedSourcePath) ||
+        fs.pathGuard.isSensitive(requestedDestinationPath)
+      ) {
         protectedCount++;
         break;
       }
