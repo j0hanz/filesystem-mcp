@@ -2762,6 +2762,61 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('search_text: anchors, word boundaries and CRLF behave per line (prefilter must not change them)', async () => {
+    const dir = join(tmpDir, 'prefilter_semantics');
+    await writeTestFile(tmpDir, 'prefilter_semantics/lf.txt', 'x\nimport a\n  import b\nfoo$bar\n');
+    await writeTestFile(tmpDir, 'prefilter_semantics/crlf.txt', 'alpha\r\nbeta end\r\ngamma\r\n');
+
+    const run = async (searchPattern: string, isRegex: boolean, caseSensitive = true) => {
+      const r = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern, isRegex, caseSensitive },
+      });
+      return (
+        (r._meta as { matches?: { file: string; line: number; column: number }[] }).matches ?? []
+      )
+        .map((m) => `${m.file}:${m.line}:${m.column}`)
+        .sort();
+    };
+
+    assert.deepStrictEqual(await run('^import', true), ['lf.txt:2:0']);
+    assert.deepStrictEqual(
+      await run('end$', true),
+      ['crlf.txt:2:5'],
+      'CRLF: $ matches before the stripped \r',
+    );
+    assert.deepStrictEqual(await run('\bimport\b', true), ['lf.txt:2:0', 'lf.txt:3:2']);
+    assert.deepStrictEqual(await run('IMPORT', false, false), ['lf.txt:2:0', 'lf.txt:3:2']);
+    assert.deepStrictEqual(await run('foo$bar', false), ['lf.txt:4:0'], 'literal $ is escaped');
+    assert.deepStrictEqual(await run('\Aimport', true), ['lf.txt:2:0'], '\A is start of each line');
+  });
+
+  it('search_text: the match set under maxResults is deterministic across runs', async () => {
+    const dir = join(tmpDir, 'determinism');
+    for (let i = 0; i < 40; i++) {
+      await writeTestFile(
+        tmpDir,
+        `determinism/f${String(i).padStart(2, '0')}.txt`,
+        'DET_HIT\nDET_HIT\nDET_HIT\n',
+      );
+    }
+    const once = async () => {
+      const r = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'DET_HIT', maxResults: 25 },
+      });
+      const meta = r._meta as { matches?: { file: string; line: number }[]; nextCursor?: string };
+      return {
+        first: (meta.matches ?? []).map((m) => `${m.file}:${m.line}`),
+        cursor: meta.nextCursor,
+      };
+    };
+    const a = await once();
+    const b = await once();
+    assert.deepStrictEqual(a.first, b.first);
+    assert.strictEqual(a.first.length, 25);
+  });
+
   it('search_text rejects a cursor minted under a different context', async () => {
     const file = await writeTestFile(tmpDir, 'search_ctx_cursor.txt', 'NEEDLE a\nNEEDLE b\n');
     const first = await harness.client.callTool({
