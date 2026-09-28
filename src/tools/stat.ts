@@ -169,13 +169,10 @@ export const STAT = defineTool({
   },
   accessPaths: singleOrBatchAccessPaths,
   run: async (args, ctx) => {
-    const batchInput = args.path !== undefined ? { path: args.path } : { paths: args.paths ?? [] };
+    const paths = args.path !== undefined ? [args.path] : (args.paths ?? []);
 
-    const batch = await runOverPaths<undefined, FileInfo>(
-      batchInput,
-      ctx,
-      ErrorCode.NOT_FOUND,
-      async ({ path }) => getFileInfo(path, ctx),
+    const batch = await runOverPaths(paths, ctx, ErrorCode.NOT_FOUND, async (path) =>
+      getFileInfo(path, ctx),
     );
 
     const { fileCount, dirCount } = classifyTypeCounts(batch.results);

@@ -170,11 +170,9 @@ export const CREATE = defineTool({
     }
 
     const batch = await runOverPaths<
-      { content: string; append?: boolean | undefined; overwrite?: boolean | undefined },
+      z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >({ files: args.files }, ctx, ErrorCode.UNKNOWN, async ({ path, override }) => {
-      const content = override?.content ?? '';
-
+    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append }) => {
       const pendingPath = pendingByPath.get(path);
       if (pendingPath !== undefined) {
         const key = confirmKey(pendingSorted.indexOf(pendingPath));
@@ -202,7 +200,7 @@ export const CREATE = defineTool({
       let meta: WrittenFileMeta;
       let created: string;
       let modified: string;
-      if (override?.append) {
+      if (append) {
         const appended = await ctx.fs.appendFile(path, content, {
           signal: ctx.signal,
         });

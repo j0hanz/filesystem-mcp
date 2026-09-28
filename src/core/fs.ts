@@ -66,69 +66,6 @@ async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<
   return validPath;
 }
 
-async function atomicWriteFile(
-  filePath: string,
-  content: string,
-  pathGuard: PathGuard,
-  options: { signal?: AbortSignal | undefined } = {},
-): Promise<{ validPath: string }> {
-  const { signal } = options;
-  const validPath = await resolveForWrite(pathGuard, filePath);
-
-  const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
-  const tempPath = `${validPath}.${tempSuffix}.tmp`;
-
-  // The rename below swaps in the temp file's inode, so the target would
-  // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
-  // file to 0644 on every write. Carry the existing mode across instead.
-  let existingMode: number | undefined;
-  try {
-    existingMode = (await fsStat(validPath)).mode & 0o777;
-  } catch (error) {
-    // ENOENT is the normal new-file case: the default mode is correct there.
-    // Anything else (EACCES, EIO) means the mode about to be overwritten could
-    // not be read, and the write will silently widen the file — say so rather
-    // than swallowing it.
-    if (!isNotFoundErrno(error)) {
-      Logger.warn(
-        `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
-      );
-    }
-  }
-
-  try {
-    signal?.throwIfAborted();
-    // Create the temp file already narrowed to the target's mode: a 0600
-    // file's new bytes must never sit at 0644 while the write is in flight.
-    // `wx` fails on a name collision instead of overwriting; the chmod below
-    // still restores bits the umask masked off at creation.
-    await fsWriteFile(tempPath, content, {
-      signal,
-      flag: 'wx',
-      ...(existingMode !== undefined ? { mode: existingMode } : {}),
-    });
-    if (existingMode !== undefined) {
-      await fsChmod(tempPath, existingMode);
-    }
-    // Last cancellation point. The rename IS the commit: once it starts the
-    // target may already be replaced, so it is never raced against the
-    // signal — a withAbort race would report a finished write as failed, and
-    // a client retry would apply it twice (same reasoning as appendFile).
-    signal?.throwIfAborted();
-    await fsRename(tempPath, validPath);
-  } catch (error) {
-    try {
-      await fsUnlink(tempPath);
-    } catch (cleanupError) {
-      Logger.warn(
-        `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
-      );
-    }
-    throw error;
-  }
-  return { validPath };
-}
-
 const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
@@ -225,12 +162,66 @@ export class GuardedFileSystem {
     content: string,
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
-    return atomicWriteFile(filePath, content, this.pathGuard, options);
+    const { signal } = options;
+    const validPath = await resolveForWrite(this.pathGuard, filePath);
+
+    const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
+    const tempPath = `${validPath}.${tempSuffix}.tmp`;
+
+    // The rename below swaps in the temp file's inode, so the target would
+    // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
+    // file to 0644 on every write. Carry the existing mode across instead.
+    let existingMode: number | undefined;
+    try {
+      existingMode = (await fsStat(validPath)).mode & 0o777;
+    } catch (error) {
+      // ENOENT is the normal new-file case: the default mode is correct there.
+      // Anything else (EACCES, EIO) means the mode about to be overwritten could
+      // not be read, and the write will silently widen the file — say so rather
+      // than swallowing it.
+      if (!isNotFoundErrno(error)) {
+        Logger.warn(
+          `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
+        );
+      }
+    }
+
+    try {
+      signal?.throwIfAborted();
+      // Create the temp file already narrowed to the target's mode: a 0600
+      // file's new bytes must never sit at 0644 while the write is in flight.
+      // `wx` fails on a name collision instead of overwriting; the chmod below
+      // still restores bits the umask masked off at creation.
+      await fsWriteFile(tempPath, content, {
+        signal,
+        flag: 'wx',
+        ...(existingMode !== undefined ? { mode: existingMode } : {}),
+      });
+      if (existingMode !== undefined) {
+        await fsChmod(tempPath, existingMode);
+      }
+      // Last cancellation point. The rename IS the commit: once it starts the
+      // target may already be replaced, so it is never raced against the
+      // signal — a withAbort race would report a finished write as failed, and
+      // a client retry would apply it twice (same reasoning as appendFile).
+      signal?.throwIfAborted();
+      await fsRename(tempPath, validPath);
+    } catch (error) {
+      try {
+        await fsUnlink(tempPath);
+      } catch (cleanupError) {
+        Logger.warn(
+          `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
+        );
+      }
+      throw error;
+    }
+    return { validPath };
   }
 
   /**
    * Append to the existing file (created if missing). Deliberately NOT the
-   * atomicWriteFile temp+rename dance: the rename would swap in a fresh inode,
+   * writeFile temp+rename dance: the rename would swap in a fresh inode,
    * and the whole point of appending is to extend the file that's already
    * there — inode and mode survive by construction.
    */

@@ -156,7 +156,7 @@ export default tseslint.config(
           paths: nodeBuiltinImportRestrictions,
           patterns: [
             {
-              regex: '^(?:\\.\\.?/)+server\\.js$',
+              regex: '^(?:\\.\\.?/)+server\\.[jt]s$',
               message: 'Registrars own local dependency contracts; do not import server.ts.',
             },
           ],

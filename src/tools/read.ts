@@ -420,19 +420,14 @@ export const READ = defineTool({
       survivors = [...pathList];
     }
 
-    const batchInput = { paths: survivors };
-
     // Every path can be budget-skipped (a single file over maxTotalSize does
     // it), and runOverPaths rejects an empty list. The per-path TOO_LARGE
     // results are already built — return those rather than failing the call.
     const batch =
       survivors.length === 0
         ? { results: [] as PerPathResult<PerPathReadValue>[] }
-        : await runOverPaths<undefined, PerPathReadValue>(
-            batchInput,
-            ctx,
-            ErrorCode.NOT_FILE,
-            ({ path }) => readOnePath(path, args, ctx, known.get(path)),
+        : await runOverPaths(survivors, ctx, ErrorCode.NOT_FILE, (path) =>
+            readOnePath(path, args, ctx, known.get(path)),
           );
 
     const resultMap = new Map(batch.results.map((r) => [r.path, r]));

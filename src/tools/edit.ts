@@ -525,19 +525,16 @@ export const EDIT = defineTool({
   },
   accessPaths: singleOrBatchAccessPaths,
   run: async (args, ctx) => {
-    const sharedEdits = args.edits ?? [];
-    const batchInput = args.path !== undefined ? { path: args.path } : { files: args.files ?? [] };
+    const items =
+      args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);
 
     const options: EditFileOptions = {
       dryRun: args.dryRun,
       ignoreWhitespace: args.ignoreWhitespace,
     };
 
-    const batch = await runOverPaths<
-      { edits: z.infer<typeof EditSpecSchema>[] },
-      { file: EditFileValue; resourceLink?: ContentBlock }
-    >(batchInput, ctx, ErrorCode.UNKNOWN, ({ path, override }) =>
-      handleEditFile(path, override?.edits ?? sharedEdits, options, ctx),
+    const batch = await runOverPaths(items, ctx, ErrorCode.UNKNOWN, ({ path, edits }) =>
+      handleEditFile(path, edits, options, ctx),
     );
 
     const perPathResults: z.infer<typeof EditPerPathSchema>[] = [];

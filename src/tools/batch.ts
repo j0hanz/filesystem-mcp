@@ -10,29 +10,12 @@ export interface BatchResult<T> {
   summary: { total: number; succeeded: number; failed: number };
 }
 
-type BatchInput<TOverride> =
-  { path: string } | { paths: string[] } | { files: ({ path: string } & TOverride)[] };
-
-function normalizeBatchItems<TOverride>(
-  args: BatchInput<TOverride>,
-): { path: string; override?: TOverride }[] {
-  if ('path' in args) return [{ path: args.path }];
-  if ('paths' in args) return args.paths.map((path) => ({ path }));
-  if ('files' in args)
-    return args.files.map(({ path, ...rest }) => ({
-      path,
-      override: rest as TOverride,
-    }));
-  return [];
-}
-
-export async function runOverPaths<TOverride, TPerPath>(
-  args: BatchInput<TOverride>,
+export async function runOverPaths<TItem extends string | { path: string }, TPerPath>(
+  items: readonly TItem[],
   ctx: ToolCtx,
   defaultErrorCode: ErrorCode,
-  perPath: (item: { path: string; override?: TOverride }, ctx: ToolCtx) => Promise<TPerPath>,
+  perPath: (item: TItem, ctx: ToolCtx) => Promise<TPerPath>,
 ): Promise<BatchResult<TPerPath>> {
-  const items = normalizeBatchItems(args);
   if (items.length === 0) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
@@ -52,13 +35,14 @@ export async function runOverPaths<TOverride, TPerPath>(
   await processInParallel(
     items,
     async (item, index) => {
+      const path = typeof item === 'string' ? item : item.path;
       try {
         const value = await perPath(item, ctx);
-        results[index] = { path: item.path, value };
+        results[index] = { path, value };
       } catch (error: unknown) {
         results[index] = {
-          path: item.path,
-          error: Problem.fromUnknown(error, defaultErrorCode, item.path),
+          path,
+          error: Problem.fromUnknown(error, defaultErrorCode, path),
         };
       } finally {
         tick();

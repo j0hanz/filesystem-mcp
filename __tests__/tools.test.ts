@@ -635,19 +635,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
   it('TC-FUNC-013: Edit via MCP tool call', async () => {
     const file = join(tmpDir, 'edit.txt');
-    await writeFile(file, 'original content');
+    const edits = [{ oldText: 'original', newText: 'modified' }];
+    for (const args of [{ path: file, edits }, { files: [{ path: file, edits }] }]) {
+      await writeFile(file, 'original content');
+      const result = await harness.client.callTool({ name: 'edit', arguments: args });
+      assert.notStrictEqual(result.isError, true);
 
-    const result = await harness.client.callTool({
-      name: 'edit',
-      arguments: {
-        path: file,
-        edits: [{ oldText: 'original', newText: 'modified' }],
-      },
-    });
-    assert.notStrictEqual(result.isError, true);
-
-    const content = await readFile(file, 'utf-8');
-    assert.strictEqual(content, 'modified content');
+      const content = await readFile(file, 'utf-8');
+      assert.strictEqual(content, 'modified content');
+    }
   });
 
   // An oldText that occurs more than once used to edit the first occurrence and
@@ -2354,18 +2350,17 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
   it('TC-FUNC-015s: stat returns file metadata via callTool', async () => {
     const file = await writeTestFile(tmpDir, 'statme.txt', 'hello');
-    const result = await harness.client.callTool({
-      name: 'stat',
-      arguments: { path: file },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const sc = result.structuredContent as {
-      results?: { value?: { type?: string; size?: number } }[];
-    };
-    const value = sc.results?.[0]?.value;
-    assert.ok(value, 'stat must return a value');
-    assert.strictEqual(value.type, 'file');
-    assert.ok(typeof value.size === 'number' && value.size > 0);
+    for (const args of [{ path: file }, { paths: [file] }]) {
+      const result = await harness.client.callTool({ name: 'stat', arguments: args });
+      assert.notStrictEqual(result.isError, true);
+      const sc = result.structuredContent as {
+        results?: { value?: { type?: string; size?: number } }[];
+      };
+      const value = sc.results?.[0]?.value;
+      assert.ok(value, 'stat must return a value');
+      assert.strictEqual(value.type, 'file');
+      assert.ok(typeof value.size === 'number' && value.size > 0);
+    }
   });
 
   it('stat reports an own symlink and its target', async (t) => {
