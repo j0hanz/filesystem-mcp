@@ -20,6 +20,7 @@ import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-
 import {
   getReservedDeviceNameForPath,
   IS_WINDOWS,
+  isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
   isWindowsDriveRelativePath,
@@ -244,6 +245,26 @@ export class PathGuard {
       return [];
     }
     return [...this.allowedDirectoriesState];
+  }
+
+  /**
+   * The allowed directory that contains `resolvedPath` — the longest match,
+   * so a nested root wins over its parent — or `undefined` when none does.
+   * Walks use it as the `.gitignore` ceiling: rules above an allowed root are
+   * never read.
+   */
+  allowedRootContaining(resolvedPath: string): string | undefined {
+    const normalized = normalizePath(resolvedPath);
+    let best: string | undefined;
+    for (const dir of this.getAllowedDirectories()) {
+      if (
+        isPathInsideDirectory(dir, normalized) &&
+        (best === undefined || dir.length > best.length)
+      ) {
+        best = dir;
+      }
+    }
+    return best;
   }
 
   /**

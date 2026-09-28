@@ -81,11 +81,13 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   let totalEntries = 0;
   let totalFiles = 0;
   let totalDirectories = 0;
+  const ceiling = options.pathGuard.allowedRootContaining(rootPath);
 
   for await (const entry of globEntries({
     cwd: rootPath,
     pattern: '**/*',
     skipIgnored: !options.includeIgnored,
+    ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
     signal: options.signal,
     includeHidden: options.includeHidden,
     baseNameMatch: false,

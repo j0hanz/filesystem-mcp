@@ -511,6 +511,7 @@ async function handleSearchAndReplace(
   const maxFileSize = getMaxTextFileSize();
   const { root, singleFile } = await resolveSearchRoot(args.path, ctx.fs);
   const effectivePattern = args.pattern ?? '**/*';
+  const ceiling = ctx.fs.pathGuard.allowedRootContaining(root);
 
   // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
   // gitignore filtering — it should always be processed as the one file named.
@@ -521,6 +522,7 @@ async function handleSearchAndReplace(
         pattern: effectivePattern,
         includeHidden: args.includeHidden,
         skipIgnored: !args.includeIgnored,
+        ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
         signal: ctx.signal,
         baseNameMatch: true,
         onlyFiles: true,

@@ -233,6 +233,7 @@ export async function searchContent(
     const maxResults = options.maxResults ?? 100;
     const maxFileSize = getMaxTextFileSize();
     const context = options.context ?? 0;
+    const ceiling = pathGuard.allowedRootContaining(directory);
 
     const entries = options.explicitFile
       ? singleEntry(options.explicitFile)
@@ -244,6 +245,7 @@ export async function searchContent(
           baseNameMatch: true,
           includeHidden: Boolean(options.includeHidden),
           skipIgnored: Boolean(options.skipIgnored),
+          ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
           maxDepth: options.maxDepth ?? 100,
           suppressErrors: true,
@@ -410,12 +412,14 @@ export async function searchFiles(
   };
 }> {
   const maxResults = options.maxResults ?? 100;
+  const ceiling = pathGuard.allowedRootContaining(directory);
   const entries = globEntries({
     cwd: directory,
     pattern,
     baseNameMatch: true,
     includeHidden: Boolean(options.includeHidden),
     skipIgnored: Boolean(options.skipIgnored),
+    ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     maxDepth: options.maxDepth ?? 100,
     suppressErrors: true,
