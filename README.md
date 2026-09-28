@@ -169,6 +169,18 @@ Add to `.cursor/mcp.json` in your project root (project-scoped), or `~/.cursor/m
 }
 ```
 
+### Install as a plugin
+
+The [filesystem-mcp plugin](https://github.com/j0hanz/j0hanz-marketplace/tree/main/plugins/filesystem-mcp) wires the server up with project-scoped defaults:
+
+| Client          | Install                                                                                                                         |
+| :-------------- | :------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code     | `/plugin marketplace add j0hanz/j0hanz-marketplace`, then `/plugin install filesystem-mcp@j0hanz-marketplace`                   |
+| Copilot CLI     | `copilot plugin marketplace add j0hanz/j0hanz-marketplace`, then `copilot plugin install filesystem-mcp@j0hanz-marketplace`     |
+| Antigravity CLI | `git clone https://github.com/j0hanz/j0hanz-marketplace`, then `agy plugin install ./j0hanz-marketplace/plugins/filesystem-mcp` |
+
+The plugin README covers the defaults and how each client picks the project directory.
+
 ### Docker configuration
 
 VS Code (`.vscode/mcp.json`) and Visual Studio (`.vs\mcp.json`):
@@ -387,7 +399,7 @@ filesystem-mcp /path/to/project1 /path/to/project2
 
 | Flag                      | Default | Purpose                                                                                                                               |
 | :------------------------ | :------ | :------------------------------------------------------------------------------------------------------------------------------------ |
-| `[dirs...]`               | —       | One or more allowed root directories (positional)                                                                                     |
+| `[dirs...]`               | —       | One or more allowed root directories (positional). A whole argument `${NAME}` is read from the environment and dropped when unset     |
 | `--allow-cwd`             | `false` | Also allow the current working directory as a root                                                                                    |
 | `--walk-cwd`              | `false` | Walk up from CWD to find a project root; implies `--allow-cwd`                                                                        |
 | `--allow-missing-roots`   | `false` | Start even if configured allowed directories do not exist                                                                             |
