@@ -127,7 +127,7 @@ class GitignoreManager {
     root: string,
     signal?: AbortSignal,
     maxDepth?: number,
-    ceiling?: string,
+    ignoreCeiling?: string,
   ): Promise<GitignoreManager | null> {
     const manager = new GitignoreManager();
     try {
@@ -148,8 +148,8 @@ class GitignoreManager {
       }
 
       await loadGitignoreFiles(root, gitignorePaths, manager, signal);
-      if (ceiling !== undefined) {
-        await loadAncestorGitignores(root, ceiling, manager, signal);
+      if (ignoreCeiling !== undefined) {
+        await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') throw error;
