@@ -120,7 +120,6 @@ diff fields are now optional.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **Request bodies are parsed after auth.** `POST /mcp` now mounts its
   JSON parser after CORS, rate limiting, and bearer auth: an
   unauthenticated or rate-limited request is refused without its body
@@ -201,7 +200,6 @@ upgrade.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **MCP SDK 2.1.0.** `@modelcontextprotocol/server` and
   `@modelcontextprotocol/node` move from 2.0.0 to 2.1.0, and
   `@modelcontextprotocol/express` from 2.0.0 to 2.0.1. `ignore` moves to
@@ -254,7 +252,6 @@ error code.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **Tool descriptions were rewritten for models.** Each now leads with what
   the tool does and the command it resembles (grep, cat, sed -i, git apply),
   and names a sibling only where the two are easy to confuse. Anything the
@@ -347,7 +344,6 @@ parses the `--print-config` table.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **A refused confirmation says why.** When a `create` overwrite, a `move` or copy overwrite, or a `delete` confirmation comes back without an accepted answer, the `CANCELLED` error used to say `declined or missing`. It now says `declined by the user`, `dismissed by the user`, `answered without a valid choice`, or `not answered`, read from the SDK's `inputResponse` view of the retried call. Nothing about which choices are offered or what proceeds changes.
 - **Confirmation forms label their field.** The `input_required` forms for overwrite, delete and access-grant confirmations now carry a `title` on their one field — `Confirm` for the yes/no grant, `Action` for the overwrite/skip and delete/skip choice, `Allow` for the multi-directory grant — so a host that renders the form shows that label instead of the property name `confirm` or `choice`. The offered values and the `message` text are unchanged.
 - **`tools/list` publishes the SDK's own schema conversion.** Each tool's
@@ -435,7 +431,6 @@ before upgrading if a caller overwrites files with `create` or passes `edit` an
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **Confirmation forms offer plain enums.** The `input_required` forms for
   overwrite, delete and access-grant confirmations used to carry each option
   as a titled `oneOf`/`anyOf` entry; they now carry a plain `enum` of the same
@@ -525,7 +520,6 @@ text block or rely on `--log-level` to silence startup warnings.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **`list` reports its position on every page.** The text block now carries
   the same `// showing 1-20 of 57 entries.` trailer the other paged tools
   emit, including on the final page, which previously shipped a bare tree and
@@ -615,7 +609,6 @@ and bearer auth.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - `cli.ts` reads `util.parseArgs` values through their inferred type
   (dot access for the plain-named flags), and `CliExitError` carries no
   exit-code parameter — every construction site already exited 1.
@@ -691,7 +684,6 @@ propagates the abort instead of silently dropping grant roots.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - `filterRootsWithin` resolves root containment with `Promise.all`, so an
   aborted boundary check rejects instead of filtering every root out as
   "within=false" — a late abort no longer reports a grant as outside the
@@ -723,7 +715,6 @@ wire payload changes behaviour.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - `edit` and `replace_in_files` call diff v9 synchronously — the library is
   sync, so the `await` bought nothing.
 - Cursor first-page and replay handling folds into `paginate`; `search_text`
@@ -764,7 +755,6 @@ deprecated. The wire format, CLI flags, and every other tool are untouched.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **`list`, `find_files`, and `search_text` externalize on one rule.** An
   incomplete first page — more pages follow, or the engine's hard cap cut the
   set — now carries `resourceUri` to the full result in the resource store, for
@@ -841,7 +831,6 @@ single-instance behaviour is identical.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - The `get-help` prompt no longer rejects a `topic` for blankness or shell
   metacharacters. The handler resolves a topic by `Object.hasOwn` against a
   frozen record, so an unrecognized one already falls through to the not-found
@@ -866,7 +855,6 @@ Nothing else here needs action.
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - **Where tool metadata lives.** Tools that return a text result (`read`,
   `list`, `diff`, `patch`, `edit`, `delete`, `move`, `replace_text`,
   `search_text`, `find_files`) now ship their metadata under `_meta` instead of
@@ -1019,7 +1007,6 @@ was empty, so importing the package root never gave callers an API. The
 
 ### Changed
 
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
 - Updated core dependencies.
 - Refined internal schemas and agent configurations.
 - `--api-key` is documented as development-only; `FS_API_KEY` is the supported
