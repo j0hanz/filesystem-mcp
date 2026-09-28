@@ -2,7 +2,7 @@ import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import { stat } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -125,7 +125,7 @@ async function planTransfer(
   let validDest: string;
   try {
     ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
-    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
+    if ((await stat(realSource)).isDirectory()) {
       await assertTreeHasNoProtectedEntries(op, realSource, pair.source, fs, signal);
     }
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
@@ -454,7 +454,8 @@ async function assertTreeHasNoProtectedEntries(
   });
   for await (const entry of entries) {
     signal?.throwIfAborted();
-    if (fs.pathGuard.isSensitive(entry.path)) {
+    const requestedPath = resolve(requestedSource, relative(realSource, entry.path));
+    if (fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedPath)) {
       protectedCount++;
       break;
     }

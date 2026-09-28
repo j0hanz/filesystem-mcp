@@ -1221,10 +1221,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
-  it('move and copy refuse a directory whose tree contains a path-denied file', async () => {
+  it('move and copy refuse a directory whose tree contains a path-denied file', async (t) => {
     // `secrets/**` is path-based: it denies secrets/x.txt but not public/x.txt,
     // so moving the directory used to carry the file out of the rule.
-    await withEnv({ FS_DENYLIST: 'secrets/**' }, async () => {
+    await withEnv({ FS_DENYLIST: 'secrets/**,linked-secrets/**' }, async () => {
       const root = await createTestRoot();
       const own = await createTestClientPair([root]);
       try {
@@ -1253,6 +1253,38 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
             'top secret\n',
             `${label} left the source`,
           );
+        }
+
+        const linkedTarget = join(root, 'linked-target');
+        await writeTestFile(root, 'linked-target/inner/x.txt', 'via symlink\n');
+        const linkedSource = join(root, 'linked-secrets');
+        if (
+          await trySymlink(linkedTarget, linkedSource, () =>
+            t.diagnostic('symlink not permitted; symlinked directory coverage skipped'),
+          )
+        ) {
+          for (const copy of [false, true]) {
+            const label = `symlink copy=${String(copy)}`;
+            const result = await own.client.callTool({
+              name: 'move',
+              arguments: {
+                moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
+                copy,
+              },
+            });
+            assert.strictEqual(result.isError, true, `${label} must be refused`);
+            const { failures = [] } = result._meta as {
+              failures?: { error: { code: string; message: string } }[];
+            };
+            assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
+            assert.match(failures[0]?.error.message ?? '', /protected/i, label);
+            await assert.rejects(access(join(root, 'public-link')), `${label} created nothing`);
+            assert.strictEqual(
+              await readFile(join(linkedSource, 'inner/x.txt'), 'utf-8'),
+              'via symlink\n',
+              `${label} left the source`,
+            );
+          }
         }
 
         // A clean tree still moves: the pre-walk must not refuse everything.
