@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Startup crash on Node 22.** The server crashed at startup with
+  `TypeError: RegExp.escape is not a function` on runtimes without
+  `RegExp.escape` (added in Node 24). npm only warns on `engines`, so
+  directory sandboxes such as mcp.so's tool fetch still ran it there. A
+  fallback implementing the same algorithm now takes over when the native
+  function is missing. The supported range is still Node 24 and later.
+
 ## [2.6.1] - 2026-09-26
 
 A fix release for the dry-run metadata of the editing tools. `edit`'s dry

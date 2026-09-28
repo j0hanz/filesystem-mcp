@@ -32,6 +32,7 @@ import { compileRegex, execMatches, freeRegex, RE2_MAX_INPUT_BYTES } from '../co
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
+  escapeRegExp,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
@@ -456,7 +457,7 @@ function buildSearchPattern(args: SearchAndReplaceArgs): string {
   if (args.isRegex) {
     return args.wholeWord ? `\\b(?:${args.searchPattern})\\b` : args.searchPattern;
   }
-  const escaped = RegExp.escape(args.searchPattern);
+  const escaped = escapeRegExp(args.searchPattern);
   return args.wholeWord ? `\\b(?:${escaped})\\b` : escaped;
 }
 

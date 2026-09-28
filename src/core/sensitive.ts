@@ -8,6 +8,7 @@ import { normalize, posix, sep } from 'node:path';
 
 import { cli } from './config.ts';
 import { IS_WINDOWS, isAlpha, parseTrueEnvFlag, toPosixPath } from './path-utils.ts';
+import { escapeRegExp } from './util.ts';
 
 const CHAR_COLON = 58;
 
@@ -145,10 +146,10 @@ function globToRegExp(glob: string): RegExp {
           source += `[${negated ? '^' : ''}${body}]`;
           j = close;
         } else {
-          source += RegExp.escape(char);
+          source += escapeRegExp(char);
         }
       } else {
-        source += RegExp.escape(char);
+        source += escapeRegExp(char);
       }
     }
     if (!last) source += '/';
