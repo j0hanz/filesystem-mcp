@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Directory move/copy honors path-based deny rules.** A directory whose tree contains an entry the sensitive-file policy denies (an operator `secrets/**`, the built-in `.aws/credentials`, …) is no longer relocated past the rule; the pair fails with `ACCESS_DENIED` and nothing moves.
+- **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before.
 - **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
 
 ## [2.6.3] - 2026-09-28

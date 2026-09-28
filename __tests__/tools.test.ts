@@ -1263,28 +1263,39 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
             t.diagnostic('symlink not permitted; symlinked directory coverage skipped'),
           )
         ) {
-          for (const copy of [false, true]) {
-            const label = `symlink copy=${String(copy)}`;
-            const result = await own.client.callTool({
-              name: 'move',
-              arguments: {
-                moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
-                copy,
-              },
-            });
-            assert.strictEqual(result.isError, true, `${label} must be refused`);
-            const { failures = [] } = result._meta as {
-              failures?: { error: { code: string; message: string } }[];
-            };
-            assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
-            assert.match(failures[0]?.error.message ?? '', /protected/i, label);
-            await assert.rejects(access(join(root, 'public-link')), `${label} created nothing`);
-            assert.strictEqual(
-              await readFile(join(linkedSource, 'inner/x.txt'), 'utf-8'),
-              'via symlink\n',
-              `${label} left the source`,
-            );
-          }
+          const copyResult = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
+              copy: true,
+            },
+          });
+          assert.strictEqual(copyResult.isError, true, 'symlink copy must be refused');
+          const { failures = [] } = copyResult._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', 'symlink copy');
+          assert.match(failures[0]?.error.message ?? '', /protected/i, 'symlink copy');
+          await assert.rejects(access(join(root, 'public-link')), 'symlink copy created nothing');
+          assert.strictEqual(
+            await readFile(join(linkedSource, 'inner/x.txt'), 'utf-8'),
+            'via symlink\n',
+            'symlink copy left the source',
+          );
+
+          const moveResult = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
+            },
+          });
+          assert.notStrictEqual(moveResult.isError, true, 'symlink move must succeed');
+          await access(join(root, 'public-link'));
+          assert.strictEqual(
+            await readFile(join(linkedTarget, 'inner/x.txt'), 'utf-8'),
+            'via symlink\n',
+            'symlink move left the linked target intact',
+          );
         }
 
         const credentialsDir = join(root, 'credentials-dir');
@@ -1311,6 +1322,22 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
             `${label} left the source`,
           );
         }
+
+        const proj = join(root, 'proj');
+        await writeTestFile(root, 'proj/.env', 'SECRET=1\n');
+        await writeTestFile(root, 'proj/app.ts', 'x\n');
+        const envMove = await own.client.callTool({
+          name: 'move',
+          arguments: { moves: [{ source: proj, destination: join(root, 'proj-moved') }] },
+        });
+        assert.notStrictEqual(envMove.isError, true);
+        assert.strictEqual(await readFile(join(root, 'proj-moved', 'app.ts'), 'utf-8'), 'x\n');
+        await access(join(root, 'proj-moved', '.env'));
+        const envRead = await own.client.callTool({
+          name: 'read',
+          arguments: { path: join(root, 'proj-moved', '.env') },
+        });
+        assert.strictEqual(envRead.isError, true);
 
         // A clean tree still moves: the pre-walk must not refuse everything.
         const moved = await own.client.callTool({

@@ -125,17 +125,10 @@ async function planTransfer(
   let validDest: string;
   try {
     ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
-    if ((await stat(realSource)).isDirectory()) {
-      await assertTreeHasNoProtectedEntries(
-        op,
-        realSource,
-        pair.source,
-        pair.destination,
-        fs,
-        signal,
-      );
-    }
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
+    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
+      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
+    }
   } catch (error) {
     return { status: 'fail', failure: pairFailure(pair, error) };
   }
@@ -436,18 +429,18 @@ async function validateTransferSource(
 }
 
 /**
- * Path-based deny rules (`secrets/**`, `.aws/credentials`) follow the path,
- * not the file: moving or copying their parent directory would relocate the
- * protected entries to paths the rules no longer match; destination-shaped
- * entries can also become denied after the transfer. Walk the tree once before
- * any mutation and fail the pair closed if anything in it is denied.
+ * A directory transfer may proceed only when every entry keeps the same
+ * sensitive-file status before and after relocation. Path-based rules
+ * (`secrets/**`, `.aws/credentials`) follow the path, not the file, so refuse
+ * any entry that would leave or enter the protected set. Walk the tree once
+ * before any mutation and fail the pair closed if anything changes status.
  * Name-based rules need no help — they match after the move too.
  */
 async function assertTreeHasNoProtectedEntries(
   op: PairOp,
   realSource: string,
   requestedSource: string,
-  requestedDestination: string,
+  validDest: string,
   fs: ToolCtx['fs'],
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -465,12 +458,11 @@ async function assertTreeHasNoProtectedEntries(
       signal?.throwIfAborted();
       const entryRelativePath = relative(realSource, entry.path);
       const requestedSourcePath = resolve(requestedSource, entryRelativePath);
-      const requestedDestinationPath = resolve(requestedDestination, entryRelativePath);
-      if (
-        fs.pathGuard.isSensitive(entry.path) ||
-        fs.pathGuard.isSensitive(requestedSourcePath) ||
-        fs.pathGuard.isSensitive(requestedDestinationPath)
-      ) {
+      const destinationPath = resolve(validDest, entryRelativePath);
+      const protectedBefore =
+        fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedSourcePath);
+      const protectedAfter = fs.pathGuard.isSensitive(destinationPath);
+      if (protectedBefore !== protectedAfter) {
         protectedCount++;
         break;
       }
