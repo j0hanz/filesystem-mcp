@@ -144,6 +144,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       return c.mcp;
     }
     activeCtx = c;
+    // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
     if (era === 'legacy') {
       // Fires when the client's `notifications/initialized` lands. Safe to own:
       // the SDK's only touchpoint is its own initialized handler reading it.

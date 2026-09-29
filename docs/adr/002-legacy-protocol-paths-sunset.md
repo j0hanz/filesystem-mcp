@@ -81,3 +81,19 @@ project.
 - This record must be revisited if the spec extends the SEP-2577 deprecation
   window past twelve months, or if a future SEP changes what replaces
   `resources/subscribe` before this server removes it.
+- **Amended 2026-09-29:** the marker grep returns five sites, not three. Two
+  legacy-only branches had landed without it: the capability gate in
+  `src/server.ts` (`legacyHttp` and the `resources: { subscribe, listChanged }`
+  pair it drives, roughly 7 lines) and the `era === 'legacy'` block in
+  `src/transport/stdio.ts` that wires `oninitialized` and
+  `notifications/roots/list_changed` to `seedRootsFromClient` (roughly 12
+  lines). Both now carry the marker. The removal also retires the `era`
+  discriminator that exists only to reach these sites: the `era?` option and
+  its forward in `src/server.ts`, the `era` field on the registrar deps in
+  `src/resources.ts`, `src/tools/index.ts` and `src/tools/define.ts`, and the
+  `({ era })` factory argument and its forward in `src/transport/http.ts` and
+  `src/transport/stdio.ts` (roughly 10 lines across six files). The
+  `legacyHttp` predicate is deliberately spelled twice (`server.ts`,
+  `resources.ts`) rather than passed through `deps`: adding a field to
+  plumbing this record schedules for deletion would be a new seam in code
+  meant to be temporary.

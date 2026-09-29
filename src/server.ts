@@ -85,6 +85,7 @@ export async function createServer(
   // one request, registers no subscribe handler (resources.ts, same
   // predicate) and sends no notification of any kind — there is no stream to
   // send it on — so neither `subscribe` nor `listChanged` is advertised.
+  // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
   const legacyHttp = extraDeps?.era === 'legacy' && extraDeps.notifier !== undefined;
   const capabilities = {
     resources: { subscribe: !legacyHttp, listChanged: !legacyHttp },
