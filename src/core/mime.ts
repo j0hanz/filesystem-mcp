@@ -193,13 +193,8 @@ export function isBinarySample(slice: Buffer): boolean {
 export function detectMimeType(path: string, sample?: Buffer): MimeInfo {
   const lastDot = path.lastIndexOf('.');
   const ext = lastDot > -1 ? path.slice(lastDot + 1).toLowerCase() : '';
-
-  if (ext && Object.hasOwn(EXT_MAP, ext)) {
-    const entry = EXT_MAP[ext];
-    if (entry !== undefined) {
-      return entry;
-    }
-  }
+  const known = Object.hasOwn(EXT_MAP, ext) ? EXT_MAP[ext] : undefined;
+  if (known) return known;
 
   // No known extension: fall back to a binary/text probe of the content.
   if (sample) {

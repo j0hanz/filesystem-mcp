@@ -29,7 +29,7 @@ export async function runOverPaths<TItem extends string | { path: string }, TPer
 
   const tick = (): void => {
     completed += 1;
-    ctx.onProgress?.({ current: completed, total });
+    ctx.onProgress({ current: completed, total });
   };
 
   await processInParallel(

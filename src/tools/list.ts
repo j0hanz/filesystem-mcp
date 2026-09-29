@@ -42,7 +42,7 @@ interface CollectOptions {
   pathGuard: PathGuard;
   /** Upper bound on the stored, paginable entry array. */
   entryCap: number;
-  onProgress?: (progress: { current: number; total?: number }) => void;
+  onProgress: (progress: { current: number; total?: number }) => void;
 }
 
 interface CollectResult {
@@ -96,7 +96,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   })) {
     options.signal.throwIfAborted();
     scanned++;
-    options.onProgress?.({ current: scanned });
+    options.onProgress({ current: scanned });
 
     const entryType: EntryType = resolveEntryType(entry.dirent);
     const relPath = toPosixRelative(rootPath, entry.path);
@@ -257,7 +257,7 @@ async function handleList(
         signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(DEFAULT_SEARCH_TIMEOUT_MS)]),
         pathGuard: ctx.fs.pathGuard,
         entryCap: MAX_LIST_ENTRIES,
-        ...(ctx.onProgress ? { onProgress: ctx.onProgress } : {}),
+        onProgress: ctx.onProgress,
       });
       return {
         items: result.entries,

@@ -224,7 +224,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
           kind = mimeInfo.kind;
           lineCount = await countFileLines(appended.validPath);
         } catch (error) {
-          ctx.log?.(
+          ctx.log(
             'warning',
             `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
             'create',

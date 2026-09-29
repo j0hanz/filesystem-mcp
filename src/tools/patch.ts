@@ -128,7 +128,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
 
     if (!args.dryRun) {
       await ctx.fs.writeFile(args.path, patched, { signal: ctx.signal });
-      ctx.log?.('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
+      ctx.log('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
     }
 
     // `modified` is read from a post-write stat and is advisory: under a concurrent

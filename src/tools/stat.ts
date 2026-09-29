@@ -110,7 +110,7 @@ async function getFileInfo(
       // root that is itself a symlink, whose parent sits outside the roots).
       // Falling back to the followed stats degrades the report to the target's
       // metadata, so leave a trace instead of degrading silently.
-      log?.('warning', `stat: lstat failed for "${requestedPath}": ${String(error)}`, 'stat');
+      log('warning', `stat: lstat failed for "${requestedPath}": ${String(error)}`, 'stat');
       stats = followedStats;
     }
   }

@@ -5,7 +5,7 @@ import { isSpecType, type ProgressNotificationParams } from '@modelcontextprotoc
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 
 import { ProgressSession } from '../src/tools/progress.ts';
 import {
@@ -24,15 +24,21 @@ interface Frame {
 }
 
 /**
- * Mirrors how ToolExecutor builds its session (src/tools/define.ts): rate
- * limiting off. A session that knows no total reports the cursor on its
- * terminal frame, which is the value the last tick already used — the case the
+ * Mirrors how ToolExecutor builds its session (src/tools/define.ts). With a
+ * test context, `Date.now` advances one rate-limit window (50ms) per call, so
+ * every tick clears the limiter; tests that drive the clock themselves pass
+ * nothing. A session that knows no total reports the cursor on its terminal
+ * frame, which is the value the last tick already used — the case the
  * monotonic wire guard has to handle without swallowing the outcome.
  */
-function session(options: { rateLimitMs?: number } = { rateLimitMs: 0 }): {
+function session(t?: TestContext): {
   sent: Frame[];
   progress: ProgressSession;
 } {
+  if (t) {
+    let now = 0;
+    t.mock.method(Date, 'now', () => (now += 50));
+  }
   const sent: Frame[] = [];
   const notify = (n: Notification): Promise<void> => {
     sent.push(n.params as unknown as Frame);
@@ -41,7 +47,6 @@ function session(options: { rateLimitMs?: number } = { rateLimitMs: 0 }): {
   const progress = new ProgressSession({
     label: 'label',
     sink: { toolName: 't', token: 'tok', notify },
-    ...options,
   });
   return { sent, progress };
 }
@@ -50,7 +55,7 @@ describe('ProgressSession wire monotonicity', () => {
   it('SDK-AUDIT-PROGRESS-005: startup does not consume the first work tick budget', async (t) => {
     let now = 0;
     t.mock.method(Date, 'now', () => now);
-    const { sent, progress } = session({});
+    const { sent, progress } = session();
     now = 100;
 
     progress.set({ current: 1, total: 2 });
@@ -66,7 +71,7 @@ describe('ProgressSession wire monotonicity', () => {
   it('SDK-AUDIT-PROGRESS-006: subsequent work ticks retain the rate limit', async (t) => {
     let now = 0;
     t.mock.method(Date, 'now', () => now);
-    const { sent, progress } = session({});
+    const { sent, progress } = session();
     now = 100;
     progress.set({ current: 1 });
     now = 120;
@@ -82,8 +87,8 @@ describe('ProgressSession wire monotonicity', () => {
     );
   });
 
-  it('SDK-AUDIT-PROGRESS-001: idle and ignored updates emit no startup frame', async () => {
-    const { sent, progress } = session();
+  it('SDK-AUDIT-PROGRESS-001: idle and ignored updates emit no startup frame', async (t) => {
+    const { sent, progress } = session(t);
     progress.set({ current: 0 });
     progress.set({ current: -1 });
 
@@ -93,8 +98,8 @@ describe('ProgressSession wire monotonicity', () => {
   });
 
   for (const terminal of ['complete', 'fail'] as const) {
-    it(`SDK-AUDIT-PROGRESS-001: terminal-only ${terminal} sends initial and final frames`, async () => {
-      const { sent, progress } = session();
+    it(`SDK-AUDIT-PROGRESS-001: terminal-only ${terminal} sends initial and final frames`, async (t) => {
+      const { sent, progress } = session(t);
 
       progress[terminal]('terminal outcome');
       await progress.flush();
@@ -107,8 +112,8 @@ describe('ProgressSession wire monotonicity', () => {
     });
   }
 
-  it('delivers every frame of a totalless session, strictly increasing', async () => {
-    const { sent, progress } = session();
+  it('delivers every frame of a totalless session, strictly increasing', async (t) => {
+    const { sent, progress } = session(t);
 
     progress.set({ current: 1 });
     progress.set({ current: 2 });
@@ -236,8 +241,8 @@ describe('ProgressSession wire monotonicity', () => {
     }
   });
 
-  it('delivers the fail frame and its message', async () => {
-    const { sent, progress } = session();
+  it('delivers the fail frame and its message', async (t) => {
+    const { sent, progress } = session(t);
 
     progress.set({ current: 1 });
     progress.fail('failed');
@@ -250,8 +255,8 @@ describe('ProgressSession wire monotonicity', () => {
     assert.strictEqual(sent.at(-1)?.message, 'failed');
   });
 
-  it('keeps a known total ahead of the advanced completion', async () => {
-    const { sent, progress } = session();
+  it('keeps a known total ahead of the advanced completion', async (t) => {
+    const { sent, progress } = session(t);
 
     progress.set({ current: 1, total: 2 });
     progress.set({ current: 2, total: 2 });
@@ -265,8 +270,8 @@ describe('ProgressSession wire monotonicity', () => {
     assert.strictEqual(sent.at(-1)?.total, 3);
   });
 
-  it('drops a tick that repeats the last value on the wire', async () => {
-    const { sent, progress } = session();
+  it('drops a tick that repeats the last value on the wire', async (t) => {
+    const { sent, progress } = session(t);
 
     progress.set({ current: 1, total: 3 });
     progress.set({ current: 1, total: 3 });

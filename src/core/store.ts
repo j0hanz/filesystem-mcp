@@ -17,19 +17,17 @@ class TtlLru<V> {
   readonly #maxEntries: number;
   readonly #maxWeight: number;
   readonly #ttlMs: number;
-  readonly #now: () => number;
   #weight = 0;
 
-  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number; now?: () => number }) {
+  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number }) {
     this.#maxEntries = opts.maxEntries;
     this.#maxWeight = opts.maxWeight ?? Number.POSITIVE_INFINITY;
     this.#ttlMs = opts.ttlMs;
-    this.#now = opts.now ?? Date.now;
   }
 
   /** Drop every expired entry; true when at least one went. */
   prune(): boolean {
-    const now = this.#now();
+    const now = Date.now();
     const before = this.#byKey.size;
     for (const [key, entry] of this.#byKey) {
       if (entry.expiresAt <= now) this.delete(key);
@@ -41,7 +39,7 @@ class TtlLru<V> {
   get(key: string): V | undefined {
     const entry = this.#byKey.get(key);
     if (!entry) return undefined;
-    if (entry.expiresAt <= this.#now()) {
+    if (entry.expiresAt <= Date.now()) {
       this.delete(key);
       return undefined;
     }
@@ -54,7 +52,7 @@ class TtlLru<V> {
   set(key: string, value: V, weight = 0): void {
     this.prune();
     this.delete(key);
-    this.#byKey.set(key, { value, expiresAt: this.#now() + this.#ttlMs, weight });
+    this.#byKey.set(key, { value, expiresAt: Date.now() + this.#ttlMs, weight });
     this.#weight += weight;
     while (
       this.#byKey.size > 0 &&
@@ -225,27 +223,24 @@ export function invalidCursor(): FsError {
   );
 }
 
+const MAX_SNAPSHOTS = 32;
+
 /**
  * Short-lived snapshots of a completed query's full result set, so later pages
  * slice a stored array instead of re-scanning and re-sorting the filesystem.
  *
- * ponytail: bounded by snapshot count and TTL, not by bytes — 32 x 20,000
- * `list` entries or 32 x 10,000 `search_text` matches, each match retaining up
- * to 20 more line strings at `context: 10`, order of a few hundred MB held for
- * 60s, and the HTTP leg shares one store so any caller can drive it. If that
- * shows up as memory pressure, pass a byte weight to `set` the way
- * `ResourceStore` does.
+ * ponytail: bounded by snapshot count and TTL, not by bytes — MAX_SNAPSHOTS x
+ * 20,000 `list` entries or MAX_SNAPSHOTS x 10,000 `search_text` matches, each
+ * match retaining up to 20 more line strings at `context: 10`, order of a few
+ * hundred MB held for 60s, and the HTTP leg shares one store so any caller can
+ * drive it. If that shows up as memory pressure, pass a byte weight to `set`
+ * the way `ResourceStore` does.
  */
 export class PageSnapshotStore {
-  readonly #byId: TtlLru<PageSnapshot & { queryKey: string }>;
-
-  constructor(options: { maxSnapshots?: number; ttlMs?: number; now?: () => number } = {}) {
-    this.#byId = new TtlLru({
-      maxEntries: options.maxSnapshots ?? 32,
-      ttlMs: options.ttlMs ?? 60 * 1000,
-      ...(options.now ? { now: options.now } : {}),
-    });
-  }
+  readonly #byId = new TtlLru<PageSnapshot & { queryKey: string }>({
+    maxEntries: MAX_SNAPSHOTS,
+    ttlMs: ENTRY_TTL_MS,
+  });
 
   create(params: { queryKey: string; items: readonly unknown[]; metadata?: unknown }): string {
     const snapshotId = randomUUID();

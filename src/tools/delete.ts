@@ -224,7 +224,7 @@ async function finalizeDeletion(
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
 
-  ctx.log?.('info', `rm: ${plan.inputPath}`, 'delete');
+  ctx.log('info', `rm: ${plan.inputPath}`, 'delete');
   return { deleted: plan.validPath };
 }
 

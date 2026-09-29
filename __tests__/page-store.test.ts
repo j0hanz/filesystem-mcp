@@ -79,12 +79,16 @@ describe('PageSnapshotStore', () => {
     assert.strictEqual(second.nextCursor, undefined);
   });
 
-  it('evicts least-recently-read snapshots and expires them', () => {
+  it('evicts least-recently-read snapshots and expires them', (t) => {
     let now = 0;
-    const store = new PageSnapshotStore({ maxSnapshots: 2, ttlMs: 10, now: () => now });
+    t.mock.method(Date, 'now', () => now);
+    const store = new PageSnapshotStore();
     const queryKey = '{"method":"list"}';
     const first = store.create({ queryKey, items: ['a'] });
     const second = store.create({ queryKey, items: ['b'] });
+    // Fill the store to its cap (32), then read `first` so `second` is the
+    // least recently used entry when the next create evicts one.
+    for (let i = 2; i < 32; i++) store.create({ queryKey, items: [String(i)] });
     store.read(first, queryKey);
     const third = store.create({ queryKey, items: ['c'] });
 
@@ -95,15 +99,18 @@ describe('PageSnapshotStore', () => {
     assert.deepStrictEqual(store.read(first, queryKey).items, ['a']);
     assert.deepStrictEqual(store.read(third, queryKey).items, ['c']);
 
-    now = 10;
+    now = 60_000;
     assert.throws(
       () => store.read(first, queryKey),
       fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),
     );
   });
 
-  it('does not create a snapshot when the complete result fits one page', async () => {
-    const store = new PageSnapshotStore({ maxSnapshots: 0 });
+  it('does not create a snapshot when the complete result fits one page', async (t) => {
+    const store = new PageSnapshotStore();
+    t.mock.method(store, 'create', () => {
+      throw new Error('create must not run for a single-page result');
+    });
     const result = await paginate({
       store,
       queryKey: '{"method":"list"}',

@@ -49,65 +49,29 @@ export interface ServerOptions {
   readOnly?: boolean;
 }
 
-/** True when `normalizedRoot` really resolves inside `bounds` (FS_ROOT_BOUNDARY). */
-async function isRootWithin(
-  normalizedRoot: string,
-  bounds: readonly string[],
-  signal?: AbortSignal,
-): Promise<boolean> {
-  try {
-    signal?.throwIfAborted();
-    const realPath = await withAbort(realpath(normalizedRoot), signal);
-    return isPathWithinDirectories(normalizePath(realPath), bounds);
-  } catch (error) {
-    rethrowIfAborted(error);
-    if (isNotFoundErrno(error)) {
-      return false;
-    }
-    Logger.warn('grantBoundary: realpath failed unexpectedly', {
-      root: normalizedRoot,
-      error: String(error),
-    });
-    return false;
-  }
-}
-
-async function filterRootsWithin(
-  roots: readonly string[],
-  bounds: readonly string[],
-  signal?: AbortSignal,
-): Promise<string[]> {
-  const normalizedBounds = normalizeAllowedDirectories(bounds);
-  const normalizedRoots = roots.map(normalizePath);
-
-  const results = await Promise.all(
-    normalizedRoots.map((root) => isRootWithin(root, normalizedBounds, signal)),
-  );
-
-  return normalizedRoots.filter((_, i) => results[i]);
-}
-
 /**
- * The real path a not-yet-existing directory would have: realpath of its
- * nearest existing ancestor plus the missing suffix. Lets a missing root be
- * checked against a realpath-canonicalized boundary even when the boundary
- * itself is reached through a symlink.
+ * The real path of `normalizedPath`, or the one it would have if it does not
+ * exist yet: realpath of its nearest existing ancestor plus the missing suffix.
+ * Lets a missing root be checked against a realpath-canonicalized boundary even
+ * when the boundary itself is reached through a symlink. `undefined` when an
+ * ancestor exists but cannot be resolved (EACCES and friends).
  */
-async function projectMissingPath(normalizedPath: string, signal?: AbortSignal): Promise<string> {
+async function projectRealPath(
+  normalizedPath: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   const missing: string[] = [];
   let current = normalizedPath;
   for (;;) {
     try {
       signal?.throwIfAborted();
       const real = await withAbort(realpath(current), signal);
-      return missing.length === 0
-        ? normalizePath(real)
-        : normalizePath(join(real, ...missing.reverse()));
+      return normalizePath(missing.length === 0 ? real : join(real, ...missing.reverse()));
     } catch (error) {
       rethrowIfAborted(error);
-      if (!isNotFoundErrno(error)) return normalizedPath;
+      if (!isNotFoundErrno(error)) return undefined;
       const parent = dirname(current);
-      if (parent === current) return normalizedPath;
+      if (parent === current) return undefined;
       missing.push(basename(current));
       current = parent;
     }
@@ -115,12 +79,12 @@ async function projectMissingPath(normalizedPath: string, signal?: AbortSignal):
 }
 
 /**
- * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
+ * Every root — configured or granted — must fall under FS_ROOT_BOUNDARY. An
  * existing root must *resolve* inside the boundary; a missing root is projected
  * through its nearest existing ancestor before comparison so symlinked boundary
  * spellings still compare against realpath-canonicalized bounds.
  */
-async function partitionStartupRoots(
+async function partitionRootsWithin(
   roots: readonly string[],
   bounds: readonly string[],
   signal?: AbortSignal,
@@ -129,18 +93,10 @@ async function partitionStartupRoots(
   const kept: string[] = [];
   const dropped: string[] = [];
   for (const root of roots.map(normalizePath)) {
-    let inside: boolean;
-    try {
-      signal?.throwIfAborted();
-      const realPath = await withAbort(realpath(root), signal);
-      inside = isPathWithinDirectories(normalizePath(realPath), normalizedBounds);
-    } catch (error) {
-      rethrowIfAborted(error);
-      inside =
-        isNotFoundErrno(error) &&
-        isPathWithinDirectories(await projectMissingPath(root, signal), normalizedBounds);
-    }
-    (inside ? kept : dropped).push(root);
+    const real = await projectRealPath(root, signal);
+    (real !== undefined && isPathWithinDirectories(real, normalizedBounds) ? kept : dropped).push(
+      root,
+    );
   }
   return { kept, dropped };
 }
@@ -879,10 +835,7 @@ export class PathGuard {
         cwd = await findProjectRoot(cwd, [...boundaries, homedir()]);
       }
       if (isUnsafeCwdPath(cwd)) {
-        Logger.emit(
-          'warning',
-          `Skipped adding unsafe current working directory to allowed list: ${cwd}`,
-        );
+        Logger.warn(`Skipped adding unsafe current working directory to allowed list: ${cwd}`);
       } else {
         allowCwdDirs.push(cwd);
       }
@@ -890,23 +843,20 @@ export class PathGuard {
 
     const signal = AbortSignal.timeout(ROOTS_TIMEOUT_MS);
     let baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
+    // FS_ROOT_BOUNDARY is the only filter grants answer to (see
+    // `grantedDirectories`); without one they pass through as accepted.
+    let grantsToInclude = this.grantedDirectories;
     if (boundaries.length > 0) {
-      const { kept, dropped } = await partitionStartupRoots(baseline, boundaries, signal);
+      const { kept, dropped } = await partitionRootsWithin(baseline, boundaries, signal);
       for (const root of dropped) {
-        Logger.emit(
-          'warning',
+        Logger.warn(
           `Skipped allowed root outside FS_ROOT_BOUNDARY (${boundaries.join(', ')}): ${root}`,
         );
       }
       baseline = kept;
+      grantsToInclude = (await partitionRootsWithin(this.grantedDirectories, boundaries, signal))
+        .kept;
     }
-
-    // FS_ROOT_BOUNDARY is the only filter grants answer to (see
-    // `grantedDirectories`); without one they pass through as accepted.
-    const grantsToInclude =
-      boundaries.length > 0
-        ? await filterRootsWithin(this.grantedDirectories, boundaries, signal)
-        : this.grantedDirectories;
 
     const combined = [...baseline, ...grantsToInclude];
     const nextState = await resolveAllowedDirectoriesState(combined, signal);

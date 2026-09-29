@@ -14,11 +14,10 @@ interface ProgressSessionOptions {
   label: string;
   /** Absent when the client sent no `progressToken`; the session then only tracks state. */
   sink?: ProgressSink;
-  /** Override the tick rate-limit window. Default: 50ms. */
-  rateLimitMs?: number;
 }
 
-const DEFAULT_RATE_LIMIT_MS = 50;
+/** Minimum gap between two tick frames on the wire. */
+const RATE_LIMIT_MS = 50;
 
 /**
  * One tool call's progress stream: a monotonic cursor, a tick rate limit, and
@@ -29,12 +28,11 @@ const DEFAULT_RATE_LIMIT_MS = 50;
 export class ProgressSession {
   readonly #label: string;
   readonly #sink: ProgressSink | undefined;
-  readonly #rateLimitMs: number;
   readonly #startTime: number;
   readonly #pending = new Set<Promise<void>>();
 
   #cursor = 0;
-  #lastSentMs = 0;
+  #lastSentMs: number;
   #lastProgress = -1;
   #started = false;
   #done = false;
@@ -42,9 +40,8 @@ export class ProgressSession {
   constructor(opts: ProgressSessionOptions) {
     this.#label = opts.label;
     this.#sink = opts.sink;
-    this.#rateLimitMs = opts.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
     this.#startTime = Date.now();
-    this.#lastSentMs = this.#startTime - this.#rateLimitMs;
+    this.#lastSentMs = this.#startTime - RATE_LIMIT_MS;
   }
 
   set(input: { current: number; total?: number; message?: string }): void {
@@ -90,10 +87,8 @@ export class ProgressSession {
   ): void {
     const now = Date.now();
     if (kind === 'tick') {
-      // Widen the window after 5s of execution; a rateLimitMs of 0 (tests)
-      // stays 0 only inside the first 5s, which every test run fits in.
-      const window =
-        now - this.#startTime > 5000 ? Math.max(this.#rateLimitMs, 250) : this.#rateLimitMs;
+      // Widen the window after 5s of execution.
+      const window = now - this.#startTime > 5000 ? 250 : RATE_LIMIT_MS;
       if (now - this.#lastSentMs < window) return;
     }
     if (kind !== 'start') this.#lastSentMs = now;

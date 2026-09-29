@@ -526,7 +526,7 @@ async function handleSearchAndReplace(
       shouldStop: () => summary.totalMatches >= args.maxResults,
       onEntry: () => {
         summary.processedFiles++;
-        ctx.onProgress?.({ current: summary.processedFiles });
+        ctx.onProgress({ current: summary.processedFiles });
       },
       onError: (entryPath, err) => {
         summary.failedFiles++;
@@ -542,10 +542,10 @@ async function handleSearchAndReplace(
   }
   if (stoppedReason !== undefined) summary.stoppedReason = stoppedReason;
 
-  ctx.onProgress?.({ current: summary.processedFiles });
+  ctx.onProgress({ current: summary.processedFiles });
 
   if (!args.dryRun && summary.totalMatches > 0) {
-    ctx.log?.(
+    ctx.log(
       'info',
       `${summary.filesChanged} file(s) changed, ${summary.totalMatches} match(es)`,
       'replace_text',

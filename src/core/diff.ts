@@ -1,4 +1,4 @@
-import { createTwoFilesPatch, diffLines } from 'diff';
+import { createTwoFilesPatch } from 'diff';
 
 // Unified-diff computation over two text buffers. Kept out of `fmt.ts`, which
 // formats terminal output and has no business pulling in the `diff` package.
@@ -11,22 +11,6 @@ import { createTwoFilesPatch, diffLines } from 'diff';
  * of freezing the process.
  */
 export const DIFF_TIMEOUT_MS = 1000;
-
-export function computeDiffStats(
-  original: string,
-  modified: string,
-  timeoutMs = DIFF_TIMEOUT_MS,
-): { linesAdded: number; linesRemoved: number } | undefined {
-  const parts = diffLines(original, modified, { timeout: timeoutMs });
-  if (parts === undefined) return undefined;
-  let linesAdded = 0;
-  let linesRemoved = 0;
-  for (const part of parts) {
-    if (part.added) linesAdded += part.count;
-    else if (part.removed) linesRemoved += part.count;
-  }
-  return { linesAdded, linesRemoved };
-}
 
 export function unifiedPatch(
   label: string,

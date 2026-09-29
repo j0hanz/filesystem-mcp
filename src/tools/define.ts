@@ -49,9 +49,9 @@ export interface ToolCtx {
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
-  readonly log?: (level: LoggingLevel, data: unknown, logger?: string) => void;
-  readonly sendNotification?: (notification: Notification) => Promise<void>;
-  readonly onProgress?: (params: { current: number; total?: number }) => void;
+  readonly log: (level: LoggingLevel, data: unknown, logger?: string) => void;
+  readonly sendNotification: (notification: Notification) => Promise<void>;
+  readonly onProgress: (params: { current: number; total?: number }) => void;
   /**
    * Multi-round-trip `inputResponses` carried by a retried `tools/call`
    * (protocol revision 2026-07-28); `undefined` on the first round. Bare,
@@ -143,7 +143,7 @@ export interface DefinedTool {
 function toToolCtx(
   ctx: ServerContext,
   deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
-): ToolCtx {
+): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
   // legacy connection fixed them at `initialize` and has no envelope at all.
@@ -219,7 +219,12 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   readonly #progressCtx: ProgressCtx;
   readonly #progressSession: ProgressSession;
 
-  constructor(toolName: string, ctx: ToolCtx, def: ToolDef<I, O>, parsedArgs: z.infer<I>) {
+  constructor(
+    toolName: string,
+    ctx: Omit<ToolCtx, 'log' | 'onProgress'>,
+    def: ToolDef<I, O>,
+    parsedArgs: z.infer<I>,
+  ) {
     this.def = def;
     this.parsedArgs = parsedArgs;
     this.signal = def.timeoutMs
@@ -227,10 +232,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
     const token = ctx._meta?.progressToken;
-    const notify = ctx.sendNotification;
     this.#progressSession = new ProgressSession({
       label: this.#progressCtx.label,
-      ...(token !== undefined && notify !== undefined ? { sink: { toolName, token, notify } } : {}),
+      ...(token !== undefined ? { sink: { toolName, token, notify: ctx.sendNotification } } : {}),
     });
     this.toolCtx = {
       ...ctx,

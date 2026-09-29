@@ -215,7 +215,7 @@ async function executeTransfer(
 
   if (op === 'move') {
     await performRenameWithFallback(plan.opSource, plan.validDest, ctx.fs, plan.pair.source);
-    ctx.log?.('info', `move: ${plan.pair.source} -> ${plan.pair.destination}`, 'move');
+    ctx.log('info', `move: ${plan.pair.source} -> ${plan.pair.destination}`, 'move');
   } else {
     await ctx.fs.cp(plan.opSource, plan.validDest, {
       recursive: true,
@@ -338,7 +338,7 @@ async function runTransfers(
   let completed = 0;
   const tick = (): void => {
     completed += 1;
-    ctx.onProgress?.({ current: completed, total });
+    ctx.onProgress({ current: completed, total });
   };
   const { results: execResults, errors: execErrors } = await processInParallel(
     ready,

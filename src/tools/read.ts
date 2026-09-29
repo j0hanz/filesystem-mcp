@@ -188,7 +188,7 @@ async function collectFileBudget(
           stats: out.stats,
         };
       } catch (err: unknown) {
-        ctx.log?.('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
+        ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
       }
     },

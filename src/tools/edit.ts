@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { computeDiffStats, unifiedPatch } from '../core/diff.ts';
+import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
@@ -362,9 +362,7 @@ function applyEdits(
     appliedEdits += 1;
   }
 
-  const stats =
-    appliedEdits > 0 ? computeDiffStats(content, newContent) : { linesAdded: 0, linesRemoved: 0 };
-  return { content: newContent, appliedEdits, unmatchedEdits, ...(stats ?? {}) };
+  return { content: newContent, appliedEdits, unmatchedEdits };
 }
 
 interface EditFileOptions {
@@ -382,12 +380,15 @@ async function handleEditFile(
     signal: ctx.signal,
   });
   const editResult = applyEdits(content, edits, options.ignoreWhitespace);
+  // One Myers pass serves both the dry-run preview and the line counts.
+  const patch =
+    editResult.appliedEdits > 0
+      ? unifiedPatch(basename(validPath), content, editResult.content)
+      : undefined;
+  if (patch !== undefined) Object.assign(editResult, diffStatsFromPatch(patch));
 
   if (options.dryRun) {
-    if (editResult.appliedEdits > 0) {
-      const patch = unifiedPatch(basename(validPath), content, editResult.content);
-      if (patch !== undefined) editResult.diff = patch;
-    }
+    if (patch !== undefined) editResult.diff = patch;
   } else {
     if (editResult.unmatchedEdits.length > 0) {
       throw new FsError(
@@ -404,7 +405,7 @@ async function handleEditFile(
       await ctx.fs.writeFile(filePath, editResult.content, {
         signal: ctx.signal,
       });
-      ctx.log?.(
+      ctx.log(
         'info',
         `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
         'edit',
