@@ -4,11 +4,11 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
+import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
@@ -21,6 +21,7 @@ import {
   createTestRoot,
   failedSummary,
   firstTextBlock,
+  makeGuard,
   type TestClientContext,
   trySymlink,
   withBoundary,
@@ -1221,6 +1222,138 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('move and copy refuse a directory whose tree contains a path-denied file', async (t) => {
+    // `secrets/**` is path-based: it denies secrets/x.txt but not public/x.txt,
+    // so moving the directory used to carry the file out of the rule.
+    await withEnv({ FS_DENYLIST: 'secrets/**,linked-secrets/**' }, async () => {
+      const root = await createTestRoot();
+      const own = await createTestClientPair([root]);
+      try {
+        const secret = await writeTestFile(root, 'secrets/inner/x.txt', 'top secret\n');
+        const plainDir = join(root, 'plain');
+        await writeTestFile(root, 'plain/ok.txt', 'ok\n');
+
+        for (const copy of [false, true]) {
+          const label = `copy=${String(copy)}`;
+          const result = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: join(root, 'secrets'), destination: join(root, 'public') }],
+              copy,
+            },
+          });
+          assert.strictEqual(result.isError, true, `${label} must be refused`);
+          const { failures = [] } = result._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
+          assert.match(failures[0]?.error.message ?? '', /protected/i, label);
+          await assert.rejects(access(join(root, 'public')), `${label} created nothing`);
+          assert.strictEqual(
+            await readFile(secret, 'utf-8'),
+            'top secret\n',
+            `${label} left the source`,
+          );
+        }
+
+        const linkedTarget = join(root, 'linked-target');
+        await writeTestFile(root, 'linked-target/inner/x.txt', 'via symlink\n');
+        const linkedSource = join(root, 'linked-secrets');
+        if (
+          await trySymlink(linkedTarget, linkedSource, () =>
+            t.diagnostic('symlink not permitted; symlinked directory coverage skipped'),
+          )
+        ) {
+          const copyResult = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
+              copy: true,
+            },
+          });
+          assert.strictEqual(copyResult.isError, true, 'symlink copy must be refused');
+          const { failures = [] } = copyResult._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', 'symlink copy');
+          assert.match(failures[0]?.error.message ?? '', /protected/i, 'symlink copy');
+          await assert.rejects(access(join(root, 'public-link')), 'symlink copy created nothing');
+          assert.strictEqual(
+            await readFile(join(linkedSource, 'inner/x.txt'), 'utf-8'),
+            'via symlink\n',
+            'symlink copy left the source',
+          );
+
+          const moveResult = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: linkedSource, destination: join(root, 'public-link') }],
+            },
+          });
+          assert.notStrictEqual(moveResult.isError, true, 'symlink move must succeed');
+          await access(join(root, 'public-link'));
+          assert.strictEqual(
+            await readFile(join(linkedTarget, 'inner/x.txt'), 'utf-8'),
+            'via symlink\n',
+            'symlink move left the linked target intact',
+          );
+        }
+
+        const credentialsDir = join(root, 'credentials-dir');
+        const credentials = await writeTestFile(root, 'credentials-dir/credentials', 'key\n');
+        for (const copy of [false, true]) {
+          const label = `destination copy=${String(copy)}`;
+          const result = await own.client.callTool({
+            name: 'move',
+            arguments: {
+              moves: [{ source: credentialsDir, destination: join(root, '.aws') }],
+              copy,
+            },
+          });
+          assert.strictEqual(result.isError, true, `${label} must be refused`);
+          const { failures = [] } = result._meta as {
+            failures?: { error: { code: string; message: string } }[];
+          };
+          assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED', label);
+          assert.match(failures[0]?.error.message ?? '', /protected/i, label);
+          await assert.rejects(access(join(root, '.aws')), `${label} created nothing`);
+          assert.strictEqual(
+            await readFile(credentials, 'utf-8'),
+            'key\n',
+            `${label} left the source`,
+          );
+        }
+
+        const proj = join(root, 'proj');
+        await writeTestFile(root, 'proj/.env', 'SECRET=1\n');
+        await writeTestFile(root, 'proj/app.ts', 'x\n');
+        const envMove = await own.client.callTool({
+          name: 'move',
+          arguments: { moves: [{ source: proj, destination: join(root, 'proj-moved') }] },
+        });
+        assert.notStrictEqual(envMove.isError, true);
+        assert.strictEqual(await readFile(join(root, 'proj-moved', 'app.ts'), 'utf-8'), 'x\n');
+        await access(join(root, 'proj-moved', '.env'));
+        const envRead = await own.client.callTool({
+          name: 'read',
+          arguments: { path: join(root, 'proj-moved', '.env') },
+        });
+        assert.strictEqual(envRead.isError, true);
+
+        // A clean tree still moves: the pre-walk must not refuse everything.
+        const moved = await own.client.callTool({
+          name: 'move',
+          arguments: { moves: [{ source: plainDir, destination: join(root, 'moved') }] },
+        });
+        assert.notStrictEqual(moved.isError, true);
+        assert.strictEqual(await readFile(join(root, 'moved', 'ok.txt'), 'utf-8'), 'ok\n');
+      } finally {
+        await own.close();
+        await cleanupTestRoot(root);
+      }
+    });
+  });
+
   // idempotentHint is gone from the declarations (production never read it); pin
   // that it stays off the wire too — it costs every client tokens without
   // changing what any tool does.
@@ -1577,6 +1710,51 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(text, /keep\.txt/);
     // A nested match the exclude predicate rejects must not survive the walk.
     assert.doesNotMatch(text, /drop\.log/);
+  });
+
+  it("find_files, search_text, list and replace_text honor the allowed root's .gitignore below it", async () => {
+    // tmpDir is the allowed root; the walk is scoped to a subdirectory.
+    await writeFile(join(tmpDir, '.gitignore'), 'scoped_ignored/*.log\n');
+    const sub = join(tmpDir, 'scoped_ignored');
+    await writeTestFile(tmpDir, 'scoped_ignored/keep.txt', 'NEEDLE_G\n');
+    const dropped = await writeTestFile(tmpDir, 'scoped_ignored/drop.log', 'NEEDLE_G\n');
+
+    const found = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: sub, pattern: '**/*' },
+    });
+    const paths =
+      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(paths, ['keep.txt']);
+
+    const searched = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: sub, searchPattern: 'NEEDLE_G' },
+    });
+    const files =
+      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
+    assert.deepStrictEqual(files, ['keep.txt']);
+
+    const listed = await harness.client.callTool({ name: 'list', arguments: { path: sub } });
+    const names =
+      (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
+    assert.deepStrictEqual(names, ['keep.txt']);
+
+    const replaced = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: sub, searchPattern: 'NEEDLE_G', replacement: 'X' },
+    });
+    assert.notStrictEqual(replaced.isError, true);
+    assert.strictEqual(await readFile(dropped, 'utf-8'), 'NEEDLE_G\n', 'ignored file untouched');
+
+    // includeIgnored lifts it, as before.
+    const all = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: sub, pattern: '**/*', includeIgnored: true },
+    });
+    const allPaths =
+      (all._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(allPaths.sort(), ['drop.log', 'keep.txt']);
   });
 
   it('TC-FUNC-075: list text carries nextCursor', async () => {
@@ -2422,6 +2600,38 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(structured.matches?.[0]?.content?.includes('NEEDLE_MARK'));
   });
 
+  it('search_text on a file whose name has glob metacharacters searches that file', async () => {
+    const target = await writeTestFile(tmpDir, 'globby/[slug].tsx', 'export const NEEDLE_A = 1;\n');
+    // A same-directory decoy that the character class `[slug]` would match.
+    await writeTestFile(tmpDir, 'globby/s.tsx', 'export const NEEDLE_A = 2;\n');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: target, searchPattern: 'NEEDLE_A' },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const matches = (result._meta as { matches?: { file: string; line: number }[] }).matches ?? [];
+    assert.deepStrictEqual(
+      matches.map((m) => m.file),
+      ['[slug].tsx'],
+      'exactly the named file, not the decoy',
+    );
+  });
+
+  it('find_files accepts a literal file name containing .. inside a segment', async () => {
+    // `[...slug]` stays a character class (as in any glob), so the accepted
+    // pattern that is also *useful* is a literal name with `..` inside it.
+    await writeTestFile(tmpDir, 'globby/docs/v1..2.md', 'x\n');
+    const result = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: join(tmpDir, 'globby'), pattern: 'docs/v1..2.md' },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const paths =
+      (result._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.deepStrictEqual(paths, ['docs/v1..2.md']);
+  });
+
   it('search_text: an empty-line pattern sees no phantom line after a trailing newline', async () => {
     const dir = join(tmpDir, 'phantom_line');
     await mkdir(dir, { recursive: true });
@@ -2551,6 +2761,111 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       firstTextBlock(result).text,
       ['c.txt-1- x', 'c.txt:2: NEEDLE a', 'c.txt:3: NEEDLE b'].join('\n'),
     );
+  });
+
+  it('search_text: anchors, word boundaries and CRLF behave per line (prefilter must not change them)', async () => {
+    const dir = join(tmpDir, 'prefilter_semantics');
+    await writeTestFile(tmpDir, 'prefilter_semantics/lf.txt', 'x\nimport a\n  import b\nfoo$bar\n');
+    await writeTestFile(tmpDir, 'prefilter_semantics/crlf.txt', 'alpha\r\nbeta end\r\ngamma\r\n');
+
+    const run = async (searchPattern: string, isRegex: boolean, caseSensitive = true) => {
+      const r = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern, isRegex, caseSensitive },
+      });
+      return (
+        (r._meta as { matches?: { file: string; line: number; column: number }[] }).matches ?? []
+      )
+        .map((m) => `${m.file}:${m.line}:${m.column}`)
+        .sort();
+    };
+
+    assert.deepStrictEqual(await run('^import', true), ['lf.txt:2:0']);
+    assert.deepStrictEqual(
+      await run('end$', true),
+      ['crlf.txt:2:5'],
+      'CRLF: $ matches before the stripped \r',
+    );
+    assert.deepStrictEqual(await run(String.raw`\bimport\b`, true), ['lf.txt:2:0', 'lf.txt:3:2']);
+    assert.deepStrictEqual(await run('IMPORT', false, false), ['lf.txt:2:0', 'lf.txt:3:2']);
+    assert.deepStrictEqual(await run('foo$bar', false), ['lf.txt:4:0'], 'literal $ is escaped');
+    assert.deepStrictEqual(
+      await run(String.raw`\Aimport`, true),
+      ['lf.txt:2:0'],
+      String.raw`\A is start of each line`,
+    );
+    assert.deepStrictEqual(
+      await run('(?-m)^import', true),
+      ['lf.txt:2:0'],
+      'an inline flag group cannot turn ^ into a buffer anchor',
+    );
+    assert.deepStrictEqual(await run('(?i)IMPORT', true), ['lf.txt:2:0', 'lf.txt:3:2']);
+  });
+
+  it('search_text: the match set under maxResults is deterministic across runs', async () => {
+    const dir = join(tmpDir, 'determinism');
+    for (let i = 0; i < 40; i++) {
+      await writeTestFile(
+        tmpDir,
+        `determinism/f${String(i).padStart(2, '0')}.txt`,
+        'DET_HIT\nDET_HIT\nDET_HIT\n',
+      );
+    }
+    const once = async () => {
+      const r = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'DET_HIT', maxResults: 25 },
+      });
+      const meta = r._meta as { matches?: { file: string; line: number }[]; nextCursor?: string };
+      return {
+        first: (meta.matches ?? []).map((m) => `${m.file}:${m.line}`),
+        cursor: meta.nextCursor,
+      };
+    };
+    const a = await once();
+    const b = await once();
+    assert.deepStrictEqual(a.first, b.first);
+    assert.strictEqual(a.first.length, 25);
+  });
+
+  it('searchContent under its own cap keeps the first matches in walk order', async () => {
+    const root = await createTestRoot();
+    try {
+      for (let i = 0; i < 30; i++) {
+        await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
+      }
+      const guard = await makeGuard([root]);
+      const a = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const b = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const key = (r: typeof a) => r.matches.map((m) => `${basename(m.file)}:${m.line}`);
+      assert.deepStrictEqual(key(a), key(b));
+      assert.strictEqual(a.matches.length, 7);
+      assert.strictEqual(a.summary.stoppedReason, 'maxResults');
+      assert.strictEqual(a.summary.truncated, true);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('searchContent never collects more matches from one file than its cap', async () => {
+    const root = await createTestRoot();
+    try {
+      // One file with far more matching lines than the cap: the scan must not
+      // materialize them all before the cap is applied.
+      await writeTestFile(
+        root,
+        'many.txt',
+        Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
+      );
+      const guard = await makeGuard([root]);
+      const r = await searchContent(root, 'CAP_ONE', { maxResults: 5 }, guard);
+      assert.strictEqual(r.matches.length, 5);
+      assert.strictEqual(r.summary.matchingLines, 5);
+      assert.strictEqual(r.summary.filesMatched, 1);
+      assert.strictEqual(r.summary.stoppedReason, 'maxResults');
+    } finally {
+      await cleanupTestRoot(root);
+    }
   });
 
   it('search_text rejects a cursor minted under a different context', async () => {
@@ -2729,6 +3044,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: join(tmpDir, 'search_bin'), searchPattern: 'BINNEEDLE' },
     });
     assert.strictEqual(firstTextBlock(result).text, 'text.txt:1: BINNEEDLE');
+    assert.strictEqual((result._meta as { filesScanned?: number }).filesScanned, 2);
     assert.strictEqual((result._meta as { skippedBinary?: number }).skippedBinary, 1);
   });
 

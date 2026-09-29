@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { globEntries, type GlobEntriesOptions } from '../src/core/glob.ts';
+import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -53,6 +53,32 @@ describe('globEntries', () => {
         'shared/inner.txt',
         'top.txt',
       ]);
+    });
+  });
+
+  describe('isSafeGlobSyntax', () => {
+    it('accepts .. inside a segment or a character class', () => {
+      for (const ok of [
+        'app/**/[...slug]/page.tsx',
+        'docs/v1..2.md',
+        '**/[..]x',
+        'a/..b/c',
+        '**/*.ts',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
+    it('refuses a whole .. segment or brace alternative', () => {
+      for (const bad of ['..', '../x', 'a/../b', 'a/..', '{a,..}/x', 'x/{..,b}', '..\\x']) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('still refuses absolute and drive-relative patterns', () => {
+      assert.strictEqual(isSafeGlobSyntax('/etc/*'), false);
+      assert.strictEqual(isSafeGlobSyntax('C:foo/*'), false);
+      assert.strictEqual(isSafeGlobSyntax('   '), false);
     });
   });
 
@@ -327,6 +353,74 @@ describe('globEntries characterization', () => {
       );
     } finally {
       await cleanupTestRoot(root);
+    }
+  });
+});
+
+describe('ancestor .gitignore', () => {
+  let root: string;
+  before(async () => {
+    root = await createTestRoot();
+    await writeFile(join(root, '.gitignore'), '*.log\noutdir/\n');
+    await mkdir(join(root, 'pkg', 'outdir'), { recursive: true });
+    await writeFile(join(root, 'pkg', '.gitignore'), '!keep.log\n');
+    await writeFile(join(root, 'pkg', 'a.txt'), 'a');
+    await writeFile(join(root, 'pkg', 'a.log'), 'a');
+    await writeFile(join(root, 'pkg', 'keep.log'), 'k');
+    await writeFile(join(root, 'pkg', 'outdir', 'out.js'), 'o');
+  });
+  after(async () => cleanupTestRoot(root));
+
+  it("applies the allowed root's rules to a walk scoped below it, nearest file winning", async () => {
+    const seen = await walk({
+      cwd: join(root, 'pkg'),
+      pattern: '**/*',
+      skipIgnored: true,
+      ignoreCeiling: root,
+    });
+    assert.deepStrictEqual(seen, ['a.txt', 'keep.log']);
+  });
+
+  it('without a ceiling only the walk root and below are consulted (previous behavior)', async () => {
+    const seen = await walk({ cwd: join(root, 'pkg'), pattern: '**/*', skipIgnored: true });
+    assert.deepStrictEqual(seen, ['a.log', 'a.txt', 'keep.log', 'outdir/out.js']);
+  });
+
+  it('a ceiling file that ignores the walk root itself is skipped whole, so the walk is not emptied', async () => {
+    await writeFile(join(root, '.gitignore'), '*.log\noutdir/\npkg/\n');
+    try {
+      const seen = await walk({
+        cwd: join(root, 'pkg'),
+        pattern: '**/*',
+        skipIgnored: true,
+        ignoreCeiling: root,
+      });
+      // The whole root file is skipped (its `pkg/` rule would hide everything the
+      // caller asked for), so its `*.log` and `outdir/` rules do not apply either.
+      assert.deepStrictEqual(seen, ['a.log', 'a.txt', 'keep.log', 'outdir/out.js']);
+    } finally {
+      await writeFile(join(root, '.gitignore'), '*.log\noutdir/\n');
+    }
+  });
+
+  it('never reads above the ceiling', async () => {
+    // A .gitignore at the ceiling's parent must not apply: give the parent a
+    // rule that would hide a.txt and confirm a.txt survives.
+    const outer = await createTestRoot();
+    try {
+      const inner = join(outer, 'repo');
+      await mkdir(join(inner, 'pkg'), { recursive: true });
+      await writeFile(join(outer, '.gitignore'), 'a.txt\n');
+      await writeFile(join(inner, 'pkg', 'a.txt'), 'a');
+      const seen = await walk({
+        cwd: join(inner, 'pkg'),
+        pattern: '**/*',
+        skipIgnored: true,
+        ignoreCeiling: inner,
+      });
+      assert.deepStrictEqual(seen, ['a.txt']);
+    } finally {
+      await cleanupTestRoot(outer);
     }
   });
 });

@@ -328,6 +328,10 @@ The server starts with allowed directories from explicit startup configuration:
 2. **Environment variable** `FS_ALLOWED_DIRS` (separated by `:` on POSIX or `;` on Windows).
 3. **Current working directory** when `--allow-cwd` is enabled.
 
+When `--root-boundary` / `FS_ROOT_BOUNDARY` is set, a configured root that
+does not fall under it is skipped at startup with a warning; only roots under
+the boundary (and later grants under it) are allowed.
+
 Legacy MCP connections may additionally seed roots through the deprecated
 `roots/list` flow. Modern 2026-07-28 connections do not automatically send
 workspace roots. They can add access after startup by calling a tool with a

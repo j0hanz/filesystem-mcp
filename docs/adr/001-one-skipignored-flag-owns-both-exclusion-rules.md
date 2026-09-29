@@ -52,6 +52,11 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
 
 - A change to what a walk hides is now one edit in `glob.ts` rather than four,
   and a new tool cannot get the pair half-right because there is no pair.
+- **Amended 2026-09-28:** a walk scoped below an allowed root also applies the
+  `.gitignore` files of its ancestors up to that root
+  (`GlobEntriesOptions.ignoreCeiling`, computed by
+  `PathGuard.allowedRootContaining`). The rules still live in `glob.ts`;
+  callers pass the ceiling and decide nothing further.
 - **The cost accepted: custom exclude patterns are no longer expressible.** The
   old `excludePatterns` was a `readonly string[]` any caller could have filled
   with arbitrary globs. None ever did, so nothing regressed — but a future

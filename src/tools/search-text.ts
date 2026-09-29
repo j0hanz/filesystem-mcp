@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -237,7 +237,7 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
 async function resolveSearchScope(
   args: SearchInput,
   ctx: ToolCtx,
-): Promise<{ basePath: string; args: SearchInput }> {
+): Promise<{ basePath: string; args: SearchInput; explicitFile?: string }> {
   const requested = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
   // One resolution, one stat: validateExistingDirectory would redo both.
   const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
@@ -250,17 +250,11 @@ async function resolveSearchScope(
   }
   return {
     basePath: dirname(resolved),
-    // The `./` anchors the name to the parent: a bare name is a basename glob
-    // that would also match every namesake anywhere below it.
-    // ponytail: the name goes through as a glob, so a file whose name contains
-    // glob metacharacters (`[id].ts`) matches as a pattern rather than
-    // literally. Escape it here if that ever bites.
-    args: {
-      ...args,
-      pattern: `./${basename(resolved)}`,
-      includeHidden: true,
-      includeIgnored: true,
-    },
+    // The name is NOT turned into a glob: `[slug].tsx` would read as a
+    // character class. searchContent scans exactly this file instead, and
+    // hidden/ignored filtering is moot for a file the caller named.
+    explicitFile: resolved,
+    args: { ...args, includeHidden: true, includeIgnored: true },
   };
 }
 
@@ -294,7 +288,7 @@ async function handleSearchContent(
     cursor: args.cursor,
     pageSize: args.maxResults,
     produce: async () => {
-      const { basePath, args: scoped } = await resolveSearchScope(args, ctx);
+      const { basePath, args: scoped, explicitFile } = await resolveSearchScope(args, ctx);
 
       const result = await searchContent(
         basePath,
@@ -307,6 +301,7 @@ async function handleSearchContent(
           maxResults: MAX_SEARCH_RESULTS,
           skipIgnored: !scoped.includeIgnored,
           context: scoped.context,
+          ...(explicitFile !== undefined ? { explicitFile } : {}),
           ...(scoped.maxDepth !== undefined ? { maxDepth: scoped.maxDepth } : {}),
           signal: ctx.signal,
         },

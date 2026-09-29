@@ -208,6 +208,26 @@ describe('Stdio CLI flags (real subprocess)', () => {
       await harness.close();
     }
   });
+
+  it('STDIO-CLI-003: --root-boundary drops a positional root outside the boundary', async () => {
+    const outside = await createTestRoot();
+    const harness = await createStdioClient(tmpDir, {}, ['--root-boundary', tmpDir, outside]);
+    try {
+      const roots = await harness.client.callTool({ name: 'list_roots', arguments: {} });
+      const listed = (roots.structuredContent as { roots: string[] }).roots;
+      assert.ok(
+        listed.some((r) => r.toLowerCase() === tmpDir.toLowerCase()),
+        'in-boundary root stays',
+      );
+      assert.ok(
+        !listed.some((r) => r.toLowerCase() === outside.toLowerCase()),
+        'outside root is dropped',
+      );
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(outside);
+    }
+  });
 });
 
 describe('Stdio subscription lease lifecycle', () => {

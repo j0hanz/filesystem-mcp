@@ -13,6 +13,7 @@ import {
   fsErrorMatcher,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -255,6 +256,67 @@ describe('PathGuard grant round-trip', () => {
     }
     assert.strictEqual(await guard.applyGrant(dirname(home)), false);
     assert.strictEqual(await guard.applyGrant(join(home, '.ssh')), false);
+  });
+
+  it('TC-PG-014: FS_ROOT_BOUNDARY drops an outside positional root at startup', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const outside = await mkDir(createdDirs, 'fsmcp-pg014-');
+
+    const guard = new PathGuard({ cliAllowedDirs: [root, outside] });
+    await guard.recomputeAllowedDirectories();
+
+    assert.ok(containsPath(guard.getRoots(), root), 'in-boundary root stays');
+    assert.ok(!containsPath(guard.getRoots(), outside), 'outside root is dropped');
+
+    const f = await writeTestFile(outside, 'f.txt', 'x');
+    await assert.rejects(guard.validateExistingPath(f), fsErrorMatcher(ErrorCode.ACCESS_DENIED));
+  });
+
+  it('TC-PG-015: FS_ROOT_BOUNDARY drops an outside FS_ALLOWED_DIRS root at startup', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const outside = await mkDir(createdDirs, 'fsmcp-pg015-');
+
+    await withEnv({ FS_ALLOWED_DIRS: outside }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+
+      assert.ok(containsPath(guard.getRoots(), root), 'in-boundary root stays');
+      assert.ok(!containsPath(guard.getRoots(), outside), 'outside root is dropped');
+
+      const f = await writeTestFile(outside, 'f.txt', 'x');
+      await assert.rejects(guard.validateExistingPath(f), fsErrorMatcher(ErrorCode.ACCESS_DENIED));
+    });
+  });
+
+  it('TC-PG-016: FS_ROOT_BOUNDARY keeps a missing startup root inside the boundary', async () => {
+    process.env['FS_ROOT_BOUNDARY'] = root;
+    const missing = join(root, 'not-yet');
+
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [root, missing] });
+      await guard.recomputeAllowedDirectories();
+
+      assert.ok(containsPath(guard.getRoots(), missing), 'missing in-boundary root stays');
+    });
+  });
+
+  it('TC-PG-017: a missing startup root under a symlinked FS_ROOT_BOUNDARY is kept', async (t) => {
+    // The boundary is realpath-canonicalized; a missing root spelled through the
+    // link must be projected through its existing ancestor before comparing.
+    const target = await mkDir(createdDirs, 'fsmcp-pg017-target-');
+    const link = join(root, 'boundary-link');
+    const made = await trySymlink(target, link, () => t.skip('symlinks not permitted here'));
+    if (!made) return;
+    process.env['FS_ROOT_BOUNDARY'] = link;
+    const missing = join(link, 'not-yet');
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [missing] });
+      await guard.recomputeAllowedDirectories();
+      assert.ok(
+        containsPath(guard.getRoots(), missing),
+        'missing root under the linked boundary stays',
+      );
+    });
   });
 });
 

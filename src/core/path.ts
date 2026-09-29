@@ -20,6 +20,7 @@ import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-
 import {
   getReservedDeviceNameForPath,
   IS_WINDOWS,
+  isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
   isWindowsDriveRelativePath,
@@ -84,6 +85,64 @@ async function filterRootsWithin(
   );
 
   return normalizedRoots.filter((_, i) => results[i]);
+}
+
+/**
+ * The real path a not-yet-existing directory would have: realpath of its
+ * nearest existing ancestor plus the missing suffix. Lets a missing root be
+ * checked against a realpath-canonicalized boundary even when the boundary
+ * itself is reached through a symlink.
+ */
+async function projectMissingPath(normalizedPath: string, signal?: AbortSignal): Promise<string> {
+  const missing: string[] = [];
+  let current = normalizedPath;
+  for (;;) {
+    try {
+      signal?.throwIfAborted();
+      const real = await withAbort(realpath(current), signal);
+      return missing.length === 0
+        ? normalizePath(real)
+        : normalizePath(join(real, ...missing.reverse()));
+    } catch (error) {
+      rethrowIfAborted(error);
+      if (!isNotFoundErrno(error)) return normalizedPath;
+      const parent = dirname(current);
+      if (parent === current) return normalizedPath;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
+ * existing root must *resolve* inside the boundary; a missing root is projected
+ * through its nearest existing ancestor before comparison so symlinked boundary
+ * spellings still compare against realpath-canonicalized bounds.
+ */
+async function partitionStartupRoots(
+  roots: readonly string[],
+  bounds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ kept: string[]; dropped: string[] }> {
+  const normalizedBounds = normalizeAllowedDirectories(bounds);
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const root of roots.map(normalizePath)) {
+    let inside: boolean;
+    try {
+      signal?.throwIfAborted();
+      const realPath = await withAbort(realpath(root), signal);
+      inside = isPathWithinDirectories(normalizePath(realPath), normalizedBounds);
+    } catch (error) {
+      rethrowIfAborted(error);
+      inside =
+        isNotFoundErrno(error) &&
+        isPathWithinDirectories(await projectMissingPath(root, signal), normalizedBounds);
+    }
+    (inside ? kept : dropped).push(root);
+  }
+  return { kept, dropped };
 }
 
 /** `path.relative` with forward slashes, so displayed paths match across platforms. */
@@ -215,6 +274,26 @@ export class PathGuard {
       return [];
     }
     return [...this.allowedDirectoriesState];
+  }
+
+  /**
+   * The allowed directory that contains `resolvedPath` — the longest match,
+   * so a nested root wins over its parent — or `undefined` when none does.
+   * Walks use it as the `.gitignore` ceiling: rules above an allowed root are
+   * never read.
+   */
+  allowedRootContaining(resolvedPath: string): string | undefined {
+    const normalized = normalizePath(resolvedPath);
+    let best: string | undefined;
+    for (const dir of this.getAllowedDirectories()) {
+      if (
+        isPathInsideDirectory(dir, normalized) &&
+        (best === undefined || dir.length > best.length)
+      ) {
+        best = dir;
+      }
+    }
+    return best;
   }
 
   /**
@@ -809,9 +888,19 @@ export class PathGuard {
       }
     }
 
-    const baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
-
     const signal = AbortSignal.timeout(ROOTS_TIMEOUT_MS);
+    let baseline = [...cliAllowedDirs, ...envAllowedDirs, ...allowCwdDirs];
+    if (boundaries.length > 0) {
+      const { kept, dropped } = await partitionStartupRoots(baseline, boundaries, signal);
+      for (const root of dropped) {
+        Logger.emit(
+          'warning',
+          `Skipped allowed root outside FS_ROOT_BOUNDARY (${boundaries.join(', ')}): ${root}`,
+        );
+      }
+      baseline = kept;
+    }
+
     // FS_ROOT_BOUNDARY is the only filter grants answer to (see
     // `grantedDirectories`); without one they pass through as accepted.
     const grantsToInclude =

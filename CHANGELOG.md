@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Subdirectory walks honor the repository's `.gitignore`.** `find_files`,
+  `search_text`, `replace_text` and `list` scoped to a subdirectory now apply
+  every `.gitignore` from that directory up to the allowed root that contains
+  it, nearest file winning, as git does. Nothing above an allowed root is read.
+- **`search_text` on a file whose name contains glob characters.** Naming `pages/[slug].tsx` searched other same-directory files (the name was read as a glob); it now searches exactly that file.
+- **Globs may contain `..` inside a segment.** `docs/v1..2.md` and `**/[..]x` are accepted by `find_files`, `search_text` and `replace_text`; only a whole `..` segment or brace alternative is refused. (Brackets remain a character class, as in any glob.)
+- **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before.
+- **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
+
+### Changed
+
+- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
+- **`search_text` is faster on large trees.** Files are read with bounded concurrency and each file is tested once as a whole before its lines are scanned, so a search over thousands of non-matching files no longer approaches the 5 s limit. Results are unchanged; `filesScanned` may count a few files past the result cap.
+
 ## [2.6.3] - 2026-09-28
 
 A small release for plugin hosts. A root argument written as `${NAME}` now

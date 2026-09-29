@@ -8,8 +8,11 @@ import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
-import { isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
+import { isPathInsideDirectory, isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
 import { MIB } from './util.ts';
+
+/** `..` bounded on both sides by a separator, a brace delimiter, or the pattern edge. */
+const TRAVERSAL_DOTDOT_RE = /(?:^|[/\\{,])\.\.(?=[/\\},]|$)/u;
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
@@ -21,10 +24,11 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   if (isWindowsDriveRelativePath(pattern)) {
     return false;
   }
-  // Covers every engine-specific traversal form too — `{a,..}` and `[..]` both
-  // contain '..', so they are rejected here. Keep this check whole-string: the
-  // per-form guards that used to follow it were unreachable because of it.
-  if (pattern.includes('..')) {
+  // Only a whole `..` — a path segment, or one alternative of a `{a,..}`
+  // brace set — can traverse. `..` inside a segment (`[...slug]`, `v1..2.md`,
+  // `[..]`) is a literal name or a character class, and PathGuard re-checks
+  // containment on every resolved entry regardless.
+  if (TRAVERSAL_DOTDOT_RE.test(pattern)) {
     return false;
   }
   return true;
@@ -64,11 +68,58 @@ async function loadGitignoreFiles(
   );
 }
 
+/**
+ * Load `.gitignore` from each ancestor of `root` up to and including `ceiling`,
+ * farthest first. A rule set that ignores `root` itself is skipped: the caller
+ * named that directory on purpose, and applying the rule would empty the walk.
+ */
+async function loadAncestorGitignores(
+  root: string,
+  ceiling: string,
+  manager: GitignoreManager,
+  signal?: AbortSignal,
+): Promise<void> {
+  const normalizedCeiling = resolve(ceiling);
+  const chain: string[] = [];
+  for (let dir = dirname(resolve(root)); ; dir = dirname(dir)) {
+    if (!isPathInsideDirectory(normalizedCeiling, dir)) break;
+    chain.push(dir);
+    if (
+      (isPathInsideDirectory(dir, normalizedCeiling) &&
+        isPathInsideDirectory(normalizedCeiling, dir)) ||
+      dirname(dir) === dir
+    ) {
+      break;
+    }
+  }
+  for (const dir of chain.reverse()) {
+    signal?.throwIfAborted();
+    const file = join(dir, '.gitignore');
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) continue;
+      const matcher = ignore().add(await fsReadFile(file, { encoding: 'utf-8', signal }));
+      const prefix = toPosixPath(relative(dir, root));
+      if (matcher.test(`${prefix}/`).ignored) continue;
+      manager.addAncestorMatcher(prefix, matcher);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      // ENOENT is the normal case (no .gitignore at this level); anything else is not worth a warning per walk
+    }
+  }
+}
+
 class GitignoreManager {
   private matchers = new Map<string, Ignore>();
+  /** Rules from directories above the walk root, farthest first; `prefix` re-bases a walk-relative path to that directory. */
+  private ancestors: { prefix: string; matcher: Ignore }[] = [];
 
   addMatcher(dir: string, matcher: Ignore): void {
     this.matchers.set(dir, matcher);
+  }
+
+  addAncestorMatcher(prefix: string, matcher: Ignore): void {
+    this.ancestors.push({ prefix, matcher });
   }
 
   /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
@@ -76,6 +127,7 @@ class GitignoreManager {
     root: string,
     signal?: AbortSignal,
     maxDepth?: number,
+    ignoreCeiling?: string,
   ): Promise<GitignoreManager | null> {
     const manager = new GitignoreManager();
     try {
@@ -96,13 +148,16 @@ class GitignoreManager {
       }
 
       await loadGitignoreFiles(root, gitignorePaths, manager, signal);
+      if (ignoreCeiling !== undefined) {
+        await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
+      }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') throw error;
       Logger.warn(
         `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
       );
     }
-    return manager.matchers.size === 0 ? null : manager;
+    return manager.matchers.size === 0 && manager.ancestors.length === 0 ? null : manager;
   }
 
   isIgnored(relativePath: string, isDirectory: boolean): boolean {
@@ -135,6 +190,12 @@ class GitignoreManager {
       : posixPath;
 
     let ignored = false;
+
+    for (const { prefix, matcher } of this.ancestors) {
+      const res = matcher.test(`${prefix}/${pathToCheck}`);
+      if (res.ignored) ignored = true;
+      if (res.unignored) ignored = false;
+    }
 
     // Check root level
     const rootMatcher = this.matchers.get('');
@@ -191,6 +252,12 @@ export interface GlobEntriesOptions {
   suppressErrors?: boolean;
   /** Skip what a walk should not surface: DEFAULT_EXCLUDED_NAMES and .gitignore. */
   skipIgnored?: boolean;
+  /**
+   * Topmost directory whose `.gitignore` may apply to this walk — the allowed
+   * root containing `cwd`. Ancestors of `cwd` up to and including it are
+   * consulted; nothing above it is ever read. Ignored without `skipIgnored`.
+   */
+  ignoreCeiling?: string;
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
 }
@@ -407,7 +474,12 @@ async function* processGlobPattern(
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
   const gitignoreMatcher = options.skipIgnored
-    ? await GitignoreManager.load(options.cwd, options.signal, options.maxDepth)
+    ? await GitignoreManager.load(
+        options.cwd,
+        options.signal,
+        options.maxDepth,
+        options.ignoreCeiling,
+      )
     : null;
 
   const plan = normalizeGlobOptions(options);

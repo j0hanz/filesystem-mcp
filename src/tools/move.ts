@@ -1,7 +1,8 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { basename, dirname, resolve } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -17,6 +18,7 @@ import {
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
+import { globEntries } from '../core/glob.ts';
 import {
   confirmKey,
   describeRefusal,
@@ -116,6 +118,7 @@ async function planTransfer(
   pair: { source: string; destination: string },
   fs: ToolCtx['fs'],
   overwrite: boolean,
+  signal: AbortSignal | undefined,
 ): Promise<TransferPlanResult> {
   let realSource: string;
   let opSource: string;
@@ -123,6 +126,9 @@ async function planTransfer(
   try {
     ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
+    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
+      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
+    }
   } catch (error) {
     return { status: 'fail', failure: pairFailure(pair, error) };
   }
@@ -267,7 +273,7 @@ async function runTransfers(
 > {
   const { results: planned, errors: planErrors } = await processInParallel(
     items,
-    (pair) => planTransfer(op, pair, ctx.fs, overwrite),
+    (pair) => planTransfer(op, pair, ctx.fs, overwrite, ctx.signal),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
@@ -419,6 +425,63 @@ async function validateTransferSource(
   } catch (error) {
     if (isFsError(error)) throw error;
     throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);
+  }
+}
+
+/**
+ * A directory transfer may proceed only when every entry keeps the same
+ * sensitive-file status before and after relocation. Path-based rules
+ * (`secrets/**`, `.aws/credentials`) follow the path, not the file, so refuse
+ * any entry that would leave or enter the protected set. Walk the tree once
+ * before any mutation and fail the pair closed if anything changes status.
+ * Name-based rules need no help — they match after the move too.
+ */
+async function assertTreeHasNoProtectedEntries(
+  op: PairOp,
+  realSource: string,
+  requestedSource: string,
+  validDest: string,
+  fs: ToolCtx['fs'],
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  let protectedCount = 0;
+  const entries = globEntries({
+    cwd: realSource,
+    pattern: '**/*',
+    includeHidden: true,
+    skipIgnored: false,
+    onlyFiles: false,
+    ...(signal ? { signal } : {}),
+  });
+  try {
+    for await (const entry of entries) {
+      signal?.throwIfAborted();
+      const entryRelativePath = relative(realSource, entry.path);
+      const requestedSourcePath = resolve(requestedSource, entryRelativePath);
+      const destinationPath = resolve(validDest, entryRelativePath);
+      const protectedBefore =
+        fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedSourcePath);
+      const protectedAfter = fs.pathGuard.isSensitive(destinationPath);
+      if (protectedBefore !== protectedAfter) {
+        protectedCount++;
+        break;
+      }
+    }
+  } catch (error) {
+    rethrowIfAborted(error);
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `${VERB[op]} refused: the directory could not be fully inspected for protected entries`,
+      requestedSource,
+      error,
+    );
+  }
+  if (protectedCount > 0) {
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
+      requestedSource,
+    );
   }
 }
 
