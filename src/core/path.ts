@@ -88,13 +88,6 @@ async function filterRootsWithin(
 }
 
 /**
- * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
- * existing root must *resolve* inside the boundary; a missing root is projected
- * through its nearest existing ancestor before comparison so symlinked boundary
- * spellings still compare against realpath-canonicalized bounds.
- */
-
-/**
  * The real path a not-yet-existing directory would have: realpath of its
  * nearest existing ancestor plus the missing suffix. Lets a missing root be
  * checked against a realpath-canonicalized boundary even when the boundary
@@ -121,6 +114,12 @@ async function projectMissingPath(normalizedPath: string, signal?: AbortSignal):
   }
 }
 
+/**
+ * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
+ * existing root must *resolve* inside the boundary; a missing root is projected
+ * through its nearest existing ancestor before comparison so symlinked boundary
+ * spellings still compare against realpath-canonicalized bounds.
+ */
 async function partitionStartupRoots(
   roots: readonly string[],
   bounds: readonly string[],
