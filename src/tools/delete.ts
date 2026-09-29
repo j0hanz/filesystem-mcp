@@ -237,7 +237,7 @@ async function finalizeDeletion(
 async function executePlan(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'log'>,
+  ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
   pendingSorted: readonly string[],
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
@@ -251,7 +251,7 @@ async function executePlan(
         failure: {
           path: plan.validPath,
           error: Problem.cancelled(
-            `Delete cancelled: confirmation was ${describeRefusal(ctx.inputResponses, key)}`,
+            `Delete cancelled: confirmation was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
             { path: plan.validPath },
           ),
         },
@@ -308,6 +308,7 @@ async function handleDelete(
       op: 'delete',
       pending: pendingSorted,
       requestState: ctx.requestState,
+      droppedInputResponseKeys: ctx.droppedInputResponseKeys,
       clientCapabilities: ctx.clientCapabilities,
       serverCtx: ctx.serverCtx,
       buildInputs: (ps) =>

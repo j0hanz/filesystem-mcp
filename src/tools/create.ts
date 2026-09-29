@@ -153,6 +153,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         op: 'create',
         pending: pendingSorted,
         requestState: ctx.requestState,
+        droppedInputResponseKeys: ctx.droppedInputResponseKeys,
         clientCapabilities: ctx.clientCapabilities,
         serverCtx: ctx.serverCtx,
         buildInputs: (paths) =>
@@ -177,7 +178,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         if (choice !== 'overwrite') {
           throw new FsError(
             ErrorCode.CANCELLED,
-            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx.inputResponses, key)}`,
+            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
             path,
           );
         }

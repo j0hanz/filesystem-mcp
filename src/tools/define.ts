@@ -60,6 +60,13 @@ export interface ToolCtx {
    */
   readonly inputResponses?: Record<string, unknown> | undefined;
   /**
+   * Keys of `inputResponses` entries the SDK dropped on this round because
+   * they were not bare results (the `{ method, result }` wrapper some hosts
+   * send). `pendingRoundTrip` re-issues a confirmation whose key is listed
+   * here once; `describeRefusal` names the cause after that.
+   */
+  readonly droppedInputResponseKeys?: readonly string[] | undefined;
+  /**
    * Reads the verified multi-round-trip `requestState` for the current round:
    * the decoded `PendingState` the `requestStateCodec` verified, or `undefined`
    * when the round carried no state (the first round). `undefined` when no
@@ -174,6 +181,7 @@ function toToolCtx(
     resourceStore: deps.resourceStore,
     sendNotification: async (notification) => ctx.mcpReq.notify(notification),
     inputResponses: ctx.mcpReq.inputResponses,
+    droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
     requestState: ctx.mcpReq.requestState,
     serverCtx: ctx,
     ...(clientCapabilities ? { clientCapabilities } : {}),
@@ -305,6 +313,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       op: 'grant',
       pending: grantDirs,
       requestState: this.toolCtx.requestState,
+      droppedInputResponseKeys: this.toolCtx.droppedInputResponseKeys,
       clientCapabilities: this.toolCtx.clientCapabilities,
       serverCtx: this.toolCtx.serverCtx,
       buildInputs: (dirs) =>

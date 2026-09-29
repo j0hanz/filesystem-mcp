@@ -7,7 +7,8 @@ import {
 } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
@@ -258,6 +259,68 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(isInputRequiredResult(result), true);
   });
 
+  it('6b. pendingRoundTrip re-issues once when the answer key was dropped by the SDK', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
+    const buildInputs = (paths: readonly string[]) =>
+      paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` }));
+
+    const reissued = await pendingRoundTrip({
+      op: 'delete',
+      pending: ['/x'],
+      requestState: () => decoded,
+      droppedInputResponseKeys: ['confirm_0'],
+      buildInputs,
+      serverCtx: bindContext(),
+    });
+    assert.ok(reissued !== undefined && isInputRequiredResult(reissued));
+    assert.deepStrictEqual(Object.keys(reissued.inputRequests ?? {}), ['confirm_0']);
+
+    // The re-issued state is sealed with the flag: a second dropped answer
+    // is not asked again.
+    const second = await requestStateCodec.verify(reissued.requestState ?? '', bindContext());
+    assert.strictEqual(second.reissued, true);
+    const proceed = await pendingRoundTrip({
+      op: 'delete',
+      pending: ['/x'],
+      requestState: () => second,
+      droppedInputResponseKeys: ['confirm_0'],
+      buildInputs,
+      serverCtx: bindContext(),
+    });
+    assert.strictEqual(proceed, undefined);
+  });
+
+  it('6c. a dropped key that is not one of this round’s inputs does not re-issue', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
+    const result = await pendingRoundTrip({
+      op: 'delete',
+      pending: ['/x'],
+      requestState: () => decoded,
+      droppedInputResponseKeys: ['unrelated'],
+      buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
+      serverCtx: bindContext(),
+    });
+    assert.strictEqual(result, undefined);
+  });
+
+  it('6d. the R9 path check still runs before a re-issue', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
+    const decoded = await requestStateCodec.verify(wire, bindContext());
+    await assert.rejects(
+      pendingRoundTrip({
+        op: 'delete',
+        pending: ['/y'],
+        requestState: () => decoded,
+        droppedInputResponseKeys: ['confirm_0'],
+        buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
+        serverCtx: bindContext(),
+      }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT),
+    );
+  });
+
   it('7. buildInputRequired shape', async () => {
     const r = await buildInputRequired(
       { op: 'delete', paths: ['/a'] },
@@ -455,6 +518,119 @@ describe('describeRefusal', () => {
     ];
     for (const [responses, expected] of cases) {
       assert.strictEqual(describeRefusal(responses, 'confirm_0'), expected);
+    }
+  });
+
+  it('names a dropped answer when told the dropped keys', () => {
+    assert.match(describeRefusal({}, 'confirm_0', ['confirm_0']), /wrapped result/);
+    assert.strictEqual(describeRefusal({}, 'confirm_0', ['other']), 'not answered');
+  });
+});
+
+describe('wrapped inputResponses over the modern wire', () => {
+  const META = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
+    'io.modelcontextprotocol/clientInfo': { name: 'raw-modern-test', version: '1.0.0' },
+  };
+
+  async function post(
+    handler: ReturnType<typeof createMcpHandler>,
+    id: number,
+    params: Record<string, unknown>,
+  ): Promise<{ result?: Record<string, unknown>; error?: { message?: string } }> {
+    const res = await handler.fetch(
+      new Request('http://test.local/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          // The modern HTTP binding's standard headers: the entry refuses a
+          // 2026-07-28 request missing any of them before dispatch
+          // (`validateStandardRequestHeaders` in the SDK). `Mcp-Name` must
+          // equal `params.name` for tools/call.
+          'mcp-protocol-version': '2026-07-28',
+          'mcp-method': 'tools/call',
+          'mcp-name': String(params['name']),
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params }),
+      }),
+    );
+    const text = await res.text();
+    // Tolerate an SSE-framed reply by taking the last `data:` line.
+    const json = res.headers.get('content-type')?.includes('text/event-stream')
+      ? (
+          text
+            .split('\n')
+            .filter((l) => l.startsWith('data:'))
+            .at(-1) ?? ''
+        ).slice(5)
+      : text;
+    return JSON.parse(json) as { result?: Record<string, unknown>; error?: { message?: string } };
+  }
+
+  it('a wrapped confirmation is asked again once, then named in the refusal', async () => {
+    const root = await createTestRoot();
+    const handler = createMcpHandler(
+      async ({ era }) => {
+        const context = await createServer({ cliAllowedDirs: [root] }, { era });
+        const previousOnClose = context.mcp.server.onclose;
+        context.mcp.server.onclose = () => {
+          previousOnClose?.();
+          context.disposeRuntimeState();
+        };
+        return context.mcp;
+      },
+      { legacy: 'reject' },
+    );
+    try {
+      const dir = join(root, 'victim');
+      await writeTestFile(root, 'victim/f.txt', 'x');
+      const args = { paths: [dir], recursive: true };
+
+      const first = await post(handler, 1, { name: 'delete', arguments: args, _meta: META });
+      assert.strictEqual(first.result?.['resultType'], 'input_required', JSON.stringify(first));
+      const requestState = first.result?.['requestState'] as string;
+      const [key] = Object.keys(first.result?.['inputRequests'] as object);
+      assert.ok(key);
+
+      const wrapped = {
+        [key]: {
+          method: 'elicitation/create',
+          result: { action: 'accept', content: { choice: 'delete' } },
+        },
+      };
+      const second = await post(handler, 2, {
+        name: 'delete',
+        arguments: args,
+        _meta: META,
+        inputResponses: wrapped,
+        requestState,
+      });
+      assert.strictEqual(
+        second.result?.['resultType'],
+        'input_required',
+        `re-issued once: ${JSON.stringify(second)}`,
+      );
+      const requestState2 = second.result?.['requestState'] as string;
+      assert.notStrictEqual(requestState2, requestState);
+
+      const third = await post(handler, 3, {
+        name: 'delete',
+        arguments: args,
+        _meta: META,
+        inputResponses: wrapped,
+        requestState: requestState2,
+      });
+      assert.notStrictEqual(third.result?.['resultType'], 'input_required');
+      assert.strictEqual(third.result?.['isError'], true, JSON.stringify(third));
+      // The refusal wording lives in the per-path failure and may or may not
+      // be echoed in the text block; match the whole result.
+      assert.match(JSON.stringify(third.result), /wrapped result/);
+      await access(join(dir, 'f.txt')); // nothing was deleted
+    } finally {
+      await handler.close();
+      await cleanupTestRoot(root);
     }
   });
 });

@@ -44,6 +44,12 @@ type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 export interface PendingState {
   readonly op: PendingOp;
   readonly paths: readonly string[];
+  /**
+   * Set on the state of a round minted because the previous round's answer
+   * was dropped by the SDK (`droppedInputResponseKeys`). Sealed in the HMAC
+   * payload, so a client cannot clear it: the re-issue happens once.
+   */
+  readonly reissued?: true;
 }
 
 /** One embedded form-mode confirmation, keyed within the call. */
@@ -153,7 +159,11 @@ export async function buildInputRequired(
     });
   }
   const requestState = await requestStateCodec.mint(
-    { op: pending.op, paths: [...pending.paths].sort() },
+    {
+      op: pending.op,
+      paths: [...pending.paths].sort(),
+      ...(pending.reissued ? { reissued: true as const } : {}),
+    },
     ctx,
   );
   return inputRequired({ inputRequests, requestState });
@@ -183,6 +193,8 @@ interface PendingRoundTripOpts {
    * {@link assertCanElicit}.
    */
   readonly clientCapabilities?: ClientCapabilities | undefined;
+  /** `ctx.mcpReq.droppedInputResponseKeys` for this round; see `ToolCtx`. */
+  readonly droppedInputResponseKeys?: readonly string[] | undefined;
   readonly buildInputs: (pending: readonly string[]) => readonly PendingInput[];
   /** The live handler context; the codec binds the minted state to its method and caller. */
   readonly serverCtx: ServerContext;
@@ -261,6 +273,21 @@ export async function pendingRoundTrip(
       `${opts.op}: confirmation does not match the requested paths`,
     );
   }
+  // The client answered, but in a shape the SDK discards before the handler
+  // runs (`{ method, result }` around the bare result). Ask the same question
+  // once more rather than report a refusal the user never made; the sealed
+  // `reissued` flag stops a second retry from looping.
+  if (state.reissued !== true && opts.droppedInputResponseKeys?.length) {
+    const dropped = new Set(opts.droppedInputResponseKeys);
+    const inputs = opts.buildInputs(opts.pending);
+    if (inputs.some((input) => dropped.has(input.key))) {
+      return buildInputRequired(
+        { op: opts.op, paths: opts.pending, reissued: true },
+        inputs,
+        opts.serverCtx,
+      );
+    }
+  }
   return undefined;
 }
 
@@ -328,11 +355,19 @@ export function readAcceptedMultiChoice(
   return acceptedContent(responses, key, MultiChoiceContent)?.choice;
 }
 
-/** Refusal wording for the `CANCELLED` error; call after a `readAccepted*` reader returned nothing. */
+/**
+ * Refusal wording for the `CANCELLED` error; call after a `readAccepted*` reader
+ * returned nothing. Pass the round's `droppedInputResponseKeys` so a dropped
+ * answer is named as such rather than as 'not answered'.
+ */
 export function describeRefusal(
   responses: Record<string, unknown> | undefined,
   key: string,
+  droppedKeys?: readonly string[],
 ): string {
+  if (droppedKeys?.includes(key)) {
+    return 'answered in a shape this server cannot read (a wrapped result instead of the bare elicitation result), twice';
+  }
   const view = inputResponse(responses, key);
   if (view.kind !== 'elicit') return 'not answered';
   if (view.action === 'decline') return 'declined by the user';

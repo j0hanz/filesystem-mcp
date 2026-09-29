@@ -179,7 +179,7 @@ async function planTransfer(
 async function executeTransfer(
   op: PairOp,
   plan: TransferPlan,
-  ctx: Pick<ToolCtx, 'fs' | 'signal' | 'inputResponses' | 'log'>,
+  ctx: Pick<ToolCtx, 'fs' | 'signal' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
   pendingSorted: readonly string[],
 ): Promise<TransferExecResult> {
   if (plan.pending) {
@@ -191,7 +191,7 @@ async function executeTransfer(
     if (choice !== 'overwrite') {
       throw new FsError(
         ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx.inputResponses, key)}`,
+        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
         plan.pair.destination,
       );
     }
@@ -318,6 +318,7 @@ async function runTransfers(
       op,
       pending: pendingSorted,
       requestState: ctx.requestState,
+      droppedInputResponseKeys: ctx.droppedInputResponseKeys,
       clientCapabilities: ctx.clientCapabilities,
       serverCtx: ctx.serverCtx,
       buildInputs: (dests) =>
