@@ -141,6 +141,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
       validPath,
       content: patched,
       dryRun: args.dryRun,
+      lastModified: fileStats.mtime.toISOString(),
     });
     return {
       structured: {

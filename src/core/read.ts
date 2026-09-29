@@ -69,6 +69,7 @@ export interface ReadFileResult {
   content: string;
   totalLines?: number;
   readMode: ReadSpec['kind'];
+  modified: string;
   head?: number;
   tail?: number;
   startLine?: number;
@@ -472,6 +473,7 @@ async function readByMode(
       return {
         path: validPath,
         readMode: 'full',
+        modified: stats.mtime.toISOString(),
         content,
         totalLines,
         linesRead: totalLines,
@@ -482,6 +484,7 @@ async function readByMode(
       return {
         path: validPath,
         readMode: 'head',
+        modified: stats.mtime.toISOString(),
         head: spec.lines,
         ...(await readRangeContent(handle, 1, spec.lines, options, filePath)),
       };
@@ -489,6 +492,7 @@ async function readByMode(
       return {
         path: validPath,
         readMode: 'range',
+        modified: stats.mtime.toISOString(),
         startLine: spec.start,
         ...(spec.end !== undefined ? { endLine: spec.end } : {}),
         ...(await readRangeContent(handle, spec.start, spec.end, options, filePath)),
@@ -497,6 +501,7 @@ async function readByMode(
       return {
         path: validPath,
         readMode: 'tail',
+        modified: stats.mtime.toISOString(),
         tail: spec.lines,
         ...(await readTailContent(handle, spec.lines, options, validPath)),
       };

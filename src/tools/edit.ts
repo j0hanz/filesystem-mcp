@@ -423,6 +423,7 @@ async function handleEditFile(
     validPath,
     content: editResult.content,
     dryRun: options.dryRun,
+    lastModified: modified,
   });
   return {
     file: buildEditFileValue(validPath, meta, modified, editResult),

@@ -92,6 +92,7 @@ interface ResourceEntry {
   name: string;
   mimeType: string;
   size: number;
+  createdAt: string;
   expiresAt: string;
   text: string;
 }
@@ -131,12 +132,14 @@ export class ResourceStore {
       if (this.#entries.prune()) this.#onListChanged?.();
       throw new FsError(ErrorCode.TOO_LARGE, `Resource too large to cache (${entryBytes} bytes).`);
     }
+    const now = Date.now();
     const entry: ResourceEntry = {
       uri: `filesystem-mcp://result/${randomUUID()}`,
       name: params.name,
       mimeType: params.mimeType ?? 'text/plain',
       size: entryBytes,
-      expiresAt: new Date(Date.now() + ENTRY_TTL_MS).toISOString(),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + ENTRY_TTL_MS).toISOString(),
       text: params.text,
     };
     this.#entries.set(entry.uri, entry, entryBytes);
@@ -195,9 +198,10 @@ export function putJsonResource(
       type: 'resource_link',
       uri: entry.uri,
       name: entry.name,
+      description: `Cached tool result; expires ${entry.expiresAt}`,
       mimeType: entry.mimeType,
       size: entry.size,
-      annotations: { audience: ['user'] },
+      annotations: { audience: ['user'], lastModified: entry.createdAt },
     },
   };
 }

@@ -2,7 +2,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -1040,6 +1040,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
     assert.ok(resourceUri, 'read must expose a resourceUri');
     assert.strictEqual(link?.uri, resourceUri);
+  });
+
+  it("read's resource_link carries the file's mtime as lastModified", async () => {
+    const file = join(tmpDir, 'stamped.txt');
+    await writeFile(file, 'content\n');
+    const { mtime } = await stat(file);
+    const result = await harness.client.callTool({ name: 'read', arguments: { path: file } });
+    const link = (
+      result.content as { type: string; annotations?: { lastModified?: string } }[]
+    ).find((c) => c.type === 'resource_link');
+    assert.strictEqual(link?.annotations?.lastModified, mtime.toISOString());
+    const structured = result._meta as { results?: { value?: { modified?: string } }[] };
+    assert.strictEqual(structured.results?.[0]?.value?.modified, mtime.toISOString());
+  });
+
+  it("create's resource_link lastModified equals the structured modified", async () => {
+    const file = join(tmpDir, 'created-stamped.txt');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'hello\n' }] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const structured = result.structuredContent as { files: { modified: string }[] };
+    const link = (
+      result.content as { type: string; annotations?: { lastModified?: string } }[]
+    ).find((c) => c.type === 'resource_link');
+    assert.ok(structured.files[0]?.modified);
+    assert.strictEqual(link?.annotations?.lastModified, structured.files[0]?.modified);
   });
 
   it('a call where every path failed is reported as isError', async () => {

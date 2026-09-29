@@ -50,6 +50,8 @@ export function buildFileResourceLinkFor(
   name: string,
   mimeType: string,
   size: number,
+  /** ISO-8601 mtime of the file the link names, when the caller has one. */
+  lastModified?: string,
 ): ContentBlock {
   return {
     type: 'resource_link',
@@ -57,16 +59,25 @@ export function buildFileResourceLinkFor(
     name,
     mimeType,
     size,
-    annotations: { audience: ['user', 'assistant'] },
+    annotations: {
+      audience: ['user', 'assistant'],
+      ...(lastModified !== undefined ? { lastModified } : {}),
+    },
   };
 }
 
-function buildFileResourceLink(validPath: string, mimeType: string, size: number): ContentBlock {
+function buildFileResourceLink(
+  validPath: string,
+  mimeType: string,
+  size: number,
+  lastModified?: string,
+): ContentBlock {
   return buildFileResourceLinkFor(
     buildFileResourceUri(validPath),
     basename(validPath),
     mimeType,
     size,
+    lastModified,
   );
 }
 
@@ -93,19 +104,22 @@ export interface WrittenFileMeta {
  * caller already has. None when the size is unknown or over the text-size cap —
  * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
  * File resources are read directly from disk, not from the result store.
+ * `lastModified` is the post-write mtime when the caller stat'd the file; a
+ * link without it is still valid.
  */
 export function writtenFileLinks(
   validPath: string,
   mimeType: string,
   size: number | undefined,
   dryRun = false,
+  lastModified?: string,
 ): Pick<WrittenFileMeta, 'resourceUri' | 'resourceLink'> {
   if (dryRun || size === undefined || size > getMaxTextFileSize()) {
     return { resourceUri: undefined, resourceLink: undefined };
   }
   return {
     resourceUri: buildFileResourceUri(validPath),
-    resourceLink: buildFileResourceLink(validPath, mimeType, size),
+    resourceLink: buildFileResourceLink(validPath, mimeType, size, lastModified),
   };
 }
 
@@ -119,6 +133,7 @@ export function buildWrittenFileMeta(options: {
   validPath: string;
   content: string;
   dryRun?: boolean | undefined;
+  lastModified?: string | undefined;
 }): WrittenFileMeta {
   const { validPath, content } = options;
   const size = Buffer.byteLength(content, 'utf-8');
@@ -128,6 +143,6 @@ export function buildWrittenFileMeta(options: {
     lineCount: countLines(content),
     mimeType,
     kind,
-    ...writtenFileLinks(validPath, mimeType, size, options.dryRun),
+    ...writtenFileLinks(validPath, mimeType, size, options.dryRun, options.lastModified),
   };
 }

@@ -197,6 +197,8 @@ describe('MCP Resources', () => {
       assert.strictEqual(entry.name, 'test_calc');
       assert.strictEqual(entry.mimeType, 'text/plain');
       assert.strictEqual(entry.text, content);
+      assert.ok(!Number.isNaN(Date.parse(entry.createdAt)));
+      assert.ok(Date.parse(entry.expiresAt) > Date.parse(entry.createdAt));
 
       // Retrieve via getEntry
       const retrievedEntry = store.getEntry(entry.uri);
@@ -586,6 +588,22 @@ describe('MCP Resources', () => {
         false,
         'workspace roots must not be duplicated into resources/list',
       );
+    });
+
+    it('a cached result lists with its expiry and creation time', async () => {
+      await writeTestFile(clientTmpDir, 'pages/one.txt', 'x');
+      await writeTestFile(clientTmpDir, 'pages/two.txt', 'x');
+      const listed = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: join(clientTmpDir, 'pages'), maxEntries: 1 },
+      });
+      const { resourceUri } = listed._meta as { resourceUri?: string };
+      assert.ok(resourceUri, 'an incomplete first page externalizes the full list');
+      const { resources } = await harness.client.listResources();
+      const entry = resources.find((r) => r.uri === resourceUri);
+      assert.ok(entry);
+      assert.match(entry.description ?? '', /expires \d{4}-\d{2}-\d{2}T/u);
+      assert.ok(entry.annotations?.lastModified);
     });
 
     it('resource contracts specify cacheHint for client caching optimization', async () => {

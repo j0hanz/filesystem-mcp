@@ -333,8 +333,10 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
           resources.push({
             uri: entry.uri,
             name: entry.name,
+            description: `Cached tool result; expires ${entry.expiresAt}`,
             mimeType: entry.mimeType,
             size: entry.size,
+            annotations: { audience: ['assistant'], priority: 0.3, lastModified: entry.createdAt },
           });
         } catch (err) {
           // An entry may expire between keys() and getEntry; skip it.

@@ -242,7 +242,13 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
           lineCount,
           mimeType,
           kind,
-          ...writtenFileLinks(appended.validPath, mimeType, stats?.size),
+          ...writtenFileLinks(
+            appended.validPath,
+            mimeType,
+            stats?.size,
+            false,
+            stats?.mtime.toISOString(),
+          ),
         };
         created = (stats?.birthtime ?? EPOCH).toISOString();
         modified = (stats?.mtime ?? EPOCH).toISOString();
@@ -257,6 +263,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         meta = buildWrittenFileMeta({
           validPath: written.validPath,
           content,
+          lastModified: modified,
         });
       }
 

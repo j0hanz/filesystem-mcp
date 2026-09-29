@@ -88,6 +88,8 @@ interface ReadPerPathValue {
   mimeType?: string;
   kind?: FileKind;
   resourceUri?: string;
+  /** ISO-8601 mtime at read time; also rides the resource_link. */
+  modified?: string;
   continuation?: ReadContinuation;
   totalLines?: number;
   linesRead?: number;
@@ -267,6 +269,7 @@ function buildPerPathReadValue(
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
     resourceUri: buildFileResourceUri(result.path),
+    modified: result.modified,
   };
 }
 
@@ -443,6 +446,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
           basename(result.path),
           v.mimeType ?? 'application/octet-stream',
           Buffer.byteLength(v.content, 'utf8'),
+          v.modified,
         ),
       );
     }

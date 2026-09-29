@@ -554,11 +554,22 @@ async function handleSearchAndReplace(
 
   const structured = buildSearchAndReplaceStructuredResult(summary, args);
 
+  let primaryModified: string | undefined;
+  if (summary.primary && !args.dryRun) {
+    try {
+      primaryModified = (
+        await ctx.fs.stat(summary.primary.path, { signal: ctx.signal })
+      ).stats.mtime.toISOString();
+    } catch {
+      /* result metadata only; the write already succeeded */
+    }
+  }
   const link = summary.primary
     ? buildWrittenFileMeta({
         validPath: summary.primary.path,
         content: summary.primary.content,
         dryRun: args.dryRun,
+        lastModified: primaryModified,
       }).resourceLink
     : undefined;
   return link ? { structured, link } : { structured };

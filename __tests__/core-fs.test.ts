@@ -544,6 +544,11 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         size: maxSize,
         annotations: { audience: ['user', 'assistant'] },
       });
+      const stamped = writtenFileLinks(path, 'text/plain', 10, false, '2026-01-02T03:04:05.000Z');
+      assert.deepStrictEqual(
+        (stamped.resourceLink as { annotations?: { lastModified?: string } }).annotations,
+        { audience: ['user', 'assistant'], lastModified: '2026-01-02T03:04:05.000Z' },
+      );
       for (const size of [undefined, maxSize + 1]) {
         assert.deepStrictEqual(writtenFileLinks(path, 'text/plain', size), {
           resourceUri: undefined,
