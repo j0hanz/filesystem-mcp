@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
-import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
+import { getMaxTextFileSize, MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import {
@@ -865,6 +865,22 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.match(firstTextBlock(caseResult).text ?? '', /duplicate of files\[0\]\.path/u);
       assert.strictEqual(await readFile(file, 'utf-8'), original);
     }
+  });
+
+  it('create refuses a batch whose combined content exceeds the file limit', async () => {
+    const limit = getMaxTextFileSize();
+    const half = 'x'.repeat(Math.ceil(limit / 2) + 1);
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: {
+        files: [
+          { path: join(tmpDir, 'batch-a.txt'), content: half },
+          { path: join(tmpDir, 'batch-b.txt'), content: half },
+        ],
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /combined content .* Split the batch/);
   });
 
   it('create refuses a batch that names the same file twice', async () => {

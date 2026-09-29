@@ -1,16 +1,17 @@
 import type { McpSubscription } from '@modelcontextprotocol/client';
 import type { JSONRPCMessage } from '@modelcontextprotocol/server';
-import { ProtocolErrorCode, STDIO_DEFAULT_MAX_BUFFER_SIZE } from '@modelcontextprotocol/server';
+import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { writeFile } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { isNodeError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { MIB } from '../src/core/util.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -69,6 +70,21 @@ describe('Stdio Transport (real subprocess)', () => {
   it('STDIO-001: lists all tools over a real stdio subprocess', async () => {
     const tools = await harness.client.listTools();
     assert.strictEqual(tools.tools.length, ALL_REGISTERED_TOOL_NAMES.length);
+  });
+
+  it('STDIO-017: a create at the advertised file limit fits one stdio message', async () => {
+    // 10 MiB of short lines: every "\n" doubles under JSON escaping, so the
+    // wire message is ~1.2× the content and over the SDK's default 10 MB
+    // buffer — the case the derived bound exists for.
+    const content = 'line\n'.repeat((10 * MIB) / 5);
+    const target = join(tmpDir, 'at-limit.txt');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: target, content }] },
+    });
+    assert.notStrictEqual(result.isError, true, JSON.stringify(result.content));
+    const stats = await stat(target);
+    assert.strictEqual(stats.size, content.length);
   });
 
   it('STDIO-002: reads a file over a real stdio subprocess', async () => {
@@ -234,7 +250,7 @@ describe('Stdio CLI flags (real subprocess)', () => {
 describe('Stdio subscription lease lifecycle', () => {
   it('STDIO-014: buffer overflow releases watchers and exits with stdin still open', async () => {
     const root = await createTestRoot();
-    const harness = await createRawStdioServer(root);
+    const harness = await createRawStdioServer(root, { FS_MAX_FILE_SIZE: String(MIB) });
     const pipeErrors: Error[] = [];
     let stderr = '';
     harness.child.stderr.on('data', (chunk: Buffer) => {
@@ -266,9 +282,11 @@ describe('Stdio subscription lease lifecycle', () => {
 
       const exited = once(harness.child, 'exit');
       // No newline, stdin end, or drain wait: overflow itself must close the connection.
-      harness.child.stdin.write(Buffer.alloc(STDIO_DEFAULT_MAX_BUFFER_SIZE + 1, 'x'));
+      // 3 × FS_MAX_FILE_SIZE + 1 MiB is the bound stdio.ts derives; one byte over.
+      harness.child.stdin.write(Buffer.alloc(4 * MIB + 1, 'x'));
       await waitFor(() => stderr.includes('ReadBuffer exceeded maximum size'), 3000);
       assert.match(stderr, /ReadBuffer exceeded maximum size/);
+      assert.match(stderr, /exceeded 4194304 bytes .*Split the write/);
       assert.deepEqual(
         await within(exited, 5000),
         [0, null],

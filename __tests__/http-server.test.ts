@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import type { ClientRequest, OutgoingHttpHeaders, Server } from 'node:http';
 import { request } from 'node:http';
 import { type AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { json } from 'node:stream/consumers';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 
+import { getMaxInboundMessageBytes, MIB } from '../src/core/util.ts';
 import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
 import { startHttpServer } from '../src/transport.ts';
 import {
@@ -273,7 +275,8 @@ describe('Real HTTP Server integration', () => {
   });
 
   it('5. POST /mcp with an oversized body -> 413', async () => {
-    const tooBig = 'x'.repeat(5 * 1024 * 1024); // > DEFAULT_MAX_REQUEST_BODY_SIZE (4 MiB)
+    // one byte over the derived bound (3 × FS_MAX_FILE_SIZE + 1 MiB)
+    const tooBig = 'x'.repeat(getMaxInboundMessageBytes() + 1);
     const r = await fetch(base, {
       method: 'POST',
       headers: {
@@ -283,8 +286,9 @@ describe('Real HTTP Server integration', () => {
       body: tooBig,
     });
     assert.strictEqual(r.status, 413);
-    const body = (await r.json()) as { error?: { code?: number } };
+    const body = (await r.json()) as { error?: { code?: number; message?: string } };
     assert.ok(body.error, '413 must carry a JSON-RPC error object');
+    assert.match(String(body.error.message), /Split the write/);
   });
 
   it('6. POST /mcp with malformed JSON -> 400 ParseError', async () => {
@@ -626,5 +630,47 @@ describe('Browser recovery response headers', () => {
     assert.strictEqual(response.status, 403);
     assert.strictEqual(response.headers.get('access-control-allow-origin'), null);
     assert.strictEqual(response.headers.get('access-control-expose-headers'), null);
+  });
+});
+
+describe('the request body limit follows FS_MAX_FILE_SIZE', () => {
+  let tmpDir: string;
+  let http: HttpTestContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    http = await bootHttpTest([tmpDir], { FS_MAX_FILE_SIZE: String(MIB) });
+  });
+  after(async () => {
+    await http.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('refuses a body over 3 × the file limit + 1 MiB with the bound in the message', async () => {
+    const r = await fetch(http.base, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Authorization: ['Bearer', TEST_API_KEY].join(' '),
+      },
+      body: 'x'.repeat(4 * MIB + 1),
+    });
+    assert.strictEqual(r.status, 413);
+    const body = (await r.json()) as { error?: { message?: string } };
+    assert.match(body.error?.message ?? '', /4194304 bytes/);
+  });
+
+  it('accepts a create whose content is at the file limit', async () => {
+    const client = await http.makeClient('at-limit');
+    try {
+      const content = 'line\n'.repeat(MIB / 5);
+      const result = await client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: join(tmpDir, 'at-limit.txt'), content }] },
+      });
+      assert.notStrictEqual(result.isError, true, JSON.stringify(result.content));
+    } finally {
+      await client.close();
+    }
   });
 });
