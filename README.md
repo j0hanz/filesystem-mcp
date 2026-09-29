@@ -422,7 +422,7 @@ filesystem-mcp /path/to/project1 /path/to/project2
 | `--root-boundary <path>`  | —       | Require all allowed roots to fall under this path (env: `FS_ROOT_BOUNDARY`)                                                                                               |
 | `--max-file-size <bytes>` | —       | Maximum file size for reads and the combined content of one create call, in bytes (env: `FS_MAX_FILE_SIZE`). Each transport accepts one message of up to 3 × this + 1 MiB |
 | `--log-level <level>`     | `info`  | RFC 5424 log level, `debug` through `emergency` (env: `FS_LOG_LEVEL`)                                                                                                     |
-| `--print-config`          | `false` | Print the active configuration as JSON and exit                                                                                                                           |
+| `--print-config`          | `false` | Print the active configuration as JSON (roots, tools, limits, policy, supported protocol revisions, SDK pins) and exit                                                    |
 
 `--deny` and `--allow` patterns support `*` (any run within a segment),
 `**` (any run of segments), `?`, `[...]` classes, and `{a,b}` alternation.

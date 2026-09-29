@@ -37,3 +37,11 @@ export interface CliOverrides {
 
 /** Written once by cli.ts; an absent key means "not set on the command line". */
 export const cli: CliOverrides = {};
+
+/**
+ * The per-request-envelope protocol revision this server serves next to the
+ * 2025 `initialize` handshake. The SDK keeps its own copy internal
+ * (`FIRST_MODERN_PROTOCOL_VERSION`), so this is asserted against SDK
+ * behaviour in `cli.test.ts` rather than imported.
+ */
+export const MODERN_PROTOCOL_REVISION = '2026-07-28';

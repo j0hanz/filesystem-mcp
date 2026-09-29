@@ -1,9 +1,12 @@
+import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/server';
+
 import type { Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { parseArgs as utilParseArgs } from 'node:util';
 
+import packageJson from '../package.json' with { type: 'json' };
 import { printHelpAndExit, printVersionAndExit } from './cli-help.ts';
-import { cli } from './core/config.ts';
+import { cli, MODERN_PROTOCOL_REVISION } from './core/config.ts';
 import { formatUnknownErrorMessage } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
@@ -246,6 +249,20 @@ export async function runPrintConfig(options: {
     limits: {
       maxFileSizeBytes: getMaxTextFileSize(),
       maxInboundMessageBytes: getMaxInboundMessageBytes(),
+    },
+    // What the binary negotiates with, so an era mismatch ("unsupported
+    // protocol version") can be diagnosed without attaching a client. The
+    // legacy list is the SDK's own; the modern revision has no SDK export.
+    // The pins are exact (package.json), so the manifest value is the
+    // installed one.
+    protocol: {
+      modern: MODERN_PROTOCOL_REVISION,
+      legacy: { latest: LATEST_PROTOCOL_VERSION, supported: SUPPORTED_PROTOCOL_VERSIONS },
+      sdk: {
+        server: packageJson.dependencies['@modelcontextprotocol/server'],
+        node: packageJson.dependencies['@modelcontextprotocol/node'],
+        express: packageJson.dependencies['@modelcontextprotocol/express'],
+      },
     },
     // Everything that can produce ACCESS_DENIED, read through the same
     // sources the guard and the matcher use (flag beats env).

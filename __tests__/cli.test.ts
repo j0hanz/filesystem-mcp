@@ -1,10 +1,20 @@
+import {
+  createMcpHandler,
+  LATEST_PROTOCOL_VERSION,
+  PROTOCOL_VERSION_META_KEY,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from '@modelcontextprotocol/server';
+
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
+import { createServer } from '../src/server.ts';
 import { cleanupTestRoot, createTestRoot } from './helpers.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -82,6 +92,81 @@ describe('CLI (real subprocess)', () => {
     };
     assert.strictEqual(config.policy.allowSensitive, true);
     assert.deepStrictEqual(config.policy.builtinDeny, []);
+  });
+
+  it('--print-config reports both protocol eras and the pinned SDK versions', async () => {
+    const { code, stdout, stderr } = await runCli(['--print-config', root]);
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as {
+      protocol: {
+        modern: string;
+        legacy: { latest: string; supported: string[] };
+        sdk: { server: string; node: string; express: string };
+      };
+    };
+    assert.strictEqual(config.protocol.modern, MODERN_PROTOCOL_REVISION);
+    assert.strictEqual(config.protocol.legacy.latest, LATEST_PROTOCOL_VERSION);
+    assert.deepStrictEqual(config.protocol.legacy.supported, SUPPORTED_PROTOCOL_VERSIONS);
+    const pinned = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf-8')) as {
+      dependencies: Record<string, string>;
+    };
+    assert.strictEqual(
+      config.protocol.sdk.server,
+      pinned.dependencies['@modelcontextprotocol/server'],
+    );
+    assert.match(config.protocol.sdk.server, /^\d+\.\d+\.\d+$/, 'the pin must be exact');
+  });
+
+  it('MODERN_PROTOCOL_REVISION is the revision the SDK actually serves', async () => {
+    // The SDK exports no constant for it, so pin the literal to behaviour: a
+    // server/discover probe stamped with it must be answered with a result.
+    const tmp = await createTestRoot();
+    const handler = createMcpHandler(
+      async ({ era }) => (await createServer({ cliAllowedDirs: [tmp] }, { era })).mcp,
+      { legacy: 'reject' },
+    );
+    try {
+      const res = await handler.fetch(
+        new Request('http://test.local/mcp', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            // The modern binding's standard headers; the entry refuses a
+            // 2026-07-28 request without them (no Mcp-Name for discover).
+            'mcp-protocol-version': MODERN_PROTOCOL_REVISION,
+            'mcp-method': 'server/discover',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'server/discover',
+            params: {
+              _meta: {
+                [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_REVISION,
+                'io.modelcontextprotocol/clientCapabilities': {},
+                'io.modelcontextprotocol/clientInfo': { name: 'cli-test', version: '1.0.0' },
+              },
+            },
+          }),
+        }),
+      );
+      const text = await res.text(); // read once; a Response body is single-use
+      assert.strictEqual(res.status, 200, text);
+      const json = res.headers.get('content-type')?.includes('text/event-stream')
+        ? (
+            text
+              .split('\n')
+              .filter((l) => l.startsWith('data:'))
+              .at(-1) ?? ''
+          ).slice(5)
+        : text;
+      const body = JSON.parse(json) as { result?: unknown; error?: unknown };
+      assert.ok(body.result, JSON.stringify(body));
+    } finally {
+      await handler.close();
+      await cleanupTestRoot(tmp);
+    }
   });
 
   // Plugin hosts pass `${NAME}` args through unexpanded when they don't know
