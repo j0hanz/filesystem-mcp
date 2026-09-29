@@ -9,18 +9,11 @@ import * as z from 'zod/v4';
 import { processInParallel } from '../core/concurrency.ts';
 import { ErrorCode } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
-import { detectMimeFromContent, detectMimeType } from '../core/mime.ts';
+import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
 import { readFileWithStats } from '../core/read.ts';
 import {
-  ContinuationSchema,
   defaultFalseBoolean,
-  FileKind,
-  NonNegInt,
-  OperationSummarySchema,
-  perPathEnvelope,
-  PositiveInt,
-  Sha256Hex,
   singleOrBatchAccessPaths,
   singleOrBatchPathsInput,
   validateReadRange,
@@ -32,7 +25,7 @@ import {
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
-import type { PerPathResult } from './batch.ts';
+import type { BatchResult, PerPathResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -84,46 +77,27 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
     dependentRequired: { endLine: ['startLine'] },
   });
 
-// File bytes are NOT here: text rides the text content block, image/audio ride
-// a media block. This schema is the metadata a caller cannot recover from
-// those blocks. `readOnePath` carries the bytes internally via
-// `PerPathReadValue` and `run` drops them before the structured half goes out.
-const ReadPerPathValueSchema = z.strictObject({
-  mimeType: z.string().optional().describe('Detected MIME type (e.g. text/typescript)'),
-  kind: FileKind.optional().describe('Broad file kind: text, binary, image, audio, or pdf'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'Resource URI for externalized content (present when file is stored in resource store)',
-    ),
-  continuation: ContinuationSchema.optional().describe(
-    'Next-read arguments; present when content was truncated due to size limits',
-  ),
-  totalLines: NonNegInt.optional().describe('Total line count in the full file'),
-  linesRead: NonNegInt.optional().describe('Number of lines returned in this response'),
-  hasMoreLines: z
-    .boolean()
-    .optional()
-    .describe('True when additional lines remain beyond what was returned'),
-  head: PositiveInt.optional().describe('Head lines requested'),
-  tail: PositiveInt.optional().describe('Tail lines requested'),
-  startLine: PositiveInt.optional().describe('Start line'),
-  endLine: PositiveInt.optional().describe('End line'),
-  contentHash: Sha256Hex.optional().describe(
-    'SHA-256 hex digest of the returned content (present when includeHash=true)',
-  ),
-});
+interface ReadContinuation {
+  tool: 'read';
+  args: { path: string; startLine: number; endLine: number };
+  hint: string;
+}
 
-const ReadPerPathSchema = perPathEnvelope(
-  ReadPerPathValueSchema,
-  'Read result; present on success',
-);
-
-const ReadFileOutputSchema = z.strictObject({
-  results: z.array(ReadPerPathSchema).describe('Per-path results ordered to match the input paths'),
-  summary: OperationSummarySchema,
-});
+// File bytes ride content blocks, never the structured metadata.
+interface ReadPerPathValue {
+  mimeType?: string;
+  kind?: FileKind;
+  resourceUri?: string;
+  continuation?: ReadContinuation;
+  totalLines?: number;
+  linesRead?: number;
+  hasMoreLines?: boolean;
+  head?: number;
+  tail?: number;
+  startLine?: number;
+  endLine?: number;
+  contentHash?: string;
+}
 
 type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
 
@@ -151,7 +125,7 @@ function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
 function buildReadContinuation(
   result: ReadFileResult,
   requestedPath: string,
-): z.infer<typeof ContinuationSchema> | undefined {
+): ReadContinuation | undefined {
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
   const nextStart = (result.startLine ?? 1) + linesRead;
@@ -175,9 +149,9 @@ function buildReadContinuation(
  * The published metadata plus the bytes this call read. `content` and
  * `mediaData` exist only between `readOnePath` and the content blocks `run`
  * builds from them — they are stripped before the structured half is returned,
- * which is why they are not in `ReadPerPathValueSchema`.
+ * which is why they are not in `ReadPerPathValue`.
  */
-type PerPathReadValue = z.infer<typeof ReadPerPathValueSchema> & {
+type PerPathReadValue = ReadPerPathValue & {
   content?: string;
   mediaData?: string;
 };
@@ -268,7 +242,7 @@ async function collectFileBudget(
 
 function buildPerPathReadValue(
   result: ReadFileResult,
-  options: { includeHash?: boolean; hasResourceStore?: boolean; requestedPath: string },
+  options: { includeHash?: boolean; requestedPath: string },
 ): PerPathReadValue {
   const mimeInfo = detectMimeFromContent(result.path, result.content);
   const continuation =
@@ -278,7 +252,6 @@ function buildPerPathReadValue(
   const contentHash = options.includeHash
     ? createHash('sha256').update(result.content, 'utf-8').digest('hex')
     : undefined;
-  const resourceUri = options.hasResourceStore ? buildFileResourceUri(result.path) : undefined;
 
   return {
     content: result.content,
@@ -293,7 +266,7 @@ function buildPerPathReadValue(
     ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
-    ...(resourceUri !== undefined ? { resourceUri } : {}),
+    resourceUri: buildFileResourceUri(result.path),
   };
 }
 
@@ -358,7 +331,6 @@ async function readOnePath(
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
-    hasResourceStore: ctx.resourceStore !== undefined,
     // The continuation is args the caller pastes back, so it echoes the path
     // they wrote. `result.path` is the resolved absolute one — on Windows that
     // is a backslash-doubling JSON string that also spells out the server root.
@@ -366,18 +338,14 @@ async function readOnePath(
   });
 }
 
-export const READ = defineTool({
+export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPathValue>>({
   name: 'read',
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
     'Images and audio return as media; other binary files are rejected.',
   input: ReadFileInputSchema,
-  output: ReadFileOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => {

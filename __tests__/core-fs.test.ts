@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it, mock } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
-import { buildWrittenFileMeta } from '../src/core/file-uri.ts';
+import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { countFileLines, GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
@@ -430,7 +430,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const meta = buildWrittenFileMeta({
         validPath: join(tmpDir, 'huge.txt'),
         content: huge,
-        resourceStore: undefined,
       });
       assert.strictEqual(meta.size, huge.length);
       assert.strictEqual(meta.resourceUri, undefined);
@@ -439,7 +438,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const small = buildWrittenFileMeta({
         validPath: join(tmpDir, 'small.txt'),
         content: 'hi',
-        resourceStore: undefined,
       });
       assert.ok(small.resourceUri, 'under the cap the URI is advertised');
 
@@ -447,11 +445,35 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const dry = buildWrittenFileMeta({
         validPath: join(tmpDir, 'small.txt'),
         content: 'hi',
-        resourceStore: undefined,
         dryRun: true,
       });
       assert.strictEqual(dry.size, 2);
       assert.strictEqual(dry.resourceUri, undefined);
+    });
+
+    it('written file links preserve the size boundary, unknown size, and dry-run gates', () => {
+      const path = join(tmpDir, 'links.txt');
+      const maxSize = getMaxTextFileSize();
+      const linked = writtenFileLinks(path, 'text/plain', maxSize);
+      assert.ok(linked.resourceUri);
+      assert.deepStrictEqual(linked.resourceLink, {
+        type: 'resource_link',
+        uri: linked.resourceUri,
+        name: 'links.txt',
+        mimeType: 'text/plain',
+        size: maxSize,
+        annotations: { audience: ['user', 'assistant'] },
+      });
+      for (const size of [undefined, maxSize + 1]) {
+        assert.deepStrictEqual(writtenFileLinks(path, 'text/plain', size), {
+          resourceUri: undefined,
+          resourceLink: undefined,
+        });
+      }
+      assert.deepStrictEqual(writtenFileLinks(path, 'text/plain', 0, true), {
+        resourceUri: undefined,
+        resourceLink: undefined,
+      });
     });
   });
 

@@ -23,14 +23,9 @@ import {
   readAcceptedChoice,
 } from '../core/input-required.ts';
 import { resolveEntryType } from '../core/path-utils.ts';
-import {
-  defaultFalseBoolean,
-  OperationSummarySchema,
-  perPathEnvelope,
-  RequiredPath,
-} from '../core/schema.ts';
+import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { isTotalFailure } from './batch.ts';
+import { type BatchResult, isTotalFailure, type PerPathResult } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -48,30 +43,9 @@ const DeleteInputSchema = z.strictObject({
   ),
 });
 
-const DeletePerPathValueSchema = z.strictObject({
-  deleted: z.boolean().describe('True when the path was removed; false when the user chose Skip'),
-});
-
-const DeletePerPathSchema = perPathEnvelope(
-  DeletePerPathValueSchema,
-  'Delete outcome; present on success',
-);
-
-// One envelope for every batch tool: `read` and `stat` already answer with
-// `{ results, summary }`, so `delete` does too. The old shape switched between
-// `{ ok, path }` and `{ ok: false, failures }` depending on the outcome, which
-// left a caller parsing two schemas for one tool and never named the paths in a
-// multi-delete's text.
-const DeleteOutputSchema = z.strictObject({
-  results: z
-    .array(DeletePerPathSchema)
-    .describe('Per-path results ordered to match the input paths'),
-  summary: OperationSummarySchema,
-});
-
 type DeleteInput = z.infer<typeof DeleteInputSchema>;
-type DeleteOutput = z.infer<typeof DeleteOutputSchema>;
-type DeletePerPathResult = z.infer<typeof DeletePerPathSchema>;
+type DeleteOutput = BatchResult<{ deleted: boolean }>;
+type DeletePerPathResult = PerPathResult<{ deleted: boolean }>;
 
 // Internal types for error handling
 interface DeleteFailure {
@@ -386,25 +360,20 @@ async function handleDelete(
     );
   });
 
-  const failed = results.filter((r) => r.error !== undefined).length;
+  const failed = results.filter((r) => 'error' in r).length;
   return {
     results,
     summary: { total: results.length, succeeded: results.length - failed, failed },
   };
 }
 
-export const DELETE = defineTool({
+export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   name: 'delete',
   title: 'Delete File',
   description:
     'Permanently delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded.',
   input: DeleteInputSchema,
-  output: DeleteOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   progress: (args) => ({
     label: 'Delete',
     subject:
@@ -430,14 +399,14 @@ export const DELETE = defineTool({
       const only = structured.results[0];
       return {
         structured,
-        text: `delete: ${only?.path ?? ''} FAILED — ${only?.error?.message ?? 'unknown error'}`,
+        text: `delete: ${only?.path ?? ''} FAILED — ${only && 'error' in only ? only.error.message : 'unknown error'}`,
         isError,
       };
     }
     const tokens = structured.results.map((r) => {
       const label = pathLabel(r.path);
-      if (r.error) return `${label} FAILED`;
-      return r.value?.deleted ? label : `${label} SKIPPED`;
+      if ('error' in r) return `${label} FAILED`;
+      return r.value.deleted ? label : `${label} SKIPPED`;
     });
     const ratio = failed > 0 ? ` (${String(total - failed)}/${String(total)} ok)` : '';
     return { structured, text: `delete: ${joinRoster(tokens)}${ratio}`, isError };

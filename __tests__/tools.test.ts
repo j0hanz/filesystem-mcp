@@ -2618,6 +2618,30 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('search_text on an explicit file ignores glob, hidden, and ignored filters', async () => {
+    const target = await writeTestFile(tmpDir, 'explicit_scope/.hidden.log', 'NEEDLE_SCOPE\n');
+    await writeTestFile(tmpDir, 'explicit_scope/.gitignore', '*.log\n');
+    await writeTestFile(tmpDir, 'explicit_scope/nested/.hidden.log', 'NEEDLE_SCOPE\n');
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: {
+        path: target,
+        searchPattern: 'NEEDLE_SCOPE',
+        pattern: '**/*.ts',
+        includeHidden: false,
+        includeIgnored: false,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(firstTextBlock(result).text, '.hidden.log:1: NEEDLE_SCOPE');
+    const matches = (result._meta as { matches: { file: string; line: number }[] }).matches;
+    assert.deepStrictEqual(
+      matches.map(({ file, line }) => ({ file, line })),
+      [{ file: '.hidden.log', line: 1 }],
+    );
+  });
+
   it('find_files accepts a literal file name containing .. inside a segment', async () => {
     // `[...slug]` stays a character class (as in any glob), so the accepted
     // pattern that is also *useful* is a literal name with `..` inside it.
@@ -3197,6 +3221,23 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const conflictText = firstTextBlock(conflict).text;
     assert.ok(conflictText);
     assert.match(conflictText, /head|tail/i);
+  });
+
+  it('every tool publishes exactly its read-only or mutating annotations', async () => {
+    const { tools } = await harness.client.listTools();
+    const mutating = new Set(['create', 'delete', 'edit', 'move', 'patch', 'replace_text']);
+    for (const tool of tools) {
+      const readOnlyHint = !mutating.has(tool.name);
+      assert.deepStrictEqual(
+        tool.annotations,
+        {
+          readOnlyHint,
+          openWorldHint: false,
+          ...(readOnlyHint ? {} : { destructiveHint: true }),
+        },
+        tool.name,
+      );
+    }
   });
 
   // The session-start cost a client pays before its first tool call. Lower this

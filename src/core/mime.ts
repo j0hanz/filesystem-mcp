@@ -3,18 +3,17 @@ import { extname } from 'node:path';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export const MIME_KINDS = ['text', 'binary', 'image', 'audio', 'pdf'] as const;
-type MimeKind = (typeof MIME_KINDS)[number];
+export type FileKind = 'text' | 'binary' | 'image' | 'audio' | 'pdf';
 
 export interface MimeInfo {
   mimeType: string;
-  kind: MimeKind;
+  kind: FileKind;
 }
 
 // ─── Extension Map ──────────────────────────────────────────────────────────
 // Maps file extensions to MIME types (80+ common extensions)
 
-const EXT_MAP: Record<string, { mimeType: string; kind: MimeKind }> = {
+const EXT_MAP: Record<string, MimeInfo> = {
   // Text: Web & Markup
   html: { mimeType: 'text/html', kind: 'text' },
   htm: { mimeType: 'text/html', kind: 'text' },

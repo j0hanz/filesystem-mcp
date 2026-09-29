@@ -4,15 +4,9 @@ import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
 import { ErrorCode, FsError } from '../core/errors.ts';
-import { buildWrittenFileMeta } from '../core/file-uri.ts';
+import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
-import {
-  defaultFalseBoolean,
-  FileKind,
-  IsoDateTime,
-  NonNegInt,
-  RequiredPath,
-} from '../core/schema.ts';
+import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
 const PatchInputSchema = z.strictObject({
@@ -24,23 +18,14 @@ const PatchInputSchema = z.strictObject({
   dryRun: defaultFalseBoolean('Preview the result without writing (default: false)'),
 });
 
-const PatchOutputSchema = z.strictObject({
-  path: z.string().describe('Resolved absolute path of the patched file'),
-  size: NonNegInt.describe('File size in bytes after patching'),
-  lineCount: NonNegInt.describe('Number of lines in the file after patching'),
-  mimeType: z.string().describe('Detected MIME type of the file'),
-  kind: FileKind.describe('Broad file kind: text, binary, image, audio, or pdf'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'Resource URI pointing to the patched file content; omitted on dryRun or when the resulting file exceeds the text-size cap, which the store would reject',
-    ),
-  modified: IsoDateTime.describe('Last modification timestamp after patching (ISO 8601 UTC)'),
-  linesAdded: NonNegInt.describe('Number of lines added by the patch'),
-  linesRemoved: NonNegInt.describe('Number of lines removed by the patch'),
-  diff: z.string().optional().describe('Unified diff preview (present only in dryRun mode)'),
-});
+type PatchOutput = Omit<WrittenFileMeta, 'resourceUri' | 'resourceLink'> & {
+  path: string;
+  resourceUri?: string;
+  modified: string;
+  linesAdded: number;
+  linesRemoved: number;
+  diff?: string;
+};
 
 // Hunk lines are the raw unified lines with their +/-/ leading prefix (no
 // +++/--- file headers inside hunks), so the first char is a reliable marker.
@@ -59,7 +44,7 @@ function countAddedRemoved(parsedPatch: ReturnType<typeof parsePatch>[number]): 
   return { linesAdded, linesRemoved };
 }
 
-export const PATCH = defineTool({
+export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
   name: 'patch',
   title: 'Patch',
   description:
@@ -67,12 +52,7 @@ export const PATCH = defineTool({
     'Nothing is written unless every hunk applies in file order with exactly matching context; ' +
     'hunks are found by their context, so start line numbers may be off.',
   input: PatchInputSchema,
-  output: PatchOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   progress: (args) => ({
     label: args.dryRun ? 'Patch [dry run]' : 'Patch',
     subject: basename(args.path),
@@ -160,7 +140,6 @@ export const PATCH = defineTool({
     const meta = buildWrittenFileMeta({
       validPath,
       content: patched,
-      resourceStore: ctx.resourceStore,
       dryRun: args.dryRun,
     });
     return {

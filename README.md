@@ -311,6 +311,11 @@ Runtime composition flows from `src/index.ts` to `src/transport/` (stdio or HTTP
 `src/server.ts`, the registrars, and finally `src/core/`. Each registrar owns
 the narrow dependency contract it consumes.
 
+Tools use Zod for runtime input validation and named TypeScript types for results;
+output schemas are neither validated nor published. `defineTool` derives wire
+annotations from each tool's required `readOnlyHint`. Every server supplies a
+result store, while file-resource links point directly to guarded reads from disk.
+
 | Path                  | Purpose                                                                         |
 | :-------------------- | :------------------------------------------------------------------------------ |
 | `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots                        |

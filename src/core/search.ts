@@ -22,7 +22,7 @@ interface SearchResult {
   /** 0-indexed column of the first occurrence on the line. */
   column: number;
   content: string;
-  matchCount?: number;
+  matchCount: number;
   /** Up to `context` lines either side of the match; absent when context is 0. */
   before?: string[];
   after?: string[];
@@ -337,7 +337,7 @@ export async function searchContent(
     const ceiling = pathGuard.allowedRootContaining(directory);
 
     const entries = options.explicitFile
-      ? singleEntry(options.explicitFile)
+      ? [{ path: options.explicitFile }]
       : globEntries({
           cwd: directory,
           pattern: options.filePattern ?? '**/*',
@@ -469,15 +469,6 @@ async function* guardedEntries(
     }
     yield entry;
   }
-}
-
-/** One named file as a walk result; `guardedEntries` re-validates it like any other. */
-// eslint-disable-next-line @typescript-eslint/require-await -- nothing to await: the async shape is what guardedEntries consumes.
-async function* singleEntry(path: string): AsyncGenerator<GlobEntry> {
-  yield {
-    path,
-    dirent: { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
-  };
 }
 
 export async function searchFiles(

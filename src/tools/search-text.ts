@@ -3,7 +3,6 @@ import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { SearchStoppedReasonSchema } from '../core/concurrency.ts';
 import { paginate } from '../core/cursor.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
@@ -15,10 +14,7 @@ import {
   IncludeIgnored,
   isBlank,
   MaxDepth,
-  NextCursorSchema,
-  NonNegInt,
   OptionalPath,
-  PositiveInt,
   SafeGlobPattern,
 } from '../core/schema.ts';
 import { searchContent } from '../core/search.ts';
@@ -33,9 +29,8 @@ import { defineTool, type ToolCtx } from './define.ts';
 
 // Type Definitions
 type SearchInput = z.infer<typeof GrepInputSchema>;
-type SearchOutput = z.infer<typeof GrepOutputSchema>;
-type SearchMatchPayload = NonNullable<SearchOutput['matches']>[number];
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
+type SearchMatchPayload = SearchResultValue['matches'][number];
 /** The engine's own summary is the page metadata; nothing is copied out of it. */
 type SearchContentPageMetadata = SearchResultValue['summary'];
 
@@ -80,55 +75,19 @@ const GrepInputSchema = z.strictObject({
   cursor: CursorSchema,
 });
 
-const GrepOutputSchema = z.strictObject({
-  matches: z
-    .array(
-      z.strictObject({
-        file: z.string().describe('File path relative to the search root'),
-        line: PositiveInt.describe('1-indexed line number of the match'),
-        column: NonNegInt.optional().describe('0-indexed column offset of the match start'),
-        content: z.string().describe('Full text of the matching line'),
-        matchCount: NonNegInt.optional().describe('Number of pattern occurrences on this line'),
-        before: z
-          .array(z.string())
-          .optional()
-          .describe('Lines immediately before the match; present when context > 0'),
-        after: z
-          .array(z.string())
-          .optional()
-          .describe('Lines immediately after the match; present when context > 0'),
-      }),
-    )
-    .describe('Flat list of matches sorted by file path then line number'),
-  totalMatches: NonNegInt.optional().describe(
-    "Total matching lines, one per entry in matches (not per occurrence); see that entry's matchCount for occurrences on a line.",
-  ),
-  filesMatched: NonNegInt.optional().describe('Number of files containing at least one match'),
-  filesScanned: NonNegInt.optional().describe('Total number of files examined'),
-  skippedInaccessible: NonNegInt.optional().describe(
-    'Files skipped unread due to permission or access errors',
-  ),
-  skippedTooLarge: NonNegInt.optional().describe(
-    'Files skipped unread because they exceed the text-file size limit; raise the limit or narrow pattern if a match was expected in one',
-  ),
-  skippedBinary: NonNegInt.optional().describe('Files skipped because they are binary'),
-  truncated: z
-    .boolean()
-    .optional()
-    .describe(
-      'True when the search engine cut the match list — the hard result cap or the time limit. Paging is not truncation: a set that spans pages has nextCursor instead.',
-    ),
-  stoppedReason: SearchStoppedReasonSchema.describe(
-    'Why the search ended early: maxResults = result cap reached, timeout = time limit hit or the request was cancelled. Absent when the scan ran to completion.',
-  ),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'URI to the full match list in the resource store; first page only, whenever the response is incomplete — more pages follow, or the engine cut the search',
-    ),
-  nextCursor: NextCursorSchema,
-});
+interface SearchOutput {
+  matches: SearchMatchPayload[];
+  totalMatches?: number;
+  filesMatched?: number;
+  filesScanned?: number;
+  skippedInaccessible?: number;
+  skippedTooLarge?: number;
+  skippedBinary?: number;
+  truncated?: boolean;
+  stoppedReason?: 'maxResults' | 'timeout';
+  resourceUri?: string;
+  nextCursor?: string;
+}
 
 function matchRow(m: SearchMatchPayload): string {
   return `${m.file}:${String(m.line)}: ${m.content}`;
@@ -226,19 +185,12 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
   return payloads;
 }
 
-/**
- * `path` is documented as "file to search, or directory to search under", but
- * the scan itself only walks directories. A file path is therefore rewritten
- * into the scan it means: its parent as the base, its own name as the glob.
- * Naming a file is an explicit request for that file, so hidden/ignored
- * filtering is lifted for it — otherwise `search_text` on a path the caller can
- * see returned nothing.
- */
+/** Explicit files bypass glob filtering; their parent anchors the relative result paths. */
 async function resolveSearchScope(
-  args: SearchInput,
+  path: string | undefined,
   ctx: ToolCtx,
-): Promise<{ basePath: string; args: SearchInput; explicitFile?: string }> {
-  const requested = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+): Promise<{ basePath: string; explicitFile?: string }> {
+  const requested = ctx.fs.pathGuard.resolvePathOrRoot(path);
   // One resolution, one stat: validateExistingDirectory would redo both.
   const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
   const stats = await stat(resolved);
@@ -246,7 +198,7 @@ async function resolveSearchScope(
     if (!stats.isDirectory()) {
       throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
     }
-    return { basePath: resolved, args };
+    return { basePath: resolved };
   }
   return {
     basePath: dirname(resolved),
@@ -254,7 +206,6 @@ async function resolveSearchScope(
     // character class. searchContent scans exactly this file instead, and
     // hidden/ignored filtering is moot for a file the caller named.
     explicitFile: resolved,
-    args: { ...args, includeHidden: true, includeIgnored: true },
   };
 }
 
@@ -280,29 +231,27 @@ async function handleSearchContent(
     maxDepth: args.maxDepth,
     context: args.context,
   });
-  const { resourceStore } = ctx;
-
   const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>({
     store: ctx.pageStore,
     queryKey,
     cursor: args.cursor,
     pageSize: args.maxResults,
     produce: async () => {
-      const { basePath, args: scoped, explicitFile } = await resolveSearchScope(args, ctx);
+      const { basePath, explicitFile } = await resolveSearchScope(args.path, ctx);
 
       const result = await searchContent(
         basePath,
-        scoped.searchPattern,
+        args.searchPattern,
         {
-          includeHidden: scoped.includeHidden,
-          filePattern: scoped.pattern ?? '**/*',
-          caseSensitive: scoped.caseSensitive,
-          isRegex: scoped.isRegex,
+          includeHidden: args.includeHidden,
+          filePattern: args.pattern ?? '**/*',
+          caseSensitive: args.caseSensitive,
+          isRegex: args.isRegex,
           maxResults: MAX_SEARCH_RESULTS,
-          skipIgnored: !scoped.includeIgnored,
-          context: scoped.context,
+          skipIgnored: !args.includeIgnored,
+          context: args.context,
           ...(explicitFile !== undefined ? { explicitFile } : {}),
-          ...(scoped.maxDepth !== undefined ? { maxDepth: scoped.maxDepth } : {}),
+          ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
           signal: ctx.signal,
         },
         ctx.fs.pathGuard,
@@ -314,14 +263,10 @@ async function handleSearchContent(
         truncated: result.summary.truncated,
       };
     },
-    externalize: resourceStore
-      ? (matches, metadata) =>
-          putJsonResource(
-            resourceStore,
-            `'${args.searchPattern}' matches`,
-            searchContentOutput(matches, metadata, undefined, undefined),
-          )
-      : undefined,
+    externalize: (matches, metadata) =>
+      putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
+        ...searchContentOutput(matches, metadata, undefined, undefined),
+      }),
   });
 
   return {
@@ -337,18 +282,14 @@ async function handleSearchContent(
   };
 }
 
-export const SEARCH_TEXT = defineTool({
+export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
   description:
     'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
     'and paths relative to the searched directory. Patterns match within one line. find_files matches file names.',
   input: GrepInputSchema,
-  output: GrepOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   progress: (args) => ({
     label: 'Search',

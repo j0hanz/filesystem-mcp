@@ -47,7 +47,7 @@ export interface ToolCtx {
   readonly traceparent?: string | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
-  readonly resourceStore: ResourceStore | undefined;
+  readonly resourceStore: ResourceStore;
   /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
   readonly log?: (level: LoggingLevel, data: unknown, logger?: string) => void;
   readonly sendNotification?: (notification: Notification) => Promise<void>;
@@ -87,7 +87,7 @@ interface ToolDeps {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
-  readonly resourceStore: ResourceStore | undefined;
+  readonly resourceStore: ResourceStore;
   readonly era?: 'legacy' | 'modern';
 }
 
@@ -103,27 +103,16 @@ interface RunResult<T> {
   readonly isError?: boolean;
 }
 
-/**
- * `ToolAnnotations` with `readOnlyHint` required and `idempotentHint` removed.
- * `readOnlyHint` is optional in the SDK, but MUTATING_TOOL_NAMES derives the
- * `--read-only` gate from it, so a tool that forgets it must be a compile error
- * rather than a silent reclassification. `idempotentHint` is omitted because
- * nothing reads it: `publishedAnnotations` derives the wire set below.
- */
-type DeclaredAnnotations = Omit<ToolAnnotations, 'idempotentHint'> & {
-  readonly readOnlyHint: boolean;
-};
-
-export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
+export interface ToolDef<I extends z.ZodType, O extends object> {
   readonly name: string;
   readonly title: string;
   readonly description: string;
   readonly input: I;
-  readonly output: O;
-  readonly annotations: DeclaredAnnotations;
+  /** Required: drives both the --read-only gate and published annotations. */
+  readonly readOnlyHint: boolean;
   readonly timeoutMs?: number;
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
-  readonly progressDone?: (args: z.infer<I>, result: z.infer<O>) => Partial<ProgressCtx>;
+  readonly progressDone?: (args: z.infer<I>, result: O) => Partial<ProgressCtx>;
   readonly defaultErrorCode?: ErrorCode;
   /**
    * The filesystem paths this tool will operate on, extracted from its parsed
@@ -134,15 +123,12 @@ export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
    * caller-supplied filesystem paths.
    */
   readonly accessPaths?: (args: z.infer<I>) => readonly string[];
-  readonly run: (
-    args: z.infer<I>,
-    ctx: ToolCtx,
-  ) => Promise<RunResult<z.infer<O>> | InputRequiredResult>;
+  readonly run: (args: z.infer<I>, ctx: ToolCtx) => Promise<RunResult<O> | InputRequiredResult>;
 }
 
 export interface DefinedTool {
   readonly name: string;
-  readonly annotations: DeclaredAnnotations;
+  readonly readOnlyHint: boolean;
 
   register(deps: ToolDeps): RegisteredTool;
 }
@@ -203,25 +189,20 @@ function toToolCtx(
  * place of the content. Tools with no `text` keep `structuredContent`: the JSON
  * *is* their model-facing view.
  */
-function buildSuccessResponse<O>(result: RunResult<O>): CallToolResult {
+function buildSuccessResponse<O extends object>(result: RunResult<O>): CallToolResult {
   const hasText = result.text !== undefined;
   const text = result.text ?? JSON.stringify(result.structured);
   const content: ContentBlock[] = [{ type: 'text' as const, text }, ...(result.resources ?? [])];
   return {
     content,
-    ...(hasText
-      ? // Safe because every `ToolDef.output` is a Zod object schema, so
-        // `structured` is always a plain object. Constraining `O` to prove it
-        // is not worth the cost: the bound has to thread through five generic
-        // sites and still loses to `exactOptionalPropertyTypes` variance on
-        // `RunResult`'s optional fields.
-        { _meta: result.structured as Record<string, unknown> }
+    ...(hasText // Result interfaces have named fields; the SDK metadata requires an index signature.
+      ? { _meta: result.structured as Record<string, unknown> }
       : { structuredContent: result.structured }),
     ...(result.isError ? { isError: true } : {}),
   };
 }
 
-class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
+class ToolExecutor<I extends z.ZodType, O extends object> {
   readonly signal: AbortSignal;
   private readonly def: ToolDef<I, O>;
   private readonly parsedArgs: z.infer<I>;
@@ -278,7 +259,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
     this.#progressSession.set({ ...p, message: plainMessage('tick', tickCtx) });
   }
 
-  private async completeProgress(result: z.infer<O>): Promise<void> {
+  private async completeProgress(result: O): Promise<void> {
     const doneCtx: ProgressCtx = this.def.progressDone
       ? { ...this.#progressCtx, ...this.def.progressDone(this.parsedArgs, result) }
       : this.#progressCtx;
@@ -396,23 +377,15 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   }
 }
 
-export function defineTool<I extends z.ZodType, O extends z.ZodType>(
-  def: ToolDef<I, O>,
-): DefinedTool {
+export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I, O>): DefinedTool {
   // Nothing here depends on `deps`, so it is built once per tool definition
   // rather than once per `register` — the HTTP leg registers every tool afresh
   // on each request.
-  // Published annotations are derived, not passed through. `readOnlyHint` is
-  // load-bearing (MUTATING_TOOL_NAMES derives the --read-only gate from it) and
-  // `openWorldHint: false` is a real claim for a filesystem server. The other
-  // two describe behavior a read-only tool cannot have, and restate the default
-  // for a mutating one — 29 tokens per tool for nothing a client acts on.
+  // Filesystem tools are closed-world; only mutating tools are destructive.
   const publishedAnnotations: ToolAnnotations = {
-    readOnlyHint: def.annotations.readOnlyHint,
-    openWorldHint: def.annotations.openWorldHint ?? false,
-    ...(def.annotations.readOnlyHint
-      ? {}
-      : { destructiveHint: def.annotations.destructiveHint ?? true }),
+    readOnlyHint: def.readOnlyHint,
+    openWorldHint: false,
+    ...(def.readOnlyHint ? {} : { destructiveHint: true }),
   };
 
   const toolDefShape = {
@@ -427,15 +400,13 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
     // own text ships its metadata under `_meta` instead — see
     // `buildSuccessResponse`. The two cannot both hold, and the text is what
     // the model reads. `TOOL-SURFACE-001` pins this for the whole surface.
-    //
-    // `def.output` stays: it types `RunResult<z.infer<O>>`, which is what makes
-    // a tool returning the wrong shape a compile error.
+    // Result shapes are checked by TypeScript, not unused runtime schemas.
     annotations: publishedAnnotations,
   };
 
   return {
     name: def.name,
-    annotations: def.annotations,
+    readOnlyHint: def.readOnlyHint,
 
     register(deps: ToolDeps): RegisteredTool {
       return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) =>

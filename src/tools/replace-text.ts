@@ -6,7 +6,7 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import type { StoppedReason } from '../core/concurrency.ts';
-import { processEntriesConcurrently, StoppedReasonSchema } from '../core/concurrency.ts';
+import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
@@ -21,10 +21,7 @@ import {
   IncludeIgnored,
   isBlank,
   MaxDepth,
-  NonNegInt,
-  OperationSummarySchema,
   OptionalPath,
-  perPathEnvelope,
   SafeGlobPattern,
 } from '../core/schema.ts';
 import type { Regex } from '../core/search.ts';
@@ -37,7 +34,7 @@ import {
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
 } from '../core/util.ts';
-import { isTotalFailure } from './batch.ts';
+import { type BatchResult, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const SearchAndReplaceInputSchema = z.strictObject({
@@ -91,44 +88,15 @@ const SearchAndReplaceInputSchema = z.strictObject({
   maxDepth: MaxDepth,
 });
 
-const ReplacePerPathSchema = perPathEnvelope(
-  z.strictObject({ matches: NonNegInt.describe('Replacements applied in this file') }),
-  'Replacement outcome; present on success',
-);
-
-// The same `{ results, summary }` envelope `read`, `stat`, and `delete` use, so
-// a caller learns one shape for every tool that spans many paths. The former
-// `filesModified` / `failedFiles` counters are `summary.succeeded` / `.failed`,
-// and the old `primaryFile` block is gone — the resource_link content block
-// already points at the first modified file.
-const SearchAndReplaceOutputSchema = z.strictObject({
-  results: z
-    .array(ReplacePerPathSchema)
-    .describe('Per-file results: modified files, then any that could not be processed'),
-  summary: OperationSummarySchema,
-  totalMatches: NonNegInt.describe('Total number of replacements made across all files'),
-  filesScanned: NonNegInt.describe('Total number of files examined'),
-  skippedBinary: NonNegInt.optional().describe(
-    'Matching files left untouched because they are binary or not valid UTF-8 text',
-  ),
-  resultsTruncated: z
-    .boolean()
-    .optional()
-    .describe(
-      'True when the results list holds fewer entries than summary.total: the changed-file or failed-file cap was hit. Trust summary over results.length.',
-    ),
-  diff: z
-    .string()
-    .optional()
-    .describe('Unified diff of all changes (present when returnDiff=true or dryRun=true)'),
-  diffTruncated: z
-    .boolean()
-    .optional()
-    .describe('True when the diff was cut due to the size limit'),
-  stoppedReason: StoppedReasonSchema.describe(
-    'Why enumeration stopped early: maxResults = match cap reached, maxFiles = file cap reached, timeout = time limit hit or cancelled. Absent when every matching file was enumerated. Marks the sweep incomplete, not the writes; files already dispatched still complete.',
-  ),
-});
+type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
+  totalMatches: number;
+  filesScanned: number;
+  skippedBinary?: number;
+  resultsTruncated?: boolean;
+  diff?: string;
+  diffTruncated?: boolean;
+  stoppedReason?: StoppedReason;
+};
 
 const MAX_FAILURES = 20;
 const REPLACE_CONCURRENCY = Math.min(PARALLEL_CONCURRENCY, 8);
@@ -138,7 +106,7 @@ const DIFF_APPEND_BUFFER = 1024;
 
 interface Failure {
   path: string;
-  error: NonNullable<z.infer<typeof ReplacePerPathSchema>['error']>;
+  error: Problem;
 }
 
 function recordFailure(failures: Failure[], failure: Failure): void {
@@ -280,7 +248,6 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
 }
 
 type SearchAndReplaceArgs = z.infer<typeof SearchAndReplaceInputSchema>;
-type SearchAndReplaceOutput = z.infer<typeof SearchAndReplaceOutputSchema>;
 
 interface ReplaceContext {
   options: { dryRun: boolean; returnDiff: boolean };
@@ -591,14 +558,13 @@ async function handleSearchAndReplace(
     ? buildWrittenFileMeta({
         validPath: summary.primary.path,
         content: summary.primary.content,
-        resourceStore: ctx.resourceStore,
         dryRun: args.dryRun,
       }).resourceLink
     : undefined;
   return link ? { structured, link } : { structured };
 }
 
-export const REPLACE_TEXT = defineTool({
+export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, SearchAndReplaceOutput>({
   name: 'replace_text',
   title: 'Search and Replace',
   description:
@@ -606,12 +572,7 @@ export const REPLACE_TEXT = defineTool({
     'under a directory, optionally filtered by glob. The pattern runs over the whole file: it can span lines, ' +
     'and ^ and $ anchor to file start and end. edit replaces one unique exact match.',
   input: SearchAndReplaceInputSchema,
-  output: SearchAndReplaceOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
@@ -646,8 +607,8 @@ export const REPLACE_TEXT = defineTool({
       );
     }
     // A failure's reason lives in `results`, which ships under `_meta`.
-    for (const r of structured.results.filter((x) => x.error).slice(0, 3)) {
-      if (r.error) lines.push(`// ${basename(r.path)}: ${r.error.code} ${r.error.message}`);
+    for (const r of structured.results.filter((x) => 'error' in x).slice(0, 3)) {
+      lines.push(`// ${basename(r.path)}: ${r.error.code} ${r.error.message}`);
     }
     if (structured.diffTruncated) {
       lines.push(

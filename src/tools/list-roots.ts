@@ -5,26 +5,19 @@ import { defineTool } from './define.ts';
 
 const RootsInputSchema = z.strictObject({});
 
-const RootsOutputSchema = z.strictObject({
-  roots: z.array(z.string()).describe('Absolute paths of the allowed workspace root directories'),
-  hint: z
-    .string()
-    .optional()
-    .describe('How to configure roots; present only when there are none to list'),
-});
+interface RootsOutput {
+  roots: string[];
+  hint?: string;
+}
 
-export const LIST_ROOTS = defineTool({
+export const LIST_ROOTS = defineTool<typeof RootsInputSchema, RootsOutput>({
   name: 'list_roots',
   title: 'Workspace Roots',
   description:
     'List the directories this server can access, as absolute paths, including any the user granted during this session. ' +
     'Other tools can ask the user to grant access to a path outside them.',
   input: RootsInputSchema,
-  output: RootsOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   run: (_args, ctx) => {
     const dirs = ctx.fs.pathGuard.getRoots();
     // No `text` on purpose. A newline-joined path list and the JSON say the

@@ -11,18 +11,13 @@ import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
-  FileKind,
   isBlank,
-  IsoDateTime,
-  NonNegInt,
-  OperationSummarySchema,
-  perPathEnvelope,
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import { escapeRegExp } from '../core/util.ts';
-import { isTotalFailure, runOverPaths } from './batch.ts';
+import { type BatchResult, isTotalFailure, type PerPathResult, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z
@@ -131,39 +126,16 @@ const EditFileInputSchema = z
   // runtime — the model had no way to see that coming.
   .meta({ oneOf: [{ required: ['path', 'edits'] }, { required: ['files'] }] });
 
-const PerFileResultSchema = z.strictObject({
-  path: z.string().describe('Resolved absolute path of the edited file'),
-  size: NonNegInt.describe('File size in bytes after edits'),
-  lineCount: NonNegInt.describe('Number of lines in the file after edits'),
-  mimeType: z.string().describe('Detected MIME type of the file'),
-  kind: FileKind.describe('Broad file kind: text, binary, image, audio, or pdf'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'Resource URI pointing to the updated file content; omitted on dryRun or when the resulting file exceeds the text-size cap, which the store would reject',
-    ),
-  modified: IsoDateTime.describe('Last modification timestamp after edits (ISO 8601 UTC)'),
-  appliedEdits: NonNegInt.describe('Number of edits successfully applied'),
-  linesAdded: NonNegInt.optional().describe('Net lines added by all applied edits'),
-  linesRemoved: NonNegInt.optional().describe('Net lines removed by all applied edits'),
-  diff: z.string().optional().describe('Unified diff of all changes (present only in dryRun mode)'),
-  unmatchedEdits: z
-    .array(z.string())
-    .optional()
-    .describe('oldText values that did not match any content in the file'),
-});
-
-const EditPerPathSchema = perPathEnvelope(PerFileResultSchema, 'Edit result; present on success');
-
-const EditFileOutputSchema = z.strictObject({
-  results: z
-    .array(EditPerPathSchema)
-    .describe('Per-path edit results ordered to match the input paths'),
-  summary: OperationSummarySchema,
-});
-
-type EditFileValue = z.infer<typeof PerFileResultSchema>;
+type EditFileValue = Omit<WrittenFileMeta, 'resourceUri' | 'resourceLink'> & {
+  path: string;
+  resourceUri?: string;
+  modified: string;
+  appliedEdits: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+  diff?: string;
+  unmatchedEdits?: string[];
+};
 
 interface TextRange {
   startIndex: number;
@@ -450,7 +422,6 @@ async function handleEditFile(
   const meta = buildWrittenFileMeta({
     validPath,
     content: editResult.content,
-    resourceStore: ctx.resourceStore,
     dryRun: options.dryRun,
   });
   return {
@@ -460,20 +431,19 @@ async function handleEditFile(
 }
 
 function formatEditSummary(
-  results: readonly z.infer<typeof EditPerPathSchema>[],
+  results: readonly PerPathResult<EditFileValue>[],
   dryRun: boolean,
 ): string {
   const tag = dryRun ? ' [dry run]' : '';
   // Single-file failure: say why here rather than making the caller read
   // structuredContent for the one message that can apply.
   const [only] = results;
-  if (results.length === 1 && only?.error) {
+  if (results.length === 1 && only && 'error' in only) {
     return `edit: ${only.path} FAILED — ${only.error.message}${tag}`;
   }
   const tokens = results.map((r) => {
-    if (r.error) return `${basename(r.path)} FAILED`;
+    if ('error' in r) return `${basename(r.path)} FAILED`;
     const v = r.value;
-    if (!v) return `${basename(r.path)} (no result)`;
     if (v.unmatchedEdits && v.unmatchedEdits.length > 0) {
       const quoted = v.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t)));
       return `${basename(v.path)} NO MATCH ${joinRoster(quoted, ', ')}`;
@@ -484,20 +454,20 @@ function formatEditSummary(
     return `${basename(v.path)} +${String(added)} -${String(removed)}`;
   });
 
-  const failed = results.filter((r) => r.error !== undefined).length;
+  const failed = results.filter((r) => 'error' in r).length;
   const ok = results.length - failed;
   const ratio = failed > 0 ? ` (${String(ok)}/${String(results.length)} ok)` : '';
   // Only a dry run carries a diff, and it is the preview the caller asked for:
   // the structured value ships under `_meta`, which clients do not show the model.
   // A no-op edit still yields a header-only diff; it previews nothing.
   const diffs = results
-    .map((r) => r.value?.diff ?? '')
+    .map((r) => ('value' in r ? (r.value.diff ?? '') : ''))
     .filter((d) => d.includes('\n@@'))
     .join('');
   return `edit: ${tokens.join(' · ')}${ratio}${tag}${diffs ? `\n\n${diffs}` : ''}`;
 }
 
-export const EDIT = defineTool({
+export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileValue>>({
   name: 'edit',
   title: 'Edit Files',
   description:
@@ -505,12 +475,7 @@ export const EDIT = defineTool({
     'Each oldText must match exactly once, and a file is written only if all its edits match. ' +
     'replace_text replaces every occurrence across files.',
   input: EditFileInputSchema,
-  output: EditFileOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     let subject: string;
@@ -537,7 +502,7 @@ export const EDIT = defineTool({
       handleEditFile(path, edits, options, ctx),
     );
 
-    const perPathResults: z.infer<typeof EditPerPathSchema>[] = [];
+    const perPathResults: PerPathResult<EditFileValue>[] = [];
     const resourceLinks: ContentBlock[] = [];
     for (const r of batch.results) {
       if ('error' in r) {

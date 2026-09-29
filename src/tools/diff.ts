@@ -5,7 +5,7 @@ import { createTwoFilesPatch } from 'diff';
 
 import { DIFF_TIMEOUT_MS, diffStatsFromPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
-import { NonNegInt, PositiveInt, RequiredPath } from '../core/schema.ts';
+import { PositiveInt, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
 const DiffInputSchema = z.strictObject({
@@ -16,24 +16,19 @@ const DiffInputSchema = z.strictObject({
     .describe('Number of context lines surrounding each change (default: 3)'),
 });
 
-const DiffOutputSchema = z.strictObject({
-  a: z.string().describe('Resolved absolute path of the first file'),
-  b: z.string().describe('Resolved absolute path of the second file'),
-  // The unified diff itself rides the text content block.
-  linesAdded: NonNegInt.describe('Number of lines added'),
-  linesRemoved: NonNegInt.describe('Number of lines removed'),
-});
+interface DiffOutput {
+  a: string;
+  b: string;
+  linesAdded: number;
+  linesRemoved: number;
+}
 
-export const DIFF = defineTool({
+export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
   name: 'diff',
   title: 'Diff',
   description: 'Compare two text files and return a unified diff from a to b, like diff -u.',
   input: DiffInputSchema,
-  output: DiffOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   progress: (args) => ({
     label: 'Diff',
     subject: basename(args.a),

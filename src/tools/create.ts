@@ -5,7 +5,13 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from '../core/errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  type Problem,
+  rethrowIfAborted,
+} from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import { countFileLines, destExists, type Stats } from '../core/fs.ts';
 import {
@@ -14,15 +20,9 @@ import {
   pendingRoundTrip,
   readAcceptedChoice,
 } from '../core/input-required.ts';
-import { detectMimeFromContent, MIME_SAMPLE_SIZE } from '../core/mime.ts';
+import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from '../core/mime.ts';
 import { isSamePath } from '../core/path-utils.ts';
-import {
-  FileKind,
-  IsoDateTime,
-  NonNegInt,
-  PathFailureSchema,
-  RequiredPath,
-} from '../core/schema.ts';
+import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool } from './define.ts';
@@ -51,21 +51,11 @@ const CreateFileItemSchema = z.strictObject({
     ),
 });
 
-const CreateFileResultSchema = z.strictObject({
-  path: z.string().describe('Resolved absolute path of the created file'),
-  size: NonNegInt.describe('File size in bytes after writing'),
-  lineCount: NonNegInt.describe('Number of lines in the written file'),
-  mimeType: z.string().describe('Detected MIME type of the file'),
-  kind: FileKind.describe('Broad file kind: text, binary, image, audio, or pdf'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'Resource URI pointing to the created file content in the resource store; omitted when the resulting file exceeds the text-size cap, which the store would reject',
-    ),
-  created: IsoDateTime.describe('File creation timestamp (ISO 8601 UTC)'),
-  modified: IsoDateTime.describe('File last-modification timestamp (ISO 8601 UTC)'),
-});
+type CreateFileResult = Omit<WrittenFileMeta, 'resourceLink'> & {
+  path: string;
+  created: string;
+  modified: string;
+};
 
 const CreateInputSchema = z
   .strictObject({
@@ -92,35 +82,25 @@ const CreateInputSchema = z
     }
   });
 
-type CreateFailureItem = z.infer<typeof PathFailureSchema>;
+interface CreateFailureItem {
+  path: string;
+  error: Problem;
+}
 
-const CreateOutputSchema = z.strictObject({
-  files: z.array(CreateFileResultSchema).describe('Successfully created files'),
-  failures: z
-    .array(PathFailureSchema)
-    .optional()
-    .describe('Files that failed to create with per-file error details'),
-  skipped: z
-    .array(z.string())
-    .optional()
-    .describe('Paths left untouched because the user chose Skip'),
-});
+interface CreateOutput {
+  files: CreateFileResult[];
+  failures?: CreateFailureItem[];
+  skipped?: string[];
+}
 
-type CreateFileResult = z.infer<typeof CreateFileResultSchema>;
-
-export const CREATE = defineTool({
+export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   name: 'create',
   title: 'Create Files',
   description:
     'Write whole text files: create new ones, overwrite, or append. Missing parent directories are created. ' +
     'edit or patch changes part of an existing file.',
   input: CreateInputSchema,
-  output: CreateOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   accessPaths: (args) => args.files.map((f) => f.path),
   run: async (args, ctx) => {
     // Phase 1 (no mutation): which entries would replace a file that exists
@@ -245,9 +225,7 @@ export const CREATE = defineTool({
           lineCount,
           mimeType,
           kind,
-          ...writtenFileLinks(appended.validPath, mimeType, stats?.size, {
-            resourceStore: ctx.resourceStore,
-          }),
+          ...writtenFileLinks(appended.validPath, mimeType, stats?.size),
         };
         created = (stats?.birthtime ?? EPOCH).toISOString();
         modified = (stats?.mtime ?? EPOCH).toISOString();
@@ -262,7 +240,6 @@ export const CREATE = defineTool({
         meta = buildWrittenFileMeta({
           validPath: written.validPath,
           content,
-          resourceStore: ctx.resourceStore,
         });
       }
 

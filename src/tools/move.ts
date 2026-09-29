@@ -31,7 +31,7 @@ import {
   normalizeCaseForComparison,
   respellCaseOnlyTarget,
 } from '../core/path-utils.ts';
-import { defaultFalseBoolean, PerFileErrorSchema, RequiredPath } from '../core/schema.ts';
+import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -41,10 +41,10 @@ const MoveItemSchema = z.strictObject({
   destination: RequiredPath.describe('Destination path'),
 });
 
-const MoveItemResultSchema = z.strictObject({
-  from: z.string().describe('Resolved absolute source path'),
-  to: z.string().describe('Resolved absolute destination path'),
-});
+interface MoveItemResult {
+  from: string;
+  to: string;
+}
 
 const MoveInputSchema = z.strictObject({
   moves: z.array(MoveItemSchema).min(1).max(100).describe('Operations to perform (max 100)'),
@@ -54,27 +54,17 @@ const MoveInputSchema = z.strictObject({
   ),
 });
 
-const MoveFailureItemSchema = z.strictObject({
-  source: z.string().describe('Source path that could not be moved'),
-  destination: z.string().describe('Intended destination path for the failed move'),
-  error: PerFileErrorSchema,
-});
+interface MoveFailureItem {
+  source: string;
+  destination: string;
+  error: Problem;
+}
 
-type MoveFailureItem = z.infer<typeof MoveFailureItemSchema>;
-
-const MoveOutputSchema = z.strictObject({
-  moves: z.array(MoveItemResultSchema).describe('Successfully completed operations'),
-  failures: z
-    .array(MoveFailureItemSchema)
-    .optional()
-    .describe('Operations that failed with per-item error details'),
-  skipped: z
-    .array(z.string())
-    .optional()
-    .describe('Destinations skipped because the user chose Skip'),
-});
-
-type MoveItemResult = z.infer<typeof MoveItemResultSchema>;
+interface MoveOutput {
+  moves: MoveItemResult[];
+  failures?: MoveFailureItem[];
+  skipped?: string[];
+}
 
 type PairOp = 'move' | 'copy';
 
@@ -535,19 +525,14 @@ export async function performRenameWithFallback(
   }
 }
 
-export const MOVE = defineTool({
+export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
   name: 'move',
   title: 'Move or Copy Files',
   description:
     'Move, rename, or copy files and directories, like mv or cp -r. ' +
     'Each destination is the full new path, not a folder to move into; missing parent directories are created.',
   input: MoveInputSchema,
-  output: MoveOutputSchema,
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: false,
   progress: (args) => {
     const label = args.copy ? 'Copy' : 'Move';
     if (args.moves.length === 1) {

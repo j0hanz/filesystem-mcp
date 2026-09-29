@@ -3,9 +3,8 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 import { basename } from 'node:path';
 
 import { detectMimeFromContent } from './mime.ts';
+import type { FileKind } from './mime.ts';
 import { countLines } from './read.ts';
-import type { FileKind } from './schema.ts';
-import type { ResourceStore } from './store.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,
@@ -93,22 +92,20 @@ export interface WrittenFileMeta {
  * dry run — nothing was written, so the file on disk is still the one the
  * caller already has. None when the size is unknown or over the text-size cap —
  * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
- * No link without a store to link into.
+ * File resources are read directly from disk, not from the result store.
  */
 export function writtenFileLinks(
   validPath: string,
   mimeType: string,
   size: number | undefined,
-  options: { resourceStore: ResourceStore | undefined; dryRun?: boolean | undefined },
+  dryRun = false,
 ): Pick<WrittenFileMeta, 'resourceUri' | 'resourceLink'> {
-  if (options.dryRun || size === undefined || size > getMaxTextFileSize()) {
+  if (dryRun || size === undefined || size > getMaxTextFileSize()) {
     return { resourceUri: undefined, resourceLink: undefined };
   }
   return {
     resourceUri: buildFileResourceUri(validPath),
-    resourceLink: options.resourceStore
-      ? buildFileResourceLink(validPath, mimeType, size)
-      : undefined,
+    resourceLink: buildFileResourceLink(validPath, mimeType, size),
   };
 }
 
@@ -121,7 +118,6 @@ export function writtenFileLinks(
 export function buildWrittenFileMeta(options: {
   validPath: string;
   content: string;
-  resourceStore: ResourceStore | undefined;
   dryRun?: boolean | undefined;
 }): WrittenFileMeta {
   const { validPath, content } = options;
@@ -132,6 +128,6 @@ export function buildWrittenFileMeta(options: {
     lineCount: countLines(content),
     mimeType,
     kind,
-    ...writtenFileLinks(validPath, mimeType, size, options),
+    ...writtenFileLinks(validPath, mimeType, size, options.dryRun),
   };
 }

@@ -1,39 +1,34 @@
 import { parse } from 'node:path';
 
-import * as z from 'zod/v4';
-
 import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
 import type { GuardedFileSystem, Stats } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
-import { resolveEntryType } from '../core/path-utils.ts';
-import {
-  FileInfoSchema,
-  NonNegInt,
-  OperationSummarySchema,
-  perPathEnvelope,
-  singleOrBatchAccessPaths,
-  singleOrBatchPathsInput,
-} from '../core/schema.ts';
+import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
+import { singleOrBatchAccessPaths, singleOrBatchPathsInput } from '../core/schema.ts';
 import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
-import type { PerPathResult } from './batch.ts';
+import type { BatchResult, PerPathResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
-type FileInfo = z.infer<typeof FileInfoSchema>;
+interface FileInfo {
+  name: string;
+  path: string;
+  type: EntryType;
+  size: number;
+  tokenEstimate?: number;
+  created: string;
+  modified: string;
+  accessed: string;
+  permissions: string;
+  isHidden: boolean;
+  mimeType?: string;
+  symlinkTarget?: string;
+}
 
 const StatInputSchema = singleOrBatchPathsInput({});
 
-const StatPerPathSchema = perPathEnvelope(FileInfoSchema, 'File metadata; present on success');
-
-const StatOutputSchema = z.strictObject({
-  results: z
-    .array(StatPerPathSchema)
-    .describe('Per-path metadata results ordered to match the input paths'),
-  summary: OperationSummarySchema,
-  fileCount: NonNegInt.optional().describe('Number of regular files in the results'),
-  dirCount: NonNegInt.optional().describe('Number of directories in the results'),
-});
+type StatOutput = BatchResult<FileInfo> & { fileCount: number; dirCount: number };
 
 function getPermissions(mode: number): string {
   let out = '';
@@ -146,7 +141,7 @@ function classifyTypeCounts(results: readonly PerPathResult<FileInfo>[]): {
   return { fileCount, dirCount };
 }
 
-export const STAT = defineTool({
+export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   name: 'stat',
   title: 'Get File Info',
   description:
@@ -154,11 +149,7 @@ export const STAT = defineTool({
     'tokenEstimate, timestamps, permissions, MIME type guessed from the extension, and symlink target. ' +
     'Also checks whether paths exist.',
   input: StatInputSchema,
-  output: StatOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   defaultErrorCode: ErrorCode.NOT_FOUND,
   progress: (args) => {

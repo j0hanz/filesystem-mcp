@@ -34,7 +34,7 @@ export const ALL_TOOLS = [
 ] as const;
 
 export const MUTATING_TOOL_NAMES = new Set(
-  ALL_TOOLS.filter((t) => !t.annotations.readOnlyHint).map((t) => t.name),
+  ALL_TOOLS.filter((t) => !t.readOnlyHint).map((t) => t.name),
 );
 
 /** The tools a server registers at this setting — the one owner of the `--read-only` gate. */

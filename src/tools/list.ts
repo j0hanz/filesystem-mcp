@@ -13,11 +13,8 @@ import type { PathGuard } from '../core/path.ts';
 import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
-  FileType as FileTypeEnum,
   IncludeHidden,
   IncludeIgnored,
-  NextCursorSchema,
-  NonNegInt,
   OptionalPath,
   PositiveInt,
 } from '../core/schema.ts';
@@ -214,36 +211,6 @@ const ListInputSchema = z.strictObject({
   cursor: CursorSchema,
 });
 
-const ListOutputSchema = z.strictObject({
-  path: z.string().optional().describe('Resolved absolute path of the listed directory'),
-  entries: z
-    .array(
-      z.strictObject({
-        name: z.string().describe('Entry basename'),
-        relativePath: z.string().describe('POSIX path relative to the listed directory'),
-        type: FileTypeEnum.describe('Entry type: file, directory, symlink, or other'),
-      }),
-    )
-    .describe('Inline directory entries sorted directories-first then alphabetically by name'),
-  // No `markdown` field: the ASCII tree is the call's text content already, and
-  // carrying it here too doubled every list response for a string the client
-  // has in hand. The stored full-tree resource still holds its own copy — that
-  // one is a *different* (uncapped) tree and is never sent inline.
-  entryCount: NonNegInt.describe('Number of entries included in this response'),
-  totalEntries: NonNegInt.describe('Total entries found before the maxEntries cap was applied'),
-  totalFiles: NonNegInt.describe('Total number of files found'),
-  totalDirectories: NonNegInt.describe('Total number of directories found'),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'URI to the full entry list in the resource store; first page only, whenever the response is ' +
-        'incomplete — more pages follow, or the hard cap cut the listing. The stored list is itself ' +
-        'bounded by that cap and marked truncated if exceeded.',
-    ),
-  nextCursor: NextCursorSchema,
-});
-
 interface ListPageMetadata {
   readonly path: string;
   readonly totalEntries: number;
@@ -251,11 +218,18 @@ interface ListPageMetadata {
   readonly totalDirectories: number;
 }
 
+type ListOutput = ListPageMetadata & {
+  entries: CollectedEntry[];
+  entryCount: number;
+  resourceUri?: string;
+  nextCursor?: string;
+};
+
 async function handleList(
   args: z.infer<typeof ListInputSchema>,
   ctx: ToolCtx,
 ): Promise<{
-  structured: z.infer<typeof ListOutputSchema>;
+  structured: ListOutput;
   markdown: string;
   offset: number;
   link?: ContentBlock;
@@ -269,8 +243,6 @@ async function handleList(
     includeHidden: args.includeHidden,
     includeIgnored: args.includeIgnored,
   });
-  const { resourceStore } = ctx;
-
   const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
     store: ctx.pageStore,
     queryKey,
@@ -298,22 +270,19 @@ async function handleList(
         truncated: result.totalEntries > result.entries.length,
       };
     },
-    externalize: resourceStore
-      ? (entries, metadata) => {
-          const name = basename(metadata.path);
-          // The stored tree is the whole collected set — itself bounded by the
-          // hard cap, and marked when the cap cut it.
-          const fullOutput = {
-            entries,
-            markdown: renderMarkdown(name, entries),
-            totalEntries: metadata.totalEntries,
-            totalFiles: metadata.totalFiles,
-            totalDirectories: metadata.totalDirectories,
-            ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
-          };
-          return putJsonResource(resourceStore, `${name} tree`, fullOutput);
-        }
-      : undefined,
+    externalize: (entries, metadata) => {
+      const name = basename(metadata.path);
+      // The stored tree is the whole collected set, bounded by the hard cap.
+      const fullOutput = {
+        entries,
+        markdown: renderMarkdown(name, entries),
+        totalEntries: metadata.totalEntries,
+        totalFiles: metadata.totalFiles,
+        totalDirectories: metadata.totalDirectories,
+        ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
+      };
+      return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
+    },
   });
 
   const resourceUri = paged.resource?.entry.uri;
@@ -331,21 +300,14 @@ async function handleList(
   };
 }
 
-export const LIST = defineTool({
+export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   name: 'list',
   title: 'List',
   description:
     "List a directory's files and subdirectories as a tree of names, like ls or tree. " +
     'stat returns sizes and dates.',
   input: ListInputSchema,
-  output: ListOutputSchema,
-  // No outputSchema, like every tool here (define.ts): one sample response
-  // teaches these scalar fields, and the schema would cost ~1.6 KB of every
-  // session start.
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   defaultErrorCode: ErrorCode.NOT_DIRECTORY,
   progress: (args) => ({

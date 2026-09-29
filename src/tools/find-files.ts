@@ -1,6 +1,5 @@
 import * as z from 'zod/v4';
 
-import { SearchStoppedReasonSchema } from '../core/concurrency.ts';
 import { paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
 import { toPosixRelative } from '../core/path.ts';
@@ -9,8 +8,6 @@ import {
   IncludeHidden,
   IncludeIgnored,
   MaxDepth,
-  NextCursorSchema,
-  NonNegInt,
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
@@ -47,33 +44,19 @@ const SearchFilesInputSchema = z.strictObject({
   cursor: CursorSchema,
 });
 
-const SearchFilesOutputSchema = z.strictObject({
-  root: z.string().describe('Resolved base directory used as the search root'),
-  results: z
-    .array(
-      z.strictObject({
-        path: z.string().describe('File path relative to the search root'),
-      }),
-    )
-    .describe('Matched files ordered by sortBy'),
-  totalMatches: NonNegInt.optional().describe('Total number of matching files found'),
-  filesScanned: NonNegInt.optional().describe('Total number of files examined during the search'),
-  skippedInaccessible: NonNegInt.optional().describe(
-    'Files skipped due to permission or access errors',
-  ),
-  stoppedReason: SearchStoppedReasonSchema.describe(
-    'Why the search ended early: maxResults = result cap reached, timeout = time limit hit or the request was cancelled. Absent when the scan ran to completion.',
-  ),
-  resourceUri: z
-    .string()
-    .optional()
-    .describe(
-      'URI to the full results JSON in the resource store; first page only, whenever the response is incomplete — more pages follow, or the result cap cut the search',
-    ),
-  nextCursor: NextCursorSchema,
-});
-
-type SearchFileResult = z.infer<typeof SearchFilesOutputSchema>['results'][number];
+interface SearchFileResult {
+  path: string;
+}
+interface SearchFilesOutput {
+  root: string;
+  results: SearchFileResult[];
+  totalMatches?: number;
+  filesScanned?: number;
+  skippedInaccessible?: number;
+  stoppedReason?: 'maxResults' | 'timeout';
+  resourceUri?: string;
+  nextCursor?: string;
+}
 
 /** The engine's own summary plus its root is the page metadata; nothing is copied out of it. */
 type SearchFilesPageMetadata = Awaited<ReturnType<typeof searchFiles>>['summary'] & {
@@ -85,7 +68,7 @@ function searchFilesOutput(
   metadata: SearchFilesPageMetadata,
   nextCursor: string | undefined,
   resourceUri: string | undefined,
-): z.infer<typeof SearchFilesOutputSchema> {
+): SearchFilesOutput {
   return {
     root: metadata.root,
     results: [...results],
@@ -102,7 +85,7 @@ async function handleSearchFiles(
   args: z.infer<typeof SearchFilesInputSchema>,
   ctx: ToolCtx,
 ): Promise<{
-  structured: z.infer<typeof SearchFilesOutputSchema>;
+  structured: SearchFilesOutput;
   offset: number;
   total: number;
   link?: ReturnType<typeof putJsonResource>['link'];
@@ -117,8 +100,6 @@ async function handleSearchFiles(
     sortBy: args.sortBy,
     maxDepth: args.maxDepth,
   });
-  const { resourceStore } = ctx;
-
   const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({
     store: ctx.pageStore,
     queryKey,
@@ -141,9 +122,7 @@ async function handleSearchFiles(
         truncated: result.summary.truncated,
       };
     },
-    externalize: resourceStore
-      ? (results) => putJsonResource(resourceStore, `${args.pattern} files`, results)
-      : undefined,
+    externalize: (results) => putJsonResource(ctx.resourceStore, `${args.pattern} files`, results),
   });
 
   return {
@@ -159,18 +138,14 @@ async function handleSearchFiles(
   };
 }
 
-export const FIND_FILES = defineTool({
+export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesOutput>({
   name: 'find_files',
   title: 'Find Files',
   description:
     'Find files by name or glob pattern; returns file paths relative to the searched directory. ' +
     'A pattern without / matches file names at any depth. search_text searches contents.',
   input: SearchFilesInputSchema,
-  output: SearchFilesOutputSchema,
-  annotations: {
-    readOnlyHint: true,
-    openWorldHint: false,
-  },
+  readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   progress: (args) => ({
     label: 'Find',

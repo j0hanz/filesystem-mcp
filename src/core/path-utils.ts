@@ -3,9 +3,7 @@ import { basename, delimiter, dirname, join, parse, resolve, sep, win32 } from '
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
-/** The four filesystem entry types; published as the `FileType` schema. */
-export const ENTRY_TYPES = ['file', 'directory', 'symlink', 'other'] as const;
-export type EntryType = (typeof ENTRY_TYPES)[number];
+export type EntryType = 'file' | 'directory' | 'symlink' | 'other';
 
 /** The three predicates both `Dirent` and `Stats` expose - all `resolveEntryType` needs. */
 export interface DirentLike {
