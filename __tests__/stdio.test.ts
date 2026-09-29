@@ -1,4 +1,5 @@
 import type { McpSubscription } from '@modelcontextprotocol/client';
+import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 import { ProtocolErrorCode, STDIO_DEFAULT_MAX_BUFFER_SIZE } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -609,4 +610,122 @@ describe('Stdio subscription lease lifecycle', () => {
       await cleanupTestRoot(tmpDir);
     }
   });
+
+  for (const { testId, phase } of [
+    { testId: 'STDIO-015', phase: 'active' },
+    { testId: 'STDIO-016', phase: 'queued' },
+  ]) {
+    for (const targetListenId of ['target', 0]) {
+      it(`${testId}: rejected cancellation request preserves ${phase} listen (${typeof targetListenId} ID)`, async () => {
+        const tmpDir = await createTestRoot();
+        const harness = await createRawStdioServer(tmpDir, { FS_MAX_WATCHERS: '1' });
+        try {
+          const fileA = await writeTestFile(tmpDir, 'preserved-a.txt', 'before');
+          const fileB = await writeTestFile(tmpDir, 'preserved-b.txt', 'B');
+          const uriA = buildFileResourceUri(fileA);
+          const uriB = buildFileResourceUri(fileB);
+          await discoverModern(harness);
+
+          const requests: JSONRPCMessage[] = [
+            {
+              jsonrpc: '2.0',
+              id: targetListenId,
+              method: 'subscriptions/listen',
+              params: {
+                _meta: MODERN_META,
+                notifications: { resourceSubscriptions: [uriA] },
+              },
+            },
+            {
+              jsonrpc: '2.0',
+              id: 'bad-cancel',
+              method: 'notifications/cancelled',
+              params: { _meta: MODERN_META, requestId: targetListenId },
+            },
+            {
+              jsonrpc: '2.0',
+              id: 'blocked',
+              method: 'subscriptions/listen',
+              params: {
+                _meta: MODERN_META,
+                notifications: { resourceSubscriptions: [uriB] },
+              },
+            },
+          ];
+          const seen = new Set<string>();
+          const recordResponse = (message: JSONRPCMessage): void => {
+            if ('method' in message) {
+              assert.strictEqual(message.method, 'notifications/subscriptions/acknowledged');
+              assert.strictEqual(
+                message.params?._meta?.['io.modelcontextprotocol/subscriptionId'],
+                targetListenId,
+                'the rejected cancellation must not free the watcher slot for B',
+              );
+              assert.ok(!seen.has('listen'), 'duplicate listen acknowledgement');
+              seen.add('listen');
+              return;
+            }
+            assert.ok('error' in message, JSON.stringify(message));
+            assert.ok(message.id === 'bad-cancel' || message.id === 'blocked');
+            assert.strictEqual(
+              message.error.code,
+              message.id === 'bad-cancel'
+                ? ProtocolErrorCode.MethodNotFound
+                : ProtocolErrorCode.InvalidParams,
+            );
+            assert.ok(!seen.has(message.id), `duplicate response for ${message.id}`);
+            seen.add(message.id);
+          };
+
+          if (phase === 'active') {
+            for (const request of requests) {
+              await harness.send(request);
+              recordResponse(await within(harness.nextMessage(), 5000));
+            }
+          } else {
+            await harness.sendMany(requests);
+            for (let remaining = requests.length; remaining > 0; remaining -= 1) {
+              recordResponse(await within(harness.nextMessage(), 5000));
+            }
+          }
+          assert.deepStrictEqual([...seen].sort(), ['bad-cancel', 'blocked', 'listen']);
+
+          await writeFile(fileA, 'after rejected cancellation');
+          const updated = await within(harness.nextMessage(), 5000);
+          assert.ok('method' in updated, JSON.stringify(updated));
+          assert.strictEqual(updated.method, 'notifications/resources/updated');
+          assert.strictEqual(updated.params?.['uri'], uriA);
+          assert.strictEqual(
+            updated.params?._meta?.['io.modelcontextprotocol/subscriptionId'],
+            targetListenId,
+          );
+
+          await harness.send({
+            jsonrpc: '2.0',
+            method: 'notifications/cancelled',
+            params: { requestId: targetListenId },
+          });
+          await harness.send({
+            jsonrpc: '2.0',
+            id: 'released',
+            method: 'subscriptions/listen',
+            params: {
+              _meta: MODERN_META,
+              notifications: { resourceSubscriptions: [uriB] },
+            },
+          });
+          const released = await within(harness.nextMessage(), 5000);
+          assert.ok('method' in released, JSON.stringify(released));
+          assert.strictEqual(released.method, 'notifications/subscriptions/acknowledged');
+          assert.strictEqual(
+            released.params?._meta?.['io.modelcontextprotocol/subscriptionId'],
+            'released',
+          );
+        } finally {
+          await harness.close();
+          await cleanupTestRoot(tmpDir);
+        }
+      });
+    }
+  }
 });

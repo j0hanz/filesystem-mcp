@@ -2,7 +2,7 @@
 // gated transport that attaches listen-filter watchers before the SDK sees the
 // message.
 import type { McpServerFactory } from '@modelcontextprotocol/server';
-import { ProtocolErrorCode } from '@modelcontextprotocol/server';
+import { isJSONRPCNotification, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import {
   serveStdio,
   type StdioServerHandle,
@@ -46,6 +46,7 @@ function cancelledRequestId(message: unknown): string | number | null {
     params?: { requestId?: unknown };
   };
   if (notification.method !== 'notifications/cancelled') return null;
+  if (!isJSONRPCNotification(message)) return null;
   const requestId = notification.params?.requestId;
   return typeof requestId === 'string' || typeof requestId === 'number' ? requestId : null;
 }

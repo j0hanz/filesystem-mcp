@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rejected stdio cancellation requests preserve subscriptions.** Requests mistaken for cancellation notifications no longer suppress queued subscriptions or detach active file watchers.
 - **File-resource reads honor cancellation.** Cancelled requests stop before starting work, and raw file reads pass the request signal to Node's buffered read.
 - **URL-only elicitation clients receive actionable tool errors.** Operations requiring a confirmation form now explain the existing workaround instead of failing with a missing-capability protocol error.
 - **Legacy confirmation progress stays increasing.** Access-grant and overwrite rounds no longer restart the same progress token; startup notifications wait until work is reported or the call finishes.
