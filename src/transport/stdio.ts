@@ -15,6 +15,7 @@ import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
+import { getMaxInboundMessageBytes } from '../core/util.ts';
 import { createWatcherRegistry } from '../core/watcher-registry.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createServer } from '../server.ts';
@@ -178,7 +179,12 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
     });
   };
 
-  const wire = new StdioServerTransport();
+  // Sized from the same limit the write tools enforce: an overflow is fatal
+  // to the connection (the SDK's ReadBuffer contract), so a schema-valid
+  // create must always fit. See getMaxInboundMessageBytes.
+  const wire = new StdioServerTransport(process.stdin, process.stdout, {
+    maxBufferSize: getMaxInboundMessageBytes(),
+  });
   const listens = new Map<string | number, StdioListenState>();
 
   // Deleting the entry is what makes this idempotent: a second call for the
@@ -233,7 +239,15 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
     legacy: 'serve',
     transport: wire,
     onerror: (error: unknown) => {
-      Logger.error('[Stdio] serve error:', formatUnknownErrorMessage(error));
+      const message = formatUnknownErrorMessage(error);
+      // The SDK's own text names a byte count and nothing else; say what
+      // the operator can do about it. The connection is already closing.
+      if (message.includes('ReadBuffer exceeded maximum size')) {
+        Logger.error(
+          `[Stdio] an inbound message exceeded ${String(getMaxInboundMessageBytes())} bytes (3 × FS_MAX_FILE_SIZE + 1 MiB); the connection is closed. Split the write into smaller calls or raise FS_MAX_FILE_SIZE.`,
+        );
+      }
+      Logger.error('[Stdio] serve error:', message);
     },
   });
   const onclose = wire.onclose;

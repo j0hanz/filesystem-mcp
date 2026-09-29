@@ -66,7 +66,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       `allowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call ${LIST_ROOTS.name} to read the current set.`,
       'legacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.',
       'sensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.',
-      `enforced_limits: max file size ${maxFileMb} MB, file search cap ${MAX_SEARCH_RESULTS} results, content search scans up to ${MAX_SEARCH_RESULTS} matches, paged by maxResults (default ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
+      `enforced_limits: max file size ${maxFileMb} MB (also the combined content cap of one create call), file search cap ${MAX_SEARCH_RESULTS} results, content search scans up to ${MAX_SEARCH_RESULTS} matches, paged by maxResults (default ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
       'ephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.',
       'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
       '```',

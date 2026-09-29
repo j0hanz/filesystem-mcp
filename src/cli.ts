@@ -14,7 +14,7 @@ import {
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
-import { getMaxTextFileSize } from './core/util.ts';
+import { getMaxInboundMessageBytes, getMaxTextFileSize } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
 
 // ════════════════════════════════════════════════════════════
@@ -243,7 +243,10 @@ export async function runPrintConfig(options: {
     allowedRoots,
     tools,
     apiKey: options.apiKey ? '***' : null,
-    limits: { maxFileSizeBytes: getMaxTextFileSize() },
+    limits: {
+      maxFileSizeBytes: getMaxTextFileSize(),
+      maxInboundMessageBytes: getMaxInboundMessageBytes(),
+    },
     // Everything that can produce ACCESS_DENIED, read through the same
     // sources the guard and the matcher use (flag beats env).
     policy: {

@@ -46,7 +46,7 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--max-file-size <bytes>',
-    desc: 'Maximum file size for reads in bytes (env: FS_MAX_FILE_SIZE)',
+    desc: 'Maximum file size for reads and for one create call, in bytes; the per-message wire limit is 3 × this + 1 MiB (env: FS_MAX_FILE_SIZE)',
   },
   { flags: '--walk-cwd', desc: 'Walk up from CWD to find a project root; implies --allow-cwd' },
   { flags: '--deny <pattern>', desc: 'Block paths matching this pattern; repeatable' },
@@ -77,7 +77,10 @@ const ENV_HELP: HelpRow[] = [
     desc: 'Allow sensitive system paths ("true" or "1" enables this)',
   },
   { flags: 'FS_ROOT_BOUNDARY', desc: 'Path prefix all allowed roots must fall under' },
-  { flags: 'FS_MAX_FILE_SIZE', desc: 'Maximum file size for reads in bytes' },
+  {
+    flags: 'FS_MAX_FILE_SIZE',
+    desc: 'Maximum file size for reads and for one create call, in bytes; sizes the wire limit (3 × this + 1 MiB)',
+  },
   {
     flags: 'FS_ALLOWED_DIRS',
     desc: 'Allowed dirs: colon-separated (Unix), semicolon-separated (Windows)',

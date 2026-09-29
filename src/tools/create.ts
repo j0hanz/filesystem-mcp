@@ -63,7 +63,9 @@ const CreateInputSchema = z
       .array(CreateFileItemSchema)
       .min(1)
       .max(100)
-      .describe('List of files to create (max 100); each entry requires path and content'),
+      .describe(
+        'List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit',
+      ),
   })
   .superRefine((value, ctx) => {
     // Entries write in parallel and each replaces its file whole, so two
@@ -79,6 +81,20 @@ const CreateInputSchema = z
           input: value,
         });
       }
+    }
+    // One call's content is what one inbound message carries; the transports
+    // size their message bound from this same limit (getMaxInboundMessageBytes),
+    // so a batch that passes here always fits on the wire. Counted in the same
+    // UTF-16 units as the per-file refine above.
+    const total = value.files.reduce((sum, file) => sum + file.content.length, 0);
+    const limit = getMaxTextFileSize();
+    if (total > limit) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['files'],
+        message: `combined content is ${String(total)} characters; one create call carries at most ${String(limit)} (FS_MAX_FILE_SIZE). Split the batch.`,
+        input: value,
+      });
     }
   });
 

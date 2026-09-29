@@ -9,7 +9,6 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { McpHttpHandler, ServerNotifier } from '@modelcontextprotocol/server';
 import {
   createMcpHandler,
-  DEFAULT_MAX_REQUEST_BODY_SIZE,
   DEFAULT_REQUEST_TIMEOUT_MSEC,
   isJsonContentType,
   ProtocolErrorCode,
@@ -27,7 +26,7 @@ import { parseTrueEnvFlag } from '../core/path-utils.ts';
 import { PathGuard } from '../core/path.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { parseEnvInt } from '../core/util.ts';
+import { getMaxInboundMessageBytes, parseEnvInt } from '../core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -67,7 +66,12 @@ function errorHandlerMiddleware(
     return;
   }
   if (err.status === 413) {
-    sendJsonRpcError(res, 413, ProtocolErrorCode.InvalidRequest, 'Request body too large');
+    sendJsonRpcError(
+      res,
+      413,
+      ProtocolErrorCode.InvalidRequest,
+      `Request body too large: the limit is ${String(getMaxInboundMessageBytes())} bytes (3 × FS_MAX_FILE_SIZE + 1 MiB). Split the write into smaller calls.`,
+    );
     return;
   }
   if (err.status === 400) {
@@ -161,12 +165,14 @@ function setupExpressApp(
     notifier.resourceUpdated(uri);
   };
 
-  // The express parser limit derives from the SDK's own request-body
-  // bound, so it and the adapter/handler-core defaults
-  // (`DEFAULT_MAX_REQUEST_BODY_SIZE`, 4 MiB in 2.1.0) cannot drift apart.
-  // Mounted here, after CORS, the rate limiter and auth, so a refused
-  // request is answered without its body being read.
-  const parseJson = express.json({ limit: `${DEFAULT_MAX_REQUEST_BODY_SIZE}b` });
+  // One bound for both transports, derived from the write tools' own limit
+  // (getMaxInboundMessageBytes): a create the schema accepts must not be
+  // refused here. Mounted after CORS, the rate limiter and auth, so a refused
+  // request is answered without its body being read. The SDK's handler and
+  // adapter get the same number below so their internal defaults (4 MiB)
+  // cannot disagree with this parser, although both only read a body when no
+  // parsedBody is supplied — which this route never does.
+  const parseJson = express.json({ limit: `${String(getMaxInboundMessageBytes())}b` });
 
   app.post('/mcp', parseJson, (req: Request, res: Response, next: NextFunction) => {
     void (async () => {
@@ -308,6 +314,8 @@ export async function startHttpServer(
   const sharedPathGuard = new PathGuard(options);
   await sharedPathGuard.recomputeAllowedDirectories();
 
+  const maxRequestBodySize = getMaxInboundMessageBytes();
+
   const modernHandler: McpHttpHandler = createMcpHandler(
     async ({ era }) => {
       const c = await createServer(options, {
@@ -332,12 +340,14 @@ export async function startHttpServer(
       // input_required confirmation, deliver a subscription — is refused with a
       // named workaround (define.ts, resources.ts). See docs/adr/003.
       legacy: 'stateless',
+      maxRequestBodySize,
       onerror: (error: Error) => {
         Logger.error('[HTTP] modern leg error:', formatUnknownErrorMessage(error));
       },
     },
   );
   const modernNodeHandler = toNodeHandler(modernHandler, {
+    maxRequestBodySize,
     // The adapter answers 500 when request conversion or handler.fetch
     // itself throws (e.g. a request racing handler.close()); the entry's
     // own onerror above never sees those. Log the adapter-level refusal so
