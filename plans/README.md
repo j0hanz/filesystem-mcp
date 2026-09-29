@@ -275,6 +275,18 @@ fail 1` with no assertion — a test process died mid-file (23 tests
     [#42](https://github.com/j0hanz/filesystem-mcp/pull/42); CI green on
     Ubuntu (1m04), Windows (1m42) and release-paths (35s) at `be4c3a07`.
     Not merged; the operator decides. Worktree: `%TEMP%\fsmcp-wt\stack`.
+  - **Review round (#42, Codex + Copilot, 2026-09-29):** 5 distinct
+    comments. One rejected with evidence (Codex P1: the ancestor prefix
+    "starts with `..`" — `dir` iterates _ancestors_, so
+    `relative(dir, root)` is a descendant path; the passing ceiling test
+    proves the matcher applies). Four accepted and fixed in `f2d98883`:
+    per-file match collection capped at `maxResults` (exact, since assembly
+    is walk-ordered); binary files count in `filesScanned` again (a
+    regression vs `main` the reviewer missed); a missing startup root under
+    a _symlinked_ boundary is projected through its nearest existing
+    ancestor before the boundary check (`projectMissingPath`, TC-PG-017);
+    DIST-004 imports `@j0hanz/filesystem-mcp/transport` as a self-reference
+    so the `exports` map is exercised. 474 tests, 471 pass, 3 skips.
 - **Platform notes.** 041's STDIO-CLI-003 compares paths case-insensitively
   because the Windows runner's `tmpdir()` is an 8.3 alias. 043's decoy
   fixture (`s.tsx` beside `[slug].tsx`) is what a character class matches on
