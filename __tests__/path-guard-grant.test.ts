@@ -299,6 +299,25 @@ describe('PathGuard grant round-trip', () => {
       assert.ok(containsPath(guard.getRoots(), missing), 'missing in-boundary root stays');
     });
   });
+
+  it('TC-PG-017: a missing startup root under a symlinked FS_ROOT_BOUNDARY is kept', async (t) => {
+    // The boundary is realpath-canonicalized; a missing root spelled through the
+    // link must be projected through its existing ancestor before comparing.
+    const target = await mkDir(createdDirs, 'fsmcp-pg017-target-');
+    const link = join(root, 'boundary-link');
+    const made = await trySymlink(target, link, () => t.skip('symlinks not permitted here'));
+    if (!made) return;
+    process.env['FS_ROOT_BOUNDARY'] = link;
+    const missing = join(link, 'not-yet');
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [missing] });
+      await guard.recomputeAllowedDirectories();
+      assert.ok(
+        containsPath(guard.getRoots(), missing),
+        'missing root under the linked boundary stays',
+      );
+    });
+  });
 });
 
 describe('Write/Delete PathGuard', () => {

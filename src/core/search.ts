@@ -237,6 +237,7 @@ interface ScanContext {
   pathGuard: PathGuard;
   signal: AbortSignal | undefined;
   maxFileSize: number;
+  maxResults: number;
   regex: Regex;
   prefilter: Regex;
   source: string;
@@ -303,6 +304,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
             }
           : {}),
       });
+      if (matches.length >= scanCtx.maxResults) break;
     }
   }
   return { kind: 'scanned', matches };
@@ -359,6 +361,7 @@ export async function searchContent(
       pathGuard,
       signal: options.signal,
       maxFileSize,
+      maxResults,
       regex,
       prefilter,
       source,
@@ -395,6 +398,7 @@ export async function searchContent(
           skippedTooLarge++;
           break;
         case 'binary':
+          filesScanned++;
           skippedBinary++;
           break;
         case 'scanned':

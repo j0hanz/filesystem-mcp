@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -103,9 +103,10 @@ describe('Built artifact (dist/index.js, the npm bin)', () => {
 
   it('DIST-004: the public ./transport export resolves and exposes both starters', async (t) => {
     if (!built) return t.skip('dist/ is not built');
-    // A non-literal specifier keeps tsc from resolving dist/*.d.ts at type-check
-    // time, so `npm run type-check:test` passes on an unbuilt clone.
-    const specifier = pathToFileURL(join(repoRoot, 'dist', 'transport.js')).href;
+    // A self-reference resolves through package.json `exports`, so this fails
+    // if the `./transport` entry is missing or points at the wrong file. Kept
+    // in a variable so tsc does not resolve it at type-check time.
+    const specifier = '@j0hanz/filesystem-mcp/transport';
     const mod = (await import(specifier)) as Record<string, unknown>;
     assert.strictEqual(typeof mod['startServer'], 'function');
     assert.strictEqual(typeof mod['startHttpServer'], 'function');

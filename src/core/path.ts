@@ -89,10 +89,38 @@ async function filterRootsWithin(
 
 /**
  * Startup roots must fall under FS_ROOT_BOUNDARY like every other root. An
- * existing root must *resolve* inside the boundary; a root that does not exist
- * yet (allowed by FS_ALLOW_MISSING_ROOTS) can only be checked lexically, and
- * access-time validation realpaths every path under it anyway.
+ * existing root must *resolve* inside the boundary; a missing root is projected
+ * through its nearest existing ancestor before comparison so symlinked boundary
+ * spellings still compare against realpath-canonicalized bounds.
  */
+
+/**
+ * The real path a not-yet-existing directory would have: realpath of its
+ * nearest existing ancestor plus the missing suffix. Lets a missing root be
+ * checked against a realpath-canonicalized boundary even when the boundary
+ * itself is reached through a symlink.
+ */
+async function projectMissingPath(normalizedPath: string, signal?: AbortSignal): Promise<string> {
+  const missing: string[] = [];
+  let current = normalizedPath;
+  for (;;) {
+    try {
+      signal?.throwIfAborted();
+      const real = await withAbort(realpath(current), signal);
+      return missing.length === 0
+        ? normalizePath(real)
+        : normalizePath(join(real, ...missing.reverse()));
+    } catch (error) {
+      rethrowIfAborted(error);
+      if (!isNotFoundErrno(error)) return normalizedPath;
+      const parent = dirname(current);
+      if (parent === current) return normalizedPath;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 async function partitionStartupRoots(
   roots: readonly string[],
   bounds: readonly string[],
@@ -109,7 +137,9 @@ async function partitionStartupRoots(
       inside = isPathWithinDirectories(normalizePath(realPath), normalizedBounds);
     } catch (error) {
       rethrowIfAborted(error);
-      inside = isNotFoundErrno(error) && isPathWithinDirectories(root, normalizedBounds);
+      inside =
+        isNotFoundErrno(error) &&
+        isPathWithinDirectories(await projectMissingPath(root, signal), normalizedBounds);
     }
     (inside ? kept : dropped).push(root);
   }

@@ -2847,6 +2847,27 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('searchContent never collects more matches from one file than its cap', async () => {
+    const root = await createTestRoot();
+    try {
+      // One file with far more matching lines than the cap: the scan must not
+      // materialize them all before the cap is applied.
+      await writeTestFile(
+        root,
+        'many.txt',
+        Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
+      );
+      const guard = await makeGuard([root]);
+      const r = await searchContent(root, 'CAP_ONE', { maxResults: 5 }, guard);
+      assert.strictEqual(r.matches.length, 5);
+      assert.strictEqual(r.summary.matchingLines, 5);
+      assert.strictEqual(r.summary.filesMatched, 1);
+      assert.strictEqual(r.summary.stoppedReason, 'maxResults');
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('search_text rejects a cursor minted under a different context', async () => {
     const file = await writeTestFile(tmpDir, 'search_ctx_cursor.txt', 'NEEDLE a\nNEEDLE b\n');
     const first = await harness.client.callTool({
@@ -3023,6 +3044,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: join(tmpDir, 'search_bin'), searchPattern: 'BINNEEDLE' },
     });
     assert.strictEqual(firstTextBlock(result).text, 'text.txt:1: BINNEEDLE');
+    assert.strictEqual((result._meta as { filesScanned?: number }).filesScanned, 2);
     assert.strictEqual((result._meta as { skippedBinary?: number }).skippedBinary, 1);
   });
 
