@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it, mock } from 'node:test';
 
-import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { countFileLines, GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -41,6 +41,86 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     }
     if (tmpDir) {
       await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  it('SDK-AUDIT-CANCEL-002: a pre-aborted raw read starts no validation or I/O', async (t) => {
+    const filePath = await writeTestFile(tmpDir, 'raw-aborted.txt', 'unchanged');
+    const reason = new DOMException('Raw read cancelled', 'AbortError');
+    const validation = t.mock.method(ctx.pathGuard, 'validateExistingPath');
+    const stats = t.mock.method(fsPromises, 'stat');
+    const reads = t.mock.method(fsPromises, 'readFile');
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        fs.readRaw(filePath, { signal: AbortSignal.abort(reason) }),
+        (error) => error === reason,
+      );
+      assert.strictEqual(validation.mock.callCount(), 0);
+      assert.strictEqual(stats.mock.callCount(), 0);
+      assert.strictEqual(reads.mock.callCount(), 0);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  for (const { id, name, code } of [
+    { id: '003', name: 'AbortError', code: ErrorCode.CANCELLED },
+    { id: '005', name: 'TimeoutError', code: ErrorCode.TIMEOUT },
+  ]) {
+    it(`SDK-AUDIT-CANCEL-${id}: native raw reads preserve the ${name} signal reason`, async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'raw-native-cancel.txt', 'unchanged');
+      const controller = new AbortController();
+      const reason = new DOMException('Cancel at native read', name);
+      const originalRead = fsPromises.readFile;
+      let nativeSignal: AbortSignal | undefined;
+      t.mock.method(
+        fsPromises,
+        'readFile',
+        async (...args: Parameters<typeof fsPromises.readFile>) => {
+          const options = args[1];
+          nativeSignal =
+            typeof options === 'object' && options !== null ? options.signal : undefined;
+          controller.abort(reason);
+          return originalRead(...args);
+        },
+      );
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(
+          fs.readRaw(filePath, { signal: controller.signal }),
+          (error: unknown) => {
+            assert.strictEqual(Problem.fromUnknown(error, ErrorCode.NOT_FILE).code, code);
+            assert.strictEqual(error, reason);
+            return true;
+          },
+        );
+        assert.strictEqual(nativeSignal, controller.signal);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    });
+  }
+
+  it('SDK-AUDIT-CANCEL-006: concurrent cancellation does not hide a native I/O failure', async (t) => {
+    const filePath = await writeTestFile(tmpDir, 'raw-native-failure.txt', 'unchanged');
+    const controller = new AbortController();
+    const failure = Object.assign(new Error('Native read failed'), { code: 'EIO' });
+    t.mock.method(fsPromises, 'readFile', () => {
+      controller.abort(new DOMException('Deadline elapsed', 'TimeoutError'));
+      return Promise.reject(failure);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        fs.readRaw(filePath, { signal: controller.signal }),
+        (error: unknown) => error === failure,
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
     }
   });
 

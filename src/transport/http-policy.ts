@@ -344,6 +344,7 @@ export function corsMiddleware(allowedOriginHostnames: readonly string[]): Reque
     const origin = req.headers.origin;
     if (origin && isOriginAllowed(origin, allowedOriginHostnames)) {
       res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Expose-Headers', 'WWW-Authenticate, Retry-After');
       // Key the response by Origin so a CDN/proxy caching one origin's response
       // cannot replay it for a different origin (cache-poison).
       res.header('Vary', 'Origin');

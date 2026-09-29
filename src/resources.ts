@@ -202,7 +202,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
     // duplicated the template and grew resources/list linearly with roots;
     // `list_roots` owns root discovery.
 
-    async read(uri, _variables, _ctx: ServerContext) {
+    async read(uri, _variables, ctx: ServerContext) {
+      ctx.mcpReq.signal.throwIfAborted();
       // Decode via extractPath — the same decoder resources/subscribe uses — so
       // both consumers are symmetric with buildFileResourceUri's encoding. The
       // {+path} template variable arrives still percent-encoded, so validating
@@ -219,7 +220,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       await options.pathGuard.validateExistingPath(rawPath);
       const fs = new GuardedFileSystem(options.pathGuard);
-      const readResult = await fs.readRaw(rawPath);
+      const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
 
       return {
         contents: [

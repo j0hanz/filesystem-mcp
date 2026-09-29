@@ -319,6 +319,32 @@ describe('HTTP Policy & Security', () => {
   });
 
   describe('CORS and Origin Policy (TC-SEC-028 - TC-SEC-031)', () => {
+    for (const method of ['POST', 'OPTIONS']) {
+      for (const origin of ['http://localhost:3000', 'https://untrusted.example', undefined]) {
+        it(`SDK-AUDIT-CORS-001: ${method} exposes recovery headers only for allowed origins (${origin ?? 'absent'})`, () => {
+          const req = createMockRequest({
+            method,
+            path: '/',
+            headers: origin === undefined ? {} : { origin },
+          });
+          const res = createMockResponse();
+
+          corsMiddleware(['localhost'])(req, res, () => {});
+
+          const allowed = origin === 'http://localhost:3000';
+          assert.strictEqual(
+            res.headers['access-control-expose-headers'],
+            allowed ? 'WWW-Authenticate, Retry-After' : undefined,
+          );
+          assert.strictEqual(
+            res.headers['access-control-allow-origin'],
+            allowed ? origin : undefined,
+          );
+          assert.strictEqual(res.headers['vary'], allowed ? 'Origin' : undefined);
+        });
+      }
+    }
+
     it('TC-SEC-028: isOriginAllowed on the loopback default accepts localhost origins and rejects spoofed ones', () => {
       assert.strictEqual(isOriginAllowed('http://localhost', []), true);
       assert.strictEqual(isOriginAllowed('http://localhost:3000', []), true);

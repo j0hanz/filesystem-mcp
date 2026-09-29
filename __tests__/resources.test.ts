@@ -20,6 +20,7 @@ import {
   extractPath,
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from '../src/core/file-uri.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { ResourceStore } from '../src/core/store.ts';
@@ -38,7 +39,10 @@ import {
   writeTestFile,
 } from './helpers.ts';
 
-const dummyContext = { sessionId: 'test-session' } as unknown as ServerContext;
+const dummyContext = {
+  sessionId: 'test-session',
+  mcpReq: { signal: new AbortController().signal },
+} as unknown as ServerContext;
 
 function requiredSection(sections: Record<string, string>, key: string): string {
   const value = sections[key];
@@ -301,6 +305,52 @@ describe('MCP Resources', () => {
       if (tmpDir) {
         await cleanupTestRoot(tmpDir);
       }
+    });
+
+    it('SDK-AUDIT-CANCEL-001: a cancelled resource read starts no raw read', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'cancelled-resource.txt', 'unchanged');
+      const reason = new DOMException('Resource read cancelled', 'AbortError');
+      const context: ServerContext = {
+        ...dummyContext,
+        mcpReq: { ...dummyContext.mcpReq, signal: AbortSignal.abort(reason) },
+      };
+      const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: false });
+      t.after(() => {
+        for (const contract of contracts) contract.destroy?.();
+      });
+      const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(file);
+      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'readRaw');
+
+      await assert.rejects(
+        async () => file.read(new URL(buildFileResourceUri(filePath)), {}, context),
+        (error: unknown) => error === reason,
+      );
+      assert.strictEqual(rawRead.mock.callCount(), 0);
+    });
+
+    it('SDK-AUDIT-CANCEL-004: resource reads forward their request signal', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'resource-signal.txt', 'resource body');
+      const controller = new AbortController();
+      const context: ServerContext = {
+        ...dummyContext,
+        mcpReq: { ...dummyContext.mcpReq, signal: controller.signal },
+      };
+      const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: false });
+      t.after(() => {
+        for (const contract of contracts) contract.destroy?.();
+      });
+      const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(file);
+      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'readRaw');
+
+      const result = await file.read(new URL(buildFileResourceUri(filePath)), {}, context);
+
+      const content = firstResourceContent(result);
+      assert.ok('text' in content);
+      assert.strictEqual(content.text, 'resource body');
+      assert.strictEqual(rawRead.mock.callCount(), 1);
+      assert.strictEqual(rawRead.mock.calls[0]?.arguments[1]?.signal, controller.signal);
     });
 
     it('TC-FUNC-061: Read workspace text file via resource contract', async () => {

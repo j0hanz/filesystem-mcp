@@ -36,6 +36,7 @@ export class ProgressSession {
   #cursor = 0;
   #lastSentMs = 0;
   #lastProgress = -1;
+  #started = false;
   #done = false;
 
   constructor(opts: ProgressSessionOptions) {
@@ -44,26 +45,27 @@ export class ProgressSession {
     this.#rateLimitMs = opts.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
     this.#startTime = Date.now();
     this.#lastSentMs = this.#startTime - this.#rateLimitMs;
-    // Synthetic start tick: the wire sees 0 at session creation.
-    this.#emit('tick', 0, undefined, this.#label);
   }
 
   set(input: { current: number; total?: number; message?: string }): void {
     if (this.#done) return;
     // A repeated or backward tick would put a duplicate value on the wire — drop it.
     if (input.current <= this.#cursor) return;
+    this.#start();
     this.#cursor = input.current;
     this.#emit('tick', this.#cursor, input.total, input.message ?? this.#label);
   }
 
   complete(message: string): void {
     if (this.#done) return;
+    this.#start();
     this.#done = true;
     this.#emit('complete', this.#cursor, undefined, message);
   }
 
   fail(message?: string): void {
     if (this.#done) return;
+    this.#start();
     this.#done = true;
     this.#emit('fail', this.#cursor, undefined, message ?? this.#label);
   }
@@ -73,8 +75,15 @@ export class ProgressSession {
     if (this.#pending.size > 0) await Promise.allSettled([...this.#pending]);
   }
 
+  #start(): void {
+    if (this.#started) return;
+    this.#started = true;
+    // Input-only rounds must not restart the originating token's progress.
+    this.#emit('start', 0, undefined, this.#label);
+  }
+
   #emit(
-    kind: 'tick' | 'complete' | 'fail',
+    kind: 'start' | 'tick' | 'complete' | 'fail',
     current: number,
     total: number | undefined,
     message: string,
@@ -87,14 +96,14 @@ export class ProgressSession {
         now - this.#startTime > 5000 ? Math.max(this.#rateLimitMs, 250) : this.#rateLimitMs;
       if (now - this.#lastSentMs < window) return;
     }
-    this.#lastSentMs = now;
+    if (kind !== 'start') this.#lastSentMs = now;
     if (!this.#sink) return;
 
     if (kind === 'complete') {
       current = total ?? current;
       total = current;
     }
-    if (kind !== 'tick') {
+    if (kind === 'complete' || kind === 'fail') {
       current = Math.max(current, this.#lastProgress + 1);
       if (total !== undefined && total < current) total = current;
     }

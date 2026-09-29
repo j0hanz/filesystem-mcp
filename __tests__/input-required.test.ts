@@ -1,7 +1,13 @@
-import type { ServerContext } from '@modelcontextprotocol/server';
-import { createRequestStateCodec, isInputRequiredResult } from '@modelcontextprotocol/server';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { ClientCapabilities, ServerContext } from '@modelcontextprotocol/server';
+import {
+  createMcpHandler,
+  createRequestStateCodec,
+  isInputRequiredResult,
+} from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
@@ -14,7 +20,14 @@ import {
   readAcceptedMultiChoice,
   requestStateCodec,
 } from '../src/core/input-required.ts';
-import { fsErrorMatcher } from './helpers.ts';
+import { createServer } from '../src/server.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  firstTextBlock,
+  fsErrorMatcher,
+  writeTestFile,
+} from './helpers.ts';
 
 /** The two fields `requestStateBinding` reads; everything else is unused. */
 function bindContext(method = 'tools/call', clientId?: string): ServerContext {
@@ -36,6 +49,97 @@ interface FormRequest<K extends string> {
 }
 
 describe('input_required multi-round-trip infrastructure', () => {
+  const modes: {
+    name: string;
+    capabilities: ClientCapabilities | undefined;
+    canElicit: boolean;
+  }[] = [
+    { name: 'unknown', capabilities: undefined, canElicit: true },
+    { name: 'none', capabilities: {}, canElicit: false },
+    { name: 'implicit form', capabilities: { elicitation: {} }, canElicit: true },
+    { name: 'form', capabilities: { elicitation: { form: {} } }, canElicit: true },
+    { name: 'form and URL', capabilities: { elicitation: { form: {}, url: {} } }, canElicit: true },
+    { name: 'URL only', capabilities: { elicitation: { url: {} } }, canElicit: false },
+  ];
+  const hints = {
+    delete: 'Delete the entries inside it individually',
+    move: 'Delete the destination first',
+    copy: 'Pass overwrite=true',
+    create: 'Pass overwrite: true',
+    grant: 'Call list_roots',
+  } as const;
+  for (const op of ['delete', 'move', 'copy', 'create', 'grant'] as const) {
+    for (const mode of modes) {
+      it(`SDK-AUDIT-MODES-001: ${op} honors ${mode.name} capabilities`, async () => {
+        const round = pendingRoundTrip({
+          op,
+          pending: ['/target'],
+          requestState: undefined,
+          clientCapabilities: mode.capabilities,
+          buildInputs: () => [{ key: 'confirm', message: 'Confirm operation?' }],
+          serverCtx: bindContext(),
+        });
+
+        if (mode.canElicit) {
+          assert.strictEqual(isInputRequiredResult(await round), true);
+        } else {
+          await assert.rejects(round, fsErrorMatcher(ErrorCode.INVALID_INPUT, hints[op]));
+        }
+      });
+    }
+  }
+
+  it('SDK-AUDIT-MODES-002: URL-only clients get a recoverable modern create error', async () => {
+    const root = await createTestRoot();
+    const handler = createMcpHandler(
+      async ({ era }) => {
+        const context = await createServer({ cliAllowedDirs: [root] }, { era });
+        const previousOnClose = context.mcp.server.onclose;
+        context.mcp.server.onclose = () => {
+          previousOnClose?.();
+          context.disposeRuntimeState();
+        };
+        return context.mcp;
+      },
+      { legacy: 'reject' },
+    );
+    const client = new Client(
+      { name: 'url-only-test', version: '1.0.0' },
+      {
+        capabilities: { elicitation: { url: {} } },
+        versionNegotiation: { mode: { pin: '2026-07-28' } },
+      },
+    );
+    let elicitations = 0;
+    client.setRequestHandler('elicitation/create', () => {
+      elicitations++;
+      return { action: 'decline' };
+    });
+    try {
+      const target = await writeTestFile(root, 'existing.txt', 'original body');
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+          fetch: (url, init) => handler.fetch(new Request(url, init)),
+        }),
+      );
+      assert.strictEqual(client.getProtocolEra(), 'modern');
+
+      const result = await client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: target, content: 'replacement body' }] },
+      });
+
+      assert.strictEqual(result.isError, true);
+      assert.match(firstTextBlock(result).text ?? '', /overwrite: true/);
+      assert.strictEqual(elicitations, 0);
+      assert.strictEqual(await readFile(target, 'utf8'), 'original body');
+    } finally {
+      await client.close();
+      await handler.close();
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('1. requestStateCodec mint/verify round-trip', async () => {
     const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a', '/b'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());

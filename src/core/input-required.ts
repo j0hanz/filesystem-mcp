@@ -179,7 +179,7 @@ interface PendingRoundTripOpts {
   readonly requestState: (() => PendingState | undefined) | undefined;
   /**
    * What the client declared it can do, or `undefined` when this connection
-   * cannot say. Only a positively-absent `elicitation` short-circuits; see
+   * cannot say. Only positively-absent form support short-circuits; see
    * {@link assertCanElicit}.
    */
   readonly clientCapabilities?: ClientCapabilities | undefined;
@@ -212,7 +212,7 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
 };
 
 /**
- * Fail early, and legibly, when the client cannot answer an embedded request.
+ * Fail early, and legibly, when the client cannot answer an embedded form.
  * The SDK checks each `inputRequests` entry against the declared client
  * capabilities and rejects the whole call with `-32021` before anything reaches
  * the wire — a protocol error the model never sees. Throwing `FsError` here
@@ -225,7 +225,13 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
  */
 function assertCanElicit(op: PendingOp, capabilities: ClientCapabilities | undefined): void {
   if (capabilities === undefined) return;
-  if (capabilities.elicitation !== undefined) return;
+  const elicitation = capabilities.elicitation;
+  if (
+    elicitation !== undefined &&
+    (elicitation.form !== undefined || elicitation.url === undefined)
+  ) {
+    return;
+  }
   throw new FsError(ErrorCode.INVALID_INPUT, `${op}: ${NO_ELICITATION_HINT[op]}`);
 }
 

@@ -526,3 +526,105 @@ describe('rate limiting', () => {
     assert.strictEqual(result.status, 429);
   });
 });
+
+describe('Browser recovery response headers', () => {
+  let root: string;
+  let http: HttpTestContext;
+  const origin = 'http://localhost:8765';
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    http = await bootHttpTest([root], {
+      FS_ALLOWED_ORIGINS: 'localhost',
+      FS_RATE_LIMIT_RPM: '1',
+    });
+  });
+
+  afterEach(async () => {
+    await http.close();
+    await cleanupTestRoot(root);
+  });
+
+  it('SDK-AUDIT-CORS-002: unauthorized responses expose their bearer challenge', async () => {
+    const response = await fetch(http.base, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    await response.text();
+
+    assert.strictEqual(response.status, 401);
+    assert.match(response.headers.get('www-authenticate') ?? '', /^Bearer\b/);
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), origin);
+    assert.strictEqual(
+      response.headers.get('access-control-expose-headers'),
+      'WWW-Authenticate, Retry-After',
+    );
+  });
+
+  it('SDK-AUDIT-CORS-003: rate-limit responses expose their retry delay', async () => {
+    const request = {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: '{}',
+    };
+    const first = await fetch(http.base, request);
+    await first.text();
+    assert.strictEqual(first.status, 401);
+
+    const response = await fetch(http.base, request);
+    await response.text();
+
+    assert.strictEqual(response.status, 429);
+    assert.match(response.headers.get('retry-after') ?? '', /^[1-9]\d*$/);
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), origin);
+    assert.strictEqual(
+      response.headers.get('access-control-expose-headers'),
+      'WWW-Authenticate, Retry-After',
+    );
+  });
+
+  it('SDK-AUDIT-CORS-004: authenticated MCP responses expose the same header names', async () => {
+    const response = await fetch(http.base, {
+      method: 'POST',
+      headers: {
+        Origin: origin,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        Authorization: ['Bearer', TEST_API_KEY].join(' '),
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'cors-test', version: '1.0.0' },
+        },
+      }),
+    });
+    const body = await response.text();
+
+    assert.strictEqual(response.status, 200);
+    assert.match(body, /filesystem-mcp/);
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), origin);
+    assert.strictEqual(
+      response.headers.get('access-control-expose-headers'),
+      'WWW-Authenticate, Retry-After',
+    );
+  });
+
+  it('SDK-AUDIT-CORS-004: disallowed origins remain blocked without exposure', async () => {
+    const response = await fetch(http.base, {
+      method: 'POST',
+      headers: { Origin: 'https://untrusted.example', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    await response.text();
+
+    assert.strictEqual(response.status, 403);
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), null);
+    assert.strictEqual(response.headers.get('access-control-expose-headers'), null);
+  });
+});

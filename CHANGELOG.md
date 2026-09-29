@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **File-resource reads honor cancellation.** Cancelled requests stop before starting work, and raw file reads pass the request signal to Node's buffered read.
+- **URL-only elicitation clients receive actionable tool errors.** Operations requiring a confirmation form now explain the existing workaround instead of failing with a missing-capability protocol error.
+- **Legacy confirmation progress stays increasing.** Access-grant and overwrite rounds no longer restart the same progress token; startup notifications wait until work is reported or the call finishes.
+- **Browser clients can read recovery headers.** Allowed origins can inspect `WWW-Authenticate` on authentication failures and `Retry-After` on rate-limit responses.
 - **Subdirectory walks honor the repository's `.gitignore`.** `find_files`,
   `search_text`, `replace_text` and `list` scoped to a subdirectory now apply
   every `.gitignore` from that directory up to the allowed root that contains

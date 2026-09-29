@@ -366,7 +366,9 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal },
   ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean }> {
+    options?.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
+    options?.signal?.throwIfAborted();
     const stats = await withAbort(fsStat(validPath), options?.signal);
     assertFileStats(filePath, stats);
     // Enforce size limit before reading to avoid loading large files into memory.
@@ -375,7 +377,16 @@ export class GuardedFileSystem {
     if (stats.size > maxTextFileSize) {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
-    const content = await withAbort(fsReadFile(validPath), options?.signal);
+    let content: Buffer;
+    try {
+      content = await fsReadFile(validPath, options);
+    } catch (error) {
+      // Node wraps even a TimeoutError signal reason in AbortError.
+      if (error instanceof Error && error.name === 'AbortError') {
+        options?.signal?.throwIfAborted();
+      }
+      throw error;
+    }
     const mimeInfo = detectMimeFromContent(validPath, content);
     return {
       content,
