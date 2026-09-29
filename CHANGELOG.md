@@ -5,10 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.7.0] - 2026-09-29
+
+A feature and hardening release. Two security fixes close fail-open gaps in
+the sensitive-file policy and the root boundary, resource links and write
+results now carry modification times, `--print-config` reports the protocol
+revisions the binary negotiates, and one inbound-message bound derived from
+`FS_MAX_FILE_SIZE` now governs both transports. The only published schema
+change is `create`'s `files` description. Before upgrading, read
+**Security** (directory `move`/`copy` can now refuse a tree it used to
+transfer; `--root-boundary` can now skip startup roots it used to allow),
+**Changed** (one `create` call's combined content is capped at
+`FS_MAX_FILE_SIZE`), and **Fixed** (subdirectory walks can return fewer
+entries now that ancestor `.gitignore` files apply).
+
+### Security
+
+- **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before. The pre-walk fails closed when it cannot inspect the whole tree.
+- **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
+
+### Added
+
+- **Modification times on links and results.** `resource_link` blocks from `read`, `create`, `edit`, `patch` and `replace_text` carry `annotations.lastModified`; `read` entries carry `modified`, and `create` and `replace_text` results carry `lastModified`. Cached-result resources report their creation time the same way.
+- **`--print-config` reports protocol and wire limits.** A `protocol` block names the modern revision, the legacy versions the SDK supports and the pinned SDK packages; `limits` adds `maxInboundMessageBytes`.
+
+### Changed
+
+- **One inbound-message bound for both transports.** The stdio read buffer and the HTTP body limit are both `3 × FS_MAX_FILE_SIZE + 1 MiB` (31 MiB by default; previously 10 MiB on stdio and 4 MiB on HTTP), and the 413 response and stdio overflow log name the bound. One `create` call's combined content is now capped at `FS_MAX_FILE_SIZE`, so a schema-valid batch always fits on the wire; a larger batch is refused with a message to split it.
+- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
+- **`search_text` is faster on large trees.** Files are read with bounded concurrency and each file is tested once as a whole before its lines are scanned, so a search over thousands of non-matching files no longer approaches the 5 s limit. Results are unchanged; `filesScanned` may count a few files past the result cap.
 
 ### Fixed
 
+- **Dropped confirmations are asked again.** When the SDK discards a client's answer to a confirmation form (a wrapped result instead of the bare elicitation result), `create`, `delete` and `move` re-issue the question once instead of refusing; a second drop is named as such in the `CANCELLED` refusal.
 - **Rejected stdio cancellation requests preserve subscriptions.** Requests mistaken for cancellation notifications no longer suppress queued subscriptions or detach active file watchers.
 - **File-resource reads honor cancellation.** Cancelled requests stop before starting work, and raw file reads pass the request signal to Node's buffered read.
 - **URL-only elicitation clients receive actionable tool errors.** Operations requiring a confirmation form now explain the existing workaround instead of failing with a missing-capability protocol error.
@@ -19,14 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every `.gitignore` from that directory up to the allowed root that contains
   it, nearest file winning, as git does. Nothing above an allowed root is read.
 - **`search_text` on a file whose name contains glob characters.** Naming `pages/[slug].tsx` searched other same-directory files (the name was read as a glob); it now searches exactly that file.
+- **`search_text` counts skipped binary files as scanned** and caps matches per file before assembling results.
 - **Globs may contain `..` inside a segment.** `docs/v1..2.md` and `**/[..]x` are accepted by `find_files`, `search_text` and `replace_text`; only a whole `..` segment or brace alternative is refused. (Brackets remain a character class, as in any glob.)
-- **Directory move/copy keeps the sensitive-file policy invariant.** A directory transfer is refused (`ACCESS_DENIED`, nothing moves) when any entry in its tree would change protection status: a file denied at its source but not at the destination (an operator `secrets/**` moved to `public/`), or a file that would land on a protected path (a tree that would create `.aws/credentials`). Entries protected by name (`.env`, `*.pem`) stay protected either way and move with their directory as before.
-- **`--root-boundary` now applies to startup roots.** Positional directories, `FS_ALLOWED_DIRS` and `--allow-cwd` roots outside the boundary are skipped with a warning instead of being allowed; previously only access grants were checked.
-
-### Changed
-
-- **MCP SDK 2.2.0.** `@modelcontextprotocol/server` and the test client move from 2.1.0 to 2.2.0 (patch-level SDK fixes: no unhandled rejection when notifying a closed connection; `subscriptions/listen` streams that honor no notification type now close after the acknowledgement). `@modelcontextprotocol/node` 2.1.0 and `@modelcontextprotocol/express` 2.0.1 are unchanged (latest).
-- **`search_text` is faster on large trees.** Files are read with bounded concurrency and each file is tested once as a whole before its lines are scanned, so a search over thousands of non-matching files no longer approaches the 5 s limit. Results are unchanged; `filesScanned` may count a few files past the result cap.
 
 ## [2.6.3] - 2026-09-28
 
