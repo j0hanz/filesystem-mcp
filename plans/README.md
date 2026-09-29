@@ -270,11 +270,11 @@ fail 1` with no assertion — a test process died mid-file (23 tests
     `DEFAULT_MAX_REQUEST_BODY_SIZE` still exported. Tip `8b72836e`: 472
     tests, 469 pass, 3 skips, `npm audit` 0, one `core@2.2.0`.
   - **Stack summary:** `advisor/047-sdk-2.2.0` carries all seven plans —
-    31 commits, 19 files, +1035/−132 over `main` (`4d751c94`). Worktree:
-    `%TEMP%\fsmcp-wt\stack`. Not merged, not pushed; the operator decides.
-    Suggested merge check: CI on Ubuntu (035's POSIX-only paths, 044's
-    `.gitignore` chain and 045's concurrency have only been run on Windows
-    here).
+    31 commits, 19 files, +1035/−132 over `main` (`4d751c94`), plus the
+    plan records. Pushed and opened as
+    [#42](https://github.com/j0hanz/filesystem-mcp/pull/42); CI green on
+    Ubuntu (1m04), Windows (1m42) and release-paths (35s) at `be4c3a07`.
+    Not merged; the operator decides. Worktree: `%TEMP%\fsmcp-wt\stack`.
 - **Platform notes.** 041's STDIO-CLI-003 compares paths case-insensitively
   because the Windows runner's `tmpdir()` is an 8.3 alias. 043's decoy
   fixture (`s.tsx` beside `[slug].tsx`) is what a character class matches on
