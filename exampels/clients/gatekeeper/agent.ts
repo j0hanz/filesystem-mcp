@@ -15,10 +15,6 @@ type Msg = {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 };
-type OpenAITool = {
-  type: 'function';
-  function: { name: string; description: string; parameters: unknown };
-};
 
 const MAX_ROUNDS = 25;
 const PROVIDERS: Record<string, { baseUrl: string; keyEnv?: string }> = {
@@ -130,11 +126,6 @@ client.setRequestHandler('elicitation/create', async (request) => {
   return { action: 'decline' }; // e.g. a multi-select grant
 });
 
-function withoutCombinators(schema: Tool['inputSchema']): Record<string, unknown> {
-  const { oneOf, anyOf, allOf, not, ...rest } = schema as Record<string, unknown>;
-  return rest;
-}
-
 function toText(result: CallToolResult): string {
   const text = result.content
     .flatMap((block) => (block.type === 'text' ? [block.text] : []))
@@ -160,12 +151,6 @@ async function gate(
     );
     if (preview.startsWith('ERROR: ')) return preview; // nothing sane to approve
     console.log(preview);
-  } else if (Array.isArray(args.files)) {
-    const files = args.files as { path?: string; content?: string }[];
-    const summary = files.map((f) => `${f.path} (${f.content?.split('\n').length ?? 0} lines)`);
-    console.log(`${tool.name} ${summary.join(', ')}`);
-  } else {
-    console.log(`${tool.name} ${JSON.stringify(args).slice(0, 120)}`);
   }
   // ponytail: no stale-preview check between dry run and apply; exact-match
   // edit fails instead of corrupting, and the model sees that error.
@@ -192,7 +177,7 @@ async function runTool(call: ToolCall, signal: AbortSignal): Promise<string> {
   }
 }
 
-async function chat(messages: Msg[], tools: OpenAITool[], signal: AbortSignal): Promise<Msg> {
+async function chat(messages: Msg[], tools: unknown[], signal: AbortSignal): Promise<Msg> {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -212,23 +197,20 @@ async function chat(messages: Msg[], tools: OpenAITool[], signal: AbortSignal): 
 }
 
 try {
-  try {
-    await client.connect(transport);
-  } catch (error) {
+  await client.connect(transport).catch((error) => {
     throw new Error(`filesystem-mcp failed to start: ${String(error)}\n${serverLog}`);
-  }
+  });
   const { tools } = await client.listTools();
   for (const tool of tools) toolsByName.set(tool.name, tool);
-  const openaiTools: OpenAITool[] = tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description ?? '',
-      // OpenAI and Anthropic reject top-level combinators; the server still
-      // validates the arguments.
-      parameters: withoutCombinators(tool.inputSchema),
-    },
-  }));
+  const openaiTools = tools.map((tool) => {
+    // OpenAI and Anthropic reject top-level combinators; the server still
+    // validates the arguments.
+    const { oneOf, anyOf, allOf, not, ...parameters } = tool.inputSchema as Record<string, unknown>;
+    return {
+      type: 'function',
+      function: { name: tool.name, description: tool.description ?? '', parameters },
+    };
+  });
   const { contents } = await client.readResource({ uri: 'internal://instructions' });
   const instructions = contents.map((c) => ('text' in c ? c.text : '')).join('\n');
   const messages: Msg[] = [

@@ -142,6 +142,11 @@ r = await runAgent({
 assert.match(lastToolMessage(r), /^ERROR: /);
 assert.equal(await readA(), 'bye\n');
 
+const createFile = (name: string): Call => ({
+  tool: 'create',
+  args: JSON.stringify({ files: [{ path: name, content: 'x\n' }] }),
+});
+
 // Server confirmations: access outside the root, then an overwrite choice.
 const outside = await workspace();
 const statOutside = {
@@ -152,12 +157,8 @@ r = await runAgent({ dir, stdin: 'y\n', script: [statOutside] });
 assert.doesNotMatch(lastToolMessage(r), /^ERROR: /);
 r = await runAgent({ dir, stdin: 'n\n', script: [statOutside] });
 assert.match(lastToolMessage(r), /^ERROR: /);
-const overwrite = {
-  tool: 'create',
-  args: JSON.stringify({ files: [{ path: 'a.txt', content: 'new\n' }] }),
-};
-r = await runAgent({ dir, stdin: 'y\n1\n', script: [overwrite] }); // gate y, then choice 1
-assert.equal(await readA(), 'new\n');
+r = await runAgent({ dir, stdin: 'y\n1\n', script: [createFile('a.txt')] }); // gate y, then choice 1
+assert.equal(await readA(), 'x\n');
 
 // Server dies mid-turn: the session ends with a clear message instead of
 // carrying on with no tools.
@@ -197,10 +198,6 @@ process.stdout.write = (chunk, ...rest) => {
   return write(chunk, ...rest);
 };`,
 );
-const createFile = (name: string): Call => ({
-  tool: 'create',
-  args: JSON.stringify({ files: [{ path: name, content: 'x\n' }] }),
-});
 r = await runAgent({
   dir,
   stdin: 'n\nsecond\n',
