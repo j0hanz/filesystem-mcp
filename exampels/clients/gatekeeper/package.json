@@ -1,0 +1,17 @@
+{
+  "name": "gatekeeper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Terminal coding agent with an approval gate, built on filesystem-mcp",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node agent.ts",
+    "test": "node check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  }
+}

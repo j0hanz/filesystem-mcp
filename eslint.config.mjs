@@ -18,7 +18,7 @@ const nodeBuiltinImportRestrictions = nodeBuiltins.map((name) => ({
 export default tseslint.config(
   {
     name: 'project/global-ignores',
-    ignores: ['dist/**', 'node_modules/**', '.claude/**'],
+    ignores: ['dist/**', 'node_modules/**', '.claude/**', 'exampels/**'],
   },
 
   {
