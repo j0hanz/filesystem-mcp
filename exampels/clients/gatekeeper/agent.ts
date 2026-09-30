@@ -88,6 +88,29 @@ const client = new Client(
   },
 );
 
+// The server's own questions: access outside the root, overwrites, recursive
+// deletes. Its forms are one boolean `confirm` or one enum `choice`.
+client.setRequestHandler('elicitation/create', async (request) => {
+  const params = request.params;
+  if (params.mode === 'url') return { action: 'decline' };
+  const fields = Object.entries(params.requestedSchema.properties);
+  if (fields.length !== 1) return { action: 'decline' };
+  const [key, field] = fields[0] as [string, { type?: string; enum?: string[] }];
+  console.log(`server asks: ${params.message}`);
+  if (field.type === 'boolean') {
+    const answer = await ask('y/N ');
+    return answer?.trim().toLowerCase() === 'y'
+      ? { action: 'accept', content: { [key]: true } }
+      : { action: 'decline' };
+  }
+  if (field.enum) {
+    field.enum.forEach((option, n) => console.log(`  ${n + 1}) ${option}`));
+    const picked = field.enum[Number(await ask('choice: ')) - 1];
+    return picked ? { action: 'accept', content: { [key]: picked } } : { action: 'decline' };
+  }
+  return { action: 'decline' }; // e.g. a multi-select grant
+});
+
 function toText(result: CallToolResult): string {
   const text = result.content
     .flatMap((block) => (block.type === 'text' ? [block.text] : []))

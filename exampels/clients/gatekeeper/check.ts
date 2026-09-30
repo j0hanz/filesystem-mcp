@@ -130,4 +130,21 @@ r = await runAgent({
 assert.match(lastToolMessage(r), /^ERROR: /);
 assert.equal(await readA(), 'bye\n');
 
+// Server confirmations: access outside the root, then an overwrite choice.
+const outside = await workspace();
+const statOutside = {
+  tool: 'stat',
+  args: JSON.stringify({ path: join(outside, 'a.txt') }),
+};
+r = await runAgent({ dir, stdin: 'y\n', script: [statOutside] });
+assert.doesNotMatch(lastToolMessage(r), /^ERROR: /);
+r = await runAgent({ dir, stdin: 'n\n', script: [statOutside] });
+assert.match(lastToolMessage(r), /^ERROR: /);
+const overwrite = {
+  tool: 'create',
+  args: JSON.stringify({ files: [{ path: 'a.txt', content: 'new\n' }] }),
+};
+r = await runAgent({ dir, stdin: 'y\n1\n', script: [overwrite] }); // gate y, then choice 1
+assert.equal(await readA(), 'new\n');
+
 console.log('check: ok');
