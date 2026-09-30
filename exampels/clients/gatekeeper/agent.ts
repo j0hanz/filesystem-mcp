@@ -34,10 +34,9 @@ const USAGE = `usage: node agent.ts <dir> [task] [--provider ${Object.keys(PROVI
 
   --model (or LLM_MODEL) is required, e.g.
     --provider ollama --model qwen3
+    --provider gemini --model gemini-flash-latest
     --provider anthropic --model claude-sonnet-5-5
   LLM_BASE_URL and LLM_API_KEY override the provider preset.`;
-
-// --- CLI -------------------------------------------------------------------
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -54,8 +53,6 @@ const dir = resolve(dirArg);
 const baseUrl = process.env.LLM_BASE_URL || preset.baseUrl;
 const apiKey = process.env.LLM_API_KEY || (preset.keyEnv && process.env[preset.keyEnv]);
 
-// --- Terminal input --------------------------------------------------------
-
 // One shared line iterator: it buffers piped lines that arrive before a prompt
 // is asked, where rl.question() would drop them.
 const rl = createInterface({ input: process.stdin });
@@ -66,8 +63,6 @@ async function ask(prompt: string): Promise<string | null> {
   const { value, done } = await lines.next();
   return done ? null : value;
 }
-
-// --- MCP client --------------------------------------------------------------
 
 const bin = process.env.FS_MCP_BIN;
 const transport = new StdioClientTransport({
@@ -167,8 +162,6 @@ async function runTool(call: ToolCall, signal: AbortSignal): Promise<string> {
   }
 }
 
-// --- LLM ---------------------------------------------------------------------
-
 async function chat(messages: Msg[], tools: OpenAITool[], signal: AbortSignal): Promise<Msg> {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -187,8 +180,6 @@ async function chat(messages: Msg[], tools: OpenAITool[], signal: AbortSignal): 
   const body = (await response.json()) as { choices: { message: Msg }[] };
   return body.choices[0].message;
 }
-
-// --- Session -----------------------------------------------------------------
 
 try {
   try {
