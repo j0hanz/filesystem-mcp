@@ -101,4 +101,33 @@ assert.match(r.stderr, /--model/);
 r = await runAgent({ dir, stdin: '', script: [], env: { LLM_BASE_URL: 'http://127.0.0.1:9/v1' } });
 assert.equal(r.code, 1);
 
+// Approval gate on a destructive tool.
+const readA = (): Promise<string> => readFile(join(dir, 'a.txt'), 'utf8');
+const editCall = {
+  tool: 'edit',
+  args: JSON.stringify({ path: 'a.txt', edits: [{ oldText: 'hello', newText: 'bye' }] }),
+};
+r = await runAgent({ dir, stdin: 'why: keep it\n', script: [editCall] });
+assert.equal(await readA(), 'hello\n');
+assert.equal(lastToolMessage(r), 'rejected by user: keep it');
+r = await runAgent({ dir, stdin: '', script: [editCall] }); // EOF at the prompt = N
+assert.equal(r.code, 0, r.stderr);
+assert.equal(await readA(), 'hello\n');
+assert.equal(lastToolMessage(r), 'rejected by user');
+r = await runAgent({ dir, stdin: 'y\n', script: [editCall] });
+assert.equal(await readA(), 'bye\n');
+// A failing dry run goes straight to the model; the 'y' is never read.
+r = await runAgent({
+  dir,
+  stdin: 'y\n',
+  script: [
+    {
+      tool: 'edit',
+      args: JSON.stringify({ path: 'a.txt', edits: [{ oldText: 'zzz', newText: 'q' }] }),
+    },
+  ],
+});
+assert.match(lastToolMessage(r), /^ERROR: /);
+assert.equal(await readA(), 'bye\n');
+
 console.log('check: ok');

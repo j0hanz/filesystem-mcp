@@ -1,7 +1,7 @@
 // gatekeeper: a terminal coding agent. filesystem-mcp provides the workspace
 // tools; any OpenAI-compatible chat endpoint provides the model.
 import { Client } from '@modelcontextprotocol/client';
-import type { CallToolResult } from '@modelcontextprotocol/client';
+import type { CallToolResult, Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { resolve } from 'node:path';
@@ -95,10 +95,48 @@ function toText(result: CallToolResult): string {
   return result.isError ? `ERROR: ${text}` : text;
 }
 
+// Filled from listTools(); annotations and schemas drive the gate.
+const toolsByName = new Map<string, Tool>();
+
+// Returns null when the user approves, else the tool result to send the model.
+async function gate(
+  tool: Tool,
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<string | null> {
+  if ('dryRun' in (tool.inputSchema.properties ?? {})) {
+    const preview = toText(
+      (await client.callTool(
+        { name: tool.name, arguments: { ...args, dryRun: true } },
+        { signal },
+      )) as CallToolResult,
+    );
+    if (preview.startsWith('ERROR: ')) return preview; // nothing sane to approve
+    console.log(preview);
+  } else if (Array.isArray(args.files)) {
+    const files = args.files as { path?: string; content?: string }[];
+    const summary = files.map((f) => `${f.path} (${f.content?.split('\n').length ?? 0} lines)`);
+    console.log(`${tool.name} ${summary.join(', ')}`);
+  } else {
+    console.log(`${tool.name} ${JSON.stringify(args).slice(0, 120)}`);
+  }
+  // ponytail: no stale-preview check between dry run and apply; exact-match
+  // edit fails instead of corrupting, and the model sees that error.
+  const answer = (await ask('apply? [y/N/why] '))?.trim() ?? '';
+  if (answer.toLowerCase() === 'y') return null;
+  const why = /^why:\s*(.+)/i.exec(answer)?.[1];
+  return why ? `rejected by user: ${why}` : 'rejected by user';
+}
+
 async function runTool(call: ToolCall, signal: AbortSignal): Promise<string> {
   try {
     const args = JSON.parse(call.function.arguments || '{}');
     console.log(`· ${call.function.name} ${JSON.stringify(args).slice(0, 120)}`);
+    const tool = toolsByName.get(call.function.name);
+    if (tool?.annotations?.destructiveHint) {
+      const refusal = await gate(tool, args, signal);
+      if (refusal !== null) return refusal;
+    }
     const result = await client.callTool({ name: call.function.name, arguments: args }, { signal });
     return toText(result as CallToolResult);
   } catch (error) {
@@ -136,6 +174,7 @@ try {
     throw new Error(`filesystem-mcp failed to start: ${String(error)}\n${serverLog}`);
   }
   const { tools } = await client.listTools();
+  for (const tool of tools) toolsByName.set(tool.name, tool);
   const openaiTools: OpenAITool[] = tools.map((tool) => ({
     type: 'function',
     function: {
@@ -150,8 +189,11 @@ try {
     { role: 'system', content: `${instructions}\n\nWorkspace root: ${dir}` },
   ];
 
-  const turn = async (input: string): Promise<void> => {
-    const controller = new AbortController();
+  // Ctrl+C aborts the running turn; at the prompt it ends the session.
+  let current: AbortController | null = null;
+  process.on('SIGINT', () => (current ? current.abort() : rl.close()));
+
+  const turn = async (input: string, controller: AbortController): Promise<void> => {
     messages.push({ role: 'user', content: input });
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const reply = await chat(messages, openaiTools, controller.signal);
@@ -169,7 +211,18 @@ try {
   };
 
   for (let line = task ?? (await ask('> ')); line !== null; line = await ask('> ')) {
-    if (line.trim()) await turn(line);
+    if (!line.trim()) continue;
+    const start = messages.length;
+    current = new AbortController();
+    try {
+      await turn(line, current);
+    } catch (error) {
+      if (!current.signal.aborted) throw error;
+      messages.length = start; // drop the half-finished turn so history stays valid
+      console.log('(interrupted)');
+    } finally {
+      current = null;
+    }
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
