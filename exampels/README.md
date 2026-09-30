@@ -24,9 +24,9 @@ Apps that call a model speak the OpenAI-compatible Chat Completions API over
 `fetch`, with no vendor SDK. Pick a provider with `--provider`, or point
 `LLM_BASE_URL` at any compatible host.
 
-| `--provider` | Base URL                                                  | Key env var         |
-| :----------- | :-------------------------------------------------------- | :------------------ |
-| `ollama`     | `http://localhost:11434/v1`                               | none                |
-| `openai`     | `https://api.openai.com/v1`                               | `OPENAI_API_KEY`    |
-| `anthropic`  | `https://api.anthropic.com/v1`                            | `ANTHROPIC_API_KEY` |
-| `gemini`     | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY`    |
+| `--provider` | Base URL                                                  | Key env var         | Tested  |
+| :----------- | :-------------------------------------------------------- | :------------------ | :------ |
+| `ollama`     | `http://localhost:11434/v1`                               | none                | yes     |
+| `gemini`     | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY`    | yes     |
+| `openai`     | `https://api.openai.com/v1`                               | `OPENAI_API_KEY`    | not yet |
+| `anthropic`  | `https://api.anthropic.com/v1`                            | `ANTHROPIC_API_KEY` | not yet |

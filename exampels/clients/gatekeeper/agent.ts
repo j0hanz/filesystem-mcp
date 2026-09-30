@@ -55,11 +55,24 @@ const apiKey = process.env.LLM_API_KEY || (preset.keyEnv && process.env[preset.k
 
 // One shared line iterator: it buffers piped lines that arrive before a prompt
 // is asked, where rl.question() would drop them.
-const rl = createInterface({ input: process.stdin });
+// In a terminal, raw mode turns Ctrl+C into a keypress: no SIGINT reaches the
+// server, which shares our process group on POSIX.
+const rl = createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  terminal: Boolean(process.stdin.isTTY),
+});
 const lines = rl[Symbol.asyncIterator]();
+let inputClosed = false;
+rl.on('close', () => (inputClosed = true));
 
 async function ask(prompt: string): Promise<string | null> {
-  process.stdout.write(prompt);
+  if (inputClosed) {
+    process.stdout.write(prompt); // lines may still be buffered after EOF
+  } else {
+    rl.setPrompt(prompt);
+    rl.prompt();
+  }
   const { value, done } = await lines.next();
   return done ? null : value;
 }
@@ -83,6 +96,17 @@ const client = new Client(
   },
 );
 
+let current: AbortController | null = null; // the running turn, if any
+let closing = false;
+// A server that dies mid-session ends it; carrying on would leave no tools.
+client.onclose = () => {
+  if (closing) return;
+  console.error('filesystem-mcp exited');
+  process.exitCode = 1;
+  current?.abort();
+  rl.close();
+};
+
 // The server's own questions: access outside the root, overwrites, recursive
 // deletes. Its forms are one boolean `confirm` or one enum `choice`.
 client.setRequestHandler('elicitation/create', async (request) => {
@@ -105,6 +129,11 @@ client.setRequestHandler('elicitation/create', async (request) => {
   }
   return { action: 'decline' }; // e.g. a multi-select grant
 });
+
+function withoutCombinators(schema: Tool['inputSchema']): Record<string, unknown> {
+  const { oneOf, anyOf, allOf, not, ...rest } = schema as Record<string, unknown>;
+  return rest;
+}
 
 function toText(result: CallToolResult): string {
   const text = result.content
@@ -158,6 +187,7 @@ async function runTool(call: ToolCall, signal: AbortSignal): Promise<string> {
     const result = await client.callTool({ name: call.function.name, arguments: args }, { signal });
     return toText(result as CallToolResult);
   } catch (error) {
+    if (signal.aborted) throw error; // Ctrl+C ends the turn, not just this call
     return `ERROR: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
@@ -194,7 +224,9 @@ try {
     function: {
       name: tool.name,
       description: tool.description ?? '',
-      parameters: tool.inputSchema,
+      // OpenAI and Anthropic reject top-level combinators; the server still
+      // validates the arguments.
+      parameters: withoutCombinators(tool.inputSchema),
     },
   }));
   const { contents } = await client.readResource({ uri: 'internal://instructions' });
@@ -204,8 +236,9 @@ try {
   ];
 
   // Ctrl+C aborts the running turn; at the prompt it ends the session.
-  let current: AbortController | null = null;
-  process.on('SIGINT', () => (current ? current.abort() : rl.close()));
+  const interrupt = (): void => (current ? current.abort() : rl.close());
+  rl.on('SIGINT', interrupt); // terminal (raw mode)
+  process.on('SIGINT', interrupt); // piped input
 
   const turn = async (input: string, controller: AbortController): Promise<void> => {
     messages.push({ role: 'user', content: input });
@@ -217,6 +250,7 @@ try {
         return;
       }
       for (const call of reply.tool_calls) {
+        controller.signal.throwIfAborted(); // no gate prompts after Ctrl+C
         const content = await runTool(call, controller.signal);
         messages.push({ role: 'tool', tool_call_id: call.id, content });
       }
@@ -242,6 +276,7 @@ try {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 } finally {
+  closing = true;
   rl.close();
   await client.close();
 }
