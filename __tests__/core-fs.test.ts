@@ -682,6 +682,22 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       ]);
       assert.strictEqual(all.summary.skippedBinary, 1);
     });
+
+    it('an aborted search over a tree with no match reports timeout, not a complete scan', async () => {
+      const dir = join(tmpDir, 'search_aborted_dir');
+      for (let i = 0; i < 20; i++)
+        await fs.mkdir(join(dir, `d${String(i)}`, 'inner'), { recursive: true });
+      const signal = AbortSignal.abort(new Error('deadline'));
+
+      const files = await searchFiles(dir, '**/*.nomatch', { signal }, ctx.pathGuard);
+      assert.strictEqual(files.results.length, 0);
+      assert.strictEqual(files.summary.stoppedReason, 'timeout');
+      assert.strictEqual(files.summary.truncated, true);
+
+      const content = await searchContent(dir, 'NEEDLE', { isRegex: false, signal }, ctx.pathGuard);
+      assert.strictEqual(content.matches.length, 0);
+      assert.strictEqual(content.summary.stoppedReason, 'timeout');
+    });
   });
 
   describe('Delete guards (TC-FUNC-018–020)', () => {

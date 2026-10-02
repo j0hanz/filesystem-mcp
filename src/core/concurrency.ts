@@ -120,52 +120,65 @@ export async function processEntriesConcurrently(
     await Promise.race(pending);
   };
 
-  for await (const entry of entries) {
-    // The signal is cancellation OR the caller's timeout: stop dispatching and
-    // let the caller report the run as incomplete rather than as a full sweep.
-    if (signal?.aborted) {
-      stoppedReason = 'timeout';
-      break;
-    }
-    if (maxEntries !== undefined && dispatched >= maxEntries) {
-      stoppedReason = 'maxFiles';
-      break;
-    }
-    // Check the result cap before waiting for a slot so an in-flight task that
-    // already crossed the cap stops dispatch without an extra wait...
-    if (shouldStop?.()) {
-      stoppedReason = 'maxResults';
-      break;
-    }
-    await waitForSlot();
-    // ...and again after the slot frees, since tasks settle concurrently. The
-    // cap can still be exceeded by at most `concurrency - 1` already-dispatched
-    // tasks that are mid-flight; that overrun is inherent to concurrent dispatch.
-    if (shouldStop?.()) {
-      stoppedReason = 'maxResults';
-      break;
-    }
-    onEntry();
-    dispatched++;
+  let walkFailed = false;
+  let walkError: unknown;
+  try {
+    for await (const entry of entries) {
+      // The signal is cancellation OR the caller's timeout: stop dispatching and
+      // let the caller report the run as incomplete rather than as a full sweep.
+      if (signal?.aborted) {
+        stoppedReason = 'timeout';
+        break;
+      }
+      if (maxEntries !== undefined && dispatched >= maxEntries) {
+        stoppedReason = 'maxFiles';
+        break;
+      }
+      // Check the result cap before waiting for a slot so an in-flight task that
+      // already crossed the cap stops dispatch without an extra wait...
+      if (shouldStop?.()) {
+        stoppedReason = 'maxResults';
+        break;
+      }
+      await waitForSlot();
+      // ...and again after the slot frees, since tasks settle concurrently. The
+      // cap can still be exceeded by at most `concurrency - 1` already-dispatched
+      // tasks that are mid-flight; that overrun is inherent to concurrent dispatch.
+      if (shouldStop?.()) {
+        stoppedReason = 'maxResults';
+        break;
+      }
+      onEntry();
+      dispatched++;
 
-    // Track a non-rejecting wrapper so a rejected task can never propagate out of
-    // Promise.race(pending) in waitForSlot() and abort the loop before the final
-    // drain below (which would silently abandon other in-flight tasks).
-    // runEntry is expected to catch its own errors; if it unexpectedly throws,
-    // record it as a failure rather than silently dropping it.
-    const tracked = runEntry(entry.path).catch((err: unknown) => {
-      onError?.(entry.path, err);
-    });
-    pending.add(tracked);
-    void tracked.finally(() => {
-      pending.delete(tracked);
-    });
+      // Track a non-rejecting wrapper so a rejected task can never propagate out of
+      // Promise.race(pending) in waitForSlot() and abort the loop before the final
+      // drain below (which would silently abandon other in-flight tasks).
+      // runEntry is expected to catch its own errors; if it unexpectedly throws,
+      // record it as a failure rather than silently dropping it.
+      const tracked = runEntry(entry.path).catch((err: unknown) => {
+        onError?.(entry.path, err);
+      });
+      pending.add(tracked);
+      void tracked.finally(() => {
+        pending.delete(tracked);
+      });
+    }
+  } catch (error) {
+    // A walk the signal cut short throws its reason (see globEntries): that is
+    // the same timeout as the check above, not a failed walk.
+    if (signal?.aborted) stoppedReason = 'timeout';
+    else {
+      walkFailed = true;
+      walkError = error;
+    }
   }
 
   if (pending.size > 0) {
     await Promise.allSettled([...pending]);
   }
 
+  if (walkFailed) throw walkError;
   return stoppedReason;
 }
 

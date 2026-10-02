@@ -137,6 +137,7 @@ class GitignoreManager {
         // Skip what the walk itself skips, and stop one level past its depth
         // bound: a .gitignore at depth d only affects entries at depth >= d.
         exclude: (entry: string) => {
+          if (signal?.aborted) return true;
           const name = basename(entry);
           if (name === '.hg' || name === '.svn' || DEFAULT_EXCLUDED_NAMES.has(name)) return true;
           return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
@@ -405,8 +406,9 @@ function createWalkFilter(
   skipIgnored: boolean,
   gitignoreMatcher: GitignoreManager | null,
   maxDepth: number | undefined,
+  signal: AbortSignal | undefined,
 ): WalkFilter | undefined {
-  if (!skipIgnored && maxDepth === undefined) return undefined;
+  if (!skipIgnored && maxDepth === undefined && signal === undefined) return undefined;
 
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
@@ -423,6 +425,9 @@ function createWalkFilter(
 
   return {
     prune: (match) => {
+      // fs.glob takes no signal and calls this for every entry it visits, so
+      // pruning everything is the only way to stop a walk that yields nothing.
+      if (signal?.aborted) return true;
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) return true;
@@ -442,6 +447,7 @@ async function* processGlobPattern(
   seen: Set<string>,
   onlyFiles: boolean,
   filter: WalkFilter | undefined,
+  signal: AbortSignal | undefined,
 ): AsyncGenerator<GlobEntry> {
   const { cwd, maxDepth, suppressErrors } = plan;
   let iterable: AsyncIterable<GlobDirentLike>;
@@ -458,6 +464,7 @@ async function* processGlobPattern(
 
   try {
     for await (const match of iterable) {
+      if (signal?.aborted) break;
       // A function `exclude` only prunes descent in fs.glob — it still yields
       // the rejected dirent itself, and any rejected entry below the top level.
       // Re-apply the ignore rules (not the depth bound) to drop those.
@@ -470,6 +477,9 @@ async function* processGlobPattern(
       `globEntries: suppressed mid-walk error for pattern "${pattern}": ${formatUnknownErrorMessage(error)}`,
     );
   }
+  // A pruned walk ends like a finished one. Say it was cut short, so no caller
+  // reads "the walk ended" as "the whole tree was seen".
+  signal?.throwIfAborted();
 }
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
@@ -490,10 +500,11 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.skipIgnored ?? false,
     gitignoreMatcher,
     plan.maxDepth,
+    options.signal,
   );
 
   for (const pattern of plan.patterns) {
-    yield* processGlobPattern(pattern, plan, seen, onlyFiles, filter);
+    yield* processGlobPattern(pattern, plan, seen, onlyFiles, filter, options.signal);
   }
 }
 
