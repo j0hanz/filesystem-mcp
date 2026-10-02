@@ -603,11 +603,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
             `${tool.name} must publish a dereferenced input schema without $defs`,
           );
         }
-        assert.strictEqual(
-          (tool.outputSchema as { $defs?: unknown } | undefined)?.$defs,
-          undefined,
-          `${tool.name} must publish a dereferenced output schema without $defs`,
-        );
       }
 
       // Zod defaults still reach the handler: edit applies with dryRun's
@@ -3319,25 +3314,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   });
 
   // The session-start cost a client pays before its first tool call. Lower this
-  // ceiling when a step in the payload plan removes weight; never raise it
-  // without a recorded reason. Baseline at commit 528760ea: 41410 / 20862.
-  // After the payload trims and the opt-in outputSchema policy: 24246 / 11536,
-  // a 41% cut. The three tools that still publish an output schema account for
-  // 6334 of the full figure (read 2806, edit 2554, delete 974) — the plan's
-  // projection put that add-back at ~4000, which is the whole of the gap
-  // against its 18500 target.
-  // Raised once since, deliberately: `replace_text` joined the tools that
-  // publish an output schema (+2042) when its result moved to the shared
-  // `{ results, summary }` envelope, whose value-XOR-error union a sample
-  // response cannot convey. `list` was considered and refused — its fields are
-  // plain scalars, so its 1599 chars bought nothing.
-  // Raised again, deliberately: read's `continuation.args` was a free-form
-  // record rendering as `additionalProperties: {}` — no validation keyword, so
-  // it told a client nothing about what to pass back. Spelling out the three
-  // fields it actually carries costs +42.
+  // ceiling when a change removes weight; never raise it without a recorded
+  // reason. History before this baseline (the 528760ea start at 41410 / 20862,
+  // and the output-schema add-backs) no longer applies: since f9199c80 no tool
+  // publishes an output schema. Baseline measured 2026-10-02, after the arch
+  // audit follow-ups: 18154 full / 8950 read-only. Each ceiling sits about 2%
+  // above its measurement, so a regression of a few hundred characters fails.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 26_900;
-    const BUDGET_CHARS_READ_ONLY = 12_000;
+    const BUDGET_CHARS = 18_500;
+    const BUDGET_CHARS_READ_ONLY = 9_150;
 
     const full = await createTestClientPair([tmpDir]);
     try {
