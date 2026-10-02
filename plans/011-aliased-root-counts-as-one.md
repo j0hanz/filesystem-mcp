@@ -172,6 +172,8 @@ containment and need both spellings:
 - `isAllowedRoot`, so deleting a root is refused under either spelling
 - the symlink ancestor walk
 - `src/core/path-completer.ts`
+  (superseded 2026-10-02: its root pick and root listing now read
+  `getRoots()`; see `docs/plan/2026-10-02-arch-audit-followups/`)
 
 Do not change any of them.
 

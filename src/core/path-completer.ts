@@ -185,23 +185,26 @@ function getSearchContext(
  * every match, sorted; the SDK truncates to 100 and reports the total.
  */
 export async function suggestPaths(pathGuard: PathGuard, value: string): Promise<string[]> {
+  // Roots to pick, name and list; the containment set also holds each root's
+  // realpath alias, so it only gates what a directory listing may enter.
+  const roots = pathGuard.getRoots();
   const allowed = pathGuard.getAllowedDirectories();
 
   try {
     if (!value) {
-      return allowed;
+      return roots;
     }
 
-    const context = getSearchContext(value, allowed);
+    const context = getSearchContext(value, roots);
     if (!context) {
-      return findRootPrefixMatches(value, allowed);
+      return findRootPrefixMatches(value, roots);
     }
 
     const { searchDir, prefix } = context;
     const dirMatches = await findMatchesInDirectory(searchDir, prefix, allowed, (p) =>
       pathGuard.isSensitive(p),
     );
-    const rootMatches = findMatchingRoots(searchDir, prefix, allowed);
+    const rootMatches = findMatchingRoots(searchDir, prefix, roots);
     return mergeCompletionMatches(dirMatches, rootMatches);
   } catch (error) {
     rethrowIfAborted(error);

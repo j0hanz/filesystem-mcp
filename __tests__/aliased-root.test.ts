@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { encodeFileUriPath, FILESYSTEM_FILE_URI_TEMPLATE } from '../src/core/file-uri.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -53,5 +54,23 @@ describe('a root configured through an alias', () => {
       assert.notStrictEqual(result.isError, true, `${name}: ${firstTextBlock(result).text ?? ''}`);
       assert.match(firstTextBlock(result).text ?? '', /alias-probe\.txt/u, name);
     }
+  });
+
+  it('completes as one root', async (t) => {
+    if (!harness) return t.skip('symlink not permitted');
+    const complete = async (value: string): Promise<string[]> => {
+      const result = await harness?.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(value) },
+      });
+      return result?.completion.values ?? [];
+    };
+    const roots = await complete('');
+    assert.strictEqual(roots.length, 1, JSON.stringify(roots));
+    const relative = await complete('alias-pro');
+    assert.ok(
+      relative.some((v) => v.endsWith('alias-probe.txt')),
+      JSON.stringify(relative),
+    );
   });
 });
