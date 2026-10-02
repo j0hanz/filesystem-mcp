@@ -7,9 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.7.1] - 2026-10-02
 
-A fix release from the 2026-10-02 architecture audit. Completion handles
-aliased roots, an omitted search `maxDepth` is unlimited as documented, and
-two small result changes follow from internal cleanups. Nothing breaks for
+A fix release from the 2026-10-02 architecture audit. Searches stop at
+their deadline even when the walk finds nothing, completion handles aliased
+roots, an omitted search `maxDepth` is unlimited as documented, and two
+small result changes follow from internal cleanups. Nothing breaks for
 existing callers, and the declared surface (tools, capabilities,
 instructions, prompts, resources) is identical to 2.7.0.
 
@@ -25,6 +26,14 @@ instructions, prompts, resources) is identical to 2.7.0.
 
 ### Fixed
 
+- **Walks stop at their deadline.** The timeout reached only `.gitignore`
+  discovery and each yielded entry, so a walk over a large tree with few or
+  no matches ran past its deadline and could then report a complete scan.
+  The walk now prunes every entry once the deadline fires and fails with the
+  timeout: `search_text`, `find_files` and `replace_text` report
+  `stoppedReason: 'timeout'`, and `list` and `move` fail with the timeout
+  even when the walk yields nothing. A walk with no other filter
+  (`includeIgnored: true` and no `maxDepth`) now runs a per-entry check.
 - **Completion with aliased roots.** A root reachable by two paths sat in
   the containment set twice, so relative path completion found nothing and
   an empty value listed the root twice. Completion now picks and lists
