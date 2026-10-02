@@ -321,7 +321,7 @@ result store, while file-resource links point directly to guarded reads from dis
 | `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots                        |
 | `src/core/fs.ts`      | `GuardedFileSystem` — guarded filesystem facade                                 |
 | `src/tools/define.ts` | Tool registration and execution framework                                       |
-| `src/tools/batch.ts`  | Batch helpers (runOverPaths, isTotalFailure)                                    |
+| `src/tools/batch.ts`  | Batch helpers (runOverPaths, summarize, isTotalFailure)                         |
 | `src/server.ts`       | Builds shared dependencies and invokes the three registrars                     |
 | `src/transport/`      | stdio (`stdio.ts`), Streamable HTTP (`http.ts`), HTTP policy (`http-policy.ts`) |
 

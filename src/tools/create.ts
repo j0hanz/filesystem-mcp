@@ -149,13 +149,9 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     if (pendingSorted.length > 0) {
       // Round 1 returns input_required; a retry whose verified state does not
       // bind this overwrite set throws (R9) via `pendingRoundTrip`.
-      const round = await pendingRoundTrip({
+      const round = await pendingRoundTrip(ctx, {
         op: 'create',
         pending: pendingSorted,
-        requestState: ctx.requestState,
-        droppedInputResponseKeys: ctx.droppedInputResponseKeys,
-        clientCapabilities: ctx.clientCapabilities,
-        serverCtx: ctx.serverCtx,
         buildInputs: (paths) =>
           paths.map((target, i) => ({
             key: confirmKey(i),
@@ -178,7 +174,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         if (choice !== 'overwrite') {
           throw new FsError(
             ErrorCode.CANCELLED,
-            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
+            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx, key)}`,
             path,
           );
         }

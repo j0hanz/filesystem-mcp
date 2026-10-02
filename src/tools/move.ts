@@ -191,7 +191,7 @@ async function executeTransfer(
     if (choice !== 'overwrite') {
       throw new FsError(
         ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
+        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx, key)}`,
         plan.pair.destination,
       );
     }
@@ -314,13 +314,9 @@ async function runTransfers(
   if (pendingSorted.length > 0) {
     // Round 1 returns input_required; a retry whose verified state does not
     // bind this overwrite set throws (R9) via `pendingRoundTrip`.
-    const round = await pendingRoundTrip({
+    const round = await pendingRoundTrip(ctx, {
       op,
       pending: pendingSorted,
-      requestState: ctx.requestState,
-      droppedInputResponseKeys: ctx.droppedInputResponseKeys,
-      clientCapabilities: ctx.clientCapabilities,
-      serverCtx: ctx.serverCtx,
       buildInputs: (dests) =>
         dests.map((dest, i) => ({
           key: confirmKey(i),

@@ -52,6 +52,22 @@ export interface PendingState {
   readonly reissued?: true;
 }
 
+/** The per-round confirmation context; `ToolCtx` satisfies it structurally. */
+export interface PendingCtx {
+  readonly requestState?: (() => PendingState | undefined) | undefined;
+  /**
+   * What the client declared it can do, or `undefined` when this connection
+   * cannot say. Only positively-absent form support short-circuits; see
+   * {@link assertCanElicit}.
+   */
+  readonly clientCapabilities?: ClientCapabilities | undefined;
+  /** `ctx.mcpReq.droppedInputResponseKeys` for this round; see `ToolCtx`. */
+  readonly droppedInputResponseKeys?: readonly string[] | undefined;
+  readonly inputResponses?: Record<string, unknown> | undefined;
+  /** The live handler context; the codec binds the minted state to its method and caller. */
+  readonly serverCtx: ServerContext;
+}
+
 /** One embedded form-mode confirmation, keyed within the call. */
 export interface PendingInput {
   /** Server-assigned key, unique within the `tools/call`. */
@@ -181,23 +197,13 @@ export async function buildInputRequired(
  * matching same-op retry so the caller proceeds.
  *
  * One home for the R9 binding check means a future fix cannot miss two of three
- * sites. The caller supplies `buildInputs` so only the prompt text varies.
+ * sites. The caller passes the round's `PendingCtx` and supplies `buildInputs`
+ * so only the prompt text varies.
  */
 interface PendingRoundTripOpts {
   readonly op: PendingOp;
   readonly pending: readonly string[];
-  readonly requestState: (() => PendingState | undefined) | undefined;
-  /**
-   * What the client declared it can do, or `undefined` when this connection
-   * cannot say. Only positively-absent form support short-circuits; see
-   * {@link assertCanElicit}.
-   */
-  readonly clientCapabilities?: ClientCapabilities | undefined;
-  /** `ctx.mcpReq.droppedInputResponseKeys` for this round; see `ToolCtx`. */
-  readonly droppedInputResponseKeys?: readonly string[] | undefined;
   readonly buildInputs: (pending: readonly string[]) => readonly PendingInput[];
-  /** The live handler context; the codec binds the minted state to its method and caller. */
-  readonly serverCtx: ServerContext;
 }
 
 /**
@@ -248,9 +254,10 @@ function assertCanElicit(op: PendingOp, capabilities: ClientCapabilities | undef
 }
 
 export async function pendingRoundTrip(
+  ctx: PendingCtx,
   opts: PendingRoundTripOpts,
 ): Promise<InputRequiredResult | undefined> {
-  const state = opts.requestState?.();
+  const state = ctx.requestState?.();
   // No verified state yet, OR the verified state belongs to a different
   // flow (e.g. an access-grant round's state is still the retried request's
   // requestState after the grant was applied, and this call is now the
@@ -259,11 +266,11 @@ export async function pendingRoundTrip(
   // input_required rather than treating a foreign-but-valid state as a
   // tamper/mismatch error.
   if (state?.op !== opts.op) {
-    assertCanElicit(opts.op, opts.clientCapabilities);
+    assertCanElicit(opts.op, ctx.clientCapabilities);
     return buildInputRequired(
       { op: opts.op, paths: opts.pending },
       opts.buildInputs(opts.pending),
-      opts.serverCtx,
+      ctx.serverCtx,
     );
   }
   // Retry for THIS op (R9): the verified state must bind the same pending set.
@@ -277,14 +284,14 @@ export async function pendingRoundTrip(
   // runs (`{ method, result }` around the bare result). Ask the same question
   // once more rather than report a refusal the user never made; the sealed
   // `reissued` flag stops a second retry from looping.
-  if (state.reissued !== true && opts.droppedInputResponseKeys?.length) {
-    const dropped = new Set(opts.droppedInputResponseKeys);
+  if (state.reissued !== true && ctx.droppedInputResponseKeys?.length) {
+    const dropped = new Set(ctx.droppedInputResponseKeys);
     const inputs = opts.buildInputs(opts.pending);
     if (inputs.some((input) => dropped.has(input.key))) {
       return buildInputRequired(
         { op: opts.op, paths: opts.pending, reissued: true },
         inputs,
-        opts.serverCtx,
+        ctx.serverCtx,
       );
     }
   }
@@ -357,18 +364,17 @@ export function readAcceptedMultiChoice(
 
 /**
  * Refusal wording for the `CANCELLED` error; call after a `readAccepted*` reader
- * returned nothing. Pass the round's `droppedInputResponseKeys` so a dropped
- * answer is named as such rather than as 'not answered'.
+ * returned nothing. Pass the round's ctx so a dropped answer is named as such
+ * rather than as 'not answered'.
  */
 export function describeRefusal(
-  responses: Record<string, unknown> | undefined,
+  ctx: Pick<PendingCtx, 'inputResponses' | 'droppedInputResponseKeys'>,
   key: string,
-  droppedKeys?: readonly string[],
 ): string {
-  if (droppedKeys?.includes(key)) {
+  if (ctx.droppedInputResponseKeys?.includes(key)) {
     return 'answered in a shape this server cannot read (a wrapped result instead of the bare elicitation result), twice';
   }
-  const view = inputResponse(responses, key);
+  const view = inputResponse(ctx.inputResponses, key);
   if (view.kind !== 'elicit') return 'not answered';
   if (view.action === 'decline') return 'declined by the user';
   if (view.action === 'cancel') return 'dismissed by the user';

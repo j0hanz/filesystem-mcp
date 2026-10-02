@@ -52,15 +52,14 @@ export async function runOverPaths<TItem extends string | { path: string }, TPer
     ctx.signal,
   );
 
-  let succeeded = 0;
-  for (const result of results) {
-    if (!('error' in result)) succeeded += 1;
-  }
+  return { results, summary: summarize(results) };
+}
 
-  return {
-    results,
-    summary: { total, succeeded, failed: total - succeeded },
-  };
+export function summarize(
+  results: readonly PerPathResult<unknown>[],
+): BatchResult<unknown>['summary'] {
+  const failed = results.filter((r) => 'error' in r).length;
+  return { total: results.length, succeeded: results.length - failed, failed };
 }
 
 /**
