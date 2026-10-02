@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2026-10-02
+
+A fix release from the 2026-10-02 architecture audit. Completion handles
+aliased roots, an omitted search `maxDepth` is unlimited as documented, and
+two small result changes follow from internal cleanups. Nothing breaks for
+existing callers, and the declared surface (tools, capabilities,
+instructions, prompts, resources) is identical to 2.7.0.
+
+### Changed
+
+- **`read` reports every requested path the same way.** A file skipped
+  because the batch's combined size budget ran out now returns a
+  `TOO_LARGE` row with the default suggestion, like any other oversized
+  file, and the progress total counts every requested path.
+- **Stdio refuses an over-cap listen up front.** A `subscriptions/listen`
+  that names more not-yet-watched URIs than the watcher slots left is
+  rejected before any watcher starts, with the same message HTTP sends.
+
+### Fixed
+
+- **Completion with aliased roots.** A root reachable by two paths sat in
+  the containment set twice, so relative path completion found nothing and
+  an empty value listed the root twice. Completion now picks and lists
+  roots from the configured root list.
+- **An omitted `maxDepth` is unlimited in `search_text` and `find_files`.**
+  Both tools capped an omitted `maxDepth` at 100, while `replace_text` and
+  the schema said unlimited. Searches without `maxDepth` can now return
+  matches deeper than 100 levels.
+
 ## [2.7.0] - 2026-09-29
 
 A feature and hardening release. Two security fixes close fail-open gaps in
