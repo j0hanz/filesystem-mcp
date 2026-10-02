@@ -14,9 +14,10 @@ you need.
 
 ## Apps
 
-| App                               | What it does                                          | Run                                |
-| :-------------------------------- | :---------------------------------------------------- | :--------------------------------- |
-| [gatekeeper](clients/gatekeeper/) | Coding agent with a y/N/why gate on every file change | `node agent.ts <dir> --model <id>` |
+| App                               | What it does                                                          | Run                                         |
+| :-------------------------------- | :-------------------------------------------------------------------- | :------------------------------------------ |
+| [gatekeeper](clients/gatekeeper/) | Coding agent with a y/N/why gate on every file change                 | `node agent.ts <dir> --model <id>`          |
+| [hooks](clients/hooks/)           | Runs a standing task through the model whenever the workspace changes | `node hooks.ts <dir> "<task>" --model <id>` |
 
 ## Model providers
 

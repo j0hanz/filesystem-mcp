@@ -1,0 +1,17 @@
+{
+  "name": "hooks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event-driven agent: runs a standing task through a model whenever the workspace changes, built on filesystem-mcp",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node hooks.ts",
+    "test": "node check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  }
+}
