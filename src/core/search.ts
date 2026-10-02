@@ -348,7 +348,7 @@ export async function searchContent(
           skipIgnored: Boolean(options.skipIgnored),
           ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
-          maxDepth: options.maxDepth ?? 100,
+          ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
           suppressErrors: true,
         });
 
@@ -505,7 +505,7 @@ export async function searchFiles(
     skipIgnored: Boolean(options.skipIgnored),
     ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
-    maxDepth: options.maxDepth ?? 100,
+    ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
     suppressErrors: true,
   });
   const results: { path: string }[] = [];
