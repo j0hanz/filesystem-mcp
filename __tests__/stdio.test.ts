@@ -431,6 +431,87 @@ describe('Stdio subscription lease lifecycle', () => {
     }
   });
 
+  it('STDIO-018: a listen naming more new URIs than remaining slots is rejected before the ack', async () => {
+    const tmpDir = await createTestRoot();
+    const harness = await createRawStdioServer(tmpDir, {
+      FS_MAX_WATCHERS: '1',
+    });
+    try {
+      const fileA = await writeTestFile(tmpDir, 'over-a.txt', 'A');
+      const fileB = await writeTestFile(tmpDir, 'over-b.txt', 'B');
+      await discoverModern(harness);
+
+      await harness.send({
+        jsonrpc: '2.0',
+        id: 'over',
+        method: 'subscriptions/listen',
+        params: {
+          _meta: MODERN_META,
+          notifications: {
+            resourceSubscriptions: [buildFileResourceUri(fileA), buildFileResourceUri(fileB)],
+          },
+        },
+      });
+      const rejection = await harness.nextMessage();
+      assert.ok('error' in rejection, JSON.stringify(rejection));
+      assert.strictEqual(rejection.error.code, ProtocolErrorCode.InvalidParams);
+      assert.ok(
+        rejection.error.message.includes('watcher slots remain (cap 1)'),
+        rejection.error.message,
+      );
+      assert.ok(rejection.error.message.includes('Reduce the resourceSubscriptions list'));
+
+      await harness.send({
+        jsonrpc: '2.0',
+        id: 'fits',
+        method: 'subscriptions/listen',
+        params: {
+          _meta: MODERN_META,
+          notifications: {
+            resourceSubscriptions: [buildFileResourceUri(fileA)],
+          },
+        },
+      });
+      const ack = await harness.nextMessage();
+      assert.ok('method' in ack, JSON.stringify(ack));
+      assert.strictEqual(ack.method, 'notifications/subscriptions/acknowledged');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  it('STDIO-019: re-listening an already watched URI at the cap is accepted', async () => {
+    const tmpDir = await createTestRoot();
+    const harness = await createRawStdioServer(tmpDir, {
+      FS_MAX_WATCHERS: '1',
+    });
+    try {
+      const fileA = await writeTestFile(tmpDir, 'again-a.txt', 'A');
+      await discoverModern(harness);
+
+      for (const id of ['first', 'again']) {
+        await harness.send({
+          jsonrpc: '2.0',
+          id,
+          method: 'subscriptions/listen',
+          params: {
+            _meta: MODERN_META,
+            notifications: {
+              resourceSubscriptions: [buildFileResourceUri(fileA)],
+            },
+          },
+        });
+        const ack = await harness.nextMessage();
+        assert.ok('method' in ack, JSON.stringify(ack));
+        assert.strictEqual(ack.method, 'notifications/subscriptions/acknowledged');
+      }
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
   it('STDIO-009: cancellation queued with a pending listen suppresses admission', async () => {
     const tmpDir = await createTestRoot();
     const harness = await createRawStdioServer(tmpDir, {

@@ -99,11 +99,6 @@ describe('input_required multi-round-trip infrastructure', () => {
     const handler = createMcpHandler(
       async ({ era }) => {
         const context = await createServer({ cliAllowedDirs: [root] }, { era });
-        const previousOnClose = context.mcp.server.onclose;
-        context.mcp.server.onclose = () => {
-          previousOnClose?.();
-          context.disposeRuntimeState();
-        };
         return context.mcp;
       },
       { legacy: 'reject' },
@@ -597,11 +592,6 @@ describe('wrapped inputResponses over the modern wire', () => {
     const handler = createMcpHandler(
       async ({ era }) => {
         const context = await createServer({ cliAllowedDirs: [root] }, { era });
-        const previousOnClose = context.mcp.server.onclose;
-        context.mcp.server.onclose = () => {
-          previousOnClose?.();
-          context.disposeRuntimeState();
-        };
         return context.mcp;
       },
       { legacy: 'reject' },

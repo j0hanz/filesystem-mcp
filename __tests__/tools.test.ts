@@ -1499,7 +1499,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           );
         } finally {
           await client.close();
-          serverCtx.disposeRuntimeState();
           await serverCtx.mcp.close();
         }
       });

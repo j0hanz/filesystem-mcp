@@ -151,7 +151,6 @@ describe('ProgressSession wire monotonicity', () => {
       frames,
       async close() {
         await client.close();
-        context.disposeRuntimeState();
         await context.mcp.close();
       },
     };

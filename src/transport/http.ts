@@ -27,11 +27,7 @@ import { PathGuard } from '../core/path.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { getMaxInboundMessageBytes, parseEnvInt } from '../core/util.ts';
-import {
-  createWatcherRegistry,
-  MAX_WATCHERS,
-  type WatcherRegistry,
-} from '../core/watcher-registry.ts';
+import { createWatcherRegistry, type WatcherRegistry } from '../core/watcher-registry.ts';
 import { createServer } from '../server.ts';
 import {
   assertHttpBindingPolicy,
@@ -201,25 +197,7 @@ function setupExpressApp(
         return;
       }
 
-      // Reject an over-cap listen before the ack so the client does not believe
-      // every requested URI is watched when the watcher budget is exhausted.
-      // The per-URI `capped` failure below would also reject, but only after
-      // creating and tearing down every watcher up to the cap.
-      // Only URIs without a live watcher consume a slot; a re-listen to an
-      // already-watched URI just retains another lease.
-      const newUris = requestedUris.filter((uri) => !sharedRegistry.hasWatcher(uri));
-      const available = MAX_WATCHERS - sharedRegistry.size();
-      if (newUris.length > available) {
-        sendJsonRpcError(
-          res,
-          400,
-          ProtocolErrorCode.InvalidParams,
-          `subscriptions/listen names ${newUris.length} not-yet-watched URIs but only ${available} watcher slots remain (cap ${MAX_WATCHERS}). Reduce the resourceSubscriptions list.`,
-          jsonRpcRequestId(parsedBody),
-        );
-        return;
-      }
-
+      // Over-cap listens are rejected inside prepareListenWatchers, before the ack.
       const prepared = await prepareListenWatchers(
         requestedUris,
         sharedPathGuard,
@@ -327,11 +305,6 @@ export async function startHttpServer(
         era,
         ...(apiKey !== undefined ? { apiKey } : {}),
       });
-      const previousOnClose = c.mcp.server.onclose;
-      c.mcp.server.onclose = () => {
-        previousOnClose?.();
-        c.disposeRuntimeState();
-      };
       return c.mcp;
     },
     {
