@@ -39,7 +39,6 @@ describe('Client roots seeding (legacy era)', () => {
 
   after(async () => {
     await client.close();
-    serverCtx.disposeRuntimeState();
     await serverCtx.mcp.close();
     await cleanupTestRoot(tmpDir);
   });

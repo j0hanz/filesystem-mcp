@@ -89,7 +89,9 @@ function watcherFailureMessage(
 
 /**
  * Prepare every filesystem watcher named by a `subscriptions/listen` filter.
- * The batch is all-or-nothing: a failed URI releases each prior lease.
+ * The batch is all-or-nothing: a failed URI releases each prior lease. An
+ * over-cap listen is rejected up front, before the ack and before any watcher
+ * exists.
  */
 export async function prepareListenWatchers(
   uris: readonly string[],
@@ -97,6 +99,17 @@ export async function prepareListenWatchers(
   registry: WatcherRegistry,
   notify: (uri: string) => void,
 ): Promise<ListenPreparation> {
+  // The per-URI `capped` failure below would also reject, but only after
+  // creating and tearing down watchers up to the cap. Only URIs without a live
+  // watcher consume a slot.
+  const newUris = uris.filter((uri) => !registry.hasWatcher(uri));
+  const available = MAX_WATCHERS - registry.size();
+  if (newUris.length > available) {
+    return {
+      ok: false,
+      message: `subscriptions/listen names ${newUris.length} not-yet-watched URIs but only ${available} watcher slots remain (cap ${MAX_WATCHERS}). Reduce the resourceSubscriptions list.`,
+    };
+  }
   const acquired: string[] = [];
   for (const uri of uris) {
     const result = await registry.acquire(pathGuard, uri, notify);

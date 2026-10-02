@@ -340,9 +340,14 @@ describe('Real HTTP Server integration', () => {
       }),
     });
     assert.strictEqual(r.status, 400);
-    const body = (await r.json()) as { error?: { code?: number; message?: string } };
+    const body = (await r.json()) as {
+      id?: number;
+      error?: { code?: number; message?: string };
+    };
+    assert.strictEqual(body.id, 1);
     assert.strictEqual(body.error?.code, ProtocolErrorCode.InvalidParams);
     assert.ok(body.error?.message?.includes('watcher slots'));
+    assert.ok(body.error?.message?.includes('Reduce the resourceSubscriptions list'));
   });
 
   async function requestWithHost(

@@ -177,7 +177,6 @@ export async function createTestClientPair(
     serverCtx,
     close: async () => {
       await client.close();
-      serverCtx.disposeRuntimeState();
       await serverCtx.mcp.close();
     },
   };

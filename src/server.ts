@@ -189,7 +189,7 @@ export async function createServer(
   // False when the store is shared across instances and outlives this one.
   const ownsPages = extraDeps?.pageStore === undefined;
   let cleanedUp = false;
-  return {
+  const context: FilesystemServerContext = {
     mcp: server,
     pathGuard,
     disposeRuntimeState() {
@@ -199,4 +199,10 @@ export async function createServer(
       resourceDisposable.dispose();
     },
   };
+  const previousOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    previousOnClose?.();
+    context.disposeRuntimeState();
+  };
+  return context;
 }

@@ -1,3 +1,5 @@
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -5,6 +7,8 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
+import { createServer } from '../src/server.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -135,5 +139,28 @@ describe('Resource subscriptions round-trip', () => {
     assert.ok(count > seen, 'the second replace must notify too (inode-bound watch went silent)');
 
     await pair.client.unsubscribeResource({ uri });
+  });
+});
+
+describe('createServer disposal on connection close', () => {
+  it('closing a connected client releases the leases it held', async () => {
+    const root = await createTestRoot();
+    const registry = createWatcherRegistry();
+    try {
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { watcherRegistry: registry });
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+
+      const uri = buildFileResourceUri(await writeTestFile(root, 'held.txt', 'x'));
+      await client.subscribeResource({ uri });
+      assert.strictEqual(registry.hasWatcher(uri), true);
+
+      await client.close();
+      assert.strictEqual(registry.hasWatcher(uri), false);
+    } finally {
+      registry.destroy();
+      await cleanupTestRoot(root);
+    }
   });
 });
