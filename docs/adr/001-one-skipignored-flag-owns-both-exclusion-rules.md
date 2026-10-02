@@ -86,3 +86,10 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
   array-vs-predicate divergence described above can no longer occur. The
   defaults became a name set (`DEFAULT_EXCLUDED_NAMES`) matched per path
   segment, which also excludes such a name below a dot-directory.
+- **Amended 2026-10-02:** the Decision's "only form a call site may take" rule
+  covers tools that translate their public `includeIgnored` input. An internal
+  walk that has no such input passes `skipIgnored: false`. The move protection
+  walk, `assertTreeHasNoProtectedEntries`
+  ([`move.ts:443`](../../src/tools/move.ts#L443)), is that kind of walk. It must
+  also see ignored and excluded trees, because a protected file under
+  `node_modules` or a `.gitignore`d path still changes status when moved.
