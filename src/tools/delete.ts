@@ -25,7 +25,7 @@ import {
 import { resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, type PerPathResult } from './batch.ts';
+import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -251,7 +251,7 @@ async function executePlan(
         failure: {
           path: plan.validPath,
           error: Problem.cancelled(
-            `Delete cancelled: confirmation was ${describeRefusal(ctx.inputResponses, key, ctx.droppedInputResponseKeys)}`,
+            `Delete cancelled: confirmation was ${describeRefusal(ctx, key)}`,
             { path: plan.validPath },
           ),
         },
@@ -304,13 +304,9 @@ async function handleDelete(
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
     // even the non-pending items in the same call); a retry whose verified
     // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
-    const round = await pendingRoundTrip({
+    const round = await pendingRoundTrip(ctx, {
       op: 'delete',
       pending: pendingSorted,
-      requestState: ctx.requestState,
-      droppedInputResponseKeys: ctx.droppedInputResponseKeys,
-      clientCapabilities: ctx.clientCapabilities,
-      serverCtx: ctx.serverCtx,
       buildInputs: (ps) =>
         ps.map((p, i) => ({
           key: confirmKey(i),
@@ -361,11 +357,7 @@ async function handleDelete(
     );
   });
 
-  const failed = results.filter((r) => 'error' in r).length;
-  return {
-    results,
-    summary: { total: results.length, succeeded: results.length - failed, failed },
-  };
+  return { results, summary: summarize(results) };
 }
 
 export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({

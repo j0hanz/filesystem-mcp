@@ -7,7 +7,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode } from '../core/errors.ts';
+import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
@@ -25,7 +25,7 @@ import {
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
-import type { BatchResult, PerPathResult } from './batch.ts';
+import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -165,16 +165,18 @@ interface BatchFileInfo {
   stats: Stats;
 }
 
+interface BudgetItem {
+  path: string;
+  known?: { validPath: string; stats: Stats };
+  skip?: FsError;
+}
+
 async function collectFileBudget(
   filePaths: readonly string[],
   maxTotalSize: number,
   maxSize: number,
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
-): Promise<{
-  skippedResults: Map<number, PerPathResult<PerPathReadValue>>;
-  survivors: string[];
-  known: Map<string, { validPath: string; stats: Stats }>;
-}> {
+): Promise<BudgetItem[]> {
   const indexed = filePaths.map((path, index) => ({ path, index }));
   const { results } = await processInParallel(
     indexed,
@@ -196,50 +198,31 @@ async function collectFileBudget(
     ctx.signal,
   );
 
-  const byIndex = new Map<number, number>();
-  const known = new Map<string, { validPath: string; stats: Stats }>();
+  const byIndex = new Map<number, BatchFileInfo>();
   for (const { value: item } of results) {
-    if (!item) continue;
-    byIndex.set(item.index, item.size);
-    // Keyed by the ORIGINAL requested path string (not validPath) — that's
-    // what readOnePath is called with downstream, and what filePaths[i]
-    // holds.
-    const requestedPath = filePaths[item.index];
-    if (requestedPath !== undefined) {
-      known.set(requestedPath, { validPath: item.validPath, stats: item.stats });
-    }
+    if (item) byIndex.set(item.index, item);
   }
 
   let total = 0;
-  const skippedResults = new Map<number, PerPathResult<PerPathReadValue>>();
-  const survivors: string[] = [];
-  for (let i = 0; i < filePaths.length; i += 1) {
-    const path = filePaths[i];
-    if (path === undefined) continue;
-    const size = byIndex.get(i);
-    // A failed stat falls through to survivors so its read surfaces the real
-    // error, not a misleading TOO_LARGE.
-    if (size === undefined) {
-      survivors.push(path);
-      continue;
-    }
+  return filePaths.map((path, i): BudgetItem => {
+    const info = byIndex.get(i);
+    // A failed stat is neither known nor skipped, so its read surfaces the
+    // real error, not a misleading TOO_LARGE.
+    if (info === undefined) return { path };
     // Skip this file only; a later, smaller file that still fits is read.
-    if (total + size > maxTotalSize) {
-      skippedResults.set(i, {
+    if (total + info.size > maxTotalSize) {
+      return {
         path,
-        error: {
-          code: ErrorCode.TOO_LARGE,
-          message: `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
+        skip: new FsError(
+          ErrorCode.TOO_LARGE,
+          `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
           path,
-        },
-      });
-      continue;
+        ),
+      };
     }
-    total += size;
-    survivors.push(path);
-  }
-
-  return { skippedResults, survivors, known };
+    total += info.size;
+    return { path, known: { validPath: info.validPath, stats: info.stats } };
+  });
 }
 
 function buildPerPathReadValue(
@@ -370,56 +353,19 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   },
   accessPaths: singleOrBatchAccessPaths,
   run: async (args, ctx) => {
-    let pathList: string[];
-    let skippedResults = new Map<number, PerPathResult<PerPathReadValue>>();
-    let survivors: string[];
-    let known = new Map<string, { validPath: string; stats: Stats }>();
-
-    if (args.paths !== undefined) {
-      pathList = args.paths;
-      const budget = await collectFileBudget(
-        pathList,
-        READ_MANY_MAX_TOTAL_BYTES,
-        getMaxTextFileSize(),
-        ctx,
-      );
-      known = budget.known;
-      skippedResults = budget.skippedResults;
-      survivors = budget.survivors;
-    } else {
-      pathList = [args.path ?? ''];
-      survivors = [...pathList];
-    }
-
-    // Every path can be budget-skipped (a single file over maxTotalSize does
-    // it), and runOverPaths rejects an empty list. The per-path TOO_LARGE
-    // results are already built — return those rather than failing the call.
-    const batch =
-      survivors.length === 0
-        ? { results: [] as PerPathResult<PerPathReadValue>[] }
-        : await runOverPaths(survivors, ctx, ErrorCode.NOT_FILE, (path) =>
-            readOnePath(path, args, ctx, known.get(path)),
-          );
-
-    const resultMap = new Map(batch.results.map((r) => [r.path, r]));
-    const ordered: PerPathResult<PerPathReadValue>[] = pathList.map((path, idx) => {
-      const skipped = skippedResults.get(idx);
-      if (skipped) return skipped;
-      const result = resultMap.get(path);
-      return (
-        result ?? {
-          path,
-          error: { code: ErrorCode.UNKNOWN, message: 'Unknown read failure' },
-        }
-      );
-    });
-
-    const failed = ordered.filter((r) => 'error' in r).length;
-    const summary = {
-      total: ordered.length,
-      succeeded: ordered.length - failed,
-      failed,
-    };
+    const items: BudgetItem[] =
+      args.paths !== undefined
+        ? await collectFileBudget(args.paths, READ_MANY_MAX_TOTAL_BYTES, getMaxTextFileSize(), ctx)
+        : [{ path: args.path ?? '' }];
+    const { results: ordered, summary } = await runOverPaths(
+      items,
+      ctx,
+      ErrorCode.NOT_FILE,
+      ({ path, known, skip }) => {
+        if (skip) throw skip;
+        return readOnePath(path, args, ctx, known);
+      },
+    );
 
     const resources: ContentBlock[] = [];
     for (const result of ordered) {

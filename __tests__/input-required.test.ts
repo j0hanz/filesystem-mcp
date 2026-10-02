@@ -72,14 +72,18 @@ describe('input_required multi-round-trip infrastructure', () => {
   for (const op of ['delete', 'move', 'copy', 'create', 'grant'] as const) {
     for (const mode of modes) {
       it(`SDK-AUDIT-MODES-001: ${op} honors ${mode.name} capabilities`, async () => {
-        const round = pendingRoundTrip({
-          op,
-          pending: ['/target'],
-          requestState: undefined,
-          clientCapabilities: mode.capabilities,
-          buildInputs: () => [{ key: 'confirm', message: 'Confirm operation?' }],
-          serverCtx: bindContext(),
-        });
+        const round = pendingRoundTrip(
+          {
+            requestState: undefined,
+            clientCapabilities: mode.capabilities,
+            serverCtx: bindContext(),
+          },
+          {
+            op,
+            pending: ['/target'],
+            buildInputs: () => [{ key: 'confirm', message: 'Confirm operation?' }],
+          },
+        );
 
         if (mode.canElicit) {
           assert.strictEqual(isInputRequiredResult(await round), true);
@@ -186,14 +190,15 @@ describe('input_required multi-round-trip infrastructure', () => {
   });
 
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
-    const result = await pendingRoundTrip({
-      op: 'delete',
-      pending: ['/a'],
-      requestState: undefined,
-      buildInputs: (paths) =>
-        paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
-      serverCtx: bindContext(),
-    });
+    const result = await pendingRoundTrip(
+      { requestState: undefined, serverCtx: bindContext() },
+      {
+        op: 'delete',
+        pending: ['/a'],
+        buildInputs: (paths) =>
+          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+      },
+    );
     assert.ok(result !== undefined);
     assert.strictEqual(isInputRequiredResult(result), true);
   });
@@ -201,14 +206,15 @@ describe('input_required multi-round-trip infrastructure', () => {
   it('4. pendingRoundTrip same-op + same paths returns undefined (proceed)', async () => {
     const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
-    const result = await pendingRoundTrip({
-      op: 'move',
-      pending: ['/x'],
-      requestState: () => decoded,
-      buildInputs: (paths) =>
-        paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
-      serverCtx: bindContext(),
-    });
+    const result = await pendingRoundTrip(
+      { requestState: () => decoded, serverCtx: bindContext() },
+      {
+        op: 'move',
+        pending: ['/x'],
+        buildInputs: (paths) =>
+          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
+      },
+    );
     assert.strictEqual(result, undefined);
   });
 
@@ -216,14 +222,15 @@ describe('input_required multi-round-trip infrastructure', () => {
     const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(async () => {
-      await pendingRoundTrip({
-        op: 'move',
-        pending: ['/y'],
-        requestState: () => decoded,
-        buildInputs: (paths) =>
-          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
-        serverCtx: bindContext(),
-      });
+      await pendingRoundTrip(
+        { requestState: () => decoded, serverCtx: bindContext() },
+        {
+          op: 'move',
+          pending: ['/y'],
+          buildInputs: (paths) =>
+            paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Move ${p}?` })),
+        },
+      );
     }, fsErrorMatcher(ErrorCode.INVALID_INPUT));
   });
 
@@ -233,28 +240,30 @@ describe('input_required multi-round-trip infrastructure', () => {
     const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(async () => {
-      await pendingRoundTrip({
-        op: 'delete',
-        pending: ['/x', '/y'],
-        requestState: () => decoded,
-        buildInputs: (paths) =>
-          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
-        serverCtx: bindContext(),
-      });
+      await pendingRoundTrip(
+        { requestState: () => decoded, serverCtx: bindContext() },
+        {
+          op: 'delete',
+          pending: ['/x', '/y'],
+          buildInputs: (paths) =>
+            paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+        },
+      );
     }, fsErrorMatcher(ErrorCode.INVALID_INPUT));
   });
 
   it('6. pendingRoundTrip different-op mints fresh input_required', async () => {
     const wire = await requestStateCodec.mint({ op: 'grant', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
-    const result = await pendingRoundTrip({
-      op: 'delete',
-      pending: ['/x'],
-      requestState: () => decoded,
-      buildInputs: (paths) =>
-        paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
-      serverCtx: bindContext(),
-    });
+    const result = await pendingRoundTrip(
+      { requestState: () => decoded, serverCtx: bindContext() },
+      {
+        op: 'delete',
+        pending: ['/x'],
+        buildInputs: (paths) =>
+          paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` })),
+      },
+    );
     assert.ok(result !== undefined);
     assert.strictEqual(isInputRequiredResult(result), true);
   });
@@ -265,14 +274,14 @@ describe('input_required multi-round-trip infrastructure', () => {
     const buildInputs = (paths: readonly string[]) =>
       paths.map((p, idx) => ({ key: `confirm_${idx}`, message: `Delete ${p}?` }));
 
-    const reissued = await pendingRoundTrip({
-      op: 'delete',
-      pending: ['/x'],
-      requestState: () => decoded,
-      droppedInputResponseKeys: ['confirm_0'],
-      buildInputs,
-      serverCtx: bindContext(),
-    });
+    const reissued = await pendingRoundTrip(
+      {
+        requestState: () => decoded,
+        droppedInputResponseKeys: ['confirm_0'],
+        serverCtx: bindContext(),
+      },
+      { op: 'delete', pending: ['/x'], buildInputs },
+    );
     assert.ok(reissued !== undefined && isInputRequiredResult(reissued));
     assert.deepStrictEqual(Object.keys(reissued.inputRequests ?? {}), ['confirm_0']);
 
@@ -280,28 +289,32 @@ describe('input_required multi-round-trip infrastructure', () => {
     // is not asked again.
     const second = await requestStateCodec.verify(reissued.requestState ?? '', bindContext());
     assert.strictEqual(second.reissued, true);
-    const proceed = await pendingRoundTrip({
-      op: 'delete',
-      pending: ['/x'],
-      requestState: () => second,
-      droppedInputResponseKeys: ['confirm_0'],
-      buildInputs,
-      serverCtx: bindContext(),
-    });
+    const proceed = await pendingRoundTrip(
+      {
+        requestState: () => second,
+        droppedInputResponseKeys: ['confirm_0'],
+        serverCtx: bindContext(),
+      },
+      { op: 'delete', pending: ['/x'], buildInputs },
+    );
     assert.strictEqual(proceed, undefined);
   });
 
   it('6c. a dropped key that is not one of this round’s inputs does not re-issue', async () => {
     const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
-    const result = await pendingRoundTrip({
-      op: 'delete',
-      pending: ['/x'],
-      requestState: () => decoded,
-      droppedInputResponseKeys: ['unrelated'],
-      buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
-      serverCtx: bindContext(),
-    });
+    const result = await pendingRoundTrip(
+      {
+        requestState: () => decoded,
+        droppedInputResponseKeys: ['unrelated'],
+        serverCtx: bindContext(),
+      },
+      {
+        op: 'delete',
+        pending: ['/x'],
+        buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
+      },
+    );
     assert.strictEqual(result, undefined);
   });
 
@@ -309,14 +322,18 @@ describe('input_required multi-round-trip infrastructure', () => {
     const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(
-      pendingRoundTrip({
-        op: 'delete',
-        pending: ['/y'],
-        requestState: () => decoded,
-        droppedInputResponseKeys: ['confirm_0'],
-        buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
-        serverCtx: bindContext(),
-      }),
+      pendingRoundTrip(
+        {
+          requestState: () => decoded,
+          droppedInputResponseKeys: ['confirm_0'],
+          serverCtx: bindContext(),
+        },
+        {
+          op: 'delete',
+          pending: ['/y'],
+          buildInputs: (paths) => paths.map((p, idx) => ({ key: `confirm_${idx}`, message: p })),
+        },
+      ),
       fsErrorMatcher(ErrorCode.INVALID_INPUT),
     );
   });
@@ -517,13 +534,19 @@ describe('describeRefusal', () => {
       [undefined, 'not answered'],
     ];
     for (const [responses, expected] of cases) {
-      assert.strictEqual(describeRefusal(responses, 'confirm_0'), expected);
+      assert.strictEqual(describeRefusal({ inputResponses: responses }, 'confirm_0'), expected);
     }
   });
 
   it('names a dropped answer when told the dropped keys', () => {
-    assert.match(describeRefusal({}, 'confirm_0', ['confirm_0']), /wrapped result/);
-    assert.strictEqual(describeRefusal({}, 'confirm_0', ['other']), 'not answered');
+    assert.match(
+      describeRefusal({ droppedInputResponseKeys: ['confirm_0'] }, 'confirm_0'),
+      /wrapped result/,
+    );
+    assert.strictEqual(
+      describeRefusal({ droppedInputResponseKeys: ['other'] }, 'confirm_0'),
+      'not answered',
+    );
   });
 });
 

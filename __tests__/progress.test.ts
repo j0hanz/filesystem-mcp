@@ -282,4 +282,27 @@ describe('ProgressSession wire monotonicity', () => {
       [0, 1],
     );
   });
+
+  it('read budget: progress total counts every requested path', async () => {
+    const root = await createTestRoot();
+    try {
+      const big = await writeTestFile(root, 'big.txt', 'x'.repeat(600 * 1024) + '\nlast\n');
+      const small = await writeTestFile(root, 'small.txt', 'tiny\n');
+      const pair = await progressClient([root]);
+      try {
+        await pair.client.callTool(
+          { name: 'read', arguments: { paths: [big, small] } },
+          { onprogress: () => {} },
+        );
+        assert.ok(
+          pair.frames.some((f) => f.progress === 1 && f.total === 2),
+          `expected a 1/2 work frame, got ${JSON.stringify(pair.frames)}`,
+        );
+      } finally {
+        await pair.close();
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });

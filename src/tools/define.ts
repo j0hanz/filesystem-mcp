@@ -313,13 +313,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     // (N dirs → 1 round-trip, not N). `pendingRoundTrip` still binds
     // `paths: grantDirs` sorted, so R9 path-binding is unaffected.
     const multi = grantDirs.length > 1;
-    const round = await pendingRoundTrip({
+    const round = await pendingRoundTrip(this.toolCtx, {
       op: 'grant',
       pending: grantDirs,
-      requestState: this.toolCtx.requestState,
-      droppedInputResponseKeys: this.toolCtx.droppedInputResponseKeys,
-      clientCapabilities: this.toolCtx.clientCapabilities,
-      serverCtx: this.toolCtx.serverCtx,
       buildInputs: (dirs) =>
         multi
           ? [

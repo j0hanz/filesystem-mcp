@@ -546,13 +546,13 @@ export function firstTextBlock(result: { content: readonly unknown[] }): {
 /** Structured per-path failure summary from a read/search tool result. */
 export function failedSummary(result: { _meta?: unknown }):
   | {
-      results?: { error?: { code?: string; message?: string } }[];
+      results?: { error?: { code?: string; message?: string; suggestion?: string } }[];
       summary?: { failed?: number };
     }
   | undefined {
   return result._meta as
     | {
-        results?: { error?: { code?: string; message?: string } }[];
+        results?: { error?: { code?: string; message?: string; suggestion?: string } }[];
         summary?: { failed?: number };
       }
     | undefined;

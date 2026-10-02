@@ -1135,6 +1135,41 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('read budget: a skipped file carries the TOO_LARGE suggestion', async () => {
+    const big = await writeTestFile(tmpDir, 'budget2/big.txt', 'x'.repeat(600 * 1024) + '\nlast\n');
+    const small = await writeTestFile(tmpDir, 'budget2/small.txt', 'tiny\n');
+
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [big, small] },
+    });
+    const error = failedSummary(result)?.results?.[0]?.error;
+    assert.strictEqual(error?.code, 'TOO_LARGE');
+    assert.strictEqual(error?.suggestion, 'Use head/tail or line ranges to read partially.');
+  });
+
+  it('read budget: duplicate paths keep one row per requested index, in order', async () => {
+    const big = await writeTestFile(tmpDir, 'budget3/big.txt', 'x'.repeat(600 * 1024) + '\nlast\n');
+    const small = await writeTestFile(tmpDir, 'budget3/small.txt', 'tiny\n');
+
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [big, small, small, big] },
+    });
+    const summary = failedSummary(result);
+    const rows = summary?.results ?? [];
+    assert.strictEqual(rows.length, 4);
+    assert.strictEqual(rows[0]?.error?.code, 'TOO_LARGE');
+    assert.strictEqual(rows[1]?.error, undefined);
+    assert.strictEqual(rows[2]?.error, undefined);
+    assert.strictEqual(rows[3]?.error?.code, 'TOO_LARGE');
+    assert.deepStrictEqual(
+      rows.map((r) => (r as { path?: string }).path),
+      [big, small, small, big],
+    );
+    assert.strictEqual(summary?.summary?.failed, 2);
+  });
+
   it('TC-FUNC-052: List roots via MCP tool call', async () => {
     const result = await harness.client.callTool({ name: 'list_roots' });
     assert.notStrictEqual(result.isError, true);
