@@ -455,19 +455,25 @@ async function* guardedEntries(
 ): AsyncGenerator<GlobEntry> {
   // The signal carries both client cancellation and the tool's search timeout,
   // so an abort means "return what we have, marked incomplete" rather than
-  // throw — but it must never be reported as a finished scan.
-  for await (const entry of entries) {
-    if (signal?.aborted) {
-      counters.stoppedByAbort = true;
-      return;
+  // throw — but it must never be reported as a finished scan. The walk itself
+  // throws when the signal stops it before a single entry is yielded.
+  try {
+    for await (const entry of entries) {
+      if (signal?.aborted) {
+        counters.stoppedByAbort = true;
+        return;
+      }
+      try {
+        await pathGuard.validateExistingPath(entry.path);
+      } catch {
+        counters.skippedInaccessible++;
+        continue;
+      }
+      yield entry;
     }
-    try {
-      await pathGuard.validateExistingPath(entry.path);
-    } catch {
-      counters.skippedInaccessible++;
-      continue;
-    }
-    yield entry;
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+    counters.stoppedByAbort = true;
   }
 }
 

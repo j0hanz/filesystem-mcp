@@ -47,6 +47,32 @@ async function withCollidingCwd(fn: (root: string) => Promise<void>): Promise<vo
 }
 
 describe('globEntries', () => {
+  // fs.glob takes no signal, so a walk that yields nothing never reaches a
+  // per-entry abort check. The walk must stop itself and say why, never end as
+  // if it had swept the whole tree: move's protection walk reads "ended" as
+  // "nothing protected inside".
+  for (const skipIgnored of [false, true]) {
+    it(`an aborted walk throws its reason instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
+      const root = await createTestRoot();
+      try {
+        for (let i = 0; i < 20; i++)
+          await mkdir(join(root, `d${String(i)}`, 'inner'), { recursive: true });
+        const reason = new Error('deadline');
+        await assert.rejects(
+          walk({
+            cwd: root,
+            pattern: '**/*.nomatch',
+            skipIgnored,
+            signal: AbortSignal.abort(reason),
+          }),
+          (err: unknown) => err === reason,
+        );
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
   it('walks every subdirectory when the process cwd holds a same-named entry', async () => {
     await withCollidingCwd(async (root) => {
       assert.deepStrictEqual(await walk({ cwd: root, pattern: '**/*', skipIgnored: true }), [
