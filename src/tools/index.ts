@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { PathGuard } from '../core/path.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { CREATE } from './create.ts';
-import type { CreateMutationHook, DefinedTool } from './define.ts';
+import type { DefinedTool } from './define.ts';
 import { DELETE } from './delete.ts';
 import { DIFF } from './diff.ts';
 import { EDIT } from './edit.ts';
@@ -56,8 +56,6 @@ interface ToolRegistrarDeps {
   readonly resourceStore: ResourceStore;
   readonly readOnly?: boolean;
   readonly era?: 'legacy' | 'modern';
-  /** Optional host-injected admission check for `create` mutations. */
-  readonly createMutationHook?: CreateMutationHook;
 }
 
 export function registerTools(deps: ToolRegistrarDeps): void {
@@ -67,7 +65,6 @@ export function registerTools(deps: ToolRegistrarDeps): void {
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
     ...(deps.era ? { era: deps.era } : {}),
-    ...(deps.createMutationHook ? { createMutationHook: deps.createMutationHook } : {}),
   };
   for (const tool of registeredTools(deps.readOnly ?? false)) {
     tool.register(toolDeps);
