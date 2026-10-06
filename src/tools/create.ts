@@ -180,6 +180,27 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         }
       }
 
+      // Optional host-injected admission: consulted after the overwrite
+      // confirmation (a skip above never reaches it) and before the first
+      // mutation, so a denial leaves the filesystem untouched. Supplements
+      // PathGuard — the guarded mkdir/write below still validate the path.
+      if (ctx.createMutationHook) {
+        try {
+          await ctx.createMutationHook(
+            { tool: 'create', path, content, mode: append ? 'append' : 'write' },
+            ctx.signal,
+          );
+        } catch (error) {
+          rethrowIfAborted(error);
+          if (error instanceof FsError) throw error;
+          throw new FsError(
+            ErrorCode.ACCESS_DENIED,
+            `create denied by mutation hook for "${path}": ${formatUnknownErrorMessage(error)}`,
+            path,
+          );
+        }
+      }
+
       await ctx.fs.mkdir(dirname(path), { recursive: true });
 
       // Overwrite: file content == `content`, so content-derived meta is

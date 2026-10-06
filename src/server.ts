@@ -15,6 +15,7 @@ import type { WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
 import { registerPrompts } from './prompts.ts';
 import { registerResources } from './resources.ts';
+import type { CreateMutationHook } from './tools/define.ts';
 import { registerTools } from './tools/index.ts';
 
 // ═══════════════════════════════════════════════════════════════
@@ -69,6 +70,13 @@ export async function createServer(
      * bearer secret has no business being reachable from a tool handler.
      */
     apiKey?: string;
+    /**
+     * Optional host-injected admission check consulted by `create` after
+     * overwrite confirmation and before its first mutation (mkdir + write).
+     * Vendor-neutral: throw to deny the entry, resolve to allow. Omitted (the
+     * normal CLI never sets it), `create` behaves exactly as before.
+     */
+    createMutationHook?: CreateMutationHook;
   },
 ): Promise<FilesystemServerContext> {
   // Only `resources` is declared: `McpServer` advertises `tools` and `prompts`
@@ -180,6 +188,7 @@ export async function createServer(
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),
+    ...(extraDeps?.createMutationHook ? { createMutationHook: extraDeps.createMutationHook } : {}),
   };
 
   const resourceDisposable = registerResources(deps);

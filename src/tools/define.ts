@@ -39,6 +39,32 @@ import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { ProgressSession } from './progress.ts';
 
+/**
+ * One mutation `create` is about to commit, bound to its exact inputs. The
+ * hook sees the caller-requested path (pre-guard), the verbatim content and
+ * whether the write replaces or appends — enough for a host to bind an
+ * admission decision to the exact action.
+ */
+export interface CreateMutation {
+  readonly tool: 'create';
+  readonly path: string;
+  readonly content: string;
+  readonly mode: 'write' | 'append';
+}
+
+/**
+ * Optional host-injected admission check for `create`, consulted after
+ * overwrite confirmation and before the first mutation (mkdir + write). It
+ * supplements the PathGuard checks, never replaces them. Resolve to allow;
+ * throw to deny — the entry fails without touching the filesystem. Absent
+ * (the normal CLI), behavior is unchanged. Vendor-neutral on purpose: this
+ * server ships no admission implementation and takes no dependency on one.
+ */
+export type CreateMutationHook = (
+  mutation: CreateMutation,
+  signal: AbortSignal,
+) => void | Promise<void>;
+
 export interface ToolCtx {
   readonly signal: AbortSignal;
   readonly _meta?: RequestMeta | undefined;
@@ -89,6 +115,8 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
+  /** Host-injected admission check for `create` mutations; absent in the normal CLI. */
+  readonly createMutationHook?: CreateMutationHook | undefined;
 }
 
 interface ToolDeps {
@@ -97,6 +125,7 @@ interface ToolDeps {
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   readonly era?: 'legacy' | 'modern';
+  readonly createMutationHook?: CreateMutationHook;
 }
 
 interface RunResult<T> {
@@ -143,7 +172,10 @@ export interface DefinedTool {
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
+  deps: Pick<
+    ToolDeps,
+    'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era' | 'createMutationHook'
+  >,
 ): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -185,6 +217,7 @@ function toToolCtx(
     droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
     requestState: ctx.mcpReq.requestState,
     serverCtx: ctx,
+    ...(deps.createMutationHook ? { createMutationHook: deps.createMutationHook } : {}),
     ...(clientCapabilities ? { clientCapabilities } : {}),
   };
 }
