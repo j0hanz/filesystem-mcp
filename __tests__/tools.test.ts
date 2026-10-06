@@ -593,16 +593,17 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.ok(tools.length > 0);
       for (const tool of tools) {
         // The wire copy is the SDK's own conversion of the Zod schema: no $defs
-        // except where a subschema is deliberately hoisted.
-        // `edit` is the deliberate exception: EditSpec is used at two sites in
-        // one document, so it carries an `id` and is hoisted (see below).
-        if (tool.name !== 'edit') {
-          assert.strictEqual(
-            (tool.inputSchema as { $defs?: unknown }).$defs,
-            undefined,
-            `${tool.name} must publish a dereferenced input schema without $defs`,
-          );
-        }
+        // and no $ref anywhere — clients whose converter cannot follow a $ref
+        // fall back to serializing the arguments (issue #51).
+        assert.strictEqual(
+          (tool.inputSchema as { $defs?: unknown }).$defs,
+          undefined,
+          `${tool.name} must publish a dereferenced input schema without $defs`,
+        );
+        assert.ok(
+          !JSON.stringify(tool.inputSchema).includes('"$ref"'),
+          `${tool.name} must publish an input schema without $ref`,
+        );
       }
 
       // Zod defaults still reach the handler: edit applies with dryRun's
@@ -639,6 +640,36 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
       const content = await readFile(file, 'utf-8');
       assert.strictEqual(content, 'modified content');
+    }
+  });
+
+  it('recovers arguments a client serialized and spread into indexed keys (issue #51)', async () => {
+    const file = join(tmpDir, 'edit-split-args.txt');
+    await writeFile(file, 'original content');
+    const payload = { path: file, edits: [{ oldText: 'original', newText: 'modified' }] };
+    // A string spread into an object is what such clients put on the wire:
+    // { "0": "{", "1": "\"", … }.
+    const spread = (text: string): Record<string, unknown> =>
+      Object.fromEntries(text.split('').entries());
+    const recovered = await harness.client.callTool({
+      name: 'edit',
+      arguments: spread(JSON.stringify(payload)),
+    });
+    assert.notStrictEqual(recovered.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'modified content');
+
+    for (const encoded of ['abc', JSON.stringify(['not', 'an', 'object'])]) {
+      const rejected = await harness.client.callTool({
+        name: 'edit',
+        arguments: spread(encoded),
+      });
+      assert.strictEqual(rejected.isError, true);
+      const text = firstTextBlock(rejected).text ?? '';
+      assert.match(
+        text,
+        new RegExp(`arrived as a ${String(encoded.length)}-character string`, 'u'),
+      );
+      assert.doesNotMatch(text, /Unrecognized keys/u);
     }
   });
 
@@ -3224,25 +3255,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const edit = tools.find((t) => t.name === 'edit');
     assert.ok(edit);
     const editInput = JSON.stringify(edit.inputSchema);
-    // EditSpec is the one subschema with an `id`, so it is hoisted into `$defs`
-    // and referenced from both use sites (edits and files[].edits) rather than
-    // inlined twice.
-    assert.strictEqual(
-      editInput.split('"$ref"').length - 1,
-      2,
-      'edit must reference the hoisted EditSpec at both use sites',
-    );
-    assert.ok(
-      (edit.inputSchema as { $defs?: Record<string, unknown> }).$defs?.['EditSpec'],
-      'edit must publish EditSpec in $defs',
-    );
+    // EditSpec carries no `id`, so it is inlined at both use sites (edits and
+    // files[].edits) instead of hoisted behind a `$ref` (issue #51).
     // Sentinel is the opening of EditSpecSchema's `oldText` description in
     // src/tools/edit.ts — reword that description and this count must move with
-    // it. Hoisted, it appears once.
+    // it.
     assert.strictEqual(
       editInput.split('Exact literal text to locate').length - 1,
-      1,
-      "EditSpec's oldText description must appear only in the hoisted $defs entry",
+      2,
+      "EditSpec's oldText description must be inlined at both use sites",
     );
 
     // `oneOf` (not `anyOf`): `{path, paths}` matches two branches and so fails,
@@ -3320,8 +3341,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // publishes an output schema. Baseline measured 2026-10-02, after the arch
   // audit follow-ups: 18154 full / 8950 read-only. Each ceiling sits about 2%
   // above its measurement, so a regression of a few hundred characters fails.
+  // Raised 2026-10-06 to 18620 full (read-only unchanged): `edit` inlines
+  // EditSpec at both use sites instead of a `$ref`, which some clients cannot
+  // follow (issue #51).
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 18_500;
+    const BUDGET_CHARS = 19_000;
     const BUDGET_CHARS_READ_ONLY = 9_150;
 
     const full = await createTestClientPair([tmpDir]);
