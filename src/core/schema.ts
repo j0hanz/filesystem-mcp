@@ -209,3 +209,51 @@ export const CursorSchema = base64urlCursor
     'Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot ' +
       'taken on the first call; it expires after ~60s — re-request without a cursor if rejected.',
   );
+
+/**
+ * Reassembles tool arguments that a client JSON-serialized and then spread
+ * into an object: `{ path }` arrives as `{ "0": "{", "1": "\"", … }`, one key
+ * per UTF-16 code unit. Returns `undefined` for anything else. Integer keys
+ * enumerate first in ascending order, so matching each key to its position
+ * also proves the keys are exactly `"0"…"n-1"` with nothing else alongside.
+ */
+function joinSplitString(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.length === 0) return undefined;
+  let text = '';
+  for (const [index, [key, char]] of entries.entries()) {
+    if (key !== String(index) || typeof char !== 'string' || char.length !== 1) return undefined;
+    text += char;
+  }
+  return text;
+}
+
+/**
+ * Wraps a tool's input schema so a stringified-then-spread payload (see
+ * {@link joinSplitString}) is parsed back into the object it encodes, and one
+ * that does not encode an object fails with a message naming the cause rather
+ * than `Unrecognized keys: "0", "1", …`. The published JSON Schema is the
+ * wrapped schema's own: a preprocess step converts to its output side.
+ */
+export function withSplitArgsRecovery<T extends z.ZodType>(schema: T): z.ZodPreprocess<T> {
+  return z.preprocess((value, ctx) => {
+    const text = joinSplitString(value);
+    if (text === undefined) return value;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return parsed;
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        `arguments must be a JSON object, but arrived as a ${String(text.length)}-character ` +
+        'string split into indexed keys (the client serialized the payload); send the arguments as an object',
+      input: value,
+    });
+    return z.NEVER;
+  }, schema);
+}

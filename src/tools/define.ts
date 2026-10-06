@@ -35,6 +35,7 @@ import { Logger, sanitizeLogField } from '../core/observability.ts';
 import type { LoggingLevel } from '../core/observability.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
+import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { ProgressSession } from './progress.ts';
 
@@ -400,10 +401,15 @@ export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I
   const toolDefShape = {
     title: def.title,
     description: def.description,
-    // The Zod schema goes in as-is: the SDK validates with it and publishes its
-    // own draft-2020-12 conversion in `tools/list`. The cast only names the
-    // in/out types a generic `ZodType` cannot surface through `~standard`.
-    inputSchema: def.input as unknown as StandardSchemaWithJSON<z.input<I>, z.output<I>>,
+    // The Zod schema goes in behind `withSplitArgsRecovery` only: the SDK
+    // validates with it and publishes its own draft-2020-12 conversion in
+    // `tools/list`, which the preprocess step leaves unchanged. The cast only
+    // names the in/out types a generic `ZodType` cannot surface through
+    // `~standard`.
+    inputSchema: withSplitArgsRecovery(def.input) as unknown as StandardSchemaWithJSON<
+      z.input<I>,
+      z.output<I>
+    >,
     // No `outputSchema`, ever. Publishing one obliges the result to carry
     // `structuredContent` (clients enforce it), and every tool that authors its
     // own text ships its metadata under `_meta` instead — see
