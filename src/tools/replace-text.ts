@@ -10,7 +10,7 @@ import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
-import { stoppedEarlyLine, truncateProgressPattern } from '../core/fmt.ts';
+import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { toPosixRelative } from '../core/path.ts';
@@ -54,8 +54,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     })
     .describe(
       'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
-    )
-    .meta({ examples: ['TODO', 'function\\s+(\\w+)', 'import.*from'] }),
+    ),
   replacement: z
     .string()
     .max(10000)
@@ -617,6 +616,20 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
         `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,
       );
     }
+    const hint =
+      structured.totalMatches === 0
+        ? zeroMatchHint({
+            ...args,
+            filesScanned: structured.filesScanned,
+            // A failed file, or a binary one the needle did hit, explains the
+            // zero better than a guess about the pattern.
+            incomplete:
+              stop !== undefined ||
+              structured.summary.failed > 0 ||
+              Boolean(structured.skippedBinary),
+          })
+        : undefined;
+    if (hint) lines.push(hint);
     // A failure's reason lives in `results`, which ships under `_meta`.
     for (const r of structured.results.filter((x) => 'error' in x).slice(0, 3)) {
       lines.push(`// ${basename(r.path)}: ${r.error.code} ${r.error.message}`);

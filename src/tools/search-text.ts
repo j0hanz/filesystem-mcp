@@ -5,7 +5,7 @@ import * as z from 'zod/v4';
 
 import { paginate } from '../core/cursor.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
+import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
@@ -50,8 +50,7 @@ const GrepInputSchema = z.strictObject({
     })
     .describe(
       'Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only.',
-    )
-    .meta({ examples: ['TODO', 'function\\s+(\\w+)', 'import.*from'] }),
+    ),
   isRegex: defaultFalseBoolean('Treat searchPattern as a regex (default: literal text match)'),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
@@ -302,7 +301,23 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   run: async (args, ctx) => {
     const { structured, offset, total, link } = await handleSearchContent(args, ctx);
     const rows = renderRows(structured.matches, args.context > 0);
-    const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
+    const body =
+      rows.length > 0
+        ? rows.join('\n')
+        : [
+            `No matches for '${args.searchPattern}'`,
+            zeroMatchHint({
+              ...args,
+              filesScanned: structured.filesScanned ?? 0,
+              incomplete: Boolean(
+                structured.stoppedReason ??
+                structured.skippedTooLarge ??
+                structured.skippedInaccessible,
+              ),
+            }),
+          ]
+            .filter(Boolean)
+            .join('\n');
     const text =
       body +
       pageTrailer({

@@ -144,3 +144,36 @@ export function stoppedEarlyLine(stoppedReason: string): string {
   const why = STOP_REASON_TEXT[stoppedReason] ?? `stopped (${stoppedReason})`;
   return `// scan stopped early: ${why}. That total is a floor, not the count. Narrow path or pattern for the rest.`;
 }
+
+// Regex syntax literal code rarely holds: unspaced alternation (`a|b`, not
+// `||` or a `string | null` union), class escapes, and `.*` / `.+`. Bare `(`,
+// `.`, `[` stay out — `foo(` and `a.b` are ordinary literal needles. A Windows
+// path like `src\db` can still trip `\d`; the hint only shows on zero
+// matches, so a stray one costs one line.
+const REGEX_META = /(?<=[^\s|])\|(?=[^\s|])|\\[dDwWsSbB]|\.[*+]/;
+
+/**
+ * The `//` line explaining a zero-match result, or undefined. Without it a
+ * regex matched literally, or a glob that selected no files, reads exactly
+ * like a genuine miss (issue #55). An `incomplete` scan (files skipped or
+ * failed, scan stopped) already has its own line, which explains the zero
+ * better, so it gets no hint.
+ */
+export function zeroMatchHint(p: {
+  searchPattern: string;
+  isRegex: boolean;
+  pattern?: string | undefined;
+  filesScanned: number;
+  incomplete: boolean;
+}): string | undefined {
+  if (p.incomplete) return undefined;
+  if (p.filesScanned === 0) {
+    return p.pattern === undefined
+      ? '// no files were searched: nothing under path passed the hidden/ignored/maxDepth filters.'
+      : `// no files were searched: nothing under path matched pattern '${p.pattern}' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.`;
+  }
+  if (!p.isRegex && REGEX_META.test(p.searchPattern)) {
+    return '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
+  }
+  return undefined;
+}

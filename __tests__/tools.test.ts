@@ -3161,6 +3161,50 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
+  it('search_text and replace_text explain a zero-match result in the text (#55)', async () => {
+    // A regex sent without isRegex, or a glob that selects no files, read
+    // exactly like a genuine miss: filesScanned lives only in `_meta`.
+    const dir = join(tmpDir, 'zero_hint');
+    await writeTestFile(tmpDir, 'zero_hint/a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');
+    const regexLine =
+      '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
+    const globLine =
+      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.";
+    const text = async (name: string, args: Record<string, unknown>) =>
+      firstTextBlock(await harness.client.callTool({ name, arguments: { path: dir, ...args } }))
+        .text ?? '';
+    const search = (args: Record<string, unknown>) => text('search_text', args);
+    const replace = (args: Record<string, unknown>) =>
+      text('replace_text', { replacement: 'X', dryRun: true, ...args });
+
+    assert.strictEqual(
+      await search({ searchPattern: 'TOKEN1|token2' }),
+      `No matches for 'TOKEN1|token2'\n${regexLine}`,
+    );
+    assert.strictEqual(
+      await search({ searchPattern: 'TOKEN1', pattern: '**/*.py' }),
+      `No matches for 'TOKEN1'\n${globLine}`,
+    );
+    for (const literal of ['foo(', 'a.b', 'x || y', 'arr[0]', 'string | undefined', '|x| x']) {
+      assert.strictEqual(await search({ searchPattern: literal }), `No matches for '${literal}'`);
+    }
+    assert.ok((await replace({ searchPattern: '\\d+' })).endsWith(`\n${regexLine}`));
+    assert.ok(
+      (await replace({ searchPattern: 'TOKEN1', pattern: '**/*.py' })).endsWith(`\n${globLine}`),
+    );
+    // Already a regex: a genuine miss gets no hint.
+    assert.strictEqual(
+      await replace({ searchPattern: '\\d{9}', isRegex: true }),
+      "replace_text: '\\d{9}' [dry run] · 0 match(es) in 0 file(s)",
+    );
+    // A literal the needle hit inside a binary file: the skip, not a regex, explains the zero.
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    assert.strictEqual(
+      await replace({ searchPattern: 'a|b' }),
+      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s) · 1 binary skipped",
+    );
+  });
+
   it('search_text skips binary files and reports the count', async () => {
     await writeTestFile(tmpDir, 'search_bin/text.txt', 'BINNEEDLE\n');
     await writeFile(

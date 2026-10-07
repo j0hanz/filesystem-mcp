@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An empty `search_text` or `replace_text` result says why it is empty**
+  (issue #55). A literal search whose `searchPattern` looks like a regex
+  (`a|b`, `\d+`, `.*`) now adds a line naming `isRegex=true`. A glob that
+  selected no files now says that nothing was searched, instead of reading
+  as a content miss. The regex-shaped `searchPattern` examples, which showed
+  no `isRegex` flag, are removed from both tools.
+
 ## [2.7.2] - 2026-10-07
 
 A fix release for clients that sent tool arguments as a serialized string
