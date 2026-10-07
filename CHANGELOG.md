@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.2] - 2026-10-07
+
+A fix release for clients that sent tool arguments as a serialized string
+(issue #51). Nothing breaks for existing callers. The only change to the
+declared surface is that `edit` now inlines its edit-spec schema instead of
+referencing it through `$defs`.
+
+### Fixed
+
+- **`edit` publishes a schema every client can read.** Its input schema no
+  longer hoists the `oldText`/`newText` spec into `$defs` behind a `$ref`;
+  the spec is inlined at both `edits` and `files[].edits`. Clients whose
+  schema converter could not follow the `$ref` treated `edit` as an opaque
+  input and sent its arguments as a serialized string.
+- **Stringified-and-spread arguments are recovered.** When a client
+  serializes a tool's arguments and then spreads the string into an object
+  (`{ "0": "{", "1": "\"", … }`), every tool now reassembles and parses the
+  payload. A payload that does not encode a JSON object fails with a message
+  naming the cause instead of `Unrecognized keys: "0", "1", …`.
+
 ## [2.7.1] - 2026-10-02
 
 A fix release from the 2026-10-02 architecture audit. Searches stop at
