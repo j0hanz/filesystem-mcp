@@ -5,7 +5,6 @@ import {
   resourceUrlFromServerUrl,
   validateOriginHeader,
 } from '@modelcontextprotocol/server';
-import type { AuthInfo } from '@modelcontextprotocol/server';
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 
@@ -283,11 +282,12 @@ export function bearerAuthMiddleware(
       // Forward the validated caller to the SDK pipeline: toNodeHandler reads
       // req.auth and passes it as the handler's pass-through authInfo, which the
       // per-request factory receives on ctx.http.
+      // `req.auth` is typed by @modelcontextprotocol/express's Request augmentation.
       // `expiresAt` is deliberately omitted: a static API key has no expiry and
       // there is no `exp` claim or introspection response to read one from.
       // Populate it from the token if this ever moves to issued tokens.
       const presented = authHeader.slice('Bearer '.length).trim();
-      (req as Request & { auth?: AuthInfo }).auth = {
+      req.auth = {
         token: presented,
         clientId: 'api-key',
         scopes: [],
