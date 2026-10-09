@@ -152,3 +152,13 @@ export const DEFAULT_SEARCH_RESULTS = 100;
 export const MAX_SEARCH_DEPTH = 100;
 
 export const DEFAULT_SEARCH_CONTENT_RESULTS = 500;
+
+/**
+ * Upper bound on array elements plus object members in one `tools/call`
+ * `arguments` payload, counted by the SDK before any schema runs
+ * (`McpServerOptions.maxToolInputElements`). Must clear the largest
+ * schema-legal call: an `edit` batch of 5 files × 100 edits is 1517 nodes
+ * and a 1000-path `read`/`delete` is ~1005, so 4096 is ~2.7× headroom.
+ * Raise it in the same change that raises any of those schema caps.
+ */
+export const MAX_TOOL_INPUT_ELEMENTS = 4096;

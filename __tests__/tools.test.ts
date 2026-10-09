@@ -9,7 +9,11 @@ import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
-import { getMaxTextFileSize, MAX_SEARCH_RESULTS } from '../src/core/util.ts';
+import {
+  getMaxTextFileSize,
+  MAX_SEARCH_RESULTS,
+  MAX_TOOL_INPUT_ELEMENTS,
+} from '../src/core/util.ts';
 import { createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import {
@@ -584,6 +588,55 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const allTools = registeredTools(false);
     assert.strictEqual(allTools.length, ALL_REGISTERED_TOOL_NAMES.length);
+  });
+
+  it('tools/call arguments over MAX_TOOL_INPUT_ELEMENTS are answered with a tool error before schema validation', async () => {
+    // 1000 is `read`'s own schema cap; this payload is far past it, so only
+    // the SDK's structural count can be the error that comes back.
+    const paths = Array.from(
+      { length: MAX_TOOL_INPUT_ELEMENTS + 1 },
+      (_, i) => `${tmpDir}/never-${String(i)}.txt`,
+    );
+    const result = await harness.client.callTool({ name: 'read', arguments: { paths } });
+    assert.strictEqual(result.isError, true);
+    const text = (result.content as { type: string; text?: string }[])
+      .map((c) => c.text ?? '')
+      .join('\n');
+    assert.match(
+      text,
+      new RegExp(`more than the maximum of ${String(MAX_TOOL_INPUT_ELEMENTS)} elements`),
+    );
+    assert.ok(!text.includes('Input validation error'), 'the cap must fire before the schema');
+  });
+
+  it('the largest schema-legal edit batch (5 files x 100 edits) is not refused by the element cap', async () => {
+    // 2 top-level members + 5 files + 5x2 file members + 500 edits + 500x2
+    // edit members = 1517 nodes. Must stay well under MAX_TOOL_INPUT_ELEMENTS;
+    // if a schema cap is ever raised past the headroom, this test is the alarm.
+    const files = await Promise.all(
+      Array.from({ length: 5 }, async (_, f) => {
+        const path = join(tmpDir, `cap-${String(f)}.txt`);
+        await writeFile(path, 'unrelated content\n');
+        return {
+          path,
+          edits: Array.from({ length: 100 }, (_, e) => ({
+            oldText: `absent-${String(f)}-${String(e)}`,
+            newText: '',
+          })),
+        };
+      }),
+    );
+    // The tool may legitimately report unmatched oldText as an error; only the
+    // element-cap message would mean the cap refused a schema-legal call.
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { files, dryRun: true },
+    });
+    const text = (result.content as { type: string; text?: string }[])
+      .map((c) => c.text ?? '')
+      .join('\n');
+    assert.notStrictEqual(result.isError, true, text.slice(0, 300));
+    assert.ok(!/more than the maximum of \d+ elements/.test(text), text.slice(0, 300));
   });
 
   it('tools/list publishes slimmed schemas and preserves Zod runtime semantics', async () => {
