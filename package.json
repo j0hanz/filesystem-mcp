@@ -58,17 +58,17 @@
   ],
   "dependencies": {
     "@adguard/re2-wasm": "^1.2.1",
-    "@modelcontextprotocol/express": "2.0.1",
-    "@modelcontextprotocol/node": "2.1.0",
-    "@modelcontextprotocol/server": "2.2.0",
+    "@modelcontextprotocol/express": "2.0.2",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "diff": "^9",
     "express": "^5.2.1",
-    "ignore": "^7.0.10",
+    "ignore": "^7.0.12",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^24",
@@ -77,7 +77,7 @@
     "knip": "^6",
     "prettier": "^3.9.9",
     "typescript": "^6",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "^8.71.1"
   },
   "engines": {
     "node": ">=24"
