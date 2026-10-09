@@ -6,7 +6,7 @@ import { detectMimeType } from '../core/mime.ts';
 import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
 import { singleOrBatchAccessPaths, singleOrBatchPathsInput } from '../core/schema.ts';
 import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
-import type { BatchResult, PerPathResult } from './batch.ts';
+import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -15,12 +15,13 @@ interface FileInfo {
   name: string;
   path: string;
   type: EntryType;
-  size: number;
+  size?: number;
   tokenEstimate?: number;
   created: string;
   modified: string;
   accessed: string;
-  permissions: string;
+  permissions?: string;
+  readOnly?: boolean;
   isHidden: boolean;
   mimeType?: string;
   symlinkTarget?: string;
@@ -28,7 +29,7 @@ interface FileInfo {
 
 const StatInputSchema = singleOrBatchPathsInput({});
 
-type StatOutput = BatchResult<FileInfo> & { fileCount: number; dirCount: number };
+type StatOutput = BatchResult<FileInfo>;
 
 function getPermissions(mode: number): string {
   let out = '';
@@ -37,6 +38,14 @@ function getPermissions(mode: number): string {
     out += (bits & 0b100 ? 'r' : '-') + (bits & 0b010 ? 'w' : '-') + (bits & 0b001 ? 'x' : '-');
   }
   return out;
+}
+
+// On Windows libuv never consults the ACL: mode is 0666, or 0444 when
+// FILE_ATTRIBUTE_READONLY is set. A POSIX triad would claim group/other access
+// it never checked (issue #56), so report the one fact the mode encodes.
+function accessFields(mode: number): Pick<FileInfo, 'permissions' | 'readOnly'> {
+  if (process.platform === 'win32') return { readOnly: (mode & 0o222) === 0 };
+  return { permissions: getPermissions(mode) };
 }
 
 function buildFileInfoResult(
@@ -52,12 +61,14 @@ function buildFileInfoResult(
     name,
     path: requestedPath,
     type: isSymlink ? 'symlink' : resolveEntryType(stats),
-    size: stats.size,
+    // A directory's st_size is 0 on Windows and the block size on POSIX; neither
+    // describes its contents, and a literal 0 reads as "empty" (issue #56).
+    ...(stats.isDirectory() ? {} : { size: stats.size }),
     ...(tokenEstimate !== undefined ? { tokenEstimate } : {}),
     created: stats.birthtime.toISOString(),
     modified: stats.mtime.toISOString(),
     accessed: stats.atime.toISOString(),
-    permissions: getPermissions(stats.mode),
+    ...accessFields(stats.mode),
     isHidden: name.startsWith('.'),
     ...(mimeType !== undefined ? { mimeType } : {}),
     ...(symlinkTarget !== undefined ? { symlinkTarget } : {}),
@@ -127,26 +138,12 @@ async function getFileInfo(
   return buildFileInfoResult(name, requestedPath, isOwnSymlink, stats, mimeType, symlinkTarget);
 }
 
-function classifyTypeCounts(results: readonly PerPathResult<FileInfo>[]): {
-  fileCount: number;
-  dirCount: number;
-} {
-  let fileCount = 0;
-  let dirCount = 0;
-  for (const result of results) {
-    if ('error' in result) continue;
-    if (result.value.type === 'directory') dirCount += 1;
-    else fileCount += 1;
-  }
-  return { fileCount, dirCount };
-}
-
 export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   name: 'stat',
   title: 'Get File Info',
   description:
-    'Get metadata without reading contents, like ls -ld: type, size (a directory reports its own entry, not its contents), ' +
-    'tokenEstimate, timestamps, permissions, MIME type guessed from the extension, and symlink target. ' +
+    'Get metadata without reading contents, like ls -ld: type, size (files only; use list for directory contents), ' +
+    'tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. ' +
     'Also checks whether paths exist.',
   input: StatInputSchema,
   readOnlyHint: true,
@@ -166,14 +163,12 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
       getFileInfo(path, ctx),
     );
 
-    const { fileCount, dirCount } = classifyTypeCounts(batch.results);
-
     // No `text` on purpose. The one-liner this used to build (`AGENTS.md: file,
     // 751 B`) dropped tokenEstimate, modified, mimeType and isHidden — the very
     // fields a caller asks `stat` for. Supplying no text makes this a data tool,
     // so `define.ts` renders the JSON and keeps it in `structuredContent`.
     return {
-      structured: { results: batch.results, summary: batch.summary, fileCount, dirCount },
+      structured: { results: batch.results, summary: batch.summary },
       isError: isTotalFailure(batch.summary),
     };
   },

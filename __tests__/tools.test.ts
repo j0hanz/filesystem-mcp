@@ -2645,6 +2645,39 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('stat on a directory does not read as empty or world-writable (#56)', async () => {
+    const dir = join(tmpDir, 'stat-dir-56');
+    await mkdir(dir);
+    await writeFile(join(dir, 'a.txt'), 'hello');
+    await writeFile(join(dir, 'b.txt'), 'world');
+
+    const result = await harness.client.callTool({ name: 'stat', arguments: { path: dir } });
+    assert.notStrictEqual(result.isError, true);
+    const sc = result.structuredContent as Record<string, unknown> & {
+      results?: { value?: Record<string, unknown> & { type?: string } }[];
+    };
+    // Result-row type counts next to a directory entry read as "0 files inside".
+    assert.ok(!('fileCount' in sc), 'fileCount must not be emitted');
+    assert.ok(!('dirCount' in sc), 'dirCount must not be emitted');
+
+    const value = sc.results?.[0]?.value;
+    assert.ok(value, 'stat must return a value');
+    assert.strictEqual(value.type, 'directory');
+    // libuv reports 0 for every directory on Windows; ext4 says 4096. Neither
+    // describes the contents, so no number is better than a misleading one.
+    assert.ok(!('size' in value), 'a directory must not report a size');
+
+    if (process.platform === 'win32') {
+      // libuv synthesizes mode 0666/0444 from FILE_ATTRIBUTE_READONLY alone,
+      // so a POSIX triad would claim group/other access it never checked.
+      assert.strictEqual(value['permissions'], undefined);
+      assert.strictEqual(value['readOnly'], false);
+    } else {
+      assert.strictEqual(typeof value['permissions'], 'string');
+      assert.strictEqual(value['readOnly'], undefined);
+    }
+  });
+
   it('stat reports an own symlink and its target', async (t) => {
     const target = await writeTestFile(tmpDir, 'stat-link-target.txt', 'target');
     const linkPath = join(tmpDir, 'stat-link.txt');
