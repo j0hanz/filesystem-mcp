@@ -11,6 +11,7 @@ import { Logger } from './core/observability.ts';
 import type { ServerOptions } from './core/path.ts';
 import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
+import { MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
 import type { WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
 import { registerPrompts } from './prompts.ts';
@@ -95,6 +96,12 @@ export async function createServer(
   const serverConfig: NonNullable<ConstructorParameters<typeof McpServer>[1]> = {
     capabilities,
     enforceStrictCapabilities: true,
+    // Structural bound on tools/call arguments, checked before Zod walks the
+    // value: the body limit is bytes (31 MiB by default), and every per-tool
+    // `.max()` runs only after a full traversal. No schema-legal call comes
+    // near this (see MAX_TOOL_INPUT_ELEMENTS); a payload over it is answered
+    // with a tool error after counting at most 4097 nodes.
+    maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
     cacheHints: {
       'tools/list': { ttlMs: 3_600_000, cacheScope },
       'prompts/list': { ttlMs: 3_600_000, cacheScope },
