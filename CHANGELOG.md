@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.4] - 2026-10-09
+
+A fix release for `stat` output that read as "empty, writable by everyone"
+on Windows (issue #56). The declared schema is unchanged; only the `stat`
+description text moved. Callers that read `fileCount`, `dirCount`, a
+directory's `size`, or `permissions` on Windows should read the Fixed entry
+before upgrading.
+
+### Fixed
+
+- **`stat` no longer implies a Windows directory is empty or world-writable**
+  (issue #56). The top-level `fileCount` and `dirCount` are removed: they
+  counted result rows by type, so a single directory always read as
+  `fileCount: 0`. Directories no longer report `size`, which libuv fixes at
+  0 on Windows and which never described contents; use `list` for that. On
+  Windows, `permissions` is replaced by `readOnly`, the one fact libuv
+  encodes in the mode there. Linux and macOS keep the `rwx` triads.
+
 ## [2.7.3] - 2026-10-07
 
 A fix release for empty search results that read like a genuine miss
