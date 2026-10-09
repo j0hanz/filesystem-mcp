@@ -398,6 +398,31 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(isOriginAllowed('not-a-valid-url', ['app.example.com']), false);
     });
 
+    it('TC-SEC-030b: an allowlist entry may be a lowercase <scheme>://* or a bare extension ID', () => {
+      // Firefox extension IDs differ per install, so the scheme wildcard is
+      // the only way to admit one; Chromium IDs are stable, so the ID alone
+      // (the origin's hostname) admits exactly that extension.
+      assert.strictEqual(isOriginAllowed('moz-extension://abc123', ['moz-extension://*']), true);
+      assert.strictEqual(
+        isOriginAllowed('chrome-extension://abcdefghijkl', ['abcdefghijkl']),
+        true,
+      );
+      // The wildcard is scheme-exact and lowercase-only.
+      assert.strictEqual(
+        isOriginAllowed('chrome-extension://abc123', ['moz-extension://*']),
+        false,
+      );
+      assert.strictEqual(isOriginAllowed('moz-extension://abc123', ['MOZ-EXTENSION://*']), false);
+      // Web schemes never wildcard: sites are listed by hostname.
+      assert.strictEqual(isOriginAllowed('https://evil.com', ['https://*']), false);
+      assert.strictEqual(isOriginAllowed('http://evil.com', ['http://*']), false);
+      // The env parser passes such entries through untouched.
+      assert.deepStrictEqual(computeAllowedOriginHostnames('app.example.com, moz-extension://*'), [
+        'app.example.com',
+        'moz-extension://*',
+      ]);
+    });
+
     it('TC-SEC-031: corsMiddleware responds to OPTIONS requests with appropriate CORS headers', () => {
       const handler = corsMiddleware(['localhost', 'app.example.com']);
 
