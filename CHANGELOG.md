@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.5] - 2026-10-09
+
+A hardening and documentation release. Nothing breaks for existing callers:
+no schema-legal tool call is affected, and the declared tool surface is
+unchanged.
+
+### Added
+
+- **`tools/call` arguments are bounded before schema validation.** A payload
+  carrying more than 4096 array elements plus object members is now answered
+  with a tool error before any schema runs, instead of being fully parsed and
+  traversed first. The largest schema-legal call (an `edit` batch of 5 files
+  by 100 edits) is 1517 nodes, so no legitimate call comes near the cap.
+
+### Changed
+
+- **`FS_ALLOWED_ORIGINS` documents browser-extension origins.** The README
+  and `--help` now describe the two forms the Origin gate already accepts: an
+  extension ID (the hostname of a `chrome-extension://` origin) and a
+  lowercase `<scheme>://*` entry such as `moz-extension://*`. `http://*` and
+  `https://*` are not honoured. A new test pins this behaviour.
+
 ## [2.7.4] - 2026-10-09
 
 A fix release for `stat` output that read as "empty, writable by everyone"
