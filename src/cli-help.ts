@@ -102,7 +102,10 @@ const ENV_HELP: HelpRow[] = [
     flags: 'FS_ALLOWED_HOSTS',
     desc: 'Comma-separated Host header values to accept (HTTP transport)',
   },
-  { flags: 'FS_ALLOWED_ORIGINS', desc: 'Comma-separated origin hostnames for CORS' },
+  {
+    flags: 'FS_ALLOWED_ORIGINS',
+    desc: 'Comma-separated origin hostnames for CORS; an extension ID or a lowercase <scheme>://* entry (e.g. moz-extension://*) admits browser extensions',
+  },
   {
     flags: 'FS_ALLOW_UNRESTRICTED_HOSTS',
     desc: 'Bind a wildcard host with no Host validation, accepts the risk ("true" or "1" enables this)',
