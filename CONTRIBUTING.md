@@ -24,17 +24,17 @@ include secrets or credentials. Report vulnerabilities privately through
 [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories),
 not public issues or project cards.
 
-The [Filesystem MCP Project](https://github.com/users/j0hanz/projects/12)
-uses issues as work items and linked PRs as implementation. Do not add both an
-issue and its PR as separate cards.
-A maintainer must verify the hosted configuration below; repository templates
-do not configure the Project. Hosted setup is tracked in
+The intended **Filesystem MCP** project uses issues as work items and linked PRs
+as implementation. Do not add both an issue and its PR as separate cards.
+Repository templates do not create the hosted Project; a maintainer must complete
+the setup below before the board is available. Hosted setup is tracked in
 [issue #57](https://github.com/j0hanz/filesystem-mcp/issues/57).
 
 ### Maintainer setup
 
-1. Use the existing **Filesystem MCP** Project linked above and ensure it is
-   linked from the repository's **Projects** tab. Do not create a duplicate.
+1. Create a GitHub Project named **Filesystem MCP** under the repository owner's
+   account and link it from the repository's **Projects** tab. Check for an
+   existing project first to avoid duplicates.
 2. Configure the **Status** field with these five values:
 
    | Status      | Meaning                               |
