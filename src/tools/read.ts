@@ -11,7 +11,6 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
-import { readFileWithStats } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   singleOrBatchAccessPaths,
@@ -312,9 +311,7 @@ async function readOnePath(
   }
 
   const spec = buildReadSpec(args, ctx.signal);
-  const result = known
-    ? await readFileWithStats(filePath, known.validPath, known.stats, spec)
-    : await ctx.fs.readFile(filePath, spec);
+  const result = await ctx.fs.readFile(filePath, spec, known);
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
@@ -449,7 +446,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
         // media), so head/tail is not a remedy for it — say so instead.
         const isMedia = resources.some((b) => b.type === 'image' || b.type === 'audio');
         const remedy = isMedia
-          ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
+          ? 'This media file is too large to return over the stdio transport; connect over HTTP, or provide a smaller version of the file.'
           : 'Read a slice with head, tail, or startLine/endLine.';
         throw new FsError(
           ErrorCode.TOO_LARGE,

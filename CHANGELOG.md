@@ -48,8 +48,9 @@ pathological inputs.
   swapped for a symlink is refused rather than followed outside the allowed
   folders, and the opened descriptor's real path is re-checked against the
   allowed folders (on Linux) to catch a swapped parent directory, before any
-  byte is read or written. Legitimate symlinks that resolve inside an allowed
-  folder are unaffected.
+  byte is read or written. These checks also cover batched text reads,
+  `search_text`, and appends that create a new file. Legitimate symlinks that
+  resolve inside an allowed folder are unaffected.
 
 ## [2.7.5] - 2026-10-09
 

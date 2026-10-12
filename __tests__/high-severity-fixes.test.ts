@@ -10,6 +10,9 @@ import { mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promise
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { RE2 } from '@adguard/re2-wasm';
+
+import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { searchContent } from '../src/core/search.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
@@ -22,6 +25,7 @@ import {
   createTestRoot,
   createTestServer,
   firstTextBlock,
+  fsErrorMatcher,
   trySymlink,
   writeTestFile,
 } from './helpers.ts';
@@ -287,11 +291,19 @@ describe('High-severity bug-hunt regressions', () => {
         const file = join(tmpDir, 'dense-replace.txt');
         const original = 'a'.repeat(200_000) + '\n';
         await writeFile(file, original);
-        t.mock.method(AbortSignal, 'timeout', () => {
-          const controller = new AbortController();
-          setTimeout(() => controller.abort(new DOMException('test timeout', 'TimeoutError')), 100);
-          return controller.signal;
+        const controller = new AbortController();
+        t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- the wrapper calls the original with its regex receiver.
+        const exec = RE2.prototype.exec;
+        let replacementsStarted = 0;
+        t.mock.method(RE2.prototype, 'exec', function (this: RE2, input: string) {
+          const match = exec.call(this, input);
+          if (input === original && match && ++replacementsStarted === 2) {
+            setImmediate(() => controller.abort(new DOMException('test timeout', 'TimeoutError')));
+          }
+          return match;
         });
+        const writes = t.mock.method(GuardedFileSystem.prototype, 'writeFile');
         const result = await pair.client.callTool({
           name: 'replace_text',
           arguments: {
@@ -302,7 +314,13 @@ describe('High-severity bug-hunt regressions', () => {
             caseSensitive: true,
           },
         });
+        assert.ok(replacementsStarted >= 2, 'cancellation must happen during replacement splicing');
         assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+        assert.strictEqual(
+          writes.mock.callCount(),
+          0,
+          'a partial replacement must not reach writeFile',
+        );
         assert.strictEqual(await readFile(file, 'utf-8'), original);
       },
     );
@@ -382,6 +400,110 @@ describe('High-severity bug-hunt regressions', () => {
       await ctx.mcp.close();
       await cleanupTestRoot(base);
     });
+
+    it('a newly created append checks containment after an ancestor swap', async (t) => {
+      if (process.platform !== 'linux') return t.skip('requires /proc/self/fd containment checks');
+      const parent = join(root, 'append-parent');
+      const outside = join(base, 'append-outside');
+      await mkdir(parent);
+      await mkdir(outside);
+      const file = join(parent, 'new.txt');
+      const validate = ctx.pathGuard.validatePathForWrite.bind(ctx.pathGuard);
+      let swapped = false;
+      t.mock.method(ctx.pathGuard, 'validatePathForWrite', async (requestedPath: string) => {
+        const validPath = await validate(requestedPath);
+        if (requestedPath === file && !swapped) {
+          await rename(parent, `${parent}-saved`);
+          await symlink(outside, parent);
+          swapped = true;
+        }
+        return validPath;
+      });
+
+      await assert.rejects(
+        fs.appendFile(file, 'must stay in root'),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
+      assert.ok(swapped, 'the ancestor changed after validation');
+      await assert.rejects(readFile(join(outside, 'new.txt')), { code: 'ENOENT' });
+    });
+
+    for (const range of [{}, { head: 1 }, { tail: 1 }, { startLine: 1, endLine: 1 }]) {
+      it(`batched read rejects an ancestor swap with ${JSON.stringify(range)}`, async (t) => {
+        if (process.platform !== 'linux')
+          return t.skip('requires /proc/self/fd containment checks');
+        const parent = join(root, `batch-parent-${Object.keys(range)[0] ?? 'full'}`);
+        await mkdir(parent);
+        const file = join(parent, 'OUTSIDE_SECRET.txt');
+        await writeFile(file, 'in-root\n');
+        const pair = await createTestClientPair([root]);
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- the wrapper applies the original to its filesystem receiver.
+        const stat = GuardedFileSystem.prototype.stat;
+        let swapped = false;
+        t.mock.method(
+          GuardedFileSystem.prototype,
+          'stat',
+          async function (this: GuardedFileSystem, ...args: Parameters<GuardedFileSystem['stat']>) {
+            const result = await stat.apply(this, args);
+            if (args[0] === file && !swapped) {
+              await rename(parent, `${parent}-saved`);
+              await symlink(base, parent);
+              swapped = true;
+            }
+            return result;
+          },
+        );
+        try {
+          const result = await pair.client.callTool({
+            name: 'read',
+            arguments: { paths: [file], ...range },
+          });
+          assert.ok(swapped, 'the ancestor changed after the batch stat');
+          assert.strictEqual(result.isError, true);
+          assert.match(firstTextBlock(result).text ?? '', /outside the allowed roots/);
+          assert.ok(!JSON.stringify(result).includes('TOP_SECRET'), 'no outside text is returned');
+        } finally {
+          await pair.close();
+        }
+      });
+    }
+
+    for (const swap of ['file', 'ancestor']) {
+      it(`search rejects a symlink swap of the ${swap} after validation`, async (t) => {
+        if (process.platform !== 'linux')
+          return t.skip('requires /proc/self/fd containment checks');
+        const parent = join(root, `search-${swap}`);
+        await mkdir(parent);
+        const file = join(parent, 'OUTSIDE_SECRET.txt');
+        await writeFile(file, 'in-root\n');
+        const validate = ctx.pathGuard.validateExistingPath.bind(ctx.pathGuard);
+        let swapped = false;
+        t.mock.method(ctx.pathGuard, 'validateExistingPath', async (requestedPath: string) => {
+          const validPath = await validate(requestedPath);
+          if (requestedPath === file && !swapped) {
+            if (swap === 'file') {
+              await rm(file);
+              await symlink(secret, file);
+            } else {
+              await rename(parent, `${parent}-saved`);
+              await symlink(base, parent);
+            }
+            swapped = true;
+          }
+          return validPath;
+        });
+        const result = await searchContent(
+          root,
+          'TOP_SECRET',
+          { explicitFile: file },
+          ctx.pathGuard,
+        );
+        assert.ok(swapped, 'the target changed after validation');
+        assert.deepStrictEqual(result.matches, []);
+        assert.strictEqual(result.summary.skippedInaccessible, 1);
+        assert.strictEqual(result.summary.filesScanned, 0);
+      });
+    }
 
     it('a concurrent file↔symlink flip never leaks out-of-root content or writes outside', async (t) => {
       if (process.platform === 'win32') return t.skip('POSIX symlink race');

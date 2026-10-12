@@ -530,7 +530,7 @@ export async function readFileWithStats(
   validPath: string,
   stats: Stats,
   spec: ReadSpec,
-  verifyHandle?: (handle: FileHandle) => Promise<void>,
+  verifyHandle: (handle: FileHandle) => Promise<void>,
 ): Promise<ReadFileResult> {
   const options: ReadOptions = {
     maxSize: getMaxTextFileSize(),
@@ -540,7 +540,7 @@ export async function readFileWithStats(
   assertFileStats(filePath, stats);
 
   await using handle = await openReadableFileHandle(validPath, spec.signal);
-  await verifyHandle?.(handle);
+  await verifyHandle(handle);
 
   await assertNotBinary(validPath, filePath, handle, options);
   spec.signal?.throwIfAborted();

@@ -353,11 +353,10 @@ export class GuardedFileSystem {
     }
     try {
       signal?.throwIfAborted();
-      // An existing target reached through a swapped ANCESTOR directory passes
+      // A target reached through a swapped ANCESTOR directory passes
       // O_NOFOLLOW (the final component is a real file) but resolves outside the
-      // roots; reject before writing. A freshly O_CREAT|O_EXCL-created file is a
-      // new regular file, so this only matters for the existed branch.
-      if (!created) await this.#assertFdWithinRoots(handle, filePath);
+      // roots; reject before writing, even when this call created the file.
+      await this.#assertFdWithinRoots(handle, filePath);
       // Ceiling: an append is not transactional, so an abort landing
       // mid-write can leave a prefix of the content on disk. Unwiring the
       // signal would trade that for a silently-completed write; a client
@@ -418,10 +417,13 @@ export class GuardedFileSystem {
     await fsCp(validSource, validDest, options);
   }
 
-  async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
+  async readFile(
+    filePath: string,
+    spec: ReadSpec,
+    known?: { validPath: string; stats: Stats },
+  ): Promise<ReadFileResult> {
     spec.signal?.throwIfAborted();
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const stats = await withAbort(fsStat(validPath), spec.signal);
+    const { validPath, stats } = known ?? (await this.stat(filePath, { signal: spec.signal }));
     return readFileWithStats(filePath, validPath, stats, spec, (handle) =>
       this.#assertFdWithinRoots(handle, filePath),
     );
