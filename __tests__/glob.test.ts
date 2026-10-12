@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
@@ -11,6 +11,8 @@ import {
   firstTextBlock,
   trySymlink,
 } from './helpers.ts';
+
+const toPosix = (p: string): string => p.replaceAll('\\', '/');
 
 /** Walk and return root-relative POSIX paths, sorted, directories with a trailing `/`. */
 async function walk(options: GlobEntriesOptions): Promise<string[]> {
@@ -106,6 +108,63 @@ describe('globEntries', () => {
       assert.strictEqual(isSafeGlobSyntax('C:foo/*'), false);
       assert.strictEqual(isSafeGlobSyntax('   '), false);
     });
+
+    it('refuses a pattern whose brace expansion or character classes reach .. or an absolute path', () => {
+      for (const bad of [
+        '..{,x}/*.txt',
+        '.{.,}/*.txt',
+        '{.,x}{.,y}/*.txt',
+        '{a,{..,b}}/*.txt',
+        '{.},.}./*.txt',
+        'x{,/../..}/*.txt',
+        '.[.]/*.txt',
+        '[.][.]/*.txt',
+        '{/etc,x}/*',
+        '{C:,x}foo/*',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('accepts ordinary brace sets and sequences', () => {
+      for (const ok of [
+        '**/*.{ts,tsx}',
+        '{src,lib}/**/*.test.{ts,js}',
+        'v1.{2,3}.md',
+        'file{1..9}.txt',
+        '{a..c}/*.ts',
+        '.{{.,a}}/*.txt',
+        '${..,x}/*.txt',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
+    it('refuses a pattern with more alternatives than it can check', () => {
+      assert.strictEqual(isSafeGlobSyntax('{a,b}'.repeat(13)), false);
+    });
+  });
+
+  it('never yields an entry outside the walk root, whatever the pattern', async () => {
+    const parent = await createTestRoot();
+    try {
+      const root = join(parent, 'root');
+      await mkdir(join(root, 'sub'), { recursive: true });
+      await writeFile(join(parent, 'outside.txt'), 'NEEDLE');
+      await writeFile(join(root, 'top.txt'), 'NEEDLE');
+      await writeFile(join(root, 'sub', 'inner.txt'), 'NEEDLE');
+      for (const pattern of ['..{,x}/*.txt', '.{.,}/*.txt', `{${toPosix(parent)},x}/*.txt`]) {
+        for (const skipIgnored of [false, true]) {
+          const seen = await walk({ cwd: join(root, 'sub'), pattern, skipIgnored });
+          assert.ok(
+            seen.every((p) => !p.startsWith('..') && !isAbsolute(p)),
+            `${pattern}: ${seen.join(', ')}`,
+          );
+        }
+      }
+    } finally {
+      await cleanupTestRoot(parent);
+    }
   });
 
   it('list, find_files and search_text see the colliding subdirectory', async () => {
@@ -134,6 +193,43 @@ describe('globEntries', () => {
         await harness.close();
       }
     });
+  });
+
+  it('find_files, search_text and replace_text refuse brace patterns that build ..', async () => {
+    const parent = await createTestRoot();
+    const root = join(parent, 'root');
+    const sub = join(root, 'sub');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(parent, 'outside.txt'), 'NEEDLE outside');
+    await writeFile(join(root, 'top.txt'), 'NEEDLE top');
+    await writeFile(join(sub, 'inner.txt'), 'NEEDLE inner');
+    const harness = await createTestClientPair([root]);
+    try {
+      for (const path of [sub, root]) {
+        for (const pattern of ['..{,x}/*.txt', '.{.,}/*.txt']) {
+          for (const [name, extra] of [
+            ['find_files', {}],
+            ['search_text', { searchPattern: 'NEEDLE' }],
+            ['replace_text', { searchPattern: 'NEEDLE', replacement: 'CHANGED' }],
+          ] as const) {
+            const result = await harness.client.callTool({
+              name,
+              arguments: { path, pattern, ...extra },
+            });
+            const text = firstTextBlock(result).text ?? '';
+            assert.strictEqual(result.isError, true, `${name} ${pattern} at ${path}: ${text}`);
+            assert.match(text, /Invalid glob or unsafe path/u, `${name} ${pattern}`);
+            assert.doesNotMatch(text, /top\.txt|outside\.txt|inaccessible/u, `${name} ${pattern}`);
+          }
+        }
+      }
+      assert.strictEqual(await readFile(join(root, 'top.txt'), 'utf8'), 'NEEDLE top');
+      assert.strictEqual(await readFile(join(parent, 'outside.txt'), 'utf8'), 'NEEDLE outside');
+      assert.strictEqual(await readFile(join(sub, 'inner.txt'), 'utf8'), 'NEEDLE inner');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(parent);
+    }
   });
 
   it('ignores a .gitignore that is a symlink or oversized', async (t) => {

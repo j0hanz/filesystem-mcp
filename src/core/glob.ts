@@ -1,5 +1,5 @@
 import { glob as fsGlob, readFile as fsReadFile, lstat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
@@ -11,27 +11,228 @@ import type { DirentLike } from './path-utils.ts';
 import { isPathInsideDirectory, isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
 import { MIB } from './util.ts';
 
-/** `..` bounded on both sides by a separator, a brace delimiter, or the pattern edge. */
-const TRAVERSAL_DOTDOT_RE = /(?:^|[/\\{,])\.\.(?=[/\\},]|$)/u;
+/**
+ * Brace expansion as fs.glob's vendored minimatch applies it (the
+ * `brace-expansion` package), used only to validate a pattern. A sequence
+ * (`{1..9}`, `{a..z}`) yields one value per kind of character it produces,
+ * since digits and letters are never `.` or `/`; nothing is truncated: past
+ * `MAX_EXPANSIONS` the caller gets `undefined` and must refuse the pattern.
+ */
+
+/** More distinct alternatives than this and the pattern is not expanded at all. */
+const MAX_EXPANSIONS = 4096;
+/** Mirrors brace-expansion's bound on `{a},b}` rescans and on nesting depth. */
+const MAX_REWRITES = 1000;
+const MAX_DEPTH = 1000;
+
+// A `}` brace-expansion has decided is literal. NUL never reaches here: the
+// schema rejects it in every pattern.
+const ESC_OPEN = '\0OPEN\0';
+const ESC_CLOSE = '\0CLOSE\0';
+
+const NUMERIC_SEQUENCE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
+const ALPHA_SEQUENCE_RE = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/u;
+const REWRITE_RE = /,(?!,).*\}/u;
+
+class ExpansionLimitError extends Error {}
+
+interface Balanced {
+  pre: string;
+  body: string;
+  post: string;
+}
+
+/** The first balanced `{…}` in `str`, as balanced-match finds it. */
+function balanced(str: string): Balanced | undefined {
+  let ai = str.indexOf('{');
+  let bi = str.indexOf('}', ai + 1);
+  if (ai < 0 || bi <= 0) return undefined;
+  const begs: number[] = [];
+  let left = str.length;
+  let right = -1;
+  let result: [number, number] | undefined;
+  let i = ai;
+  while (i >= 0 && !result) {
+    if (i === ai) {
+      begs.push(i);
+      ai = str.indexOf('{', i + 1);
+    } else if (begs.length === 1) {
+      result = [begs.pop() ?? ai, bi];
+    } else {
+      const beg = begs.pop();
+      if (beg !== undefined && beg < left) {
+        left = beg;
+        right = bi;
+      }
+      bi = str.indexOf('}', i + 1);
+    }
+    i = ai < bi && ai >= 0 ? ai : bi;
+  }
+  if (!result && begs.length && right >= 0) result = [left, right];
+  if (!result) return undefined;
+  return {
+    pre: str.slice(0, result[0]),
+    body: str.slice(result[0] + 1, result[1]),
+    post: str.slice(result[1] + 1),
+  };
+}
+
+/** `str.split(',')` that keeps nested brace sets whole: `a,{b,c},d`. */
+function parseCommaParts(input: string): string[] {
+  const parts: string[] = [];
+  let carry = '';
+  let str = input;
+  for (;;) {
+    const m = balanced(str);
+    if (!m) {
+      const tail = str.split(',');
+      tail[0] = carry + (tail[0] ?? '');
+      parts.push(...tail);
+      return parts;
+    }
+    const p = m.pre.split(',');
+    p[0] = carry + (p[0] ?? '');
+    p.push(`${p.pop() ?? ''}{${m.body}}`);
+    if (!m.post.length) {
+      parts.push(...p);
+      return parts;
+    }
+    carry = p.pop() ?? '';
+    parts.push(...p);
+    str = m.post;
+  }
+}
+
+function sequenceValues(body: string, isAlpha: boolean): string[] {
+  // Digits (and a leading `-`) can never form `.` or `/`; one stands for all.
+  if (!isAlpha) return ['0'];
+  const [from = '', to = '', step] = body.split('..');
+  const x = from.charCodeAt(0);
+  const y = to.charCodeAt(0);
+  const incr = Math.max(Math.abs(step === undefined ? 1 : Number.parseInt(step, 10) || 0), 1);
+  const values = new Set<string>();
+  // At most 58 characters lie between two ASCII letters: cheap to walk. The
+  // letters collapse to one; the punctuation between `Z` and `a` stays, since
+  // `[` and `]` can build a character class. `\` expands to nothing.
+  for (let i = x; y < x ? i >= y : i <= y; i += y < x ? -incr : incr) {
+    const c = String.fromCharCode(i);
+    values.add(/[a-z]/iu.test(c) ? 'a' : c === '\\' ? '' : c);
+  }
+  return [...values];
+}
+
+function combine(acc: readonly string[], pre: string, values: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const a of acc) {
+    for (const v of values) {
+      out.add(a + pre + v);
+      if (out.size > MAX_EXPANSIONS) throw new ExpansionLimitError();
+    }
+  }
+  return [...out];
+}
+
+function expand(input: string, depth: number): string[] {
+  if (depth > MAX_DEPTH) throw new ExpansionLimitError();
+  let str = input;
+  let acc = [''];
+  let rewrites = 0;
+  for (;;) {
+    const m = balanced(str);
+    if (!m) return combine(acc, str, ['']);
+
+    const { pre, body, post } = m;
+    if (pre.endsWith('$')) {
+      acc = combine(acc, `${pre}{${body}}`, ['']);
+      if (!post.length) return acc;
+      str = post;
+      continue;
+    }
+
+    const isAlpha = ALPHA_SEQUENCE_RE.test(body);
+    const isSequence = isAlpha || NUMERIC_SEQUENCE_RE.test(body);
+    if (!isSequence && !body.includes(',')) {
+      // `{a},b}`: the first `}` is literal and the set closes at the next one.
+      if (REWRITE_RE.test(post)) {
+        if (++rewrites > MAX_REWRITES) throw new ExpansionLimitError();
+        str = `${pre}{${body}${ESC_CLOSE}${post}`;
+        continue;
+      }
+      return combine(acc, `${pre}{${body}}${post}`, ['']);
+    }
+
+    let values: string[];
+    if (isSequence) {
+      values = sequenceValues(body, isAlpha);
+    } else {
+      const parts = parseCommaParts(body);
+      // `x{{a,b}}y` expands to `x{a}y x{b}y`.
+      const members =
+        parts.length === 1 ? expand(parts[0] ?? '', depth + 1).map((v) => `{${v}}`) : parts;
+      if (members.length === 1) {
+        values = members;
+      } else {
+        values = [];
+        for (const member of members) {
+          values.push(...expand(member, depth + 1));
+          if (values.length > MAX_EXPANSIONS) throw new ExpansionLimitError();
+        }
+      }
+    }
+
+    acc = combine(acc, pre, values);
+    if (!post.length) return acc;
+    str = post;
+  }
+}
+
+/**
+ * Every alternative `pattern` expands to, or `undefined` when there are more
+ * than can be checked. Backslashes must already be `/`: fs.glob reads them as
+ * separators, never as escapes.
+ */
+function expandBraces(pattern: string): string[] | undefined {
+  // brace-expansion keeps a leading `{}` literal.
+  const str = pattern.startsWith('{}') ? `${ESC_OPEN}${ESC_CLOSE}${pattern.slice(2)}` : pattern;
+  try {
+    return expand(str, 0).map((alt) => alt.replaceAll(ESC_OPEN, '{').replaceAll(ESC_CLOSE, '}'));
+  } catch (error) {
+    if (error instanceof ExpansionLimitError) return undefined;
+    throw error;
+  }
+}
+
+/** True when `segment` is, or compiles to, the literal name `..` (`..`, `[.][.]`, `.[.]`). */
+function isTraversalSegment(segment: string): boolean {
+  // Only a literal `.` or a one-character class can stand for a dot, and
+  // `..` needs two of them; skip the matcher for every other segment.
+  if (segment.split('.').length < 3) return false;
+  return segment === '..' || matchesGlob('..', segment);
+}
+
+function isUnsafeAlternative(alternative: string): boolean {
+  return (
+    isAbsolute(alternative) ||
+    isWindowsDriveRelativePath(alternative) ||
+    alternative.split('/').some(isTraversalSegment)
+  );
+}
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
     return false;
   }
-  if (isAbsolute(pattern)) {
+  // fs.glob reads `\` as a separator and expands braces before it walks, so
+  // `..{,x}`, `.{.,}` and `{/etc,x}` reach `..` or an absolute path that the
+  // pattern as written never shows. Check every alternative the walk will
+  // see. `..` inside a segment (`[...slug]`, `v1..2.md`, `[..]`) is a literal
+  // name or a character class, and PathGuard re-checks containment on every
+  // resolved entry regardless.
+  const alternatives = expandBraces(toPosixPath(pattern));
+  if (alternatives === undefined) {
     return false;
   }
-  if (isWindowsDriveRelativePath(pattern)) {
-    return false;
-  }
-  // Only a whole `..` — a path segment, or one alternative of a `{a,..}`
-  // brace set — can traverse. `..` inside a segment (`[...slug]`, `v1..2.md`,
-  // `[..]`) is a literal name or a character class, and PathGuard re-checks
-  // containment on every resolved entry regardless.
-  if (TRAVERSAL_DOTDOT_RE.test(pattern)) {
-    return false;
-  }
-  return true;
+  return !alternatives.some(isUnsafeAlternative);
 }
 
 /** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
@@ -408,6 +609,10 @@ function* processDirentMatch(
 ): Generator<GlobEntry> {
   const absolutePath = resolve(cwd, match.parentPath, match.name);
 
+  // Validation keeps `..` and absolute alternatives out of the pattern; this
+  // keeps any gap in it from widening the walk past the root it was given.
+  if (!isPathInsideDirectory(cwd, absolutePath)) return;
+
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);
     if (rel.split(/[/\\]/u).length - 1 > maxDepth) return;
@@ -440,6 +645,8 @@ function createWalkFilter(
   // root, not the process cwd — when it re-visits a directory under `**` whose
   // name also exists in the process cwd. Resolving against `cwd` names the
   // entry the dirent describes; `join` would resolve it against the process.
+  const isOutside = (match: GlobDirentLike): boolean =>
+    !isPathInsideDirectory(cwd, resolve(cwd, match.parentPath, match.name));
   const relativeOf = (match: GlobDirentLike): string =>
     toPosixPath(relative(cwd, resolve(cwd, match.parentPath, match.name)));
   // Every default exclude is a bare name that applies at any depth, so a Set
@@ -454,6 +661,7 @@ function createWalkFilter(
       // fs.glob takes no signal and calls this for every entry it visits, so
       // pruning everything is the only way to stop a walk that yields nothing.
       if (signal?.aborted) return true;
+      if (isOutside(match)) return true;
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) return true;
@@ -463,7 +671,7 @@ function createWalkFilter(
       if (maxDepth === undefined || !isDir) return false;
       return posixRel.split('/').length - 1 > maxDepth;
     },
-    isExcluded: (match) => excluded(relativeOf(match), match.isDirectory()),
+    isExcluded: (match) => isOutside(match) || excluded(relativeOf(match), match.isDirectory()),
   };
 }
 

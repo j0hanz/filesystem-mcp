@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A glob `pattern` can no longer reach outside the `path` it searches.**
+  `find_files`, `search_text` and `replace_text` checked for `..` only as
+  written, so a brace set that builds it (`..{,x}/*.txt`, `.{.,}/*.txt`), a
+  one-character class (`.[.]`), or an absolute alternative (`{/etc,x}/*`)
+  walked the parent of the search root: `replace_text` edited files there, and
+  at an allowed root the names of entries above it leaked through skip counts
+  and per-file errors. Patterns are now checked after brace expansion, with the
+  glob engine's semantics, and refused like `../*.txt`; a pattern with more than
+  4096 alternatives is refused rather than partly checked. The walk itself also
+  drops any entry outside its root before it is yielded, counted or reported.
+
 ## [2.7.6] - 2026-10-12
 
 A security and reliability release. It closes a symlink-swap sandbox escape
