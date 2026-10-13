@@ -72,7 +72,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/express": "^5.0.6",
-    "@types/node": "^24",
+    "@types/node": "^26",
     "eslint": "^10",
     "eslint-config-prettier": "^10.1.8",
     "knip": "^6",
