@@ -110,7 +110,8 @@ or VM without host-data mounts when experimenting with untrusted code.
 ```text
 filesystem-mcp/
 ├── src/
-│   ├── index.ts         Process entry point, shutdown, transport selection
+│   ├── index.ts         Process entry point; checks the Node.js version, then loads main.ts
+│   ├── main.ts          Startup, shutdown, transport selection
 │   ├── cli.ts           Argument parsing and --print-config
 │   ├── cli-help.ts      --help and --version text
 │   ├── server.ts        Server factory; wires tools, resources, and prompts
@@ -129,7 +130,7 @@ filesystem-mcp/
 └── Dockerfile           Multi-stage Alpine build, non-root user
 ```
 
-Requests flow from `src/index.ts` to `src/transport/` (stdio or HTTP), then to
+Requests flow from `src/main.ts` to `src/transport/` (stdio or HTTP), then to
 `src/server.ts`, the tool, resource, and prompt registrars, and finally
 `src/core/`. Two classes do the security work: `PathGuard`
 (`src/core/path.ts`) checks every path against the allowed folders and the

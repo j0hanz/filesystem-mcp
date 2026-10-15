@@ -109,6 +109,12 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 
 ### Fixed
 
+- **An old Node.js gets a clear message instead of a crash.** On Node.js 21
+  and older, the server died at startup with
+  `does not provide an export named 'glob'`. It now exits with
+  `filesystem-mcp needs Node.js 24 or later; this is Node.js v20.20.0`
+  (with your version). Node.js 22 and 23 still start, with a warning on
+  stderr that the version is not tested.
 - **A cancelled or timed-out read no longer shuts the server down.** A file
   read that started after its call was cancelled, for example a
   `replace_text` worker opening its next file after the 5-second deadline,

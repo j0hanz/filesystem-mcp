@@ -337,8 +337,9 @@ or one of your `--deny` rules. Unblock that built-in pattern with
 `--allow`, for example `--allow '.env.example'`. `--deny` rules cannot be
 lifted this way; remove the rule instead.
 
-**Nothing happens, or a syntax error at startup.** Check `node --version`.
-The server needs Node.js 24 or later.
+**`filesystem-mcp needs Node.js 24 or later`.** The server needs Node.js 24
+or later. Check `node --version` and upgrade. On Node.js 22 and 23 it starts
+with a warning, because those lines are not tested.
 
 **Overwrite or delete fails with "needs a confirmation this client cannot
 show".** Your client does not support MCP confirmations (elicitation). The
