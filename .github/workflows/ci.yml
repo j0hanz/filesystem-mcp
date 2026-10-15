@@ -18,21 +18,39 @@ concurrency:
 
 jobs:
   check:
-    name: Check (${{ matrix.os }})
+    # Existing legs keep their names exactly (required status checks depend on
+    # them); only the extra Node leg gets a suffix.
+    name: Check (${{ matrix.os }}${{ matrix.node && format(', node {0}', matrix.node) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # New legs report but do not fail the workflow until they have been green
+    # for a while; then delete their `experimental: true` lines (plan 062
+    # maintenance notes).
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
-      # One OS failing must not cancel the other: the point is to see both.
+      # One leg failing must not cancel the others: the point is to see all.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # '' is the pinned major from .nvmrc. Keep it: without an original
+        # `node` value, the Node 26 entry below would merge into the default
+        # Ubuntu leg instead of adding its own.
+        node: ['']
+        include:
+          - os: macos-latest
+            experimental: true
+          - os: ubuntu-latest
+            node: '26'
+            experimental: true
     # Mirrors package.json's check script (check:static + test) as separate
     # steps, so one failure does not hide the others. Keep the two in sync.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: .nvmrc
+          # The pinned major from .nvmrc, unless the leg names another one.
+          node-version: ${{ matrix.node }}
+          node-version-file: ${{ !matrix.node && '.nvmrc' || '' }}
           cache: npm
       - name: Install
         id: install
@@ -54,13 +72,13 @@ jobs:
         run: npx knip
       - name: Test
         # dist-smoke boots dist/index.js, so tests need a successful build.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os != 'ubuntu-latest' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (matrix.os != 'ubuntu-latest' || matrix.node != '') }}
         run: npm test
       - name: Test with coverage floor
         # Ubuntu runs the POSIX-only sandbox branches; the floor lives in
         # package.json test:coverage. Raise it when coverage rises; never lower it
         # without a recorded reason.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' && matrix.node == '' }}
         run: npm run test:coverage
 
   release-paths:
