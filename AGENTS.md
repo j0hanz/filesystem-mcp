@@ -29,3 +29,6 @@ with no `FS_*` variables set, and commit the `.snapshot` diff with the change.
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps
 `package.json`, `server.json`, and `mcpb/manifest.json` in sync. Never
 hand-edit any of those versions.
+
+The maintainer decides when to release. Never suggest or plan a major version
+bump; changes ship as minor or patch releases.

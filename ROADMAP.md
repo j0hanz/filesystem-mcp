@@ -48,23 +48,22 @@ Each of these was reproduced against the built server.
 
 ## Now: housekeeping
 
-| ID  | Item                                                                                                                                                                             | Status |
-| :-- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
-| N1  | Cut a release. 65 commits sit on `main` since v2.8.1, including the Unreleased security fix for glob patterns that froze the server. npm still serves 2.8.1.                     | TODO   |
-| N2  | Triage GitHub: merge Dependabot PR #87, close the stale Copilot PR #59 and its issue #57, close spam issue #5.                                                                   | TODO   |
-| N3  | Finish [plan 062](plans/062-ci-macos-and-node-next-legs.md): macOS and Node 26 CI legs. Node 26 enters LTS in October 2026. Plans 056 (flake root cause) and 061 are still open. | TODO   |
-| N4  | Check the Node version before any import and exit with "needs Node.js 24 or later, found 20.x".                                                                                  | TODO   |
+| ID  | Item                                                                                                                                                                             | Status                                                 |
+| :-- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------- |
+| N2  | Triage GitHub: merge Dependabot PR #87, close the stale Copilot PR #59 and its issue #57, close spam issue #5.                                                                   | TODO                                                   |
+| N3  | Finish [plan 062](plans/062-ci-macos-and-node-next-legs.md): macOS and Node 26 CI legs. Node 26 enters LTS in October 2026. Plans 056 (flake root cause) and 061 are still open. | IN PROGRESS: legs added; step 4 needs a CI run on a PR |
+| N4  | Check the Node version before any import and exit with "needs Node.js 24 or later, found 20.x".                                                                                  | DONE                                                   |
 
-## Next: model ergonomics and trust (v2.9 / v3.0)
+## Next: model ergonomics and trust
 
-| ID  | Item                                                                                                                                                                                                                                                                                                         | Status |
-| :-- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
-| X1  | **Near-miss hints for `edit` and `patch`.** On no match, show the closest region as a short diff, and say when `ignoreWhitespace: true` would match. On several matches, list their line numbers. The most common agent failure loop, and the same teach-at-the-mistake approach as #55. Highest value item. | TODO   |
-| X2  | **Did-you-mean on `NOT_FOUND`.** Suggest close names in the same folder, or the same basename elsewhere under the root, in the error's `suggestion`.                                                                                                                                                         | TODO   |
-| X3  | **`expectedHash` on write tools** (`edit`, `patch`, `create`, `replace_text`). Refuse the write when the file no longer hashes to what the caller read. Matters most for a shared HTTP server and multi-agent use.                                                                                           | TODO   |
-| X4  | **Audit log.** `--audit-log <file>` writes one JSON line per mutation: time, tool, path, hash before and after, and client. Small to build; teams value it.                                                                                                                                                  | TODO   |
-| X5  | **Recoverable changes.** An opt-in trash for `delete`, and a short-lived journal of prior content per changed file that a `history` resource and one undo operation can use. The largest gap in a server whose pitch is safety.                                                                              | TODO   |
-| X6  | **Finer permissions.** Per-root modes (for example `/docs:ro`) and a `--tools` allowlist. In clients that already have native read and edit tools, the allowlist also cuts `tools/list` tokens.                                                                                                              | TODO   |
+| ID  | Item                                                                                                                                                                                                                                                                                                                                                       | Status |
+| :-- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
+| X1  | **Near-miss hints for `edit` and `patch`.** On no match, show the closest region as a short diff, and say when `ignoreWhitespace: true` would match. Several matches already list their line numbers; `patch` should name the hunk that failed. The most common agent failure loop, and the same teach-at-the-mistake approach as #55. Highest value item. | TODO   |
+| X2  | **Did-you-mean on `NOT_FOUND`.** Suggest close names in the same folder, or the same basename elsewhere under the root, in the error's `suggestion`.                                                                                                                                                                                                       | TODO   |
+| X3  | **`expectedHash` on write tools** (`edit`, `patch`, `create`, `replace_text`). Refuse the write when the file no longer hashes to what the caller read. Matters most for a shared HTTP server and multi-agent use.                                                                                                                                         | TODO   |
+| X4  | **Audit log.** `--audit-log <file>` writes one JSON line per mutation: time, tool, path, hash before and after, and client. Small to build; teams value it.                                                                                                                                                                                                | TODO   |
+| X5  | **Recoverable changes.** An opt-in trash for `delete`, and a short-lived journal of prior content per changed file that a `history` resource and one undo operation can use. The largest gap in a server whose pitch is safety.                                                                                                                            | TODO   |
+| X6  | **Finer permissions.** Per-root modes (for example `/docs:ro`) and a `--tools` allowlist. In clients that already have native read and edit tools, the allowlist also cuts `tools/list` tokens.                                                                                                                                                            | TODO   |
 
 Each item changes tool text or schemas, so each needs the contract snapshot
 refreshed and the `tools/list` budget checked. Prefer new parameters,
@@ -84,6 +83,9 @@ resources, and error text over new tools.
 
 - **No shell or process execution.** That belongs to servers like Desktop
   Commander, and it would undercut the security story.
+- **No release planning here, and never a major version bump.** The
+  maintainer decides when to release; changes ship as minor or patch
+  versions.
 - **Keep about 13 tools.** Each costs 440 to 2,800 characters of `tools/list`
   on every request.
 - **Slow the audit loop.** `docs/plan/` and `plans/` hold 197 files (about
