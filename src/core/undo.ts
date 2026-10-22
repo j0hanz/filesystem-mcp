@@ -496,8 +496,15 @@ export async function restoreEntry(
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      // startsWith keeps the slice exact; the helper adds the segment boundary.
-      if (out.startsWith(from) && isPathInsideDirectory(from, out)) {
+      const prefix = out.slice(0, from.length);
+      const foldedFrom = from.toLowerCase();
+      const foldedPrefix = prefix.toLowerCase();
+      const samePrefix =
+        out.startsWith(from) ||
+        (foldedFrom.length === from.length &&
+          foldedPrefix.length === prefix.length &&
+          foldedPrefix === foldedFrom);
+      if (samePrefix && isPathInsideDirectory(from, out)) {
         out = to + out.slice(from.length);
       }
     }

@@ -965,6 +965,31 @@ describe('restoreEntry', () => {
     );
   });
 
+  it('dry run after an external case-only folder rename previews as restored', async (t) => {
+    const lower = join(tmpDir, 'external-case-cd');
+    const upper = join(tmpDir, 'EXTERNAL-CASE-CD');
+    const away = join(tmpDir, 'external-case-away');
+    await mkdir(lower, { recursive: true });
+    await writeFile(join(lower, 'f.txt'), 'v1');
+    const fsPromises = await import('node:fs/promises');
+    const caseInsensitive = await fsPromises.stat(upper).then(
+      () => true,
+      () => false,
+    );
+    if (!caseInsensitive) {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const edited = await captureOne((fs) => fs.writeFile(join(lower, 'f.txt'), 'v2'));
+    await fsPromises.rename(lower, upper);
+    const moved = await captureOne((fs) => fs.rename(upper, away));
+    const results = await dryRunAll([moved, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
   it('an edit inside a folder moved twice restores for real', async () => {
     const a = join(tmpDir, 'twice-real-a');
     const b = join(tmpDir, 'twice-real-b');
