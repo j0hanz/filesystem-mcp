@@ -40,8 +40,8 @@ export type UndoRecord =
   | { op: 'remove'; path: string; expect: string }
   /** Remove a directory this call created, only if empty. */
   | { op: 'rmdir'; path: string }
-  /** Recreate a directory this call deleted, only if `path` is absent. */
-  | { op: 'mkdir'; path: string; was?: FileIdentity | undefined }
+  /** Recreate a directory this call deleted, only if `path` is absent; `mode` is reapplied, narrowed by the umask. */
+  | { op: 'mkdir'; path: string; mode?: number | undefined; was?: FileIdentity | undefined }
   /** Recreate a symlink this call deleted, only if `path` is absent. */
   | {
       op: 'symlink';
@@ -398,7 +398,12 @@ export async function snapshotTree(
         await snapshotTree(capture, fs, join(validPath, name));
         if (capture.isAbandoned()) return;
       }
-      capture.push({ op: 'mkdir', path: validPath, was: identityOf(stats) });
+      capture.push({
+        op: 'mkdir',
+        path: validPath,
+        mode: stats.mode & 0o777,
+        was: identityOf(stats),
+      });
       return;
     }
     // Anything else (FIFO, socket, device) has no restore record. Journaling
@@ -651,11 +656,11 @@ export async function restoreEntry(
         case 'mkdir': {
           const known = simulated.get(record.path);
           if (await absent(record.path)) {
-            // ponytail: a recreated directory gets the default mode; GuardedFileSystem
-            // has no chmod and mkdir's mode is masked by the umask. Files get their
-            // exact mode back; directories do not. Upgrade: add a chmod record.
+            // ponytail: mkdir's mode is masked by the umask, so a restored directory can
+            // come back narrower than it was (0775 as 0755), never wider. Upgrade: a
+            // guarded chmod on GuardedFileSystem for exact bits.
             if (!dryRun) {
-              await fs.mkdir(record.path);
+              await fs.mkdir(record.path, { mode: record.mode });
               if (record.was) {
                 opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
               }

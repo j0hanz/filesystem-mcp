@@ -506,6 +506,29 @@ describe('restoreEntry', () => {
     assert.deepStrictEqual(outcome.remaining, []);
   });
 
+  it('a deleted directory comes back with its mode, never wider', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('directory mode bits are POSIX-only');
+      return;
+    }
+    const fsPromises = await import('node:fs/promises');
+    const tree = join(tmpDir, 'private-tree');
+    const empty = join(tmpDir, 'private-empty');
+    await mkdir(join(tree, 'inner'), { recursive: true });
+    await mkdir(empty);
+    await fsPromises.chmod(tree, 0o700);
+    await fsPromises.chmod(join(tree, 'inner'), 0o700);
+    await fsPromises.chmod(empty, 0o700);
+    const entry = await captureOne(async (fs) => {
+      await fs.rm(tree, { recursive: true, force: true }); // snapshotTree path
+      await fs.rmdir(empty); // GuardedFileSystem.rmdir path
+    });
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual((await fsPromises.stat(tree)).mode & 0o777, 0o700);
+    assert.strictEqual((await fsPromises.stat(join(tree, 'inner'))).mode & 0o777, 0o700);
+    assert.strictEqual((await fsPromises.stat(empty)).mode & 0o777, 0o700);
+  });
+
   it('a created file and its created parents are removed', async () => {
     const file = join(tmpDir, 'created-parents', 'a', 'new.txt');
     const entry = await captureOne(async (fs) => {

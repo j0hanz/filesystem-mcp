@@ -16,11 +16,12 @@ upgrade: per-subscription-id keying retires both quirks (see memory
 
 ## src/core/undo.ts:383
 
-Recreated directory gets the default mode on undo. Simplified: no chmod record;
-mkdir's mode is masked by the umask. Files get their exact mode back;
-directories do not.
-ceiling: `GuardedFileSystem` has no chmod.
-upgrade: add a chmod record.
+Recreated directory gets its recorded mode back through `mkdir` on undo.
+Simplified: no chmod; mkdir's mode is masked by the umask, so a restored
+directory can come back narrower than it was, never wider.
+ceiling: umask-cleared bits (group/other write, e.g. `0775` as `0755`) are not
+restored.
+upgrade: a guarded `chmod` on `GuardedFileSystem` for exact bits.
 
 ## src/core/store.ts:297
 
