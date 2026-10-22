@@ -14,13 +14,16 @@ ceiling: SDK unsubscribe contract has no per-subscription id.
 upgrade: per-subscription-id keying retires both quirks (see memory
 `watcher-no-subscription-id`).
 
-## src/core/undo.ts:659
+## src/core/undo.ts:661
 
-Recreated directory gets its recorded mode back through `mkdir` on undo.
-Simplified: no chmod; mkdir's mode is masked by the umask, so a restored
-directory can come back narrower than it was, never wider.
+Recreated directory gets its recorded mode back through `mkdir` on undo, with
+owner rwx forced so the server can write the children back. Simplified: no
+chmod; mkdir's mode is masked by the umask, so group/other bits can come back
+narrower than they were, never wider.
 ceiling: umask-cleared bits (group/other write, e.g. `0775` as `0755`) are not
-restored.
+restored; an owner-read-only folder comes back owner-writable; a parent that an
+older move's undo recreated first keeps the default mode (its `mkdir` record
+then counts it as done).
 upgrade: a guarded `chmod` on `GuardedFileSystem` for exact bits.
 
 ## src/core/store.ts:297

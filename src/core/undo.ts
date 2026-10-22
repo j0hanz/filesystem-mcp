@@ -656,11 +656,14 @@ export async function restoreEntry(
         case 'mkdir': {
           const known = simulated.get(record.path);
           if (await absent(record.path)) {
-            // ponytail: mkdir's mode is masked by the umask, so a restored directory can
-            // come back narrower than it was (0775 as 0755), never wider. Upgrade: a
-            // guarded chmod on GuardedFileSystem for exact bits.
+            // Owner rwx is forced: the server owns the recreated folder and must
+            // write its children back into it.
+            // ponytail: mkdir's mode is masked by the umask, so group/other bits can
+            // come back narrower (0775 as 0755), never wider; a parent an older
+            // move's undo recreated first keeps the default mode. Upgrade: a guarded
+            // chmod on GuardedFileSystem for exact bits.
             if (!dryRun) {
-              await fs.mkdir(record.path, { mode: record.mode });
+              await fs.mkdir(record.path, { mode: (record.mode ?? 0o777) | 0o700 });
               if (record.was) {
                 opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
               }
