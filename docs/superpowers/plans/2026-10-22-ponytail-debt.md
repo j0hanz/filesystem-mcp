@@ -30,21 +30,21 @@ swapped-in link, and narrowing-only already closes the widening.
 Six ledger entries stay as they are. Each one's trigger has not fired, or the
 upgrade is blocked upstream:
 
-| Entry | Why it stays |
-| :-- | :-- |
-| `watcher-registry.ts:44` | MCP `resources/unsubscribe` carries only `uri` |
-| `store.ts:297` | trigger is memory pressure; none seen |
-| `fs.ts:301` rename identity | no data loss; contents move with the dir |
-| `fs.ts:446` append capture | refuses honestly; no client asked |
-| `fs.ts:607` forced `cp` | refuses honestly; no client asked |
-| `server.ts:143` debounce | trigger is a client report; none filed |
+| Entry                       | Why it stays                                   |
+| :-------------------------- | :--------------------------------------------- |
+| `watcher-registry.ts:44`    | MCP `resources/unsubscribe` carries only `uri` |
+| `store.ts:297`              | trigger is memory pressure; none seen          |
+| `fs.ts:301` rename identity | no data loss; contents move with the dir       |
+| `fs.ts:446` append capture  | refuses honestly; no client asked              |
+| `fs.ts:607` forced `cp`     | refuses honestly; no client asked              |
+| `server.ts:143` debounce    | trigger is a client report; none filed         |
 
 ## Review Focus
 
 1. **Windows host:** mode bits mean nothing on win32 directories; a restore
    that now passes `mode` to `mkdir` must still recreate the tree. Pinned by
    the existing test `a deleted tree comes back with bytes, mode, symlink and
-   subdirectory` (`__tests__/undo.test.ts:475`), which runs on win32 and
+subdirectory` (`__tests__/undo.test.ts:475`), which runs on win32 and
    restores `sub` through the changed `mkdir` call.
 2. **Restrictive umask (`077`):** a restored `0750` folder comes back `0700`,
    narrower, never wider. This is the documented ceiling; no test, because the
@@ -62,6 +62,7 @@ upgrade is blocked upstream:
 ### Task 1: Restore a deleted directory's mode on undo
 
 **Files:**
+
 - Modify: `src/core/undo.ts:43-44` (record type), `:401` (`snapshotTree`),
   `:654-658` (restore `mkdir` case)
 - Modify: `src/core/fs.ts:582-589` (`GuardedFileSystem.rmdir`)
@@ -69,6 +70,7 @@ upgrade is blocked upstream:
 - Test: `__tests__/undo.test.ts` (new test after line 507)
 
 **Interfaces:**
+
 - Produces: `UndoRecord` variant
   `{ op: 'mkdir'; path: string; mode?: number | undefined; was?: FileIdentity | undefined }`,
   where `mode` is `stats.mode & 0o777` of the deleted directory.
@@ -157,6 +159,7 @@ Body: one line on the widening (`0700` came back `0755`) and one on the ceiling.
 ### Task 2: Revisit triggers for the two trigger-less markers; refresh the ledger
 
 **Files:**
+
 - Modify: `src/core/schema.ts:232-234`
 - Modify: `examples/clients/gatekeeper/agent.ts:161-162`
 - Modify: `PONYTAIL-DEBT.md` (all headings, both no-trigger entries, footer)
