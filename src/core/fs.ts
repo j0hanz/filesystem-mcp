@@ -312,10 +312,7 @@ export class GuardedFileSystem {
           was: destWas,
         });
       }
-      const identity = await fsLstat(validNew).then(
-        (s) => ({ dev: s.dev, ino: s.ino, birthtimeMs: s.birthtimeMs }),
-        () => undefined,
-      );
+      const identity = await fsLstat(validNew).then(identityOf, () => undefined);
       if (identity !== undefined) {
         this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
       } else {

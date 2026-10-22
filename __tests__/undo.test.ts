@@ -881,6 +881,24 @@ describe('restoreEntry', () => {
     assert.strictEqual(outcome.remaining.length, entry.records.length);
   });
 
+  it('a blocked folder does not block a sibling that shares its prefix', async () => {
+    const pfx = join(tmpDir, 'pfx');
+    const pfx2 = join(tmpDir, 'pfx2');
+    for (const dir of [pfx, pfx2]) {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'f.txt'), 'saved');
+    }
+    // pfx2 first, so the reverse pass blocks pfx before it reaches pfx2.
+    const entry = await captureOne(async (fs) => {
+      await fs.rm(pfx2, { recursive: true, force: true });
+      await fs.rm(pfx, { recursive: true, force: true });
+    });
+    await writeFile(pfx, 'a file where the folder was');
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(join(pfx2, 'f.txt'), 'utf8'), 'saved');
+  });
+
   it('live captures share one byte budget', () => {
     const journal = new UndoJournal(4096);
     const one = journal.beginCapture();

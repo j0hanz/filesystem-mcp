@@ -5,7 +5,7 @@ import {
   readlink as fsReadlink,
   stat as fsStat,
 } from 'node:fs/promises';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   ErrorCode,
@@ -16,6 +16,7 @@ import {
   Problem,
 } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
+import { IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
 export interface FileIdentity {
@@ -64,7 +65,7 @@ type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
 const identityKey = (i: FileIdentity): string =>
   `${String(i.dev)}:${String(i.ino)}:${String(i.birthtimeMs)}`;
 
-const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
+export const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
   a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /** One restored path, in the batch tools' per-path result shape. */
@@ -79,7 +80,6 @@ export interface UndoEntry {
 
 const MAX_ENTRIES = 64;
 const TTL_MS = 30 * 60 * 1000;
-const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 /**
  * Flat memory weight charged per record, whatever its op: the record object
  * plus its path strings (a rename carries two). An estimate, not a measure —
@@ -120,9 +120,11 @@ export class UndoJournal {
   }
 
   #newId(): string {
-    // 4 chars from the 36-char alphabet via randomInt; regenerate on a live collision.
+    // 4 base-36 chars via randomInt; regenerate on a live collision.
     const make = () =>
-      Array.from({ length: 4 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('');
+      randomInt(36 ** 4)
+        .toString(36)
+        .padStart(4, '0');
     let id = make();
     while (this.#byId.has(id)) id = make();
     return id;
@@ -374,12 +376,11 @@ export async function snapshotTree(
       // The follow-stat types the link (junction vs file). A win32 link
       // whose target is gone cannot be typed, so it refuses capture rather
       // than restoring with the wrong reparse flavor.
-      const isDir =
-        process.platform === 'win32'
-          ? await fsStat(validPath)
-              .then((s) => s.isDirectory())
-              .catch(() => undefined)
-          : false;
+      const isDir = IS_WINDOWS
+        ? await fsStat(validPath)
+            .then((s) => s.isDirectory())
+            .catch(() => undefined)
+        : false;
       if (isDir === undefined) {
         capture.abandon('could not type a link whose target is gone');
         return;
@@ -495,7 +496,7 @@ export async function restoreEntry(
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (out === from || out.startsWith(from + sep)) out = to + out.slice(from.length);
+      if (isPathInsideDirectory(from, out)) out = to + out.slice(from.length);
     }
     return out;
   };
@@ -505,7 +506,7 @@ export async function restoreEntry(
   // Records that did not run because a directory they sit under was not restored.
   const blocked: string[] = [];
   const isBlocked = (path: string): boolean =>
-    blocked.some((dir) => path === dir || path.startsWith(dir + sep));
+    blocked.some((dir) => isPathInsideDirectory(dir, path));
   const results: UndoFileResult[] = [];
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
@@ -670,10 +671,6 @@ export async function restoreEntry(
           // would overwrite it. The pair is taken in a fixed key order (and
           // deduped) so two concurrent pairs cannot deadlock.
           await fs.lockPairForWrite(record.from, record.to, async () => {
-            const same = (s: FileIdentity): boolean =>
-              s.dev === record.identity.dev &&
-              s.ino === record.identity.ino &&
-              s.birthtimeMs === record.identity.birthtimeMs;
             const toKnown = simulated.get(record.to);
             let toHere: boolean;
             let toIsRealDir = false;
@@ -702,7 +699,7 @@ export async function restoreEntry(
                   return undefined;
                 },
               );
-              if (at !== undefined && same(at.stats)) {
+              if (at !== undefined && sameIdentity(at.stats, record.identity)) {
                 toHere = true;
                 toIsRealDir = at.stats.isDirectory();
                 if (dryRun) {
@@ -721,7 +718,7 @@ export async function restoreEntry(
               fromKnown !== undefined
                 ? fromKnown === null
                 : await fs.lstat(disk(record.from)).then(
-                    (r) => same(r.stats),
+                    (r) => sameIdentity(r.stats, record.identity),
                     (error: unknown) => {
                       if (!isMissing(error)) throw error;
                       return true;
