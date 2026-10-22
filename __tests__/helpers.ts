@@ -31,6 +31,7 @@ import {
 } from '../src/core/errors.ts';
 import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
 import type { WatcherRegistry } from '../src/core/watcher-registry.ts';
 import { createServer } from '../src/server.ts';
@@ -308,6 +309,7 @@ export async function createTestHttpHarness(
     notifier.resourcesChanged();
   });
   const sharedPageStore = new PageSnapshotStore();
+  const sharedUndoJournal = new UndoJournal();
   const handler = createMcpHandler(
     async ({ era }) => {
       const serverCtx = await createServer(
@@ -318,6 +320,7 @@ export async function createTestHttpHarness(
           era,
           resourceStore: sharedStore,
           pageStore: sharedPageStore,
+          undoJournal: sharedUndoJournal,
           // As http.ts passes it: a guard that started refusing on HTTP fails here.
           transport: 'http',
         },
@@ -345,6 +348,7 @@ export async function createTestHttpHarness(
     close: async () => {
       await client.close();
       await handler.close();
+      sharedUndoJournal.clear();
       sharedRegistry.destroy();
     },
   };

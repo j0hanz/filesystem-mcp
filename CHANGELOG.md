@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- New `undo` tool: every call that changes files returns an undo id
+  (`· undo k3x9` in the text, `undo` in `_meta`, or in `structuredContent`
+  for `create`), and `undo` reverts one call by id, the last N calls, or
+  (stdio only) the last call. A file is restored only when its current bytes
+  still match what the tool wrote; `dryRun: true` previews the history.
+  History is in memory only and disappears when the server exits. Over
+  HTTP an id is required.
+- `FS_MAX_UNDO_BYTES` env var: memory kept for undo, default 32 MiB, 0
+  turns undo off.
+- Copies (`move` with `copy: true`) and cross-device moves report
+  `not undoable` instead of being captured.
+
 ## [2.9.1] - 2026-10-16
 
 A security and fix patch. The denylist now covers the subtree of every

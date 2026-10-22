@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { availableParallelism } from 'node:os';
 
 import { cli } from './config.ts';
@@ -70,6 +71,10 @@ export function parseTrueEnvFlag(value: string | undefined, name?: string): bool
   return false;
 }
 
+/** sha256 of `data` as lowercase hex, the digest every result hash uses. */
+export const sha256Hex = (data: string | Buffer): string =>
+  createHash('sha256').update(data).digest('hex');
+
 const REGEXP_SYNTAX = /[\\^$.*+?()[\]{}|/]/;
 const REGEXP_OTHER_PUNCTUATORS = /[,\-=<>#&!%:;@~'`"]/;
 const REGEXP_CONTROL_ESCAPES: Readonly<Record<string, string>> = {
@@ -117,6 +122,11 @@ export const escapeRegExp: (input: string) => string =
   typeof RegExp.escape === 'function' ? (input) => RegExp.escape(input) : escapeRegExpFallback;
 
 export const PARALLEL_CONCURRENCY = Math.min(Math.max(availableParallelism(), 4), 32);
+
+/** Memory kept for undo history (saved file contents). 0 turns undo off. */
+export function getMaxUndoBytes(): number {
+  return parseEnvInt('FS_MAX_UNDO_BYTES', 32 * MIB, 0, 1024 * MIB);
+}
 
 export const ROOTS_TIMEOUT_MS = 5000;
 

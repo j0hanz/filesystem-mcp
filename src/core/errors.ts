@@ -60,6 +60,9 @@ export const Problem = {
   },
 } as const;
 
+/** One path's outcome: either a value or the Problem that stopped it. */
+export type PerPathResult<T> = { path: string; value: T } | { path: string; error: Problem };
+
 const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.ACCESS_DENIED]: 'Run list_roots to list allowed directories.',
   [ErrorCode.NOT_FOUND]: 'Run list or find_files to verify the path.',
@@ -196,6 +199,10 @@ export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 export function isNotFoundErrno(error: unknown): error is NodeJS.ErrnoException {
   return isNodeError(error) && error.code === 'ENOENT';
 }
+
+/** True when `error` says "absent", in either shape: a Node ENOENT or a guarded NOT_FOUND. */
+export const isMissing = (error: unknown): boolean =>
+  isNotFoundErrno(error) || (isFsError(error) && error.code === ErrorCode.NOT_FOUND);
 
 /** True when `error` is a Node errno error whose code is in `SKIPPABLE_ERRNOS`. */
 export function isSkippableErrno(error: unknown): error is NodeJS.ErrnoException {

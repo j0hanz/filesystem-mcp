@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Permanently delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. Revert with undo.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -826,6 +826,40 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "readOnlyHint": true,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "undo",
+      "title": "Undo",
+      "description": "Revert earlier calls that changed files, by undo id or the last N calls. A file is restored only if unchanged since. dryRun lists the history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The undo id from a tool result",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "steps": {
+            "description": "Revert the last N calls (not over HTTP)",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "dryRun": {
+            "default": false,
+            "description": "Preview which calls would restore, changing nothing",
+            "type": "boolean"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
     }
   ],
   "prompts": [
@@ -876,7 +910,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "role": "user",
         "content": {
           "type": "text",
-          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\nWrite: create, delete, edit, move, patch, replace_text\\n\`\`\`\\n\\nFull schemas, descriptions, and annotations are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call list_roots to read the current set.\\nlegacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.\\nenforced_limits: max file size 10 MB (also the combined content cap of one create call), file search cap 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.\\npagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots; configure a missing startup root or retry a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to verify the path.\\nTOO_LARGE: Use read with head/tail or startLine/endLine, or split across several calls.\\nTIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\n\`\`\`\\n",
+          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\nWrite: create, delete, edit, move, patch, replace_text, undo\\n\`\`\`\\n\\nFull schemas, descriptions, and annotations are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call list_roots to read the current set.\\nlegacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.\\nenforced_limits: max file size 10 MB (also the combined content cap of one create call), file search cap 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.\\npagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots; configure a missing startup root or retry a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to verify the path.\\nTOO_LARGE: Use read with head/tail or startLine/endLine, or split across several calls.\\nTIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\n\`\`\`\\n",
           "annotations": {
             "audience": [
               "assistant"

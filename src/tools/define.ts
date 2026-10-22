@@ -36,6 +36,8 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import type { UndoJournal } from '../core/undo.ts';
+import { UndoCapture } from '../core/undo.ts';
 import { getToolTimeoutMs, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
@@ -45,6 +47,7 @@ export interface ToolCtx {
   readonly requestId: RequestId;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
+  readonly undoJournal: UndoJournal;
   readonly resourceStore: ResourceStore;
   /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
   readonly log: (level: LoggingLevel, data: unknown, logger?: string) => void;
@@ -93,6 +96,7 @@ export interface ToolDeps {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
+  readonly undoJournal: UndoJournal;
   readonly resourceStore: ResourceStore;
   readonly era?: 'legacy' | 'modern';
   readonly transport?: 'stdio' | 'http';
@@ -117,6 +121,8 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
   readonly input: I;
   /** Required: drives both the --read-only gate and published annotations. */
   readonly readOnlyHint: boolean;
+  /** Set on the undo tool itself: its calls are never captured (no redo). */
+  readonly noUndo?: true;
   /** Abort the call after getToolTimeoutMs() (`--tool-timeout`, FS_TOOL_TIMEOUT_MS). */
   readonly deadline?: boolean;
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
@@ -149,7 +155,11 @@ export interface DefinedTool {
   register(deps: ToolDeps): RegisteredTool;
 }
 
-function toToolCtx(ctx: ServerContext, deps: ToolDeps): Omit<ToolCtx, 'log' | 'onProgress'> {
+function toToolCtx(
+  ctx: ServerContext,
+  deps: ToolDeps,
+  capture?: UndoCapture,
+): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
   // legacy connection fixed them at `initialize` and has no envelope at all.
@@ -178,8 +188,9 @@ function toToolCtx(ctx: ServerContext, deps: ToolDeps): Omit<ToolCtx, 'log' | 'o
   return {
     signal: ctx.mcpReq.signal,
     requestId: ctx.mcpReq.id,
-    fs: new GuardedFileSystem(deps.pathGuard),
+    fs: new GuardedFileSystem(deps.pathGuard, capture),
     pageStore: deps.pageStore,
+    undoJournal: deps.undoJournal,
     resourceStore: deps.resourceStore,
     inputResponses: ctx.mcpReq.inputResponses,
     droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
@@ -218,6 +229,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   /** Rewritten once, by `resolveRelativePaths`, before anything reads a path. */
   private parsedArgs: z.infer<I>;
   private readonly toolCtx: ToolCtx;
+  private readonly capture: UndoCapture | undefined;
 
   readonly #progressCtx: ProgressCtx;
   readonly #progressSession: ProgressSession;
@@ -227,9 +239,11 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     ctx: Omit<ToolCtx, 'log' | 'onProgress'>,
     def: ToolDef<I, O>,
     parsedArgs: z.infer<I>,
+    capture?: UndoCapture,
   ) {
     this.def = def;
     this.parsedArgs = parsedArgs;
+    this.capture = capture;
     this.signal = def.deadline
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(getToolTimeoutMs())])
       : ctx.signal;
@@ -288,14 +302,49 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     this.#progressSession.complete(plainMessage('done', doneCtx));
   }
 
-  private failProgress(error: unknown): { isError: true; content: ContentBlock[] } {
+  private failProgress(
+    error: unknown,
+    undoSuffix = '',
+  ): { isError: true; content: ContentBlock[] } {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
-    const errorText = Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
+    const errorText =
+      Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN) + undoSuffix;
     return {
       content: [{ type: 'text' as const, text: errorText }],
       isError: true,
     };
+  }
+
+  /**
+   * The undo suffix for a captured call, minted once: ` · undo <id>` when the
+   * capture holds records, ` · not undoable: <reason>` when it was abandoned,
+   * `''` for a capture that recorded nothing (dry run, early failure) or a
+   * read-only call. Sets `undo`/`undoUnavailable` on `structured` when given.
+   */
+  /** The undo id for this call, minted once; a re-run of #undoSuffix reuses it. */
+  #undoId: string | undefined;
+
+  #undoSuffix(structured?: Record<string, unknown>): string {
+    const capture = this.capture;
+    if (capture === undefined) return '';
+    if (capture.unavailable !== undefined) {
+      if (structured !== undefined) structured['undoUnavailable'] = capture.unavailable;
+      return ` · not undoable: ${capture.unavailable}`;
+    }
+    if (capture.records.length === 0) return '';
+    // Minted once: the catch path re-runs this after the success path, and a
+    // second add would double-journal the same records under a fresh id.
+    this.#undoId ??= this.toolCtx.undoJournal.add(this.def.name, capture.records);
+    const id = this.#undoId;
+    if (structured !== undefined) structured['undo'] = id;
+    return ` · undo ${id}`;
+  }
+
+  /** `suffix` goes at the end of the text's first line, not the end of the text. */
+  #insertSuffix(text: string, suffix: string): string {
+    const nl = text.indexOf('\n');
+    return nl < 0 ? text + suffix : text.slice(0, nl) + suffix + text.slice(nl);
   }
 
   private collectPaths(): string[] {
@@ -447,12 +496,21 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       if (isInputRequiredResult(result)) {
         return result;
       }
-      const response = buildSuccessResponse(result);
-      this.refuseOversized(result, response);
-      this.completeProgress(result.structured);
+      // `undo` rides inside the structured result both ways (`_meta` and
+      // `structuredContent`); the text suffix only when the tool authored a
+      // text (`create`'s text is JSON and stays untouched).
+      const structured = result.structured as Record<string, unknown>;
+      const suffix = this.#undoSuffix(structured);
+      const finalResult: RunResult<O> =
+        result.text !== undefined && suffix !== ''
+          ? { ...result, text: this.#insertSuffix(result.text, suffix) }
+          : result;
+      const response = buildSuccessResponse(finalResult);
+      this.refuseOversized(finalResult, response);
+      this.completeProgress(finalResult.structured);
       return response;
     } catch (error) {
-      return this.failProgress(error);
+      return this.failProgress(error, this.#undoSuffix());
     } finally {
       await this.#progressSession.flush();
     }
@@ -496,9 +554,21 @@ export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I
     readOnlyHint: def.readOnlyHint,
 
     register(deps: ToolDeps): RegisteredTool {
-      return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) =>
-        new ToolExecutor<I, O>(def.name, toToolCtx(ctx, deps), def, args).execute(),
-      );
+      return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) => {
+        // Tools marked noUndo are never captured (no redo); read-only calls
+        // change nothing.
+        const capture =
+          deps.undoJournal.enabled && !def.readOnlyHint && !def.noUndo
+            ? new UndoCapture(deps.undoJournal.maxBytes)
+            : undefined;
+        return new ToolExecutor<I, O>(
+          def.name,
+          toToolCtx(ctx, deps, capture),
+          def,
+          args,
+          capture,
+        ).execute();
+      });
     },
   };
 }

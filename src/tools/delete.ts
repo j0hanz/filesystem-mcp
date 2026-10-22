@@ -9,7 +9,7 @@ import { processInParallel } from '../core/concurrency.ts';
 import {
   ErrorCode,
   FsError,
-  isFsError,
+  isMissing,
   isNodeError,
   isNotFoundErrno,
   Problem,
@@ -114,10 +114,7 @@ async function planPath(
   try {
     validPath = await fs.pathGuard.validatePathForDelete(inputPath);
   } catch (error) {
-    if (
-      args.ignoreIfNotExists &&
-      ((isFsError(error) && error.code === ErrorCode.NOT_FOUND) || isNotFoundErrno(error))
-    ) {
+    if (args.ignoreIfNotExists && isMissing(error)) {
       return { status: 'noop', deleted: inputPath };
     }
     return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
@@ -374,7 +371,7 @@ async function handleDelete(
       buildInputs: (ps) =>
         ps.map((p, i) => ({
           key: confirmKey(i),
-          message: `Permanently delete "${p}" and all its contents? This cannot be undone.`,
+          message: `Delete "${p}" and all its contents?`,
           choices: ['delete', 'skip'],
         })),
     });
@@ -429,7 +426,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   name: 'delete',
   title: 'Delete File',
   description:
-    'Permanently delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded.',
+    'Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. Revert with undo.',
   input: DeleteInputSchema,
   readOnlyHint: false,
   progress: (args) => ({

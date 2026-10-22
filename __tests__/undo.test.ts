@@ -1,0 +1,1020 @@
+import type { Client } from '@modelcontextprotocol/client';
+
+import assert from 'node:assert/strict';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
+
+import type { Problem } from '../src/core/errors.ts';
+import { pathLabel } from '../src/core/fmt.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
+import type { UndoRecord } from '../src/core/undo.ts';
+import type { UndoEntry } from '../src/core/undo.ts';
+import { restoreEntry, UndoCapture, UndoJournal } from '../src/core/undo.ts';
+import { sha256Hex } from '../src/core/util.ts';
+import type { FilesystemServerContext } from '../src/server.ts';
+import {
+  cleanupTestRoot,
+  createStdioClient,
+  createTestClientPair,
+  createTestHttpHarness,
+  createTestRoot,
+  createTestServer,
+  trySymlink,
+  withEnv,
+} from './helpers.ts';
+
+const writeRecord = (size: number): UndoRecord => ({
+  op: 'write',
+  path: `/x${String(size)}`,
+  bytes: Buffer.alloc(size),
+  mode: 0o644,
+  expect: null,
+});
+
+type WriteRecord = Extract<UndoRecord, { op: 'write' }>;
+type RemoveRecord = Extract<UndoRecord, { op: 'remove' }>;
+type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
+const isWrite = (r: UndoRecord | undefined): r is WriteRecord => r?.op === 'write';
+const isRemove = (r: UndoRecord | undefined): r is RemoveRecord => r?.op === 'remove';
+const isRename = (r: UndoRecord | undefined): r is RenameRecord => r?.op === 'rename';
+
+describe('UndoJournal', () => {
+  it('returns 4-char ids and newest(n) newest first', (t) => {
+    t.mock.method(Date, 'now', () => 0);
+    const journal = new UndoJournal(1024 * 1024);
+    const first = journal.add('edit', [writeRecord(1)]);
+    const second = journal.add('edit', [writeRecord(1)]);
+    const third = journal.add('edit', [writeRecord(1)]);
+    for (const id of [first, second, third]) assert.match(id, /^[a-z0-9]{4}$/);
+    const newestTwo = journal.newest(2);
+    assert.deepStrictEqual(
+      newestTwo.map((e) => e.id),
+      [third, second],
+    );
+    assert.strictEqual(journal.list()[0]?.id, third);
+  });
+
+  it('the 65th add evicts the oldest', () => {
+    const journal = new UndoJournal(1024 * 1024);
+    const ids: string[] = [];
+    for (let i = 0; i < 65; i++) ids.push(journal.add('edit', [writeRecord(1)]));
+    assert.ok(ids[0] && ids[1]);
+    assert.strictEqual(journal.get(ids[0]), undefined);
+    assert.ok(journal.get(ids[1]));
+    assert.strictEqual(journal.list().length, 64);
+    assert.strictEqual(journal.list().at(-1)?.id, ids[1]);
+  });
+
+  it('a byte cap keeps only the newest entries', () => {
+    const journal = new UndoJournal(10);
+    const older = journal.add('edit', [writeRecord(6)]);
+    const newer = journal.add('edit', [writeRecord(6)]);
+    assert.strictEqual(journal.get(older), undefined);
+    assert.ok(journal.get(newer));
+  });
+
+  it('entries expire after 30 minutes', (t) => {
+    let now = 0;
+    t.mock.method(Date, 'now', () => now);
+    const journal = new UndoJournal(1024 * 1024);
+    const id = journal.add('edit', [writeRecord(1)]);
+    now = 29 * 60 * 1000;
+    assert.ok(journal.get(id));
+    now = 30 * 60 * 1000;
+    assert.strictEqual(journal.get(id), undefined);
+    assert.deepStrictEqual(journal.list(), []);
+  });
+
+  it('replaceRecords keeps position; empty records delete the entry', (t) => {
+    t.mock.method(Date, 'now', () => 0);
+    const journal = new UndoJournal(1024 * 1024);
+    const first = journal.add('edit', [writeRecord(1)]);
+    const second = journal.add('edit', [writeRecord(1)]);
+    const kept = [writeRecord(2)];
+    journal.replaceRecords(first, kept);
+    assert.strictEqual(journal.get(first)?.records, kept);
+    assert.deepStrictEqual(
+      journal.list().map((e) => e.id),
+      [second, first],
+    );
+    journal.replaceRecords(second, []);
+    assert.strictEqual(journal.get(second), undefined);
+  });
+
+  it('a maxBytes of 0 disables the journal', () => {
+    assert.strictEqual(new UndoJournal(0).enabled, false);
+    assert.strictEqual(new UndoJournal(1).enabled, true);
+  });
+});
+
+describe('UndoCapture via GuardedFileSystem', () => {
+  let tmpDir: string;
+  let ctx: FilesystemServerContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    ctx = await createTestServer([tmpDir]);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (tmpDir) {
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  const capture = () => new UndoCapture(32 * 1024 * 1024);
+  const makeFs = (cap: UndoCapture) => new GuardedFileSystem(ctx.pathGuard, cap);
+
+  it('an overwrite pushes write with the old bytes and the new hash', async () => {
+    const file = join(tmpDir, 'overwrite.txt');
+    await writeFile(file, 'old-content');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.writeFile(file, 'new-content');
+    await rm(file);
+    assert.strictEqual(cap.unavailable, undefined);
+    const rec = cap.records[0];
+    if (!isWrite(rec)) assert.fail('expected a write record');
+    assert.strictEqual(rec.bytes.toString('utf8'), 'old-content');
+    assert.strictEqual(rec.expect, sha256Hex('new-content'));
+  });
+
+  it('a new file pushes remove', async () => {
+    const file = join(tmpDir, 'new-file.txt');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.writeFile(file, 'fresh');
+    const rec = cap.records[0];
+    if (!isRemove(rec)) assert.fail('expected a remove record');
+    assert.strictEqual(rec.expect, sha256Hex('fresh'));
+  });
+
+  it('append on an existing file pushes write with the combined hash', async () => {
+    const file = join(tmpDir, 'append.txt');
+    await writeFile(file, 'abc');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.appendFile(file, 'def');
+    const rec = cap.records[0];
+    if (!isWrite(rec)) assert.fail('expected a write record');
+    assert.strictEqual(rec.bytes.toString('utf8'), 'abc');
+    assert.strictEqual(rec.expect, sha256Hex('abcdef'));
+  });
+
+  it('mkdir -p a/b/c pushes 3 rmdir, top-down', async () => {
+    await mkdir(join(tmpDir, 'deep'), { recursive: true });
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.mkdir(join(tmpDir, 'deep', 'a', 'b', 'c'), { recursive: true });
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op),
+      ['rmdir', 'rmdir', 'rmdir'],
+    );
+    const paths = cap.records.map((r) => (r as { path: string }).path);
+    assert.ok(paths[0]?.endsWith(join('deep', 'a')));
+    assert.ok(paths[2]?.endsWith(join('deep', 'a', 'b', 'c')));
+  });
+
+  it('recursive rm of a tree pushes post-order records', async (t) => {
+    const tree = join(tmpDir, 'tree');
+    await mkdir(join(tree, 'sub'), { recursive: true });
+    await writeFile(join(tree, 'f.txt'), 'leaf');
+    if (
+      !(await trySymlink(
+        join(tree, 'f.txt'),
+        join(tree, 'link.txt'),
+        () => t.skip('symlink not permitted'),
+        'file',
+      ))
+    ) {
+      return;
+    }
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.rm(tree, { recursive: true, force: true });
+    assert.strictEqual(cap.unavailable, undefined);
+    const ops = cap.records.map((r) => r.op);
+    // post-order: children of sub (none), sub, then tree's files/link, then tree
+    assert.ok(ops.includes('write'));
+    assert.ok(ops.includes('symlink'));
+    assert.ok(ops.includes('mkdir'));
+    const last = cap.records.at(-1);
+    assert.strictEqual(last?.op, 'mkdir');
+    // every record under the tree root precedes the root's mkdir
+    const rootMkdirs = cap.records.filter((r) => r.op === 'mkdir');
+    assert.strictEqual(rootMkdirs.length, 2);
+  });
+
+  it('a tree containing .env abandons with contains protected files', async () => {
+    const tree = join(tmpDir, 'protected-tree');
+    await mkdir(tree, { recursive: true });
+    await writeFile(join(tree, '.env'), 'SECRET=1');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.rm(tree, { recursive: true, force: true });
+    assert.strictEqual(cap.unavailable, 'contains protected files');
+    assert.deepStrictEqual(cap.records, []);
+  });
+
+  it('a budget of 3 bytes with a 4-byte file abandons', async () => {
+    const file = join(tmpDir, 'big.txt');
+    await writeFile(file, 'abcd');
+    const cap = new UndoCapture(3);
+    const fs = makeFs(cap);
+    await fs.writeFile(file, 'x');
+    assert.ok(cap.unavailable !== undefined);
+    assert.deepStrictEqual(cap.records, []);
+  });
+
+  it('cp abandons with copies are not undoable yet', async () => {
+    const src = join(tmpDir, 'cp-src.txt');
+    const dest = join(tmpDir, 'cp-dest.txt');
+    await writeFile(src, 'cp');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.cp(src, dest);
+    assert.strictEqual(cap.unavailable, 'copies are not undoable yet');
+  });
+
+  it('POSIX only: overwriting a 0o200 file succeeds and abandons', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX only');
+      return;
+    }
+    if (process.getuid?.() === 0) {
+      t.skip('root bypasses the 0200 mode bits');
+      return;
+    }
+    const file = join(tmpDir, 'write-only.txt');
+    await writeFile(file, 'hidden');
+    await import('node:fs/promises').then((m) => m.chmod(file, 0o200));
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.writeFile(file, 'replacement');
+    assert.strictEqual(cap.unavailable, 'could not read the old content');
+    await import('node:fs/promises').then((m) => m.chmod(file, 0o644));
+  });
+
+  it('POSIX only: overwriting a FIFO abandons the capture', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX only');
+      return;
+    }
+    const { spawnSync } = await import('node:child_process');
+    const fifo = join(tmpDir, 'pipe.fifo');
+    const mk = spawnSync('mkfifo', [fifo]);
+    if (mk.error !== undefined) {
+      t.skip('mkfifo not available');
+      return;
+    }
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.writeFile(fifo, 'replacement');
+    assert.strictEqual(cap.unavailable, 'cannot capture a write over a non-regular file');
+  });
+
+  it('win32 only: deleting a directory link whose target is gone abandons', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('win32 only');
+      return;
+    }
+    const target = join(tmpDir, 'link-target-gone');
+    const link = join(tmpDir, 'dir-link');
+    const fsPromises = await import('node:fs/promises');
+    await fsPromises.mkdir(target);
+    await fsPromises.symlink(target, link, 'junction');
+    await fsPromises.rm(target, { recursive: true });
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.rm(link);
+    assert.strictEqual(cap.unavailable, 'could not type a link whose target is gone');
+  });
+
+  it('rename of a.txt to A.txt pushes exactly one rename record', async (t) => {
+    const lower = join(tmpDir, 'case-a.txt');
+    const upper = join(tmpDir, 'case-A.txt');
+    await writeFile(lower, 'same');
+    // Probe case sensitivity: on a case-sensitive filesystem, upper is absent.
+    const probe = await import('node:fs/promises').then((m) =>
+      m.stat(upper).then(
+        () => undefined,
+        () => 'absent',
+      ),
+    );
+    if (probe === 'absent') {
+      t.skip('case-sensitive filesystem');
+      return;
+    }
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.rename(lower, upper);
+    assert.strictEqual(cap.records.length, 1);
+    const rec = cap.records[0];
+    if (!isRename(rec)) assert.fail('expected a rename record');
+    await rm(upper);
+  });
+});
+
+describe('restoreEntry', () => {
+  let tmpDir: string;
+  let ctx: FilesystemServerContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    ctx = await createTestServer([tmpDir]);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (tmpDir) {
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  const newFs = () => new GuardedFileSystem(ctx.pathGuard);
+  const captureOne = async (
+    run: (fs: GuardedFileSystem) => Promise<unknown>,
+  ): Promise<UndoEntry> => {
+    const cap = new UndoCapture(32 * 1024 * 1024);
+    const fs = new GuardedFileSystem(ctx.pathGuard, cap);
+    await run(fs);
+    assert.strictEqual(cap.unavailable, undefined);
+    return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
+  };
+
+  it('overwrite, then restore, gives the old bytes back', async () => {
+    const file = join(tmpDir, 'restore-overwrite.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'after'));
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
+      'after',
+    );
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
+      'before',
+    );
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('an outside write after capture is skipped as modified since', async () => {
+    const file = join(tmpDir, 'restore-raced.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await writeFile(file, 'outside-write');
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
+      'outside-write',
+    );
+    const skipped = outcome.results.find(
+      (r): r is { path: string; error: Problem } => 'error' in r,
+    );
+    assert.ok(skipped);
+    assert.match(skipped.error.message, /modified since/);
+  });
+
+  it('a deleted tree comes back with bytes, mode, symlink and subdirectory', async (t) => {
+    const tree = join(tmpDir, 'restore-tree');
+    await mkdir(join(tree, 'sub'), { recursive: true });
+    await writeFile(join(tree, 'f.txt'), 'leaf');
+    if (
+      !(await trySymlink(
+        join(tree, 'f.txt'),
+        join(tree, 'link.txt'),
+        () => t.skip('symlink not permitted'),
+        'file',
+      ))
+    ) {
+      return;
+    }
+    const fsPromises = await import('node:fs/promises');
+    if (process.platform !== 'win32') await fsPromises.chmod(join(tree, 'f.txt'), 0o600);
+    const entry = await captureOne((fs) => fs.rm(tree, { recursive: true, force: true }));
+    assert.strictEqual(
+      await fsPromises.stat(join(tree, 'f.txt')).then(
+        () => true,
+        () => false,
+      ),
+      false,
+    );
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(await fsPromises.readFile(join(tree, 'f.txt'), 'utf8'), 'leaf');
+    if (process.platform !== 'win32') {
+      assert.strictEqual((await fsPromises.stat(join(tree, 'f.txt'))).mode & 0o777, 0o600);
+    }
+    assert.strictEqual(await fsPromises.readlink(join(tree, 'link.txt')), join(tree, 'f.txt'));
+    assert.ok((await fsPromises.stat(join(tree, 'sub'))).isDirectory());
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a created file and its created parents are removed', async () => {
+    const file = join(tmpDir, 'created-parents', 'a', 'new.txt');
+    const entry = await captureOne(async (fs) => {
+      await fs.mkdir(join(tmpDir, 'created-parents', 'a'), { recursive: true });
+      await fs.writeFile(file, 'fresh');
+    });
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) =>
+        m.stat(file).then(
+          () => true,
+          () => false,
+        ),
+      ),
+      false,
+    );
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) =>
+        m.stat(join(tmpDir, 'created-parents')).then(
+          () => true,
+          () => false,
+        ),
+      ),
+      false,
+    );
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a created parent that gained a new file stays, rmdir skipped', async () => {
+    const parent = join(tmpDir, 'kept-parent', 'a');
+    const entry = await captureOne(async (fs) => {
+      await fs.mkdir(parent, { recursive: true });
+      await fs.writeFile(join(parent, 'tool-made.txt'), 'x');
+    });
+    await writeFile(join(parent, 'outsider.txt'), 'y');
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.ok((await fsPromises.stat(parent)).isDirectory());
+    assert.strictEqual(
+      await fsPromises.stat(join(parent, 'tool-made.txt')).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      'the tool-made file must be removed',
+    );
+    const skippedRmdir = outcome.results.find(
+      (r) => r.path.toLowerCase() === parent.toLowerCase() && 'error' in r,
+    );
+    assert.ok(skippedRmdir, 'the parent rmdir must be reported skipped');
+  });
+
+  it('a rename comes back', async () => {
+    const from = join(tmpDir, 'rename-from.txt');
+    const to = join(tmpDir, 'rename-to.txt');
+    await writeFile(from, 'payload');
+    const entry = await captureOne((fs) => fs.rename(from, to));
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) =>
+        m.stat(from).then(
+          () => true,
+          () => false,
+        ),
+      ),
+      false,
+    );
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(
+      await import('node:fs/promises').then((m) => m.readFile(from, 'utf8')),
+      'payload',
+    );
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a rename over an existing file restores both', async () => {
+    const from = join(tmpDir, 'rename-over-from.txt');
+    const to = join(tmpDir, 'rename-over-to.txt');
+    await writeFile(from, 'incoming');
+    await writeFile(to, 'clobbered-old');
+    const entry = await captureOne((fs) => fs.rename(from, to));
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(to, 'utf8'), 'clobbered-old');
+    assert.strictEqual(await fsPromises.readFile(from, 'utf8'), 'incoming');
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('dryRun writes nothing and reports the same per-path outcomes', async () => {
+    // case (d): a created file in created parents
+    const file = join(tmpDir, 'dry-run-parents', 'a', 'new.txt');
+    const entry = await captureOne(async (fs) => {
+      await fs.mkdir(join(tmpDir, 'dry-run-parents', 'a'), { recursive: true });
+      await fs.writeFile(file, 'fresh');
+    });
+    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(
+      await fsPromises.stat(file).then(
+        () => true,
+        () => false,
+      ),
+      true,
+      'dry run must not remove anything',
+    );
+    const fileResult = dry.results.find((r) => r.path.toLowerCase() === file.toLowerCase());
+    assert.ok(fileResult && 'value' in fileResult && fileResult.value.restored);
+    // case (g): a rename over an existing file
+    const from = join(tmpDir, 'dry-rename-from.txt');
+    const to = join(tmpDir, 'dry-rename-to.txt');
+    await writeFile(from, 'incoming');
+    await writeFile(to, 'clobbered-old');
+    const entry2 = await captureOne((fs) => fs.rename(from, to));
+    const dry2 = await restoreEntry(entry2, newFs(), { dryRun: true });
+    assert.strictEqual(
+      await fsPromises.readFile(to, 'utf8'),
+      'incoming',
+      'dry run must not touch bytes',
+    );
+    const fromResult = dry2.results.find((r) => r.path.toLowerCase() === from.toLowerCase());
+    const toResult = dry2.results.find((r) => r.path.toLowerCase() === to.toLowerCase());
+    assert.ok(fromResult && 'value' in fromResult && fromResult.value.restored);
+    assert.ok(toResult && 'value' in toResult && toResult.value.restored);
+  });
+
+  it('a file whose parent was also deleted is FAILED and stays in remaining', async () => {
+    const tree = join(tmpDir, 'restore-failed-tree');
+    await mkdir(tree, { recursive: true });
+    const file = join(tree, 'gone.txt');
+    await writeFile(file, 'data');
+    const entry = await captureOne((fs) => fs.rm(tree, { recursive: true, force: true }));
+    // Drop the tree's own mkdir record so the parent is missing at restore.
+    entry.records = entry.records.filter((r) => r.op !== 'mkdir');
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const failed = outcome.results.find((r) => 'error' in r);
+    assert.ok(failed?.error, 'must report a failure, not throw');
+    assert.ok(outcome.remaining.length > 0);
+  });
+});
+
+describe('undo id on results', () => {
+  const firstTextBlock = (result: unknown): string | undefined => {
+    const blocks = (result as { content?: { type: string; text?: string }[] }).content;
+    return blocks?.find((b) => b.type === 'text')?.text;
+  };
+
+  it('an edit result carries the undo id in text and _meta', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'suffix-edit.txt');
+      await writeFile(file, 'before body');
+      const result = await pair.client.callTool({
+        name: 'edit',
+        arguments: { path: file, edits: [{ oldText: 'before body', newText: 'after body' }] },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const text = firstTextBlock(result) ?? '';
+      assert.match(text, / · undo [a-z0-9]{4}$/u);
+      const meta = result._meta as { undo?: string };
+      assert.match(text.slice(text.length - 4), new RegExp(`^${meta.undo ?? ''}$`, 'u'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a create result carries undo in structuredContent and stays valid JSON text', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await pair.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: join(tmp, 'suffix-create.txt'), content: 'new' }] },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const structured = result.structuredContent as { undo?: string };
+      assert.match(structured.undo ?? '', /^[a-z0-9]{4}$/u);
+      assert.ok(JSON.parse(firstTextBlock(result) ?? '') !== undefined);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a dry run carries no suffix', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'suffix-dry.txt');
+      await writeFile(file, 'before body');
+      const result = await pair.client.callTool({
+        name: 'edit',
+        arguments: {
+          path: file,
+          edits: [{ oldText: 'before body', newText: 'after body' }],
+          dryRun: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.ok(!(firstTextBlock(result) ?? '').includes('undo'));
+      assert.strictEqual((result._meta as { undo?: string }).undo, undefined);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a copy ends with not undoable: copies are not undoable yet', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const src = join(tmp, 'suffix-copy.txt');
+      await writeFile(src, 'cp');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [{ source: src, destination: join(tmp, 'suffix-copy-dest.txt') }],
+          copy: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.match(firstTextBlock(result) ?? '', / · not undoable: copies are not undoable yet$/u);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('FS_MAX_UNDO_BYTES=0 removes the suffix', async () => {
+    const tmp = await createTestRoot();
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '0' }, () => createTestClientPair([tmp]));
+    try {
+      const file = join(tmp, 'suffix-disabled.txt');
+      await writeFile(file, 'before body');
+      const result = await pair.client.callTool({
+        name: 'edit',
+        arguments: { path: file, edits: [{ oldText: 'before body', newText: 'after body' }] },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.ok(!(firstTextBlock(result) ?? '').includes('undo'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+});
+
+describe('undo tool', () => {
+  const firstTextBlock = (result: unknown): string | undefined => {
+    const blocks = (result as { content?: { type: string; text?: string }[] }).content;
+    return blocks?.find((b) => b.type === 'text')?.text;
+  };
+  const undoId = (result: unknown): string => {
+    const match = / · undo ([a-z0-9]{4})/u.exec(firstTextBlock(result) ?? '');
+    assert.ok(match, `no undo id in: ${firstTextBlock(result) ?? ''}`);
+    return match?.[1] ?? '';
+  };
+  const call = async (client: Client, name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: args });
+
+  it('a fresh server has nothing to undo', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await call(pair.client, 'undo', {});
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(firstTextBlock(result), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('the issue example: edit, delete, create-overwrite, then undo them in order', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      await writeFile(join(tmp, 'a.ts'), 'original\n');
+      await writeFile(join(tmp, 'old.log'), 'log-data\n');
+      await writeFile(join(tmp, 'config.json'), '{"v":1}\n');
+      const editRes = await call(pair.client, 'edit', {
+        path: join(tmp, 'a.ts'),
+        edits: [{ oldText: 'original', newText: 'changed' }],
+      });
+      assert.notStrictEqual(editRes.isError, true);
+      const deleteRes = await call(pair.client, 'delete', { paths: [join(tmp, 'old.log')] });
+      assert.notStrictEqual(deleteRes.isError, true);
+      const createRes = await call(pair.client, 'create', {
+        files: [{ path: join(tmp, 'config.json'), content: '{"v":2}\n', overwrite: true }],
+      });
+      assert.notStrictEqual(createRes.isError, true);
+
+      const undoOne = await call(pair.client, 'undo', {});
+      assert.notStrictEqual(undoOne.isError, true);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(await fsPromises.readFile(join(tmp, 'config.json'), 'utf8'), '{"v":1}\n');
+
+      const undoTwo = await call(pair.client, 'undo', { steps: 2 });
+      assert.notStrictEqual(undoTwo.isError, true);
+      assert.strictEqual(await fsPromises.readFile(join(tmp, 'a.ts'), 'utf8'), 'original\n');
+      assert.strictEqual(await fsPromises.readFile(join(tmp, 'old.log'), 'utf8'), 'log-data\n');
+
+      const undoEmpty = await call(pair.client, 'undo', {});
+      assert.strictEqual(firstTextBlock(undoEmpty), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('dryRun of two steps previews what the real undo restores', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'two-step.txt');
+      await writeFile(file, 'v1');
+      const del = await call(pair.client, 'delete', { paths: [file] });
+      assert.notStrictEqual(del.isError, true);
+      const mk = await call(pair.client, 'create', {
+        files: [{ path: file, content: 'v2' }],
+      });
+      assert.notStrictEqual(mk.isError, true);
+      const ed = await call(pair.client, 'edit', {
+        path: file,
+        edits: [{ oldText: 'v2', newText: 'v3' }],
+      });
+      assert.notStrictEqual(ed.isError, true);
+
+      const dry = await call(pair.client, 'undo', { steps: 3, dryRun: true });
+      assert.notStrictEqual(dry.isError, true);
+      const dryText = firstTextBlock(dry) ?? '';
+      assert.ok(
+        !dryText.includes('SKIPPED') && !dryText.includes('FAILED'),
+        `the preview must show all three steps restoring: ${dryText}`,
+      );
+      assert.strictEqual(
+        await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
+        'v3',
+        'dry run must not touch bytes',
+      );
+
+      const undone = await call(pair.client, 'undo', { steps: 3 });
+      assert.notStrictEqual(undone.isError, true);
+      assert.strictEqual(
+        await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
+        'v1',
+        'reverting edit, create, then delete puts v1 back',
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('batch create in a new folder undoes all files and removes the folder', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const dir = join(tmp, 'batch-new', 'sub');
+      const created = await call(pair.client, 'create', {
+        files: [
+          { path: join(dir, 'a.txt'), content: 'a' },
+          { path: join(dir, 'b.txt'), content: 'b' },
+        ],
+      });
+      assert.notStrictEqual(created.isError, true);
+      const undone = await call(pair.client, 'undo', {});
+      assert.notStrictEqual(undone.isError, true);
+      const text = firstTextBlock(undone) ?? '';
+      assert.ok(!text.includes('SKIPPED') && !text.includes('FAILED'), text);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(
+        await fsPromises.stat(join(tmp, 'batch-new')).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('non-recursive delete on a non-empty folder records no undo step', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const dir = join(tmp, 'non-empty');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'keep.txt'), 'keep');
+      const del = await call(pair.client, 'delete', { paths: [dir] });
+      assert.strictEqual(del.isError, true);
+      assert.ok(!(firstTextBlock(del) ?? '').includes('undo'));
+      const undoRes = await call(pair.client, 'undo', {});
+      assert.strictEqual(firstTextBlock(undoRes), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('undo by id reverts only that call', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const one = join(tmp, 'one.txt');
+      const two = join(tmp, 'two.txt');
+      await writeFile(one, 'one-old\n');
+      await writeFile(two, 'two-old\n');
+      const first = await call(pair.client, 'edit', {
+        path: one,
+        edits: [{ oldText: 'one-old', newText: 'one-new' }],
+      });
+      const second = await call(pair.client, 'edit', {
+        path: two,
+        edits: [{ oldText: 'two-old', newText: 'two-new' }],
+      });
+      const olderId = undoId(first);
+      assert.notStrictEqual(undoId(second), olderId);
+      const undone = await call(pair.client, 'undo', { id: olderId });
+      assert.notStrictEqual(undone.isError, true);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(await fsPromises.readFile(one, 'utf8'), 'one-old\n');
+      assert.strictEqual(await fsPromises.readFile(two, 'utf8'), 'two-new\n');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('an older id on a file edited again is skipped, and dryRun still lists it', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'twice.txt');
+      await writeFile(file, 'v1\n');
+      const first = await call(pair.client, 'edit', {
+        path: file,
+        edits: [{ oldText: 'v1', newText: 'v2' }],
+      });
+      await call(pair.client, 'edit', { path: file, edits: [{ oldText: 'v2', newText: 'v3' }] });
+      const olderId = undoId(first);
+      const undone = await call(pair.client, 'undo', { id: olderId });
+      // Every record was skipped, so the call reports isError — and the older
+      // entry is still listed by a later dry run.
+      assert.strictEqual(undone.isError, true);
+      assert.match(firstTextBlock(undone) ?? '', /SKIPPED/u);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'v3\n');
+      const dry = await call(pair.client, 'undo', { dryRun: true });
+      assert.match(firstTextBlock(dry) ?? '', /undo: [a-z0-9]{4}/u);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('id plus steps is INVALID_INPUT', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await call(pair.client, 'undo', { id: 'aaaa', steps: 2 });
+      assert.strictEqual(result.isError, true);
+      assert.match(firstTextBlock(result) ?? '', /Pass id or steps, not both\./u);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('an unknown id is NOT_FOUND', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await call(pair.client, 'undo', { id: 'zzzz' });
+      assert.strictEqual(result.isError, true);
+      assert.match(firstTextBlock(result) ?? '', /Unknown or expired undo id "zzzz"\./u);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('dryRun lists ids, tools and paths without changing bytes', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'dry.txt');
+      await writeFile(file, 'a\n');
+      const editRes = await call(pair.client, 'edit', {
+        path: file,
+        edits: [{ oldText: 'a', newText: 'b' }],
+      });
+      const id = undoId(editRes);
+      const before = await (await import('node:fs/promises')).readFile(file, 'utf8');
+      const dry = await call(pair.client, 'undo', { dryRun: true });
+      assert.notStrictEqual(dry.isError, true);
+      const text = firstTextBlock(dry) ?? '';
+      assert.match(text, /undo: [a-z0-9]{4} \(edit\)/u);
+      assert.ok(text.includes(pathLabel(file)));
+      const fsPromises2 = await import('node:fs/promises');
+      const after = await fsPromises2.readFile(file, 'utf8');
+      assert.strictEqual(after, before);
+      // The entry is still there: a real undo still works.
+      const real = await call(pair.client, 'undo', { id });
+      assert.notStrictEqual(real.isError, true);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('readOnly mode does not register undo', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp], { readOnly: true });
+    try {
+      const { tools } = await pair.client.listTools();
+      assert.ok(!tools.some((t) => t.name === 'undo'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('over HTTP, undo with no id or dryRun is INVALID_INPUT', async () => {
+    const tmp = await createTestRoot();
+    const harness = await createTestHttpHarness([tmp]);
+    try {
+      const result = await call(harness.client, 'undo', {});
+      assert.strictEqual(result.isError, true);
+      assert.match(
+        firstTextBlock(result) ?? '',
+        /Over HTTP, pass the undo id from the tool result/u,
+      );
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('over HTTP, undo with steps is INVALID_INPUT', async () => {
+    const tmp = await createTestRoot();
+    const harness = await createTestHttpHarness([tmp]);
+    try {
+      const result = await call(harness.client, 'undo', { steps: 2 });
+      assert.strictEqual(result.isError, true);
+      assert.match(
+        firstTextBlock(result) ?? '',
+        /Over HTTP, pass the undo id from the tool result/u,
+      );
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('over HTTP, undo by id in a separate request reverts the edit', async () => {
+    const tmp = await createTestRoot();
+    const harness = await createTestHttpHarness([tmp]);
+    try {
+      const file = join(tmp, 'http-edit.txt');
+      await writeFile(file, 'before\n');
+      const editRes = await call(harness.client, 'edit', {
+        path: file,
+        edits: [{ oldText: 'before', newText: 'after' }],
+      });
+      assert.notStrictEqual(editRes.isError, true);
+      const id = undoId(editRes);
+      const undone = await call(harness.client, 'undo', { id });
+      assert.notStrictEqual(undone.isError, true);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'before\n');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('over stdio, undo with no arguments reverts the last call', async () => {
+    const tmp = await createTestRoot();
+    const stdio = await createStdioClient(tmp);
+    try {
+      const file = join(tmp, 'stdio-edit.txt');
+      await writeFile(file, 'before\n');
+      const editRes = await call(stdio.client, 'edit', {
+        path: file,
+        edits: [{ oldText: 'before', newText: 'after' }],
+      });
+      assert.notStrictEqual(editRes.isError, true);
+      assert.match(firstTextBlock(editRes) ?? '', / · undo [a-z0-9]{4}$/u);
+      const undone = await call(stdio.client, 'undo', {});
+      assert.notStrictEqual(undone.isError, true);
+      const fsPromises = await import('node:fs/promises');
+      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'before\n');
+    } finally {
+      await stdio.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+});

@@ -1,9 +1,11 @@
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, FsError, Problem } from '../core/errors.ts';
+import { ErrorCode, FsError, type PerPathResult, Problem } from '../core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
 
-export type PerPathResult<T> = { path: string; value: T } | { path: string; error: Problem };
+// Re-exported: every batch tool's callers speak this shape, and core undo
+// reuses it for its per-path restore results.
+export type { PerPathResult };
 
 export interface BatchResult<T> {
   results: PerPathResult<T>[];

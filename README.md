@@ -16,7 +16,7 @@ Secret files stay hidden, and risky changes wait for your OK.
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is how AI apps
 such as Claude, GitHub Copilot in VS Code, and Cursor connect to tools.
 Filesystem MCP is an MCP server: a small program that runs on your computer
-and gives the AI 13 tools for working with files. You choose which folders it
+and gives the AI 14 tools for working with files. You choose which folders it
 can use, and everything outside them is off limits.
 
 Once it is connected, you can ask things like:
@@ -269,6 +269,7 @@ npm install -g @j0hanz/filesystem-mcp
 | `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                       |
 | `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting, unless a copy passes `overwrite: true`. |
 | `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                           |
+| `undo` ✎         | Reverts earlier changes by undo id or the last N calls, while the server runs. Skips files changed since.     |
 
 ✎ changes files. `--read-only` removes these tools.
 
@@ -391,8 +392,8 @@ package, the Docker image, and the `.mcpb` desktop extension.
   reporting, and makes no outbound network requests.
 - **Use and storage:** the server reads and writes files only inside the
   folders you allow, and only when your MCP client calls a tool. Tool results go to that
-  client and nowhere else. Short-lived result caches live in memory and
-  disappear when the server exits.
+  client and nowhere else. Short-lived result caches and the undo history
+  (saved file contents) live in memory and disappear when the server exits.
 - **Third-party sharing:** none by this server. Your MCP client may send tool
   results to its model provider under that client's own privacy policy.
 - **Retention:** the server keeps nothing after the process exits. Diagnostic logs go to
