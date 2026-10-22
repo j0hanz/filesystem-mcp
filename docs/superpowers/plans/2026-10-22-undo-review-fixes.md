@@ -105,10 +105,7 @@ it('a second concurrent undo of a fully restored id reports it gone', async () =
     assert.strictEqual(results.filter((r) => r.isError !== true).length, 1);
     const failed = results.find((r) => r.isError === true);
     assert.match(firstTextBlock(failed) ?? '', /Unknown or expired undo id/u);
-    assert.strictEqual(
-      await import('node:fs/promises').then((m) => m.readFile(x, 'utf8')),
-      'X0',
-    );
+    assert.strictEqual(await import('node:fs/promises').then((m) => m.readFile(x, 'utf8')), 'X0');
   } finally {
     await pair.close();
     await cleanupTestRoot(tmp);
@@ -168,9 +165,15 @@ it('a write whose path already holds the saved bytes counts as restored', async 
   const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
   await writeFile(file, 'A');
   const dry = await dryRunAll([entry]);
-  assert.deepStrictEqual(dry.filter((r) => 'error' in r), []);
+  assert.deepStrictEqual(
+    dry.filter((r) => 'error' in r),
+    [],
+  );
   const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
-  assert.deepStrictEqual(outcome.results.filter((r) => 'error' in r), []);
+  assert.deepStrictEqual(
+    outcome.results.filter((r) => 'error' in r),
+    [],
+  );
   assert.deepStrictEqual(outcome.remaining, []);
 });
 
@@ -241,7 +244,10 @@ it('dry run across a case-only folder rename and a move previews as restored', a
   const recased = await captureOne((fs) => fs.rename(lower, upper));
   const moved = await captureOne((fs) => fs.rename(upper, away));
   const results = await dryRunAll([moved, recased, edited]);
-  assert.deepStrictEqual(results.filter((r) => 'error' in r), []);
+  assert.deepStrictEqual(
+    results.filter((r) => 'error' in r),
+    [],
+  );
 });
 ```
 
