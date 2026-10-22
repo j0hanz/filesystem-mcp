@@ -18,7 +18,7 @@ import {
 import type { GuardedFileSystem } from './fs.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
-interface FileIdentity {
+export interface FileIdentity {
   dev: number;
   ino: number;
   birthtimeMs: number;
@@ -26,7 +26,15 @@ interface FileIdentity {
 
 export type UndoRecord =
   /** Put `bytes` back at `path`. expect = sha256 of the bytes that must be there now, or null = path must be absent. */
-  | { op: 'write'; path: string; bytes: Buffer; mode: number; expect: string | null }
+  | {
+      op: 'write';
+      path: string;
+      bytes: Buffer;
+      mode: number;
+      expect: string | null;
+      /** The file these bytes came from; a restore gives its replacement to the moves that tracked it. */
+      was?: FileIdentity | undefined;
+    }
   /** Remove a file this call created, if its sha256 still equals `expect`. */
   | { op: 'remove'; path: string; expect: string }
   /** Remove a directory this call created, only if empty. */
@@ -37,6 +45,16 @@ export type UndoRecord =
   | { op: 'symlink'; path: string; target: string; type: 'file' | 'junction' }
   /** Move `to` back to `from`, if `to` is still the same object and `from` is absent or is that same object. */
   | { op: 'rename'; from: string; to: string; identity: FileIdentity };
+
+/** The identity a move record is matched on. */
+export const identityOf = (s: { dev: number; ino: number; birthtimeMs: number }): FileIdentity => ({
+  dev: s.dev,
+  ino: s.ino,
+  birthtimeMs: s.birthtimeMs,
+});
+
+const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
+  a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /** One restored path, in the batch tools' per-path result shape. */
 export type UndoFileResult = PerPathResult<{ restored: true }>;
@@ -161,11 +179,17 @@ export class UndoJournal {
     if (entry) entry.records = records;
   }
 
-  /** Re-key every move record that ends at `path`: a restore replaced the file there. */
-  reidentify(path: string, identity: FileIdentity): void {
+  /**
+   * A restore replaced the file `was` with a new one: every move record that
+   * tracked `was` now tracks `identity`. Matched on the object, not its path,
+   * so an unrelated file that took the same name is never adopted.
+   */
+  reidentify(was: FileIdentity, identity: FileIdentity): void {
     for (const entry of this.#byId.values()) {
       for (const record of entry.records) {
-        if (record.op === 'rename' && record.to === path) record.identity = identity;
+        if (record.op === 'rename' && sameIdentity(record.identity, was)) {
+          record.identity = identity;
+        }
       }
     }
   }
@@ -190,6 +214,8 @@ export class UndoCapture {
   /** True while this capture holds one of the journal's live-capture slots. */
   holdsSlot = false;
   #bytes = 0;
+  /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
+  #reserved = 0;
   readonly maxBytes: number;
   readonly #pool: LivePool | undefined;
 
@@ -217,18 +243,23 @@ export class UndoCapture {
   release(): void {
     if (this.#pool) this.#pool.bytes -= this.#bytes;
     this.#bytes = 0;
+    this.#reserved = 0;
   }
 
   /**
-   * Gate before reading n more saved bytes (plus the record that will hold
-   * them); the bytes are charged at `push`.
+   * Charge n more saved bytes (plus the record that will hold them) before
+   * reading them, so concurrent reads cannot all pass the same gate. The
+   * write record's `push` draws the reservation down instead of charging twice.
    */
   reserve(n: number): boolean {
     if (this.unavailable !== undefined) return false;
-    if (this.#used() + n + RECORD_OVERHEAD_BYTES > this.maxBytes) {
+    const cost = n + RECORD_OVERHEAD_BYTES;
+    if (this.#used() + cost > this.maxBytes) {
       this.abandon('too large to keep for undo');
       return false;
     }
+    this.#charge(cost);
+    this.#reserved += cost;
     return true;
   }
 
@@ -244,11 +275,13 @@ export class UndoCapture {
     if (this.unavailable !== undefined) return;
     for (const record of records) {
       const cost = recordWeight(record);
-      if (this.#used() + cost > this.maxBytes) {
+      const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
+      if (this.#used() + (cost - drawn) > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
       }
-      this.#charge(cost);
+      this.#reserved -= drawn;
+      this.#charge(cost - drawn);
       this.records.push(record);
     }
   }
@@ -311,7 +344,14 @@ export async function snapshotTree(
     if (stats.isFile()) {
       if (!capture.reserve(stats.size)) return;
       const bytes = await fs.readSaved(validPath);
-      capture.push({ op: 'write', path: validPath, bytes, mode: stats.mode & 0o777, expect: null });
+      capture.push({
+        op: 'write',
+        path: validPath,
+        bytes,
+        mode: stats.mode & 0o777,
+        expect: null,
+        was: identityOf(stats),
+      });
       return;
     }
     if (stats.isSymbolicLink()) {
@@ -408,11 +448,11 @@ export async function restoreEntry(
     dryRun: boolean;
     simulated?: Map<string, string | null> | undefined;
     /**
-     * A restore wrote a new file at `path`, so it has a new inode; the owner
-     * of the journal re-keys any move record that ends there, in this entry
-     * or an older one, so that move still finds its file.
+     * A restore replaced the file `was` with a new inode; the owner of the
+     * journal re-keys the move records that tracked `was`, in this entry or an
+     * older one, so those moves still find their file.
      */
-    onRewrite?: ((path: string, identity: FileIdentity) => void) | undefined;
+    onRewrite?: ((was: FileIdentity, identity: FileIdentity) => void) | undefined;
   },
 ): Promise<RestoreOutcome> {
   const { dryRun } = opts;
@@ -496,11 +536,7 @@ export async function restoreEntry(
               if (!dryRun) {
                 await fs.writeFile(record.path, record.bytes, { mode: record.mode });
                 const at = await fs.lstat(record.path);
-                opts.onRewrite?.(record.path, {
-                  dev: at.stats.dev,
-                  ino: at.stats.ino,
-                  birthtimeMs: at.stats.birthtimeMs,
-                });
+                if (record.was) opts.onRewrite?.(record.was, identityOf(at.stats));
               }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
@@ -626,6 +662,13 @@ export async function restoreEntry(
               if (!dryRun) {
                 await fs.mkdir(dirname(record.from), { recursive: true });
                 await fs.rename(record.to, record.from);
+                // A move can change a file's creation time (NTFS restores the
+                // one an older file had at that name), so carry the identity
+                // it now has to the other moves that tracked it.
+                const landed = identityOf((await fs.lstat(record.from)).stats);
+                if (!sameIdentity(landed, record.identity)) {
+                  opts.onRewrite?.(record.identity, landed);
+                }
               }
               simulate(record.to, null);
               simulate(record.from, toState ?? 'moved');

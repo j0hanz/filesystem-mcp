@@ -89,8 +89,8 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       const outcome = await restoreEntry(entry, ctx.fs, {
         dryRun,
         simulated,
-        onRewrite: (path, identity) => {
-          journal.reidentify(path, identity);
+        onRewrite: (was, identity) => {
+          journal.reidentify(was, identity);
         },
       });
       if (!dryRun) journal.replaceRecords(entry.id, outcome.remaining);

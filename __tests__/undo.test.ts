@@ -650,8 +650,11 @@ describe('restoreEntry', () => {
     const moved = await captureOne((fs) => fs.rename(a, b));
     const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
     journal.add('move', moved.records);
-    const onRewrite = (path: string, identity: Parameters<UndoJournal['reidentify']>[1]) => {
-      journal.reidentify(path, identity);
+    const onRewrite = (
+      was: Parameters<UndoJournal['reidentify']>[0],
+      identity: Parameters<UndoJournal['reidentify']>[1],
+    ) => {
+      journal.reidentify(was, identity);
     };
     const movedInJournal = journal.list()[0];
     assert.ok(movedInJournal);
@@ -660,6 +663,72 @@ describe('restoreEntry', () => {
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual([second.remaining, first.remaining], [[], []]);
     assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
+  });
+
+  it('an unrelated file that took the moved name is not adopted by the move', async () => {
+    const a = join(tmpDir, 'adopt-a.txt');
+    const b = join(tmpDir, 'adopt-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    const moved = await captureOne((fs) => fs.rename(a, b));
+    const moveId = journal.add('move', moved.records);
+    await rm(b);
+    await writeFile(b, 'outsider');
+    const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
+    const onRewrite = (
+      was: Parameters<UndoJournal['reidentify']>[0],
+      identity: Parameters<UndoJournal['reidentify']>[1],
+    ) => {
+      journal.reidentify(was, identity);
+    };
+    await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
+    const entry = journal.get(moveId);
+    assert.ok(entry);
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(outcome.remaining.length, 1);
+    assert.strictEqual(await fsPromises.readFile(b, 'utf8'), 'outsider');
+    await assert.rejects(fsPromises.stat(a));
+  });
+
+  it('a move chain survives an edit: three steps undo back to the start', async () => {
+    const a = join(tmpDir, 'chain3-a.txt');
+    const b = join(tmpDir, 'chain3-b.txt');
+    const c = join(tmpDir, 'chain3-c.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    const ids = [
+      journal.add('move', (await captureOne((fs) => fs.rename(a, b))).records),
+      journal.add('move', (await captureOne((fs) => fs.rename(b, c))).records),
+      journal.add('edit', (await captureOne((fs) => fs.writeFile(c, 'v2'))).records),
+    ];
+    const onRewrite = (
+      was: Parameters<UndoJournal['reidentify']>[0],
+      identity: Parameters<UndoJournal['reidentify']>[1],
+    ) => {
+      journal.reidentify(was, identity);
+    };
+    const remaining: number[] = [];
+    for (const id of ids.reverse()) {
+      const entry = journal.get(id);
+      assert.ok(entry);
+      remaining.push(
+        (await restoreEntry(entry, newFs(), { dryRun: false, onRewrite })).remaining.length,
+      );
+    }
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual(remaining, [0, 0, 0]);
+    assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
+  });
+
+  it('reserve charges before the read, so two captures cannot both pass the gate', () => {
+    const journal = new UndoJournal(4096);
+    const one = journal.beginCapture();
+    const two = journal.beginCapture();
+    assert.ok(one.reserve(2000));
+    assert.strictEqual(two.reserve(2000), false);
+    journal.endCapture(one);
+    journal.endCapture(two);
   });
 
   it('a skipped directory restore does not restore its children through a symlink', async (t) => {

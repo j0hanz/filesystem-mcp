@@ -45,7 +45,7 @@ import {
   READ_NOFOLLOW,
   readFileWithStats,
 } from './read.ts';
-import { plannedMkdirChain, snapshotTree } from './undo.ts';
+import { identityOf, plannedMkdirChain, snapshotTree } from './undo.ts';
 import type { UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
@@ -273,6 +273,7 @@ export class GuardedFileSystem {
     const capture = this.#capture;
     let destBytes: Buffer | undefined;
     let destMode: number | undefined;
+    let destWas: ReturnType<typeof identityOf> | undefined;
     if (capture && !capture.unavailable && !spellingOnly) {
       try {
         const dest = await fsLstat(validNew).catch((error: unknown) => {
@@ -287,6 +288,7 @@ export class GuardedFileSystem {
           if (capture.reserve(dest.size)) {
             destBytes = await this.readSaved(validNew);
             destMode = dest.mode & 0o777;
+            destWas = identityOf(dest);
           }
         } else {
           capture.abandon('could not inspect the move destination');
@@ -307,6 +309,7 @@ export class GuardedFileSystem {
           bytes: destBytes,
           mode: destMode,
           expect: null,
+          was: destWas,
         });
       }
       const identity = await fsLstat(validNew).then(
@@ -337,6 +340,7 @@ export class GuardedFileSystem {
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
     let oldBytes: Buffer | undefined;
+    let oldWas: ReturnType<typeof identityOf> | undefined;
     try {
       const existing = await fsStat(validPath);
       existingMode = existing.mode & 0o777;
@@ -349,6 +353,7 @@ export class GuardedFileSystem {
           this.#capture.abandon('cannot capture a write over a non-regular file');
         } else if (this.#capture.reserve(existing.size)) {
           oldBytes = await this.readSaved(validPath);
+          oldWas = identityOf(existing);
         }
       }
     } catch (error) {
@@ -404,6 +409,7 @@ export class GuardedFileSystem {
           bytes: oldBytes,
           mode: existingMode,
           expect: sha256Hex(contentBytes),
+          was: oldWas,
         });
       } else {
         this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(contentBytes) });
@@ -443,11 +449,13 @@ export class GuardedFileSystem {
     // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
     let oldBytes: Buffer | undefined;
     let oldMode: number | undefined;
+    let oldWas: ReturnType<typeof identityOf> | undefined;
     if (this.#capture && !this.#capture.unavailable && existing) {
       try {
         if (this.#capture.reserve(existing.size)) {
           oldBytes = await this.readSaved(validPath);
           oldMode = existing.mode & 0o777;
+          oldWas = identityOf(existing);
         }
       } catch {
         this.#capture.abandon('could not read the old content');
@@ -512,6 +520,7 @@ export class GuardedFileSystem {
           bytes: oldBytes,
           mode: oldMode,
           expect: sha256Hex(Buffer.concat([oldBytes, Buffer.from(content, 'utf8')])),
+          was: oldWas,
         });
       } else {
         this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(content) });
