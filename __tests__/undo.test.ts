@@ -3,7 +3,6 @@ import type { Client } from '@modelcontextprotocol/client';
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-
 import { after, before, describe, it } from 'node:test';
 
 import type { Problem } from '../src/core/errors.ts';
