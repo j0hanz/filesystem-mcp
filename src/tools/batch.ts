@@ -1,11 +1,7 @@
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, FsError, type PerPathResult, Problem } from '../core/errors.ts';
+import { type ErrorCode, type PerPathResult, Problem } from '../core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
-
-// Re-exported: every batch tool's callers speak this shape, and core undo
-// reuses it for its per-path restore results.
-export type { PerPathResult };
 
 export interface BatchResult<T> {
   results: PerPathResult<T>[];
@@ -18,13 +14,6 @@ export async function runOverPaths<TItem extends string | { path: string }, TPer
   defaultErrorCode: ErrorCode,
   perPath: (item: TItem, ctx: ToolCtx) => Promise<TPerPath>,
 ): Promise<BatchResult<TPerPath>> {
-  if (items.length === 0) {
-    throw new FsError(
-      ErrorCode.INVALID_INPUT,
-      "runOverPaths: at least one of 'path', 'paths', or 'files' must be provided",
-    );
-  }
-
   const total = items.length;
   let completed = 0;
   const results: PerPathResult<TPerPath>[] = new Array<PerPathResult<TPerPath>>(total);

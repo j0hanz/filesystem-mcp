@@ -22,6 +22,7 @@ import {
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
+  type ReadRange,
   singleOrBatchPathsInput,
   validateReadRange,
 } from '../core/schema.ts';
@@ -59,19 +60,8 @@ const readRangeFields = {
 };
 
 /** A slice read: only a full read returns media or a binary resource. */
-function hasLineRange(args: {
-  head?: number | undefined;
-  tail?: number | undefined;
-  startLine?: number | undefined;
-  endLine?: number | undefined;
-}): boolean {
-  return (
-    args.head !== undefined ||
-    args.tail !== undefined ||
-    args.startLine !== undefined ||
-    args.endLine !== undefined
-  );
-}
+const hasLineRange = (args: ReadRange): boolean =>
+  [args.head, args.tail, args.startLine, args.endLine].some((line) => line !== undefined);
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
@@ -80,15 +70,7 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
   ),
   ...readRangeFields,
 }).superRefine((value, ctx) => {
-  validateReadRange(
-    {
-      head: value.head,
-      tail: value.tail,
-      startLine: value.startLine,
-      endLine: value.endLine,
-    },
-    ctx,
-  );
+  validateReadRange(value, ctx);
   if (value.binary && hasLineRange(value)) {
     ctx.addIssue({
       code: 'custom',
@@ -187,11 +169,6 @@ type PerPathReadValue = ReadPerPathValue & {
   blobData?: string;
 };
 
-interface BatchFileInfo {
-  index: number;
-  size: number;
-}
-
 interface BudgetItem {
   path: string;
   skip?: FsError;
@@ -220,13 +197,12 @@ async function collectFileBudget(
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
   mode: BudgetMode,
 ): Promise<BudgetItem[]> {
-  const indexed = filePaths.map((path, index) => ({ path, index }));
   const { results } = await processInParallel(
-    indexed,
-    async ({ path, index }): Promise<BatchFileInfo | undefined> => {
+    filePaths,
+    async (path): Promise<number | undefined> => {
       try {
         const out = await ctx.fs.stat(path);
-        return { index, size: budgetBytes(path, Math.min(out.stats.size, maxSize), mode) };
+        return budgetBytes(path, Math.min(out.stats.size, maxSize), mode);
       } catch (err: unknown) {
         ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
@@ -235,20 +211,16 @@ async function collectFileBudget(
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
-
-  const byIndex = new Map<number, BatchFileInfo>();
-  for (const { value: item } of results) {
-    if (item) byIndex.set(item.index, item);
-  }
+  const sizes = new Map(results.map(({ index, value }) => [index, value]));
 
   let total = 0;
   return filePaths.map((path, i): BudgetItem => {
-    const info = byIndex.get(i);
+    const size = sizes.get(i);
     // A failed stat is not skipped, so its read surfaces the
     // real error, not a misleading TOO_LARGE.
-    if (info === undefined) return { path };
+    if (size === undefined) return { path };
     // Skip this file only; a later, smaller file that still fits is read.
-    if (total + info.size > maxTotalSize) {
+    if (total + size > maxTotalSize) {
       return {
         path,
         skip: new FsError(
@@ -258,7 +230,7 @@ async function collectFileBudget(
         ),
       };
     }
-    total += info.size;
+    total += size;
     return { path };
   });
 }

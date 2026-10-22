@@ -327,7 +327,7 @@ export class PathGuard {
   /**
    * True when a grant must never admit `targetDir` — an unsafe path (home,
    * /etc, C:\Windows, ...). Checked on the lexical path AND on the one it
-   * resolves to: `resolveAllowedDirectoriesState` pushes each root's realpath
+   * resolves to: `recomputeAllowedDirectories` pushes each root's realpath
    * into the allowed set, so a lexical-only check let a symlink or junction
    * aliasing $HOME/C:\Windows in under an innocuous name — and the confirmation
    * prompt showed the alias, not the target. A target that cannot be resolved
@@ -681,7 +681,8 @@ export class PathGuard {
       return pathValue;
     }
     const roots = this.getRoots();
-    if (roots.length === 0) {
+    const [root] = roots;
+    if (root === undefined) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
         'No roots configured. Use the roots tool or --allow-cwd.',
@@ -692,10 +693,6 @@ export class PathGuard {
         ErrorCode.INVALID_INPUT,
         'Multiple roots configured. Provide an explicit path.',
       );
-    }
-    const root = roots[0];
-    if (!root) {
-      throw new FsError(ErrorCode.ACCESS_DENIED, 'Workspace root is unexpectedly undefined');
     }
     return root;
   }

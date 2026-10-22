@@ -27,14 +27,10 @@ export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOL
 export const APPEND_CREATE_NOFOLLOW =
   constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
 
-async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {
+/** A file's leading bytes, at most MIME_SAMPLE_SIZE: enough to sniff its type. */
+export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {
   const buffer = Buffer.allocUnsafe(MIME_SAMPLE_SIZE);
   const { bytesRead } = await withAbort(handle.read(buffer, 0, MIME_SAMPLE_SIZE, 0), signal);
-
-  if (bytesRead === 0) {
-    return Buffer.alloc(0);
-  }
-
   return buffer.subarray(0, bytesRead);
 }
 
@@ -468,6 +464,12 @@ async function readByMode(
   spec: ReadSpec,
   options: ReadOptions,
 ): Promise<ReadFileResult> {
+  const base = {
+    path: validPath,
+    readMode: spec.kind,
+    modified: stats.mtime.toISOString(),
+    fileSize: stats.size,
+  };
   switch (spec.kind) {
     case 'full': {
       if (stats.size > options.maxSize) {
@@ -482,42 +484,24 @@ async function readByMode(
         options.signal,
         spec.strictUtf8 === true,
       );
-      return {
-        path: validPath,
-        readMode: 'full',
-        modified: stats.mtime.toISOString(),
-        fileSize: stats.size,
-        content,
-        totalLines,
-        linesRead: totalLines,
-        hasMoreLines: false,
-      };
+      return { ...base, content, totalLines, linesRead: totalLines, hasMoreLines: false };
     }
     case 'head':
       return {
-        path: validPath,
-        readMode: 'head',
-        modified: stats.mtime.toISOString(),
-        fileSize: stats.size,
+        ...base,
         head: spec.lines,
         ...(await readRangeContent(handle, 1, spec.lines, options, filePath)),
       };
     case 'range':
       return {
-        path: validPath,
-        readMode: 'range',
-        modified: stats.mtime.toISOString(),
-        fileSize: stats.size,
+        ...base,
         startLine: spec.start,
         ...(spec.end !== undefined ? { endLine: spec.end } : {}),
         ...(await readRangeContent(handle, spec.start, spec.end, options, filePath)),
       };
     case 'tail':
       return {
-        path: validPath,
-        readMode: 'tail',
-        modified: stats.mtime.toISOString(),
-        fileSize: stats.size,
+        ...base,
         tail: spec.lines,
         ...(await readTailContent(handle, spec.lines, options, validPath)),
       };

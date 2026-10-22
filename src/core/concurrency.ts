@@ -89,13 +89,7 @@ export async function processInParallel<T, R>(
     }
   };
 
-  const workerCount = Math.min(itemCount, concurrency);
-  const workers: Promise<void>[] = new Array<Promise<void>>(workerCount);
-  for (let index = 0; index < workerCount; index += 1) {
-    workers[index] = next();
-  }
-
-  await Promise.allSettled(workers);
+  await Promise.allSettled(Array.from({ length: Math.min(itemCount, concurrency) }, next));
   // A deadline (AbortSignal.timeout) hit during the run surfaces here as
   // signal.reason — a TimeoutError — rather than a fresh AbortError, so
   // callers see TIMEOUT, not CANCELLED. Only a run that actually skipped

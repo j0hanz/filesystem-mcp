@@ -1,4 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import {
   lstat as fsLstat,
   readdir as fsReaddir,
@@ -14,6 +15,7 @@ import {
   isNodeError,
   type PerPathResult,
   Problem,
+  unlessMissing,
 } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
@@ -230,11 +232,6 @@ export class UndoCapture {
     this.#pool = pool;
   }
 
-  /** Bytes charged against the budget: the shared live total of every capture. */
-  #used(): number {
-    return this.#pool.bytes;
-  }
-
   #charge(n: number): void {
     this.#bytes += n;
     this.#pool.bytes += n;
@@ -260,7 +257,8 @@ export class UndoCapture {
   reserve(n: number): boolean {
     if (this.unavailable !== undefined) return false;
     const cost = n + RECORD_OVERHEAD_BYTES;
-    if (this.#used() + cost > this.maxBytes) {
+    // The budget is shared: every live capture's charge counts.
+    if (this.#pool.bytes + cost > this.maxBytes) {
       this.abandon('too large to keep for undo');
       return false;
     }
@@ -285,7 +283,7 @@ export class UndoCapture {
     for (const record of records) {
       const cost = recordWeight(record);
       const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
-      if (this.#used() + (cost - drawn) > this.maxBytes) {
+      if (this.#pool.bytes + (cost - drawn) > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
       }
@@ -311,11 +309,7 @@ export async function plannedMkdirChain(
     for (;;) {
       const parent = dirname(probe);
       if (parent === probe) break;
-      const stats = await fsLstat(probe).catch((error: unknown) => {
-        if (!isMissing(error)) throw error;
-        return undefined;
-      });
-      if (stats !== undefined) break;
+      if ((await unlessMissing(fsLstat(probe))) !== undefined) break;
       created.push(probe);
       probe = parent;
     }
@@ -324,6 +318,24 @@ export async function plannedMkdirChain(
     capture.abandon('could not inspect the parent folders');
     return [];
   }
+}
+
+/** A regular file's bytes, mode and identity before a call replaces it: a write record's fields. */
+export interface SavedFile {
+  bytes: Buffer;
+  mode: number;
+  was: FileIdentity;
+}
+
+/** Read `path`'s current bytes for undo; `undefined` once they would go over the budget. */
+export async function saveOld(
+  capture: UndoCapture,
+  fs: GuardedFileSystem,
+  path: string,
+  stats: Stats,
+): Promise<SavedFile | undefined> {
+  if (!capture.reserve(stats.size)) return undefined;
+  return { bytes: await fs.readSaved(path), mode: stats.mode & 0o777, was: identityOf(stats) };
 }
 
 /**
@@ -340,10 +352,7 @@ export async function snapshotTree(
 ): Promise<void> {
   if (capture.unavailable !== undefined) return;
   try {
-    const stats = await fsLstat(validPath).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-      return undefined;
-    });
+    const stats = await unlessMissing(fsLstat(validPath));
     // ENOENT on the root (the `force` case): nothing will be deleted.
     if (stats === undefined) return;
     if (fs.pathGuard.isSensitive(validPath)) {
@@ -351,16 +360,8 @@ export async function snapshotTree(
       return;
     }
     if (stats.isFile()) {
-      if (!capture.reserve(stats.size)) return;
-      const bytes = await fs.readSaved(validPath);
-      capture.push({
-        op: 'write',
-        path: validPath,
-        bytes,
-        mode: stats.mode & 0o777,
-        expect: null,
-        was: identityOf(stats),
-      });
+      const saved = await saveOld(capture, fs, validPath, stats);
+      if (saved) capture.push({ op: 'write', path: validPath, ...saved, expect: null });
       return;
     }
     if (stats.isSymbolicLink()) {
@@ -536,21 +537,12 @@ export async function restoreEntry(
   const absent = async (path: string): Promise<boolean> => {
     const known = simulated.get(path);
     if (known !== undefined) return known === null;
-    try {
-      await fs.lstat(disk(path));
-      return false;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-      return true;
-    }
+    return (await unlessMissing(fs.lstat(disk(path)))) === undefined;
   };
   const matchesHash = async (path: string, expect: string): Promise<boolean> => {
     const known = simulated.get(path);
     if (known !== undefined) return known === expect;
-    const existing = await fs.lstat(disk(path)).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-      return undefined;
-    });
+    const existing = await unlessMissing(fs.lstat(disk(path)));
     return (
       existing !== undefined &&
       existing.stats.isFile() &&
@@ -708,13 +700,7 @@ export async function restoreEntry(
                 toIsRealDir = toBacking !== undefined;
               }
             } else {
-              const at = await fs.lstat(disk(record.to)).then(
-                (r) => r,
-                (error: unknown) => {
-                  if (!isMissing(error)) throw error;
-                  return undefined;
-                },
-              );
+              const at = await unlessMissing(fs.lstat(disk(record.to)));
               if (at !== undefined && sameIdentity(at.stats, record.identity)) {
                 toHere = true;
                 toIsRealDir = at.stats.isDirectory();
@@ -734,12 +720,8 @@ export async function restoreEntry(
             const fromFree =
               fromKnown !== undefined
                 ? fromKnown === null
-                : await fs.lstat(disk(record.from)).then(
-                    (r) => sameIdentity(r.stats, record.identity),
-                    (error: unknown) => {
-                      if (!isMissing(error)) throw error;
-                      return true;
-                    },
+                : await unlessMissing(fs.lstat(disk(record.from))).then(
+                    (at) => at === undefined || sameIdentity(at.stats, record.identity),
                   );
             if (toHere && fromFree) {
               if (toIsRealDir && toBacking !== undefined) {
