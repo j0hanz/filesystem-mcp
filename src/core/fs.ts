@@ -19,7 +19,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -312,10 +312,7 @@ export class GuardedFileSystem {
           was: destWas,
         });
       }
-      const identity = await fsLstat(validNew).then(
-        (s) => ({ dev: s.dev, ino: s.ino, birthtimeMs: s.birthtimeMs }),
-        () => undefined,
-      );
+      const identity = await fsLstat(validNew).then(identityOf, () => undefined);
       if (identity !== undefined) {
         this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
       } else {
@@ -593,11 +590,7 @@ export class GuardedFileSystem {
 
   async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {
     const validPath = await this.pathGuard.validatePathForWrite(linkPath);
-    await fsSymlink(
-      type === 'junction' ? resolve(dirname(validPath), target) : target,
-      validPath,
-      type,
-    );
+    await fsSymlink(target, validPath, type);
   }
 
   async cp(

@@ -25,6 +25,7 @@ import {
 } from '../core/input-required.ts';
 import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
+import { sameIdentity } from '../core/undo.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
@@ -159,12 +160,6 @@ async function planPath(
     plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren },
   };
 }
-
-type Identity = Pick<LstatResult['stats'], 'dev' | 'ino' | 'birthtimeMs'>;
-
-/** Same filesystem object. birthtimeMs joins dev/ino, which read 0 on some non-POSIX drivers. */
-const sameIdentity = (a: Identity, b: Identity): boolean =>
-  a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /**
  * Phase 2 (mutation): TOCTOU re-stat against the plan's first stat, then

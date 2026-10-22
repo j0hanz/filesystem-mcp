@@ -5,7 +5,7 @@ import {
   readlink as fsReadlink,
   stat as fsStat,
 } from 'node:fs/promises';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   ErrorCode,
@@ -16,6 +16,7 @@ import {
   Problem,
 } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
+import { IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
 export interface FileIdentity {
@@ -64,7 +65,7 @@ type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
 const identityKey = (i: FileIdentity): string =>
   `${String(i.dev)}:${String(i.ino)}:${String(i.birthtimeMs)}`;
 
-const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
+export const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
   a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /** One restored path, in the batch tools' per-path result shape. */
@@ -79,9 +80,6 @@ export interface UndoEntry {
 
 const MAX_ENTRIES = 64;
 const TTL_MS = 30 * 60 * 1000;
-const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-/** In-flight captures allowed at once; past it a mutating call runs, just not undoable. */
-const MAX_LIVE_CAPTURES = 8;
 /**
  * Flat memory weight charged per record, whatever its op: the record object
  * plus its path strings (a rename carries two). An estimate, not a measure —
@@ -122,42 +120,28 @@ export class UndoJournal {
   }
 
   #newId(): string {
-    // 4 chars from the 36-char alphabet via randomInt; regenerate on a live collision.
+    // 4 base-36 chars via randomInt; regenerate on a live collision.
     const make = () =>
-      Array.from({ length: 4 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('');
+      randomInt(36 ** 4)
+        .toString(36)
+        .padStart(4, '0');
     let id = make();
     while (this.#byId.has(id)) id = make();
     return id;
   }
 
-  #live = 0;
   /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
   readonly #pool: LivePool = { bytes: 0 };
 
-  /**
-   * Start a capture for a mutating call. Past the live cap the call still
-   * runs, its capture is pre-abandoned with the reason, and it takes no slot;
-   * pair every `beginCapture` with `endCapture` when the call finishes.
-   */
+  /** Start a capture for a mutating call; pair it with `endCapture` when the call finishes. */
   beginCapture(): UndoCapture {
-    const capture = new UndoCapture(this.maxBytes, this.#pool);
-    if (this.#live < MAX_LIVE_CAPTURES) {
-      this.#live += 1;
-      capture.holdsSlot = true;
-    } else {
-      capture.abandon('too many concurrent calls to keep for undo');
-    }
-    return capture;
+    return new UndoCapture(this.maxBytes, this.#pool);
   }
 
   endCapture(capture: UndoCapture | undefined): void {
     // Its records now live in the journal (or were dropped); either way the
     // live pool no longer owes them.
     capture?.release();
-    if (capture?.holdsSlot) {
-      capture.holdsSlot = false;
-      this.#live -= 1;
-    }
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -228,11 +212,6 @@ export class UndoJournal {
     else this.#renameIndex?.set(key, [record]);
   }
 
-  list(): UndoEntry[] {
-    this.#pruneExpired(Date.now());
-    return [...this.#byId.values()].reverse();
-  }
-
   clear(): void {
     this.#renameIndex = undefined;
     this.#byId.clear();
@@ -246,8 +225,6 @@ interface LivePool {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   unavailable: string | undefined;
-  /** True while this capture holds one of the journal's live-capture slots. */
-  holdsSlot = false;
   #bytes = 0;
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
@@ -303,7 +280,10 @@ export class UndoCapture {
     if (this.unavailable !== undefined) return;
     this.unavailable = reason;
     this.records.length = 0;
-    this.release();
+    // Dropped records free their bytes now. Reservations stay charged until
+    // endCapture: a read reserved before the abandon may still be in flight.
+    if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
+    this.#bytes = this.#reserved;
   }
 
   push(...records: UndoRecord[]): void {
@@ -394,12 +374,11 @@ export async function snapshotTree(
       // The follow-stat types the link (junction vs file). A win32 link
       // whose target is gone cannot be typed, so it refuses capture rather
       // than restoring with the wrong reparse flavor.
-      const isDir =
-        process.platform === 'win32'
-          ? await fsStat(validPath)
-              .then((s) => s.isDirectory())
-              .catch(() => undefined)
-          : false;
+      const isDir = IS_WINDOWS
+        ? await fsStat(validPath)
+            .then((s) => s.isDirectory())
+            .catch(() => undefined)
+        : false;
       if (isDir === undefined) {
         capture.abandon('could not type a link whose target is gone');
         return;
@@ -439,6 +418,7 @@ export async function snapshotTree(
  */
 async function assertTreeKeepsPolicy(
   fs: GuardedFileSystem,
+  listedAt: string,
   from: string,
   to: string,
 ): Promise<void> {
@@ -452,7 +432,7 @@ async function assertTreeKeepsPolicy(
   };
   try {
     const guard = fs.pathGuard;
-    const names = ['', ...(await fsReaddir(from, { recursive: true }))];
+    const names = ['', ...(await fsReaddir(listedAt, { recursive: true }))];
     for (const name of names) {
       if (guard.isSensitive(join(from, name)) !== guard.isSensitive(join(to, name))) refuse();
     }
@@ -507,14 +487,33 @@ export async function restoreEntry(
      * folder where it still sits on disk.
      */
     relocations?: [string, string][] | undefined;
+    /** Dry-run directories map to their on-disk tree, or null when rebuilt from saved records. */
+    directoryBackings?: Map<string, string | null> | undefined;
   },
 ): Promise<RestoreOutcome> {
   const { dryRun, signal } = opts;
   const relocations = opts.relocations ?? [];
+  const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
+  const hasPathBoundary = (directory: string, candidate: string): boolean =>
+    candidate.length === directory.length ||
+    directory.endsWith('/') ||
+    (IS_WINDOWS && directory.endsWith('\\')) ||
+    candidate[directory.length] === '/' ||
+    (IS_WINDOWS && candidate[directory.length] === '\\');
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (out === from || out.startsWith(from + sep)) out = to + out.slice(from.length);
+      if (out.startsWith(from) && hasPathBoundary(from, out)) {
+        out = to + out.slice(from.length);
+      } else if (
+        isPathInsideDirectory(from, out) &&
+        from.toLowerCase().length === from.length &&
+        out.slice(0, from.length).toLowerCase().length === from.length &&
+        out.slice(0, from.length).toLowerCase() === from.toLowerCase() &&
+        hasPathBoundary(from, out)
+      ) {
+        out = to + out.slice(from.length);
+      }
     }
     return out;
   };
@@ -524,7 +523,7 @@ export async function restoreEntry(
   // Records that did not run because a directory they sit under was not restored.
   const blocked: string[] = [];
   const isBlocked = (path: string): boolean =>
-    blocked.some((dir) => path === dir || path.startsWith(dir + sep));
+    blocked.some((dir) => isPathInsideDirectory(dir, path));
   const results: UndoFileResult[] = [];
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
@@ -565,8 +564,15 @@ export async function restoreEntry(
       (await hashFile(fs, disk(path), signal)) === expect
     );
   };
-  const simulate = (path: string, state: string | null): void => {
-    if (dryRun) simulated.set(path, state);
+  const simulate = (
+    path: string,
+    state: string | null,
+    directoryBacking: string | null = null,
+  ): void => {
+    if (!dryRun) return;
+    simulated.set(path, state);
+    if (state === 'dir') directoryBackings.set(path, directoryBacking);
+    else directoryBackings.delete(path);
   };
 
   // Run non-rmdir records in reverse first, then deduplicated rmdirs deepest-first
@@ -689,19 +695,20 @@ export async function restoreEntry(
           // would overwrite it. The pair is taken in a fixed key order (and
           // deduped) so two concurrent pairs cannot deadlock.
           await fs.lockPairForWrite(record.from, record.to, async () => {
-            const same = (s: FileIdentity): boolean =>
-              s.dev === record.identity.dev &&
-              s.ino === record.identity.ino &&
-              s.birthtimeMs === record.identity.birthtimeMs;
             const toKnown = simulated.get(record.to);
             let toHere: boolean;
             let toIsRealDir = false;
+            let toBacking: string | undefined;
             // What undoing leaves at `from`, so an older record's check can
             // match it in a later simulated step: a hash, or 'dir'/'link'.
             let toState: string | undefined;
             if (toKnown !== undefined) {
               toHere = toKnown !== null;
               toState = toKnown ?? undefined;
+              if (dryRun && toKnown === 'dir') {
+                toBacking = directoryBackings.get(record.to) ?? undefined;
+                toIsRealDir = toBacking !== undefined;
+              }
             } else {
               const at = await fs.lstat(disk(record.to)).then(
                 (r) => r,
@@ -710,9 +717,10 @@ export async function restoreEntry(
                   return undefined;
                 },
               );
-              if (at !== undefined && same(at.stats)) {
+              if (at !== undefined && sameIdentity(at.stats, record.identity)) {
                 toHere = true;
                 toIsRealDir = at.stats.isDirectory();
+                if (toIsRealDir) toBacking = disk(record.to);
                 if (dryRun) {
                   toState = at.stats.isDirectory()
                     ? 'dir'
@@ -729,14 +737,16 @@ export async function restoreEntry(
               fromKnown !== undefined
                 ? fromKnown === null
                 : await fs.lstat(disk(record.from)).then(
-                    (r) => same(r.stats),
+                    (r) => sameIdentity(r.stats, record.identity),
                     (error: unknown) => {
                       if (!isMissing(error)) throw error;
                       return true;
                     },
                   );
             if (toHere && fromFree) {
-              if (toIsRealDir) await assertTreeKeepsPolicy(fs, record.to, record.from);
+              if (toIsRealDir && toBacking !== undefined) {
+                await assertTreeKeepsPolicy(fs, toBacking, record.to, record.from);
+              }
               if (!dryRun) {
                 await fs.mkdir(dirname(record.from), { recursive: true });
                 await fs.rename(record.to, record.from);
@@ -748,9 +758,9 @@ export async function restoreEntry(
                   opts.onRewrite?.(record.identity, landed);
                 }
               }
-              if (dryRun && toIsRealDir) relocations.push([record.from, disk(record.to)]);
+              if (dryRun && toBacking !== undefined) relocations.push([record.from, toBacking]);
               simulate(record.to, null);
-              simulate(record.from, toState ?? 'moved');
+              simulate(record.from, toState ?? 'moved', toBacking ?? null);
               done(record.from);
             } else {
               skip(record, order, record.from);

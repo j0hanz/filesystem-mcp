@@ -52,7 +52,7 @@ describe('UndoJournal', () => {
       newestTwo.map((e) => e.id),
       [third, second],
     );
-    assert.strictEqual(journal.list()[0]?.id, third);
+    assert.strictEqual(journal.newest(Infinity)[0]?.id, third);
   });
 
   it('the 65th add evicts the oldest', () => {
@@ -62,8 +62,8 @@ describe('UndoJournal', () => {
     assert.ok(ids[0] && ids[1]);
     assert.strictEqual(journal.get(ids[0]), undefined);
     assert.ok(journal.get(ids[1]));
-    assert.strictEqual(journal.list().length, 64);
-    assert.strictEqual(journal.list().at(-1)?.id, ids[1]);
+    assert.strictEqual(journal.newest(Infinity).length, 64);
+    assert.strictEqual(journal.newest(Infinity).at(-1)?.id, ids[1]);
   });
 
   it('a byte cap keeps only the newest entries', () => {
@@ -84,7 +84,7 @@ describe('UndoJournal', () => {
     assert.ok(journal.get(id));
     now = 30 * 60 * 1000;
     assert.strictEqual(journal.get(id), undefined);
-    assert.deepStrictEqual(journal.list(), []);
+    assert.deepStrictEqual(journal.newest(Infinity), []);
   });
 
   it('replaceRecords keeps position; empty records delete the entry', (t) => {
@@ -96,7 +96,7 @@ describe('UndoJournal', () => {
     journal.replaceRecords(first, kept);
     assert.strictEqual(journal.get(first)?.records, kept);
     assert.deepStrictEqual(
-      journal.list().map((e) => e.id),
+      journal.newest(Infinity).map((e) => e.id),
       [second, first],
     );
     journal.replaceRecords(second, []);
@@ -108,19 +108,40 @@ describe('UndoJournal', () => {
     assert.strictEqual(new UndoJournal(1).enabled, true);
   });
 
-  it('beginCapture past the live cap abandons; endCapture frees the slot', () => {
+  it('a ninth concurrent capture is undoable', () => {
     const journal = new UndoJournal(1024 * 1024);
-    const caps = Array.from({ length: 8 }, () => journal.beginCapture());
-    assert.ok(caps.every((c) => c.unavailable === undefined && c.holdsSlot));
-    const ninth = journal.beginCapture();
-    assert.strictEqual(ninth.unavailable, 'too many concurrent calls to keep for undo');
-    assert.strictEqual(ninth.holdsSlot, false);
-    journal.endCapture(caps[0]);
-    const tenth = journal.beginCapture();
-    assert.strictEqual(tenth.unavailable, undefined);
-    assert.strictEqual(tenth.holdsSlot, true);
-    journal.endCapture(undefined);
-    for (const c of [ninth, tenth, ...caps.slice(1)]) journal.endCapture(c);
+    const caps = Array.from({ length: 9 }, () => journal.beginCapture());
+    assert.ok(caps.every((c) => c.unavailable === undefined));
+    for (const c of caps) journal.endCapture(c);
+  });
+
+  it('an abandoned capture keeps its charge until endCapture', () => {
+    // One reserve of 2000 charges 2512 (512 record overhead).
+    const journal = new UndoJournal(4096);
+    const one = journal.beginCapture();
+    assert.ok(one.reserve(2000));
+    assert.strictEqual(one.reserve(2000), false);
+    assert.strictEqual(one.unavailable, 'too large to keep for undo');
+    const two = journal.beginCapture();
+    assert.strictEqual(two.reserve(2000), false);
+    journal.endCapture(one);
+    journal.endCapture(two);
+    const three = journal.beginCapture();
+    assert.ok(three.reserve(2000));
+    journal.endCapture(three);
+  });
+
+  it('an abandoned capture frees the bytes of the records it dropped', () => {
+    // A pushed record holds 2512 (2000 bytes + 512 overhead) and no reservation.
+    const journal = new UndoJournal(4096);
+    const big = journal.beginCapture();
+    assert.ok(big.reserve(2000));
+    big.push(writeRecord(2000));
+    assert.strictEqual(big.reserve(2000), false);
+    const small = journal.beginCapture();
+    assert.ok(small.reserve(1200));
+    journal.endCapture(big);
+    journal.endCapture(small);
   });
 });
 
@@ -398,6 +419,25 @@ describe('restoreEntry', () => {
     assert.strictEqual(cap.unavailable, undefined);
     return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
   };
+  const dryRunAll = async (entries: UndoEntry[]) => {
+    const simulated = new Map<string, string | null>();
+    const relocations: [string, string][] = [];
+    const directoryBackings = new Map<string, string | null>();
+    const results = [];
+    for (const entry of entries) {
+      results.push(
+        ...(
+          await restoreEntry(entry, newFs(), {
+            dryRun: true,
+            simulated,
+            relocations,
+            directoryBackings,
+          })
+        ).results,
+      );
+    }
+    return results;
+  };
 
   it('overwrite, then restore, gives the old bytes back', async () => {
     const file = join(tmpDir, 'restore-overwrite.txt');
@@ -656,7 +696,7 @@ describe('restoreEntry', () => {
     ) => {
       journal.reidentify(was, identity);
     };
-    const movedInJournal = journal.list()[0];
+    const movedInJournal = journal.newest(Infinity)[0];
     assert.ok(movedInJournal);
     const second = await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
     const first = await restoreEntry(movedInJournal, newFs(), { dryRun: false });
@@ -763,15 +803,161 @@ describe('restoreEntry', () => {
     const moved = await captureOne((fs) => fs.rename(a, b));
     const simulated = new Map<string, string | null>();
     const relocations: [string, string][] = [];
+    const directoryBackings = new Map<string, string | null>();
     const results = [];
     for (const entry of [moved, edited]) {
-      const out = await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations });
+      const out = await restoreEntry(entry, newFs(), {
+        dryRun: true,
+        simulated,
+        relocations,
+        directoryBackings,
+      });
       results.push(...out.results);
     }
     assert.deepStrictEqual(
       results.filter((r) => 'error' in r),
       [],
     );
+  });
+
+  it('dry run: an edit inside a folder moved twice previews as restored', async () => {
+    const a = join(tmpDir, 'twice-a');
+    const b = join(tmpDir, 'twice-b');
+    const c = join(tmpDir, 'twice-c');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
+    const first = await captureOne((fs) => fs.rename(a, b));
+    const second = await captureOne((fs) => fs.rename(b, c));
+    const results = await dryRunAll([second, first, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run does not remap a length-changing lowercase alias', async (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const from = join(tmpDir, 'unicode-İ');
+    const to = join(tmpDir, 'unicode-moved');
+    await mkdir(from, { recursive: true });
+    await writeFile(join(from, 'f.txt'), 'before');
+    const edited = await captureOne((fs) => fs.writeFile(join(from, 'f.txt'), 'after'));
+    const moved = await captureOne((fs) => fs.rename(from, to));
+    const aliasEntry: UndoEntry = {
+      ...edited,
+      records: edited.records.map((record) =>
+        record.op === 'write'
+          ? { ...record, path: join(tmpDir, 'unicode-i\u0307', 'f.txt') }
+          : record,
+      ),
+    };
+    const malformed = `${to}\u0307`;
+    await mkdir(malformed, { recursive: true });
+    await writeFile(join(malformed, 'f.txt'), 'after');
+
+    const results = await dryRunAll([moved, aliasEntry]);
+    assert.deepStrictEqual(
+      results.filter((result) => 'error' in result).map((result) => result.path),
+      [join(tmpDir, 'unicode-i\u0307', 'f.txt')],
+    );
+  });
+
+  it('an edit inside a folder moved twice restores for real', async () => {
+    const a = join(tmpDir, 'twice-real-a');
+    const b = join(tmpDir, 'twice-real-b');
+    const c = join(tmpDir, 'twice-real-c');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
+    const first = await captureOne((fs) => fs.rename(a, b));
+    const second = await captureOne((fs) => fs.rename(b, c));
+    for (const entry of [second, first, edited]) {
+      assert.deepStrictEqual((await restoreEntry(entry, newFs(), { dryRun: false })).remaining, []);
+    }
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(join(a, 'f.txt'), 'utf8'), 'v1');
+  });
+
+  it('dry run: a folder move inside a folder that was later moved previews as restored', async () => {
+    const p = join(tmpDir, 'nested-p');
+    const s = join(tmpDir, 'nested-s');
+    await mkdir(join(p, 'q'), { recursive: true });
+    await writeFile(join(p, 'q', 'f.txt'), 'v1');
+    const inner = await captureOne((fs) => fs.rename(join(p, 'q'), join(p, 'r')));
+    const outer = await captureOne((fs) => fs.rename(p, s));
+    const results = await dryRunAll([outer, inner]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run: a moved folder that a later delete removed previews as restored', async () => {
+    const k = join(tmpDir, 'recreated-k');
+    const m = join(tmpDir, 'recreated-m');
+    await mkdir(k, { recursive: true });
+    await writeFile(join(k, 'f.txt'), 'v1');
+    const moved = await captureOne((fs) => fs.rename(k, m));
+    const deleted = await captureOne((fs) => fs.rm(m, { recursive: true, force: true }));
+    const results = await dryRunAll([deleted, moved]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run does not use a replacement tree as backing for a recreated directory', async () => {
+    const policyCtx = await withEnv({ FS_DENYLIST: '**/X/blocked.txt' }, () =>
+      createTestServer([tmpDir]),
+    );
+    try {
+      const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
+        const cap = new UndoCapture(32 * 1024 * 1024);
+        await run(new GuardedFileSystem(policyCtx.pathGuard, cap));
+        assert.strictEqual(cap.unavailable, undefined);
+        return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
+      };
+      const x = join(tmpDir, 'X');
+      const p = join(tmpDir, 'P');
+      const q = join(tmpDir, 'Q');
+      assert.strictEqual(policyCtx.pathGuard.isSensitive(join(x, 'blocked.txt')), true);
+      assert.strictEqual(policyCtx.pathGuard.isSensitive(join(p, 'blocked.txt')), false);
+      await mkdir(x, { recursive: true });
+      await writeFile(join(x, 'f.txt'), 'saved');
+      const movedX = await capture((fs) => fs.rename(x, p));
+      const deletedP = await capture((fs) => fs.rm(p, { recursive: true, force: true }));
+      await mkdir(q, { recursive: true });
+      await writeFile(join(q, 'blocked.txt'), 'not part of X');
+      const movedQ = await capture((fs) => fs.rename(q, p));
+
+      const simulated = new Map<string, string | null>();
+      const relocations: [string, string][] = [];
+      const directoryBackings = new Map<string, string | null>();
+      const results = [];
+      for (const entry of [movedQ, deletedP, movedX]) {
+        results.push(
+          ...(
+            await restoreEntry(entry, new GuardedFileSystem(policyCtx.pathGuard), {
+              dryRun: true,
+              simulated,
+              relocations,
+              directoryBackings,
+            })
+          ).results,
+        );
+      }
+      assert.deepStrictEqual(
+        results.filter((result) => 'error' in result),
+        [],
+      );
+    } finally {
+      policyCtx.disposeRuntimeState();
+      await policyCtx.mcp.close();
+    }
   });
 
   it('an aborted restore returns every unprocessed record and touches nothing', async () => {
@@ -800,6 +986,42 @@ describe('restoreEntry', () => {
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual(await fsPromises.readdir(elsewhere), []);
     assert.strictEqual(outcome.remaining.length, entry.records.length);
+  });
+
+  it('a blocked folder does not block a sibling that shares its prefix', async () => {
+    const pfx = join(tmpDir, 'pfx');
+    const pfx2 = join(tmpDir, 'pfx2');
+    for (const dir of [pfx, pfx2]) {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'f.txt'), 'saved');
+    }
+    // pfx2 first, so the reverse pass blocks pfx before it reaches pfx2.
+    const entry = await captureOne(async (fs) => {
+      await fs.rm(pfx2, { recursive: true, force: true });
+      await fs.rm(pfx, { recursive: true, force: true });
+    });
+    await writeFile(pfx, 'a file where the folder was');
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(join(pfx2, 'f.txt'), 'utf8'), 'saved');
+  });
+
+  it('win32 only: a deleted directory junction comes back as a junction to the same folder', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('junctions are win32 only');
+      return;
+    }
+    const fsPromises = await import('node:fs/promises');
+    const target = join(tmpDir, 'junction-target');
+    const link = join(tmpDir, 'junction-link');
+    await mkdir(target, { recursive: true });
+    await fsPromises.symlink(target, link, 'junction');
+    const before = await fsPromises.readlink(link);
+    const entry = await captureOne((fs) => fs.rm(link));
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.deepStrictEqual(outcome.remaining, []);
+    assert.strictEqual(await fsPromises.readlink(link), before);
+    assert.ok((await fsPromises.stat(link)).isDirectory());
   });
 
   it('live captures share one byte budget', () => {
@@ -856,6 +1078,29 @@ describe('undo id on results', () => {
       assert.match(text, / · undo [a-z0-9]{4}$/u);
       const meta = result._meta as { undo?: string };
       assert.match(text.slice(text.length - 4), new RegExp(`^${meta.undo ?? ''}$`, 'u'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('nine edits at once each carry an undo id', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const files = Array.from({ length: 9 }, (_, i) => join(tmp, `burst-${String(i)}.txt`));
+      await Promise.all(files.map((f) => writeFile(f, 'before')));
+      const results = await Promise.all(
+        files.map((path) =>
+          pair.client.callTool({
+            name: 'edit',
+            arguments: { path, edits: [{ oldText: 'before', newText: 'after' }] },
+          }),
+        ),
+      );
+      for (const result of results) {
+        assert.match((result._meta as { undo?: string }).undo ?? '', /^[a-z0-9]{4}$/u);
+      }
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
