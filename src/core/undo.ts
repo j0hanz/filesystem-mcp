@@ -133,15 +133,9 @@ export class UndoJournal {
   /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
   readonly #pool: LivePool = { bytes: 0 };
 
-  /** Start a capture for a mutating call; pair it with `endCapture` when the call finishes. */
+  /** Start a capture for a mutating call; `release()` it when the call finishes. */
   beginCapture(): UndoCapture {
     return new UndoCapture(this.maxBytes, this.#pool);
-  }
-
-  endCapture(capture: UndoCapture | undefined): void {
-    // Its records now live in the journal (or were dropped); either way the
-    // live pool no longer owes them.
-    capture?.release();
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -229,21 +223,21 @@ export class UndoCapture {
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
   readonly maxBytes: number;
-  readonly #pool: LivePool | undefined;
+  readonly #pool: LivePool;
 
-  constructor(maxBytes: number, pool?: LivePool) {
+  constructor(maxBytes: number, pool: LivePool) {
     this.maxBytes = maxBytes;
     this.#pool = pool;
   }
 
-  /** Bytes charged against the budget: the shared live total when pooled. */
+  /** Bytes charged against the budget: the shared live total of every capture. */
   #used(): number {
-    return this.#pool?.bytes ?? this.#bytes;
+    return this.#pool.bytes;
   }
 
   #charge(n: number): void {
     this.#bytes += n;
-    if (this.#pool) this.#pool.bytes += n;
+    this.#pool.bytes += n;
   }
 
   /** True once abandoned; a method so callers re-read it after an await. */
@@ -253,7 +247,7 @@ export class UndoCapture {
 
   /** Return this capture's charge to the shared pool; call when the call ends. */
   release(): void {
-    if (this.#pool) this.#pool.bytes -= this.#bytes;
+    this.#pool.bytes -= this.#bytes;
     this.#bytes = 0;
     this.#reserved = 0;
   }
@@ -281,8 +275,8 @@ export class UndoCapture {
     this.unavailable = reason;
     this.records.length = 0;
     // Dropped records free their bytes now. Reservations stay charged until
-    // endCapture: a read reserved before the abandon may still be in flight.
-    if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
+    // release(): a read reserved before the abandon may still be in flight.
+    this.#pool.bytes -= this.#bytes - this.#reserved;
     this.#bytes = this.#reserved;
   }
 
@@ -499,24 +493,18 @@ export async function restoreEntry(
   const { dryRun, signal } = opts;
   const relocations = opts.relocations ?? [];
   const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
-  const hasPathBoundary = (directory: string, candidate: string): boolean =>
-    candidate.length === directory.length ||
-    directory.endsWith('/') ||
-    (IS_WINDOWS && directory.endsWith('\\')) ||
-    candidate[directory.length] === '/' ||
-    (IS_WINDOWS && candidate[directory.length] === '\\');
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (out.startsWith(from) && hasPathBoundary(from, out)) {
-        out = to + out.slice(from.length);
-      } else if (
-        isPathInsideDirectory(from, out) &&
-        from.toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase() === from.toLowerCase() &&
-        hasPathBoundary(from, out)
-      ) {
+      const prefix = out.slice(0, from.length);
+      const foldedFrom = from.toLowerCase();
+      const foldedPrefix = prefix.toLowerCase();
+      const samePrefix =
+        out.startsWith(from) ||
+        (foldedFrom.length === from.length &&
+          foldedPrefix.length === prefix.length &&
+          foldedPrefix === foldedFrom);
+      if (samePrefix && isPathInsideDirectory(from, out)) {
         out = to + out.slice(from.length);
       }
     }
@@ -619,6 +607,8 @@ export async function restoreEntry(
               }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
+            } else if (await matchesHash(record.path, sha256Hex(record.bytes))) {
+              done(record.path); // already holds what undo would write
             } else {
               skip(record, order, record.path);
             }

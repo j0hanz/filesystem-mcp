@@ -315,15 +315,15 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     };
   }
 
+  /** The undo id for this call, minted once; a re-run of #undoSuffix reuses it. */
+  #undoId: string | undefined;
+
   /**
    * The undo suffix for a captured call, minted once: ` · undo <id>` when the
    * capture holds records, ` · not undoable: <reason>` when it was abandoned,
    * `''` for a capture that recorded nothing (dry run, early failure) or a
    * read-only call. Sets `undo`/`undoUnavailable` on `structured` when given.
    */
-  /** The undo id for this call, minted once; a re-run of #undoSuffix reuses it. */
-  #undoId: string | undefined;
-
   #undoSuffix(structured?: Record<string, unknown>): string {
     const capture = this.capture;
     if (capture === undefined) return '';
@@ -511,7 +511,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     } catch (error) {
       return this.failProgress(error, this.#undoSuffix());
     } finally {
-      this.toolCtx.undoJournal.endCapture(this.capture);
+      this.capture?.release();
       await this.#progressSession.flush();
     }
   }
