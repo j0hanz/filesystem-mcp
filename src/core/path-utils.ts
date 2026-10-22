@@ -227,11 +227,10 @@ export function mayHaveEquivalentSpelling(name: string): boolean {
 
 /** `name` with each non-ASCII code unit as a `\uXXXX` escape, which a JSON string argument accepts. */
 export function escapeNonAscii(name: string): string {
-  return name.replace(/[^\x20-\x7e]/gu, (char) =>
-    Array.from(
-      { length: char.length },
-      (_, index) => `\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`,
-    ).join(''),
+  // No `u` flag: each UTF-16 code unit, a surrogate included, gets its own escape.
+  return name.replace(
+    /[^\x20-\x7e]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`,
   );
 }
 

@@ -386,50 +386,29 @@ class GitignoreManager {
   }
 
   private checkPath(posixPath: string, isDirectory: boolean): boolean {
-    const parts = posixPath.split('/');
-    const pathToCheck = isDirectory
-      ? posixPath.endsWith('/')
-        ? posixPath
-        : `${posixPath}/`
-      : posixPath;
-
+    // Later rule sets override earlier ones, as nested .gitignore files do.
     let ignored = false;
-
-    for (const { prefix, matcher } of this.ancestors) {
-      const res = matcher.test(`${prefix}/${pathToCheck}`);
+    const apply = (matcher: Ignore, path: string): void => {
+      const res = matcher.test(isDirectory && !path.endsWith('/') ? `${path}/` : path);
       if (res.ignored) ignored = true;
       if (res.unignored) ignored = false;
-    }
+    };
+
+    for (const { prefix, matcher } of this.ancestors) apply(matcher, `${prefix}/${posixPath}`);
 
     // Check root level
     const rootMatcher = this.matchers.get('');
-    if (rootMatcher) {
-      const res = rootMatcher.test(pathToCheck);
-      if (res.ignored) ignored = true;
-      if (res.unignored) ignored = false;
-    }
+    if (rootMatcher) apply(rootMatcher, posixPath);
 
     // Check subdirectories
+    const parts = posixPath.split('/');
     let currentDir = '';
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
       if (!part) continue;
       currentDir = currentDir ? `${currentDir}/${part}` : part;
-
       const matcher = this.matchers.get(currentDir);
-      if (matcher) {
-        const relParts = parts.slice(i + 1);
-        const relPath = relParts.join('/');
-        const relPathToCheck = isDirectory
-          ? relPath.endsWith('/')
-            ? relPath
-            : `${relPath}/`
-          : relPath;
-
-        const res = matcher.test(relPathToCheck);
-        if (res.ignored) ignored = true;
-        if (res.unignored) ignored = false;
-      }
+      if (matcher) apply(matcher, parts.slice(i + 1).join('/'));
     }
 
     return ignored;
@@ -472,13 +451,6 @@ export interface GlobEntriesOptions {
   signal?: AbortSignal;
 }
 
-interface NormalizedGlob {
-  cwd: string;
-  patterns: readonly string[];
-  suppressErrors: boolean;
-  maxDepth?: number;
-}
-
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
 const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
@@ -494,10 +466,6 @@ function splitPatternPrefix(normalizedPattern: string): {
   prefix: string;
   remainder: string;
 } {
-  if (!GLOB_MAGIC_RE.test(normalizedPattern)) {
-    return { prefix: '', remainder: normalizedPattern };
-  }
-
   const segments = normalizedPattern.split(SEP);
   const splitIndex = segments.findIndex((seg) => GLOB_MAGIC_RE.test(seg));
 
@@ -578,27 +546,6 @@ function buildHiddenPatterns(normalizedPattern: string): readonly string[] {
   expandHiddenGlobstars(patterns, prefix, remainder);
 
   return Array.from(patterns);
-}
-
-function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
-  const cwd = resolve(options.cwd);
-  const normalizedPattern = normalizePattern(options.pattern, options.baseNameMatch ?? false);
-
-  const patterns = options.includeHidden
-    ? buildHiddenPatterns(normalizedPattern)
-    : [normalizedPattern];
-
-  const normalized: NormalizedGlob = {
-    cwd,
-    patterns,
-    suppressErrors: options.suppressErrors ?? false,
-  };
-
-  if (options.maxDepth !== undefined) {
-    normalized.maxDepth = options.maxDepth;
-  }
-
-  return normalized;
 }
 
 function* processDirentMatch(
@@ -710,15 +657,34 @@ function createWalkFilter(
   };
 }
 
-async function* processGlobPatterns(
-  patterns: readonly string[],
-  plan: NormalizedGlob,
-  seen: Set<string>,
-  onlyFiles: boolean,
-  filter: WalkFilter,
-  signal: AbortSignal | undefined,
-): AsyncGenerator<GlobEntry> {
-  const { cwd, maxDepth, suppressErrors } = plan;
+export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
+  const { maxDepth, signal, suppressErrors } = options;
+  const gitignoreMatcher = options.skipIgnored
+    ? await GitignoreManager.load(
+        options.cwd,
+        options.includeHidden ?? false,
+        signal,
+        maxDepth,
+        options.ignoreCeiling,
+      )
+    : null;
+
+  const cwd = resolve(options.cwd);
+  const pattern = normalizePattern(options.pattern, options.baseNameMatch ?? false);
+  // One walk for every variant: fs.glob reads each directory once and matches
+  // all of them, where a walk per variant re-read the tree for each.
+  const patterns = options.includeHidden ? buildHiddenPatterns(pattern) : [pattern];
+  const seen = new Set<string>();
+  const onlyFiles = options.onlyFiles ?? true;
+  const filter = createWalkFilter(
+    cwd,
+    options.skipIgnored ?? false,
+    gitignoreMatcher,
+    maxDepth,
+    signal,
+    options.pathGuard,
+  );
+
   let iterable: AsyncIterable<GlobDirentLike>;
   try {
     iterable = fsGlob([...patterns], {
@@ -749,34 +715,6 @@ async function* processGlobPatterns(
   // A pruned walk ends like a finished one. Say it was cut short, so no caller
   // reads "the walk ended" as "the whole tree was seen".
   signal?.throwIfAborted();
-}
-
-export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
-  const gitignoreMatcher = options.skipIgnored
-    ? await GitignoreManager.load(
-        options.cwd,
-        options.includeHidden ?? false,
-        options.signal,
-        options.maxDepth,
-        options.ignoreCeiling,
-      )
-    : null;
-
-  const plan = normalizeGlobOptions(options);
-  const seen = new Set<string>();
-  const onlyFiles = options.onlyFiles ?? true;
-  const filter = createWalkFilter(
-    plan.cwd,
-    options.skipIgnored ?? false,
-    gitignoreMatcher,
-    plan.maxDepth,
-    options.signal,
-    options.pathGuard,
-  );
-
-  // One walk for every variant: fs.glob reads each directory once and matches
-  // all of them, where a walk per variant re-read the tree for each.
-  yield* processGlobPatterns(plan.patterns, plan, seen, onlyFiles, filter, options.signal);
 }
 
 /** Names a `skipIgnored` walk never enters or yields, at any depth. */

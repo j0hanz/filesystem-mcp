@@ -12,6 +12,7 @@ import {
   isMissing,
   isNodeError,
   isNotFoundErrno,
+  type PerPathResult,
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
@@ -27,7 +28,7 @@ import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { sameIdentity } from '../core/undo.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
+import { type BatchResult, isTotalFailure, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -55,22 +56,13 @@ interface DeleteFailure {
   error: Problem;
 }
 
-const ERR_NOT_EMPTY = new Error('Directory not empty. Set recursive: true.');
-
 function toDeleteFailure(path: string, error: unknown): DeleteFailure {
   // A missing path reached here as the raw errno text ("ENOENT: no such file or
   // directory, lstat 'c:\...'"), while `stat` reported the same condition as
   // "Path not found". One condition, one message — and the syscall name stays
   // off the wire.
   if (isNotFoundErrno(error)) {
-    return {
-      path,
-      error: Problem.fromUnknown(
-        new FsError(ErrorCode.NOT_FOUND, 'Path not found', path),
-        ErrorCode.NOT_FOUND,
-        path,
-      ),
-    };
+    return { path, error: new FsError(ErrorCode.NOT_FOUND, 'Path not found', path).problem };
   }
   if (
     isNodeError(error) &&
@@ -78,7 +70,7 @@ function toDeleteFailure(path: string, error: unknown): DeleteFailure {
   ) {
     return {
       path,
-      error: Problem.fromUnknown(ERR_NOT_EMPTY, ErrorCode.INVALID_INPUT, path),
+      error: Problem.invalidInput('Directory not empty. Set recursive: true.', { path }),
     };
   }
   return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path) };
@@ -303,12 +295,7 @@ async function handleDelete(
       plans.push({ plan: r.plan, index });
     }
   }
-  for (const { index, error } of planned.errors) {
-    out[index] = {
-      path: paths[index] ?? '(unknown)',
-      error: { code: ErrorCode.UNKNOWN, message: error.message },
-    };
-  }
+  // planPath returns its failures; a slot it never filled falls to the fallback below.
 
   // One entry inside another would race the other's recursive delete, and
   // accepting the parent would remove a child whose own prompt was skipped.

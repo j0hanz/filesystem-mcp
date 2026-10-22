@@ -517,7 +517,6 @@ async function assertTreeHasNoProtectedEntries(
   fs: ToolCtx['fs'],
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  let protectedCount = 0;
   const entries = globEntries({
     cwd: realSource,
     pattern: '**/*',
@@ -536,24 +535,22 @@ async function assertTreeHasNoProtectedEntries(
         fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedSourcePath);
       const protectedAfter = fs.pathGuard.isSensitive(destinationPath);
       if (protectedBefore !== protectedAfter) {
-        protectedCount++;
-        break;
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
+          requestedSource,
+        );
       }
     }
   } catch (error) {
     rethrowIfAborted(error);
+    // The walk itself throws only raw fs errors; an FsError is the refusal above.
+    if (isFsError(error)) throw error;
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
       `${VERB[op]} refused: the directory could not be fully inspected for protected entries`,
       requestedSource,
       error,
-    );
-  }
-  if (protectedCount > 0) {
-    throw new FsError(
-      ErrorCode.ACCESS_DENIED,
-      `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
-      requestedSource,
     );
   }
 }

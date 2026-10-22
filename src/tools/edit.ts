@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
-import { ErrorCode, FsError } from '../core/errors.ts';
+import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
@@ -17,7 +17,7 @@ import {
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import { escapeRegExp } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, type PerPathResult, runOverPaths } from './batch.ts';
+import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z.strictObject({

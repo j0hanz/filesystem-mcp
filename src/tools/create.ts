@@ -19,15 +19,10 @@ import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
-// runOverPaths rejects an empty list, and a call may carry only one of the two lists.
-const NO_ENTRIES: BatchResult<never> = {
-  results: [],
-  summary: { total: 0, succeeded: 0, failed: 0 },
-};
 
 const CreateFileItemSchema = z.strictObject({
   path: RequiredPath.describe('Absolute path where the file will be created'),
@@ -199,54 +194,48 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
 
     // Directories wait for the overwrite question above, so nothing is written
     // before the user answers.
-    const dirBatch =
-      dirs.length > 0
-        ? await runOverPaths(dirs, progressFrom(0), ErrorCode.UNKNOWN, async (dir) => {
-            await ctx.fs.mkdir(dir, { recursive: true });
-            return dir;
-          })
-        : NO_ENTRIES;
+    const dirBatch = await runOverPaths(dirs, progressFrom(0), ErrorCode.UNKNOWN, async (dir) => {
+      await ctx.fs.mkdir(dir, { recursive: true });
+      return dir;
+    });
 
     const filesCtx = progressFrom(dirs.length);
-    const batch =
-      files.length > 0
-        ? await runOverPaths<
-            z.infer<typeof CreateFileItemSchema>,
-            { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-          >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
-            const pendingPath = pendingByPath.get(path);
-            if (pendingPath !== undefined) {
-              const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');
-              if (verdict === 'skipped') return { skipped: path };
-              if (verdict !== 'accepted') {
-                throw new FsError(
-                  ErrorCode.CANCELLED,
-                  `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
-                  path,
-                );
-              }
-            }
+    const batch = await runOverPaths<
+      z.infer<typeof CreateFileItemSchema>,
+      { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
+    >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
+      const pendingPath = pendingByPath.get(path);
+      if (pendingPath !== undefined) {
+        const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');
+        if (verdict === 'skipped') return { skipped: path };
+        if (verdict !== 'accepted') {
+          throw new FsError(
+            ErrorCode.CANCELLED,
+            `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
+            path,
+          );
+        }
+      }
 
-            // Lock per resolved file so two entries naming one file (e.g. through a
-            // symlinked parent) cannot clobber each other.
-            return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
-              // The file may have appeared since the overwrite set was planned.
-              if (
-                !append &&
-                !overwrite &&
-                pendingPath === undefined &&
-                (await destExists(ctx.fs, resolvedTarget, 'create'))
-              ) {
-                throw new FsError(
-                  ErrorCode.INVALID_INPUT,
-                  `create refused: "${path}" appeared after overwrite confirmation was checked`,
-                  path,
-                );
-              }
-              return createOne(path, content, append, ctx);
-            });
-          })
-        : NO_ENTRIES;
+      // Lock per resolved file so two entries naming one file (e.g. through a
+      // symlinked parent) cannot clobber each other.
+      return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+        // The file may have appeared since the overwrite set was planned.
+        if (
+          !append &&
+          !overwrite &&
+          pendingPath === undefined &&
+          (await destExists(ctx.fs, resolvedTarget, 'create'))
+        ) {
+          throw new FsError(
+            ErrorCode.INVALID_INPUT,
+            `create refused: "${path}" appeared after overwrite confirmation was checked`,
+            path,
+          );
+        }
+        return createOne(path, content, append, ctx);
+      });
+    });
 
     const results: CreateFileResult[] = [];
     const directories: string[] = [];

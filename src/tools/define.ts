@@ -223,7 +223,6 @@ function buildSuccessResponse<O extends object>(result: RunResult<O>): CallToolR
 }
 
 class ToolExecutor<I extends z.ZodType, O extends object> {
-  readonly signal: AbortSignal;
   private readonly def: ToolDef<I, O>;
   /** Rewritten once, by `resolveRelativePaths`, before anything reads a path. */
   private parsedArgs: z.infer<I>;
@@ -243,7 +242,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     this.def = def;
     this.parsedArgs = parsedArgs;
     this.capture = capture;
-    this.signal = def.deadline
+    const signal = def.deadline
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(getToolTimeoutMs())])
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
@@ -257,7 +256,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     const traceparent = mcpReq._meta?.[TRACEPARENT_META_KEY];
     this.toolCtx = {
       ...ctx,
-      signal: this.signal,
+      signal,
       // Per-call views, so a response refused after `run` can take back the
       // cached result and page snapshot behind a link or cursor it never sent.
       pageStore: ctx.pageStore.forCall(),

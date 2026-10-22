@@ -204,6 +204,13 @@ export function isNotFoundErrno(error: unknown): error is NodeJS.ErrnoException 
 export const isMissing = (error: unknown): boolean =>
   isNotFoundErrno(error) || (isFsError(error) && error.code === ErrorCode.NOT_FOUND);
 
+/** `promise`'s value, or `undefined` when it rejects as absent (`isMissing`); any other rejection propagates. */
+export const unlessMissing = <T>(promise: Promise<T>): Promise<T | undefined> =>
+  promise.catch((error: unknown) => {
+    if (!isMissing(error)) throw error;
+    return undefined;
+  });
+
 /** True when `error` is a Node errno error whose code is in `SKIPPABLE_ERRNOS`. */
 export function isSkippableErrno(error: unknown): error is NodeJS.ErrnoException {
   return isNodeError(error) && error.code !== undefined && SKIPPABLE_ERRNOS.has(error.code);
