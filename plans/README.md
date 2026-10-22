@@ -1072,3 +1072,9 @@ and `dist/*.mjs`. Not covered: `@modelcontextprotocol/client` beyond its
 testing helpers, `codemod` and `server-legacy` beyond confirming they do not
 apply (the codebase is already on the v2 split packages), and POSIX runtime
 behaviour.
+
+| 076 | Bind guarded stat to open fd | P1 | S | — | DONE (worktree branch `advisor/076-bind-guarded-stat-to-fd`, commit `f4194c7f`, reviewed 2026-10-16; unmerged — user rules merge) |
+| 077 | Inline single-use hop helpers | P2 | S | — | TODO — commit dda3542b |
+| 078 | Dedupe PathGuard test recompute pairs | P2 | S | — | TODO — commit dda3542b |
+| 079 | Single unicode fold primitive for search | P3 | S | — | TODO — commit dda3542b |
+| 080 | Enforce coverage floor on all runners | P3 | S | — | TODO — commit dda3542b |
