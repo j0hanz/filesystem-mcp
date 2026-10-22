@@ -25,6 +25,7 @@ import { Logger } from '../core/observability.ts';
 import { PathGuard } from '../core/path.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { UndoJournal } from '../core/undo.ts';
 import { getMaxInboundMessageBytes, parseEnvInt, parseTrueEnvFlag } from '../core/util.ts';
 import { createWatcherRegistry, type WatcherRegistry } from '../core/watcher-registry.ts';
 import { createServer } from '../server.ts';
@@ -280,6 +281,7 @@ export async function startHttpServer(
     modernHandler.notify.resourcesChanged();
   });
   const sharedPageStore = new PageSnapshotStore();
+  const sharedUndoJournal = new UndoJournal();
   // One guard for the whole endpoint. The modern leg builds a fresh McpServer
   // per request, so a per-instance guard would discard every accepted access
   // grant the moment the request ended — re-prompting on each subsequent call
@@ -301,6 +303,7 @@ export async function startHttpServer(
         pathGuard: sharedPathGuard,
         resourceStore: sharedStore,
         pageStore: sharedPageStore,
+        undoJournal: sharedUndoJournal,
         era,
         transport: 'http',
         cacheScope: apiKey ? 'private' : 'public',
@@ -357,6 +360,7 @@ export async function startHttpServer(
   const teardown = (): Promise<void> => {
     sharedRegistry.destroy();
     sharedPageStore.clear();
+    sharedUndoJournal.clear();
     sharedStore.clear();
     return modernHandler.close().catch((err: unknown) => {
       Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));

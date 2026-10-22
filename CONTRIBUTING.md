@@ -89,7 +89,7 @@ node --test --test-timeout=60000 __tests__/sandbox.test.ts
 The lab uses synthetic files in disposable temporary directories, an explicit
 `FS_ROOT_BOUNDARY`, a real stdio subprocess, and authenticated HTTP on a loopback
 ephemeral port. The test cleans up clients, servers, and fixtures after each scenario.
-It checks all 13 tools through a file lifecycle, compares previews and responses
+It checks all 14 tools through a file lifecycle, compares previews and responses
 with actual disk bytes, and exercises bounded concurrency and pagination.
 You do not need to share personal files or existing project directories with the server.
 

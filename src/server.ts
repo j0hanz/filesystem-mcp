@@ -11,6 +11,7 @@ import { Logger, voidSend } from './core/observability.ts';
 import type { ServerOptions } from './core/path.ts';
 import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
+import { UndoJournal } from './core/undo.ts';
 import { MAX_OUTBOUND_RESULT_BYTES, MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
 import type { WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
@@ -61,6 +62,11 @@ export async function createServer(
      * stdio, where the connection-owned context clears its store on close.
      */
     pageStore?: PageSnapshotStore;
+    /**
+     * Undo history shared by every modern HTTP request. Omitted on stdio,
+     * where the connection-owned context clears its journal on close.
+     */
+    undoJournal?: UndoJournal;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
     /**
@@ -173,6 +179,7 @@ export async function createServer(
       extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},
     );
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
+  const undoJournal = extraDeps?.undoJournal ?? new UndoJournal();
 
   const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);
   // Recompute once per guard, keyed on the guard's own state rather than on
@@ -187,6 +194,7 @@ export async function createServer(
     server,
     pathGuard,
     pageStore,
+    undoJournal,
     resourceStore,
     cacheScope,
     readOnly: options.readOnly ?? false,
@@ -202,6 +210,7 @@ export async function createServer(
 
   // False when the store is shared across instances and outlives this one.
   const ownsPages = extraDeps?.pageStore === undefined;
+  const ownsUndo = extraDeps?.undoJournal === undefined;
   let cleanedUp = false;
   const context: FilesystemServerContext = {
     mcp: server,
@@ -210,6 +219,7 @@ export async function createServer(
       if (cleanedUp) return;
       cleanedUp = true;
       if (ownsPages) pageStore.clear();
+      if (ownsUndo) undoJournal.clear();
       resourceDisposable.dispose();
     },
   };

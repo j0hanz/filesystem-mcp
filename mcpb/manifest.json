@@ -46,9 +46,10 @@
     },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },
-    { "name": "delete", "description": "Permanently delete files or directories." },
+    { "name": "delete", "description": "Delete files or directories." },
     { "name": "replace_text", "description": "Search and replace across files matching a glob." },
-    { "name": "patch", "description": "Apply a unified diff to one file." }
+    { "name": "patch", "description": "Apply a unified diff to one file." },
+    { "name": "undo", "description": "Revert earlier file changes by undo id or the last N calls." }
   ],
   "user_config": {
     "allowed_directories": {

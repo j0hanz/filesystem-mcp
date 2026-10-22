@@ -109,8 +109,8 @@ filesystem-mcp ~/code/app --deny 'private/**' --deny '*.sqlite' --allow '.env.ex
 
 ## Read-only mode
 
-`--read-only` removes the six tools that change files (`create`, `edit`,
-`move`, `delete`, `patch`, `replace_text`). The AI can still list, search,
+`--read-only` removes the seven tools that change files (`create`, `edit`,
+`move`, `delete`, `patch`, `replace_text`, `undo`). The AI can still list, search,
 read, compare, and inspect. Use it for code review, research, or any folder
 you do not want changed.
 
@@ -177,6 +177,7 @@ These variables control limits and logging:
 | `FS_MAX_FILE_SIZE`   | Same as `--max-file-size`.                                            |
 | `FS_TOOL_TIMEOUT_MS` | Same as `--tool-timeout`.                                             |
 | `FS_MAX_WATCHERS`    | Most files watched for changes at once. Default 256, range 1 to 4096. |
+| `FS_MAX_UNDO_BYTES`  | Memory kept for undo. Default 32 MiB, 0 turns undo off.               |
 | `FS_LOG_LEVEL`       | Same as `--log-level`. Logs go to stderr.                             |
 | `NO_COLOR`           | Any value turns off colored output.                                   |
 

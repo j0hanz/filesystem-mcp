@@ -134,6 +134,10 @@ const ENV_HELP: HelpRow[] = [
     flags: 'FS_MAX_WATCHERS',
     desc: 'Max concurrent file watchers (default 256, 1–4096)',
   },
+  {
+    flags: 'FS_MAX_UNDO_BYTES',
+    desc: 'Bytes of file content kept for undo (default 32 MiB, 0 disables)',
+  },
   { flags: 'NO_COLOR', desc: 'Any value disables ANSI color output' },
   {
     flags: 'FS_REQUEST_STATE_KEY',

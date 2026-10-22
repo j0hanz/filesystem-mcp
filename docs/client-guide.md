@@ -273,12 +273,13 @@ found by `resources/read`.
 | `replace_text` | yes           | yes      | a folder and a glob             |       | `_meta`             |
 | `move`         | yes           |          | `moves` (100)                   |       | `_meta`             |
 | `delete`       | yes           |          | `paths` (1000)                  |       | `_meta`             |
+| `undo`         | yes           | yes      |                                 |       | `_meta`             |
 
 - Decide what to gate from the annotations, not from tool names: every tool
   that changes files has `destructiveHint: true` and `readOnlyHint: false`; the
   others have `readOnlyHint: true`. All have `openWorldHint: false`. A tool
   that takes a preview has a `dryRun` property in its `inputSchema`.
-- `--read-only` removes the six tools that change files from `tools/list`.
+- `--read-only` removes the seven tools that change files from `tools/list`.
   Calling one anyway throws `Tool create not found`. Check the list rather
   than assuming.
 - Input schemas are JSON Schema draft 2020-12 with no top-level `oneOf`,
@@ -299,10 +300,13 @@ the same data is available as JSON, in one of two places:
 
 - Tools that write their own text keep their data in `_meta`: `list`,
   `find_files`, `search_text`, `read`, `diff`, `edit`, `patch`,
-  `replace_text`, `move`, `delete`. They have no `structuredContent`, because
+  `replace_text`, `move`, `delete`, `undo`. They have no `structuredContent`, because
   some clients show `structuredContent` to the model instead of the text.
 - Tools without their own text (`list_roots`, `stat`, `create`) put the data
   in `structuredContent`, and the text block is the same JSON.
+- Every call that changes files carries `undo` (the undo id) or
+  `undoUnavailable` (the reason) in its `_meta`, or in `structuredContent` for
+  `create`.
 
 So read `result.structuredContent ?? result._meta` (Python:
 `result.structured_content or result.meta`). On 2026-07-28 connections

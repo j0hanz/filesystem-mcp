@@ -1,6 +1,5 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -32,6 +31,7 @@ import {
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
+  sha256Hex,
 } from '../core/util.ts';
 import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
@@ -43,10 +43,6 @@ import { defineTool } from './define.ts';
  * never asks for more. Not restated as `.max()`: that reports it twice.
  */
 const MAX_LINE_NUMBER = 2_147_483_647;
-
-/** One spelling of the resource-content digest every read result that carries a hash uses. */
-const sha256Hex = (data: string | Buffer): string =>
-  createHash('sha256').update(data).digest('hex');
 
 const rangeField = (description: string, count = false) => {
   const field = z.int32().min(1, { message: 'Min: 1' });

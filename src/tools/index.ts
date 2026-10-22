@@ -12,6 +12,7 @@ import { READ } from './read.ts';
 import { REPLACE_TEXT } from './replace-text.ts';
 import { SEARCH_TEXT } from './search-text.ts';
 import { STAT } from './stat.ts';
+import { UNDO } from './undo.ts';
 
 export const ALL_TOOLS = [
   CREATE,
@@ -27,6 +28,7 @@ export const ALL_TOOLS = [
   SEARCH_TEXT,
   FIND_FILES,
   STAT,
+  UNDO,
 ] as const;
 
 export const MUTATING_TOOL_NAMES = new Set(
@@ -40,7 +42,7 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 
 // Re-exported so documentation surfaces quote `.name` off the definition rather
 // than repeating the string. This module is the only owner of the inventory.
-// Only the read-only tools are named individually: the mutating six are no
+// Only the read-only tools are named individually: the mutating tools are no
 // longer listed by hand anywhere, so their names reach callers through
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
 export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, STAT };

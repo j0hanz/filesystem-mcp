@@ -15,17 +15,18 @@ import {
   rm as fsRm,
   rmdir as fsRmdir,
   stat as fsStat,
+  symlink as fsSymlink,
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
   FsError,
-  isFsError,
+  isMissing,
   isNodeError,
   isNotFoundErrno,
 } from './errors.ts';
@@ -44,7 +45,9 @@ import {
   READ_NOFOLLOW,
   readFileWithStats,
 } from './read.ts';
-import { getMaxTextFileSize } from './util.ts';
+import { identityOf, plannedMkdirChain, snapshotTree } from './undo.ts';
+import type { UndoCapture, UndoRecord } from './undo.ts';
+import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
 export type { FileType };
 export type { Stats };
@@ -64,9 +67,11 @@ const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
+  readonly #capture: UndoCapture | undefined;
 
-  constructor(pathGuard: PathGuard) {
+  constructor(pathGuard: PathGuard, capture?: UndoCapture) {
     this.pathGuard = pathGuard;
+    this.#capture = capture;
   }
 
   /**
@@ -170,6 +175,36 @@ export class GuardedFileSystem {
     return runExclusive(key, () => fn(key));
   }
 
+  /**
+   * Serialize an operation across BOTH of its paths (a restore's check-then-
+   * rename). The two keys are taken in a fixed order and deduped, so two
+   * concurrent pairs can never deadlock, and a nested same-key call cannot
+   * happen (`runExclusive` is not re-entrant).
+   */
+  async lockPairForWrite<T>(a: string, b: string, fn: () => Promise<T>): Promise<T> {
+    // `a` is where a rename lands (resolved like the move tool's destination);
+    // `b` is the entry being moved, kept as itself so a symlink is locked as
+    // the link, not its target. A `b` whose parent is gone (a dry-run
+    // intermediate) falls back to write validation.
+    const keyA = await this.pathGuard.validatePathForWrite(a);
+    const keyB = await this.pathGuard
+      .validatePathForDelete(b)
+      .catch(() => this.pathGuard.validatePathForWrite(b));
+    if (keyA === keyB) return runExclusive(keyA, fn);
+    const [first, second] = keyA < keyB ? [keyA, keyB] : [keyB, keyA];
+    return runExclusive(first, () => runExclusive(second, fn));
+  }
+
+  /**
+   * Bytes of a regular file for undo capture, read through the same
+   * O_NOFOLLOW, descriptor-verified open as every other reader: a path swapped
+   * for a symlink after validation fails instead of pulling outside bytes in.
+   */
+  async readSaved(validPath: string): Promise<Buffer> {
+    await using handle = await this.#openVerified(validPath, validPath);
+    return await handle.readFile();
+  }
+
   async stat(
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
@@ -203,7 +238,17 @@ export class GuardedFileSystem {
 
   async mkdir(filePath: string, options?: Parameters<typeof fsMkdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForWrite(filePath);
+    // Undo capture: collect the chain of directories this call is about to
+    // create (each one currently absent), outermost first.
+    const capture = this.#capture;
+    let created: string[] = [];
+    if (capture && !capture.unavailable) {
+      created = await plannedMkdirChain(capture, validPath);
+    }
     await fsMkdir(validPath, options);
+    if (capture && !capture.unavailable) {
+      capture.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
+    }
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
@@ -219,16 +264,70 @@ export class GuardedFileSystem {
       (entry) => isSamePath(entry, validOld),
       () => false,
     );
-    if (sameEntry || validOld === validNew) {
+    const spellingOnly = sameEntry || validOld === validNew;
+    if (spellingOnly) {
       validNew = respellSpellingOnlyTarget(newPath, sameEntry ? validOld : validNew);
     }
+    // Undo capture: snapshot the destination before the rename replaces it.
+    // A spelling-only rename IS the source; there is no second entry to save.
+    const capture = this.#capture;
+    let destBytes: Buffer | undefined;
+    let destMode: number | undefined;
+    let destWas: ReturnType<typeof identityOf> | undefined;
+    if (capture && !capture.unavailable && !spellingOnly) {
+      try {
+        const dest = await fsLstat(validNew).catch((error: unknown) => {
+          if (!isMissing(error)) throw error;
+          return undefined;
+        });
+        if (dest === undefined) {
+          // absent: nothing to save, the rename record alone restores it.
+        } else if (dest.isDirectory()) {
+          capture.abandon('move replaced a directory');
+        } else if (dest.isFile()) {
+          if (capture.reserve(dest.size)) {
+            destBytes = await this.readSaved(validNew);
+            destMode = dest.mode & 0o777;
+            destWas = identityOf(dest);
+          }
+        } else {
+          capture.abandon('could not inspect the move destination');
+        }
+      } catch {
+        capture.abandon('could not read the old content');
+      }
+    }
     await fsRename(validOld, validNew);
+    // ponytail: the rename check is identity only. A moved directory whose
+    // contents changed after the move is still moved back; upgrade by hashing
+    // the tree under `to` before recording it.
+    if (this.#capture && !this.#capture.unavailable) {
+      if (destBytes !== undefined && destMode !== undefined) {
+        this.#capture.push({
+          op: 'write',
+          path: validNew,
+          bytes: destBytes,
+          mode: destMode,
+          expect: null,
+          was: destWas,
+        });
+      }
+      const identity = await fsLstat(validNew).then(
+        (s) => ({ dev: s.dev, ino: s.ino, birthtimeMs: s.birthtimeMs }),
+        () => undefined,
+      );
+      if (identity !== undefined) {
+        this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
+      } else {
+        this.#capture.abandon('could not inspect the moved entry');
+      }
+    }
   }
 
   async writeFile(
     filePath: string,
-    content: string,
-    options: { signal?: AbortSignal | undefined } = {},
+    content: string | Buffer,
+    options: { signal?: AbortSignal | undefined; mode?: number | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
     const validPath = await this.pathGuard.validatePathForWrite(filePath);
@@ -240,8 +339,23 @@ export class GuardedFileSystem {
     // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
+    let oldBytes: Buffer | undefined;
+    let oldWas: ReturnType<typeof identityOf> | undefined;
     try {
-      existingMode = (await fsStat(validPath)).mode & 0o777;
+      const existing = await fsStat(validPath);
+      existingMode = existing.mode & 0o777;
+      // Undo capture: save the bytes about to be overwritten. A write over a
+      // non-regular entry (FIFO, socket) cannot be undone — the remove record
+      // would delete the replacement and report restored while the original
+      // entry is gone — so the capture refuses instead of lying.
+      if (this.#capture && !this.#capture.unavailable) {
+        if (!existing.isFile()) {
+          this.#capture.abandon('cannot capture a write over a non-regular file');
+        } else if (this.#capture.reserve(existing.size)) {
+          oldBytes = await this.readSaved(validPath);
+          oldWas = identityOf(existing);
+        }
+      }
     } catch (error) {
       // ENOENT is the normal new-file case: the default mode is correct there.
       // Anything else (EACCES, EIO) means the mode about to be overwritten could
@@ -251,8 +365,10 @@ export class GuardedFileSystem {
         Logger.warn(
           `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
         );
+        this.#capture?.abandon('could not read the old content');
       }
     }
+    const mode = existingMode ?? options.mode;
 
     try {
       signal?.throwIfAborted();
@@ -263,10 +379,10 @@ export class GuardedFileSystem {
       await fsWriteFile(tempPath, content, {
         signal,
         flag: 'wx',
-        ...(existingMode !== undefined ? { mode: existingMode } : {}),
+        ...(mode !== undefined ? { mode } : {}),
       });
-      if (existingMode !== undefined) {
-        await fsChmod(tempPath, existingMode);
+      if (mode !== undefined) {
+        await fsChmod(tempPath, mode);
       }
       // Last cancellation point. The rename IS the commit: once it starts the
       // target may already be replaced, so it is never raced against the
@@ -283,6 +399,21 @@ export class GuardedFileSystem {
         );
       }
       throw error;
+    }
+    if (this.#capture && !this.#capture.unavailable) {
+      const contentBytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+      if (oldBytes !== undefined && existingMode !== undefined) {
+        this.#capture.push({
+          op: 'write',
+          path: validPath,
+          bytes: oldBytes,
+          mode: existingMode,
+          expect: sha256Hex(contentBytes),
+          was: oldWas,
+        });
+      } else {
+        this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(contentBytes) });
+      }
     }
     return { validPath };
   }
@@ -306,12 +437,29 @@ export class GuardedFileSystem {
     // overwrite path can't hang — it writes a temp file and renames over.
     // resolveForWrite has already resolved any symlink to its target, so the
     // lstat here doubles as the new-vs-existing probe for the cleanup below.
-    let existed = true;
+    let existing: Stats | undefined;
     try {
-      assertFileStats(validPath, await fsLstat(validPath));
+      existing = await fsLstat(validPath);
+      assertFileStats(validPath, existing);
     } catch (error) {
       if (!isNotFoundErrno(error)) throw error;
-      existed = false;
+    }
+    // Undo capture: the whole old file is saved, not its size — a multi-GB
+    // append goes over the budget and reads as not undoable.
+    // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
+    let oldBytes: Buffer | undefined;
+    let oldMode: number | undefined;
+    let oldWas: ReturnType<typeof identityOf> | undefined;
+    if (this.#capture && !this.#capture.unavailable && existing) {
+      try {
+        if (this.#capture.reserve(existing.size)) {
+          oldBytes = await this.readSaved(validPath);
+          oldMode = existing.mode & 0o777;
+          oldWas = identityOf(existing);
+        }
+      } catch {
+        this.#capture.abandon('could not read the old content');
+      }
     }
     // fs.promises.appendFile takes no signal, so a withAbort race would
     // report failure while the append still lands — a client retry then
@@ -327,7 +475,7 @@ export class GuardedFileSystem {
     signal?.throwIfAborted();
     let created = false;
     let handle: FileHandle;
-    if (existed) {
+    if (existing) {
       handle = await fsOpen(validPath, APPEND_NOFOLLOW);
     } else {
       try {
@@ -350,6 +498,9 @@ export class GuardedFileSystem {
       // write stays.
       await handle.writeFile(content, { signal });
     } catch (error) {
+      // A failure after the open can leave a prefix of the content behind,
+      // which no record covers; the call is then not undoable.
+      this.#capture?.abandon('the append failed part-way');
       if (created) {
         await fsUnlink(validPath).catch((unlinkError: unknown) => {
           Logger.warn(
@@ -360,6 +511,20 @@ export class GuardedFileSystem {
       throw error;
     } finally {
       await handle.close();
+    }
+    if (this.#capture && !this.#capture.unavailable) {
+      if (oldBytes !== undefined && oldMode !== undefined) {
+        this.#capture.push({
+          op: 'write',
+          path: validPath,
+          bytes: oldBytes,
+          mode: oldMode,
+          expect: sha256Hex(Buffer.concat([oldBytes, Buffer.from(content, 'utf8')])),
+          was: oldWas,
+        });
+      } else {
+        this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(content) });
+      }
     }
     return { validPath };
   }
@@ -408,12 +573,31 @@ export class GuardedFileSystem {
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
+    // recursive rm can fail halfway with files already gone.
+    const capture = this.#capture;
+    if (capture && !capture.unavailable) {
+      await snapshotTree(capture, this, validPath);
+    }
     await fsRm(validPath, options);
   }
 
   async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    const was = this.#capture
+      ? await fsLstat(validPath).then(identityOf, () => undefined)
+      : undefined;
     await fsRmdir(validPath, options);
+    this.#capture?.push({ op: 'mkdir', path: validPath, was });
+  }
+
+  async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {
+    const validPath = await this.pathGuard.validatePathForWrite(linkPath);
+    await fsSymlink(
+      type === 'junction' ? resolve(dirname(validPath), target) : target,
+      validPath,
+      type,
+    );
   }
 
   async cp(
@@ -425,6 +609,11 @@ export class GuardedFileSystem {
     // actually copy the link rather than a dereferenced target.
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
+    // Undoing a forced cp means telling new files apart from overwritten ones
+    // across a merged tree.
+    // ponytail: upgrade path is snapshotting destination entries here before
+    // fsCp, the way #snapshotTree does.
+    this.#capture?.abandon('copies are not undoable yet');
     await fsCp(validSource, validDest, options);
   }
 
@@ -666,8 +855,7 @@ export async function destExists(
     await fs.stat(path);
     return true;
   } catch (err) {
-    const missing = isNotFoundErrno(err) || (isFsError(err) && err.code === ErrorCode.NOT_FOUND);
-    if (!missing) {
+    if (!isMissing(err)) {
       Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
     }
     return false;
