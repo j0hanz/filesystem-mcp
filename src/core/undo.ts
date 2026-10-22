@@ -40,9 +40,15 @@ export type UndoRecord =
   /** Remove a directory this call created, only if empty. */
   | { op: 'rmdir'; path: string }
   /** Recreate a directory this call deleted, only if `path` is absent. */
-  | { op: 'mkdir'; path: string }
+  | { op: 'mkdir'; path: string; was?: FileIdentity | undefined }
   /** Recreate a symlink this call deleted, only if `path` is absent. */
-  | { op: 'symlink'; path: string; target: string; type: 'file' | 'junction' }
+  | {
+      op: 'symlink';
+      path: string;
+      target: string;
+      type: 'file' | 'junction';
+      was?: FileIdentity | undefined;
+    }
   /** Move `to` back to `from`, if `to` is still the same object and `from` is absent or is that same object. */
   | { op: 'rename'; from: string; to: string; identity: FileIdentity };
 
@@ -52,6 +58,11 @@ export const identityOf = (s: { dev: number; ino: number; birthtimeMs: number })
   ino: s.ino,
   birthtimeMs: s.birthtimeMs,
 });
+
+type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
+
+const identityKey = (i: FileIdentity): string =>
+  `${String(i.dev)}:${String(i.ino)}:${String(i.birthtimeMs)}`;
 
 const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
   a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
@@ -89,6 +100,8 @@ const weigh = (records: readonly UndoRecord[]): number =>
 export class UndoJournal {
   // Insertion order is call order; nothing ever re-inserts, so the last key is the newest call.
   readonly #byId = new Map<string, UndoEntry>();
+  /** Move records by the identity they track; rebuilt lazily after the journal changes. */
+  #renameIndex: Map<string, RenameRecord[]> | undefined;
   readonly maxBytes: number;
 
   constructor(maxBytes = getMaxUndoBytes()) {
@@ -101,7 +114,10 @@ export class UndoJournal {
 
   #pruneExpired(now: number): void {
     for (const [id, entry] of this.#byId) {
-      if (now - entry.createdAt >= TTL_MS) this.#byId.delete(id);
+      if (now - entry.createdAt >= TTL_MS) {
+        this.#byId.delete(id);
+        this.#renameIndex = undefined;
+      }
     }
   }
 
@@ -148,6 +164,7 @@ export class UndoJournal {
     const now = Date.now();
     this.#pruneExpired(now);
     const id = this.#newId();
+    this.#renameIndex = undefined;
     this.#byId.set(id, { id, tool, createdAt: now, records });
     while (
       this.#byId.size > MAX_ENTRIES ||
@@ -171,6 +188,7 @@ export class UndoJournal {
   }
 
   replaceRecords(id: string, records: UndoRecord[]): void {
+    this.#renameIndex = undefined;
     if (records.length === 0) {
       this.#byId.delete(id);
       return;
@@ -185,13 +203,29 @@ export class UndoJournal {
    * so an unrelated file that took the same name is never adopted.
    */
   reidentify(was: FileIdentity, identity: FileIdentity): void {
-    for (const entry of this.#byId.values()) {
-      for (const record of entry.records) {
-        if (record.op === 'rename' && sameIdentity(record.identity, was)) {
-          record.identity = identity;
+    if (this.#renameIndex === undefined) {
+      this.#renameIndex = new Map();
+      for (const entry of this.#byId.values()) {
+        for (const record of entry.records) {
+          if (record.op === 'rename') this.#track(record);
         }
       }
     }
+    const key = identityKey(was);
+    const hit = this.#renameIndex.get(key);
+    if (hit === undefined) return;
+    this.#renameIndex.delete(key);
+    for (const record of hit) {
+      record.identity = identity;
+      this.#track(record);
+    }
+  }
+
+  #track(record: RenameRecord): void {
+    const key = identityKey(record.identity);
+    const bucket = this.#renameIndex?.get(key);
+    if (bucket) bucket.push(record);
+    else this.#renameIndex?.set(key, [record]);
   }
 
   list(): UndoEntry[] {
@@ -200,6 +234,7 @@ export class UndoJournal {
   }
 
   clear(): void {
+    this.#renameIndex = undefined;
     this.#byId.clear();
   }
 }
@@ -369,7 +404,13 @@ export async function snapshotTree(
         capture.abandon('could not type a link whose target is gone');
         return;
       }
-      capture.push({ op: 'symlink', path: validPath, target, type: isDir ? 'junction' : 'file' });
+      capture.push({
+        op: 'symlink',
+        path: validPath,
+        target,
+        type: isDir ? 'junction' : 'file',
+        was: identityOf(stats),
+      });
       return;
     }
     if (stats.isDirectory()) {
@@ -378,7 +419,7 @@ export async function snapshotTree(
         await snapshotTree(capture, fs, join(validPath, name));
         if (capture.isAbandoned()) return;
       }
-      capture.push({ op: 'mkdir', path: validPath });
+      capture.push({ op: 'mkdir', path: validPath, was: identityOf(stats) });
       return;
     }
     // Anything else (FIFO, socket, device) has no restore record. Journaling
@@ -427,10 +468,15 @@ export interface RestoreOutcome {
 }
 
 /** sha256 of a file's current bytes, streamed so a huge file still hashes. */
-async function hashFile(fs: GuardedFileSystem, path: string): Promise<string> {
+async function hashFile(
+  fs: GuardedFileSystem,
+  path: string,
+  signal?: AbortSignal,
+): Promise<string> {
   await using handle = await fs.open(path);
   const hash = createHash('sha256');
   for await (const chunk of handle.createReadStream({ autoClose: false })) {
+    signal?.throwIfAborted();
     hash.update(chunk as Buffer);
   }
   return hash.digest('hex');
@@ -453,9 +499,25 @@ export async function restoreEntry(
      * older one, so those moves still find their file.
      */
     onRewrite?: ((was: FileIdentity, identity: FileIdentity) => void) | undefined;
+    /** Stops the run between records; the unprocessed ones come back in `remaining`. */
+    signal?: AbortSignal | undefined;
+    /**
+     * Dry run only, shared across entries like `simulated`: directories the
+     * simulation moved back, so a later probe of a path inside one reads the
+     * folder where it still sits on disk.
+     */
+    relocations?: [string, string][] | undefined;
   },
 ): Promise<RestoreOutcome> {
-  const { dryRun } = opts;
+  const { dryRun, signal } = opts;
+  const relocations = opts.relocations ?? [];
+  const disk = (path: string): string => {
+    let out = path;
+    for (const [from, to] of relocations.toReversed()) {
+      if (out === from || out.startsWith(from + sep)) out = to + out.slice(from.length);
+    }
+    return out;
+  };
   // Shared across entries by the caller when the whole run is simulated.
   // Values are null (absent), a 64-char sha256 hex (regular file), or 'dir'/'link'/'moved'.
   const simulated = opts.simulated ?? new Map<string, string | null>();
@@ -483,7 +545,7 @@ export async function restoreEntry(
     const known = simulated.get(path);
     if (known !== undefined) return known === null;
     try {
-      await fs.lstat(path);
+      await fs.lstat(disk(path));
       return false;
     } catch (error) {
       if (!isMissing(error)) throw error;
@@ -493,12 +555,14 @@ export async function restoreEntry(
   const matchesHash = async (path: string, expect: string): Promise<boolean> => {
     const known = simulated.get(path);
     if (known !== undefined) return known === expect;
-    const existing = await fs.lstat(path).catch((error: unknown) => {
+    const existing = await fs.lstat(disk(path)).catch((error: unknown) => {
       if (!isMissing(error)) throw error;
       return undefined;
     });
     return (
-      existing !== undefined && existing.stats.isFile() && (await hashFile(fs, path)) === expect
+      existing !== undefined &&
+      existing.stats.isFile() &&
+      (await hashFile(fs, disk(path), signal)) === expect
     );
   };
   const simulate = (path: string, state: string | null): void => {
@@ -520,6 +584,10 @@ export async function restoreEntry(
 
   for (const { record, order } of [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs]) {
     const anchor = record.op === 'rename' ? record.from : record.path;
+    if (signal?.aborted) {
+      remaining.push({ record, order });
+      continue;
+    }
     if (isBlocked(anchor)) {
       skip(record, order, anchor);
       continue;
@@ -580,13 +648,18 @@ export async function restoreEntry(
             // ponytail: a recreated directory gets the default mode; GuardedFileSystem
             // has no chmod and mkdir's mode is masked by the umask. Files get their
             // exact mode back; directories do not. Upgrade: add a chmod record.
-            if (!dryRun) await fs.mkdir(record.path);
+            if (!dryRun) {
+              await fs.mkdir(record.path);
+              if (record.was) {
+                opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
+              }
+            }
             simulate(record.path, 'dir');
             done(record.path);
           } else if (
             known !== undefined
               ? known === 'dir'
-              : (await fs.lstat(record.path)).stats.isDirectory()
+              : (await fs.lstat(disk(record.path))).stats.isDirectory()
           ) {
             done(record.path);
           } else {
@@ -597,7 +670,12 @@ export async function restoreEntry(
         }
         case 'symlink': {
           if (await absent(record.path)) {
-            if (!dryRun) await fs.symlink(record.target, record.path, record.type);
+            if (!dryRun) {
+              await fs.symlink(record.target, record.path, record.type);
+              if (record.was) {
+                opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
+              }
+            }
             simulate(record.path, 'link');
             done(record.path);
           } else {
@@ -625,7 +703,7 @@ export async function restoreEntry(
               toHere = toKnown !== null;
               toState = toKnown ?? undefined;
             } else {
-              const at = await fs.lstat(record.to).then(
+              const at = await fs.lstat(disk(record.to)).then(
                 (r) => r,
                 (error: unknown) => {
                   if (!isMissing(error)) throw error;
@@ -640,7 +718,7 @@ export async function restoreEntry(
                     ? 'dir'
                     : at.stats.isSymbolicLink()
                       ? 'link'
-                      : await hashFile(fs, record.to);
+                      : await hashFile(fs, disk(record.to), signal);
                 }
               } else {
                 toHere = false;
@@ -650,7 +728,7 @@ export async function restoreEntry(
             const fromFree =
               fromKnown !== undefined
                 ? fromKnown === null
-                : await fs.lstat(record.from).then(
+                : await fs.lstat(disk(record.from)).then(
                     (r) => same(r.stats),
                     (error: unknown) => {
                       if (!isMissing(error)) throw error;
@@ -670,6 +748,7 @@ export async function restoreEntry(
                   opts.onRewrite?.(record.identity, landed);
                 }
               }
+              if (dryRun && toIsRealDir) relocations.push([record.from, disk(record.to)]);
               simulate(record.to, null);
               simulate(record.from, toState ?? 'moved');
               done(record.from);

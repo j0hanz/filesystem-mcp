@@ -85,15 +85,21 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     // One simulated-state map across every entry: a dry run must see what
     // reverting the newer entries would change, or its per-step preview lies.
     const simulated = dryRun ? new Map<string, string | null>() : undefined;
+    const relocations: [string, string][] = [];
     for (const entry of entries) {
+      ctx.signal.throwIfAborted();
       const outcome = await restoreEntry(entry, ctx.fs, {
         dryRun,
         simulated,
+        relocations,
+        signal: ctx.signal,
         onRewrite: (was, identity) => {
           journal.reidentify(was, identity);
         },
       });
       if (!dryRun) journal.replaceRecords(entry.id, outcome.remaining);
+      // A cancelled restore keeps what it finished: done records left the journal above.
+      ctx.signal.throwIfAborted();
       stepResults.push({ id: entry.id, tool: entry.tool, results: outcome.results });
       total += outcome.results.length;
       skippedOrFailed += outcome.results.filter(SKIPPED_OR_FAILED).length;

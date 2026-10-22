@@ -731,6 +731,63 @@ describe('restoreEntry', () => {
     journal.endCapture(two);
   });
 
+  it('a deleted moved directory: undoing both steps moves the new tree back', async () => {
+    const a = join(tmpDir, 'dirmove-a');
+    const b = join(tmpDir, 'dirmove-b');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'inside');
+    const journal = new UndoJournal();
+    const moveId = journal.add('move', (await captureOne((fs) => fs.rename(a, b))).records);
+    const delEntry = await captureOne((fs) => fs.rm(b, { recursive: true, force: true }));
+    const onRewrite = (
+      was: Parameters<UndoJournal['reidentify']>[0],
+      identity: Parameters<UndoJournal['reidentify']>[1],
+    ) => {
+      journal.reidentify(was, identity);
+    };
+    const first = await restoreEntry(delEntry, newFs(), { dryRun: false, onRewrite });
+    const moveEntry = journal.get(moveId);
+    assert.ok(moveEntry);
+    const second = await restoreEntry(moveEntry, newFs(), { dryRun: false, onRewrite });
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual([first.remaining, second.remaining], [[], []]);
+    assert.strictEqual(await fsPromises.readFile(join(a, 'f.txt'), 'utf8'), 'inside');
+  });
+
+  it('dry run: a file edit inside a directory that was later moved previews as restored', async () => {
+    const a = join(tmpDir, 'dryprefix-a');
+    const b = join(tmpDir, 'dryprefix-b');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
+    const moved = await captureOne((fs) => fs.rename(a, b));
+    const simulated = new Map<string, string | null>();
+    const relocations: [string, string][] = [];
+    const results = [];
+    for (const entry of [moved, edited]) {
+      const out = await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations });
+      results.push(...out.results);
+    }
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('an aborted restore returns every unprocessed record and touches nothing', async () => {
+    const file = join(tmpDir, 'abort-restore.txt');
+    await writeFile(file, 'v1');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'v2'));
+    const outcome = await restoreEntry(entry, newFs(), {
+      dryRun: false,
+      signal: AbortSignal.abort(),
+    });
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual(outcome.results, []);
+    assert.strictEqual(outcome.remaining.length, entry.records.length);
+    assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'v2');
+  });
+
   it('a skipped directory restore does not restore its children through a symlink', async (t) => {
     const tree = join(tmpDir, 'swapped-tree');
     const elsewhere = join(tmpDir, 'swapped-elsewhere');
