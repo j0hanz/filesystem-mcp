@@ -223,21 +223,21 @@ export class UndoCapture {
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
   readonly maxBytes: number;
-  readonly #pool: LivePool | undefined;
+  readonly #pool: LivePool;
 
-  constructor(maxBytes: number, pool?: LivePool) {
+  constructor(maxBytes: number, pool: LivePool) {
     this.maxBytes = maxBytes;
     this.#pool = pool;
   }
 
-  /** Bytes charged against the budget: the shared live total when pooled. */
+  /** Bytes charged against the budget: the shared live total of every capture. */
   #used(): number {
-    return this.#pool?.bytes ?? this.#bytes;
+    return this.#pool.bytes;
   }
 
   #charge(n: number): void {
     this.#bytes += n;
-    if (this.#pool) this.#pool.bytes += n;
+    this.#pool.bytes += n;
   }
 
   /** True once abandoned; a method so callers re-read it after an await. */
@@ -247,7 +247,7 @@ export class UndoCapture {
 
   /** Return this capture's charge to the shared pool; call when the call ends. */
   release(): void {
-    if (this.#pool) this.#pool.bytes -= this.#bytes;
+    this.#pool.bytes -= this.#bytes;
     this.#bytes = 0;
     this.#reserved = 0;
   }
@@ -276,7 +276,7 @@ export class UndoCapture {
     this.records.length = 0;
     // Dropped records free their bytes now. Reservations stay charged until
     // release(): a read reserved before the abandon may still be in flight.
-    if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
+    this.#pool.bytes -= this.#bytes - this.#reserved;
     this.#bytes = this.#reserved;
   }
 

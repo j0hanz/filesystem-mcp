@@ -8,9 +8,9 @@ import { after, before, describe, it } from 'node:test';
 import type { Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import type { UndoRecord } from '../src/core/undo.ts';
+import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
-import { restoreEntry, UndoCapture, UndoJournal } from '../src/core/undo.ts';
+import { restoreEntry, UndoJournal } from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -164,7 +164,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     }
   });
 
-  const capture = () => new UndoCapture(32 * 1024 * 1024);
+  const capture = () => new UndoJournal(32 * 1024 * 1024).beginCapture();
   const makeFs = (cap: UndoCapture) => new GuardedFileSystem(ctx.pathGuard, cap);
 
   it('an overwrite pushes write with the old bytes and the new hash', async () => {
@@ -261,7 +261,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
   it('a budget of 3 bytes with a 4-byte file abandons', async () => {
     const file = join(tmpDir, 'big.txt');
     await writeFile(file, 'abcd');
-    const cap = new UndoCapture(3);
+    const cap = new UndoJournal(3).beginCapture();
     const fs = makeFs(cap);
     await fs.writeFile(file, 'x');
     assert.ok(cap.unavailable !== undefined);
@@ -273,7 +273,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await mkdir(join(tree, 'sub'), { recursive: true });
     for (let i = 0; i < 5; i++) await writeFile(join(tree, `e${i}.txt`), '');
     // 7 records (5 empty files, sub, tree) cost 7 * 512 overhead: over 3 KiB.
-    const cap = new UndoCapture(3 * 1024);
+    const cap = new UndoJournal(3 * 1024).beginCapture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
     assert.strictEqual(cap.unavailable, 'too many changes to keep for undo');
@@ -413,7 +413,7 @@ describe('restoreEntry', () => {
   const captureOne = async (
     run: (fs: GuardedFileSystem) => Promise<unknown>,
   ): Promise<UndoEntry> => {
-    const cap = new UndoCapture(32 * 1024 * 1024);
+    const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
     const fs = new GuardedFileSystem(ctx.pathGuard, cap);
     await run(fs);
     assert.strictEqual(cap.unavailable, undefined);
@@ -1015,7 +1015,7 @@ describe('restoreEntry', () => {
     );
     try {
       const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
-        const cap = new UndoCapture(32 * 1024 * 1024);
+        const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
         await run(new GuardedFileSystem(policyCtx.pathGuard, cap));
         assert.strictEqual(cap.unavailable, undefined);
         return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
