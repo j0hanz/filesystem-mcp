@@ -945,6 +945,26 @@ describe('restoreEntry', () => {
     );
   });
 
+  it('dry run across a case-only folder rename and a move previews as restored', async (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const lower = join(tmpDir, 'case-cd');
+    const upper = join(tmpDir, 'CASE-CD');
+    const away = join(tmpDir, 'case-away');
+    await mkdir(lower, { recursive: true });
+    await writeFile(join(lower, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(lower, 'f.txt'), 'v2'));
+    const recased = await captureOne((fs) => fs.rename(lower, upper));
+    const moved = await captureOne((fs) => fs.rename(upper, away));
+    const results = await dryRunAll([moved, recased, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
   it('an edit inside a folder moved twice restores for real', async () => {
     const a = join(tmpDir, 'twice-real-a');
     const b = join(tmpDir, 'twice-real-b');

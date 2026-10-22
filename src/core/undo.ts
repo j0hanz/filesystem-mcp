@@ -499,24 +499,11 @@ export async function restoreEntry(
   const { dryRun, signal } = opts;
   const relocations = opts.relocations ?? [];
   const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
-  const hasPathBoundary = (directory: string, candidate: string): boolean =>
-    candidate.length === directory.length ||
-    directory.endsWith('/') ||
-    (IS_WINDOWS && directory.endsWith('\\')) ||
-    candidate[directory.length] === '/' ||
-    (IS_WINDOWS && candidate[directory.length] === '\\');
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (out.startsWith(from) && hasPathBoundary(from, out)) {
-        out = to + out.slice(from.length);
-      } else if (
-        isPathInsideDirectory(from, out) &&
-        from.toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase() === from.toLowerCase() &&
-        hasPathBoundary(from, out)
-      ) {
+      // startsWith keeps the slice exact; the helper adds the segment boundary.
+      if (out.startsWith(from) && isPathInsideDirectory(from, out)) {
         out = to + out.slice(from.length);
       }
     }
