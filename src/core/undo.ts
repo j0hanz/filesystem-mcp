@@ -280,7 +280,10 @@ export class UndoCapture {
     if (this.unavailable !== undefined) return;
     this.unavailable = reason;
     this.records.length = 0;
-    // The charge stays until endCapture: a read reserved before the abandon may still be in flight.
+    // Dropped records free their bytes now. Reservations stay charged until
+    // endCapture: a read reserved before the abandon may still be in flight.
+    if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
+    this.#bytes = this.#reserved;
   }
 
   push(...records: UndoRecord[]): void {

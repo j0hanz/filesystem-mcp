@@ -130,6 +130,19 @@ describe('UndoJournal', () => {
     assert.ok(three.reserve(2000));
     journal.endCapture(three);
   });
+
+  it('an abandoned capture frees the bytes of the records it dropped', () => {
+    // A pushed record holds 2512 (2000 bytes + 512 overhead) and no reservation.
+    const journal = new UndoJournal(4096);
+    const big = journal.beginCapture();
+    assert.ok(big.reserve(2000));
+    big.push(writeRecord(2000));
+    assert.strictEqual(big.reserve(2000), false);
+    const small = journal.beginCapture();
+    assert.ok(small.reserve(1200));
+    journal.endCapture(big);
+    journal.endCapture(small);
+  });
 });
 
 describe('UndoCapture via GuardedFileSystem', () => {

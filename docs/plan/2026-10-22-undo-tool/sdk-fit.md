@@ -77,8 +77,11 @@ probe. PLAUSIBLE means the mechanism holds but part of the change was not run.
   (`MAX_LIVE_CAPTURES`), `:133` (`#live`), the branch in `:137-151`, the slot
   release in `:157-160`, `holdsSlot` at `:249-250`, and the comment at
   [`src/tools/define.ts:559-561`](../../../src/tools/define.ts#L559-L561).
-  Also delete `this.release()` from `abandon()` at
-  [`src/core/undo.ts:306`](../../../src/core/undo.ts#L306).
+  In `abandon()` at
+  [`src/core/undo.ts:306`](../../../src/core/undo.ts#L306), release only the
+  bytes of the records it drops, and keep reservations charged until
+  `endCapture()`. (As shipped. The first version kept the whole charge; the
+  final branch review found that this starved concurrent calls.)
 - **Replaced by.** The shared `LivePool` that commit 3b5d5a0c added
   (`undo.ts:134-135,242-244,262-270`). `reserve()` (`:289-299`) and `push()`
   (`:309-322`) already charge every capture against one budget, and
@@ -98,8 +101,9 @@ probe. PLAUSIBLE means the mechanism holds but part of the change was not run.
   the journal. This is stricter than today.
 - **Lost.** The ninth concurrent mutating call is no longer refused with
   `not undoable: too many concurrent calls to keep for undo`. An abandoned
-  call holds its charge until it finishes, so a concurrent call can hit
-  `too large to keep for undo` slightly longer than today. This also removes
+  call holds the bytes of reads still in flight until it finishes, so a
+  concurrent call can hit `too large to keep for undo` while those reads
+  run. This also removes
   a latent slot leak if anything throws between `beginCapture()` and
   `execute()` (`define.ts:562-572`).
 - **Tests.** Delete `__tests__/undo.test.ts:111-124`. The verifier removed the
