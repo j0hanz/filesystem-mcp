@@ -455,6 +455,37 @@ describe('restoreEntry', () => {
     assert.deepStrictEqual(outcome.remaining, []);
   });
 
+  it('a write whose path already holds the saved bytes counts as restored', async () => {
+    const file = join(tmpDir, 'already-restored.txt');
+    await writeFile(file, 'A');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
+    await writeFile(file, 'A');
+    const dry = await dryRunAll([entry]);
+    assert.deepStrictEqual(
+      dry.filter((r) => 'error' in r),
+      [],
+    );
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.deepStrictEqual(
+      outcome.results.filter((r) => 'error' in r),
+      [],
+    );
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a symlink to the saved bytes is still skipped', async (t) => {
+    const file = join(tmpDir, 'link-restored.txt');
+    const target = join(tmpDir, 'link-restored-target.txt');
+    await writeFile(file, 'A');
+    await writeFile(target, 'A');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
+    await rm(file);
+    if (!(await trySymlink(target, file, () => t.skip('symlinks unavailable'), 'file'))) return;
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(outcome.results.filter((r) => 'error' in r).length, 1);
+    assert.strictEqual(outcome.remaining.length, 1);
+  });
+
   it('an outside write after capture is skipped as modified since', async () => {
     const file = join(tmpDir, 'restore-raced.txt');
     await writeFile(file, 'before');

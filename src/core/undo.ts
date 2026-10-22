@@ -619,6 +619,8 @@ export async function restoreEntry(
               }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
+            } else if (await matchesHash(record.path, sha256Hex(record.bytes))) {
+              done(record.path); // already holds what undo would write
             } else {
               skip(record, order, record.path);
             }
