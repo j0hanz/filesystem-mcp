@@ -1262,6 +1262,56 @@ describe('undo tool', () => {
     }
   });
 
+  it('a second concurrent undo of one id does not bring restored records back', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const x = join(tmp, 'tx.txt');
+      const y = join(tmp, 'ty.txt');
+      await writeFile(x, 'X0');
+      await writeFile(y, 'Y0');
+      const made = await call(pair.client, 'create', {
+        files: [
+          { path: x, content: 'X1', overwrite: true },
+          { path: y, content: 'Y1', overwrite: true },
+        ],
+      });
+      const id = (made.structuredContent as { undo?: string }).undo ?? '';
+      await writeFile(y, 'Y-external');
+      await Promise.all([call(pair.client, 'undo', { id }), call(pair.client, 'undo', { id })]);
+      const third = firstTextBlock(await call(pair.client, 'undo', { id })) ?? '';
+      assert.match(third, /ty\.txt SKIPPED/u);
+      assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a second concurrent undo of a fully restored id reports it gone', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const x = join(tmp, 'full.txt');
+      await writeFile(x, 'X0');
+      const made = await call(pair.client, 'create', {
+        files: [{ path: x, content: 'X1', overwrite: true }],
+      });
+      const id = (made.structuredContent as { undo?: string }).undo ?? '';
+      const results = await Promise.all([
+        call(pair.client, 'undo', { id }),
+        call(pair.client, 'undo', { id }),
+      ]);
+      assert.strictEqual(results.filter((r) => r.isError !== true).length, 1);
+      const failed = results.find((r) => r.isError === true);
+      assert.match(firstTextBlock(failed) ?? '', /Unknown or expired undo id/u);
+      assert.strictEqual(await import('node:fs/promises').then((m) => m.readFile(x, 'utf8')), 'X0');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
   it('the issue example: edit, delete, create-overwrite, then undo them in order', async () => {
     const tmp = await createTestRoot();
     const pair = await createTestClientPair([tmp]);
