@@ -80,8 +80,6 @@ export interface UndoEntry {
 const MAX_ENTRIES = 64;
 const TTL_MS = 30 * 60 * 1000;
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-/** In-flight captures allowed at once; past it a mutating call runs, just not undoable. */
-const MAX_LIVE_CAPTURES = 8;
 /**
  * Flat memory weight charged per record, whatever its op: the record object
  * plus its path strings (a rename carries two). An estimate, not a measure —
@@ -130,34 +128,18 @@ export class UndoJournal {
     return id;
   }
 
-  #live = 0;
   /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
   readonly #pool: LivePool = { bytes: 0 };
 
-  /**
-   * Start a capture for a mutating call. Past the live cap the call still
-   * runs, its capture is pre-abandoned with the reason, and it takes no slot;
-   * pair every `beginCapture` with `endCapture` when the call finishes.
-   */
+  /** Start a capture for a mutating call; pair it with `endCapture` when the call finishes. */
   beginCapture(): UndoCapture {
-    const capture = new UndoCapture(this.maxBytes, this.#pool);
-    if (this.#live < MAX_LIVE_CAPTURES) {
-      this.#live += 1;
-      capture.holdsSlot = true;
-    } else {
-      capture.abandon('too many concurrent calls to keep for undo');
-    }
-    return capture;
+    return new UndoCapture(this.maxBytes, this.#pool);
   }
 
   endCapture(capture: UndoCapture | undefined): void {
     // Its records now live in the journal (or were dropped); either way the
     // live pool no longer owes them.
     capture?.release();
-    if (capture?.holdsSlot) {
-      capture.holdsSlot = false;
-      this.#live -= 1;
-    }
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -246,8 +228,6 @@ interface LivePool {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   unavailable: string | undefined;
-  /** True while this capture holds one of the journal's live-capture slots. */
-  holdsSlot = false;
   #bytes = 0;
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
@@ -303,7 +283,7 @@ export class UndoCapture {
     if (this.unavailable !== undefined) return;
     this.unavailable = reason;
     this.records.length = 0;
-    this.release();
+    // The charge stays until endCapture: a read reserved before the abandon may still be in flight.
   }
 
   push(...records: UndoRecord[]): void {

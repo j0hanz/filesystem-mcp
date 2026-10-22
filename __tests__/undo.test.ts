@@ -108,19 +108,27 @@ describe('UndoJournal', () => {
     assert.strictEqual(new UndoJournal(1).enabled, true);
   });
 
-  it('beginCapture past the live cap abandons; endCapture frees the slot', () => {
+  it('a ninth concurrent capture is undoable', () => {
     const journal = new UndoJournal(1024 * 1024);
-    const caps = Array.from({ length: 8 }, () => journal.beginCapture());
-    assert.ok(caps.every((c) => c.unavailable === undefined && c.holdsSlot));
-    const ninth = journal.beginCapture();
-    assert.strictEqual(ninth.unavailable, 'too many concurrent calls to keep for undo');
-    assert.strictEqual(ninth.holdsSlot, false);
-    journal.endCapture(caps[0]);
-    const tenth = journal.beginCapture();
-    assert.strictEqual(tenth.unavailable, undefined);
-    assert.strictEqual(tenth.holdsSlot, true);
-    journal.endCapture(undefined);
-    for (const c of [ninth, tenth, ...caps.slice(1)]) journal.endCapture(c);
+    const caps = Array.from({ length: 9 }, () => journal.beginCapture());
+    assert.ok(caps.every((c) => c.unavailable === undefined));
+    for (const c of caps) journal.endCapture(c);
+  });
+
+  it('an abandoned capture keeps its charge until endCapture', () => {
+    // One reserve of 2000 charges 2512 (512 record overhead).
+    const journal = new UndoJournal(4096);
+    const one = journal.beginCapture();
+    assert.ok(one.reserve(2000));
+    assert.strictEqual(one.reserve(2000), false);
+    assert.strictEqual(one.unavailable, 'too large to keep for undo');
+    const two = journal.beginCapture();
+    assert.strictEqual(two.reserve(2000), false);
+    journal.endCapture(one);
+    journal.endCapture(two);
+    const three = journal.beginCapture();
+    assert.ok(three.reserve(2000));
+    journal.endCapture(three);
   });
 });
 
@@ -856,6 +864,29 @@ describe('undo id on results', () => {
       assert.match(text, / · undo [a-z0-9]{4}$/u);
       const meta = result._meta as { undo?: string };
       assert.match(text.slice(text.length - 4), new RegExp(`^${meta.undo ?? ''}$`, 'u'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('nine edits at once each carry an undo id', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const files = Array.from({ length: 9 }, (_, i) => join(tmp, `burst-${String(i)}.txt`));
+      await Promise.all(files.map((f) => writeFile(f, 'before')));
+      const results = await Promise.all(
+        files.map((path) =>
+          pair.client.callTool({
+            name: 'edit',
+            arguments: { path, edits: [{ oldText: 'before', newText: 'after' }] },
+          }),
+        ),
+      );
+      for (const result of results) {
+        assert.match((result._meta as { undo?: string }).undo ?? '', /^[a-z0-9]{4}$/u);
+      }
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);

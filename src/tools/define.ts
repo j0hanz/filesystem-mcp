@@ -556,9 +556,7 @@ export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I
     register(deps: ToolDeps): RegisteredTool {
       return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) => {
         // Tools marked noUndo are never captured (no redo); read-only calls
-        // change nothing. Past the journal's live-capture cap the call runs,
-        // pre-abandoned with the reason. The slot is released in execute()'s
-        // finally.
+        // change nothing. execute()'s finally releases the capture's pool charge.
         const capture =
           deps.undoJournal.enabled && !def.readOnlyHint && !def.noUndo
             ? deps.undoJournal.beginCapture()
