@@ -899,6 +899,24 @@ describe('restoreEntry', () => {
     assert.strictEqual(await fsPromises.readFile(join(pfx2, 'f.txt'), 'utf8'), 'saved');
   });
 
+  it('win32 only: a deleted directory junction comes back as a junction to the same folder', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('junctions are win32 only');
+      return;
+    }
+    const fsPromises = await import('node:fs/promises');
+    const target = join(tmpDir, 'junction-target');
+    const link = join(tmpDir, 'junction-link');
+    await mkdir(target, { recursive: true });
+    await fsPromises.symlink(target, link, 'junction');
+    const before = await fsPromises.readlink(link);
+    const entry = await captureOne((fs) => fs.rm(link));
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.deepStrictEqual(outcome.remaining, []);
+    assert.strictEqual(await fsPromises.readlink(link), before);
+    assert.ok((await fsPromises.stat(link)).isDirectory());
+  });
+
   it('live captures share one byte budget', () => {
     const journal = new UndoJournal(4096);
     const one = journal.beginCapture();
