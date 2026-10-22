@@ -175,6 +175,20 @@ export class GuardedFileSystem {
     return runExclusive(key, () => fn(key));
   }
 
+  /**
+   * Serialize an operation across BOTH of its paths (a restore's check-then-
+   * rename). The two keys are taken in a fixed order and deduped, so two
+   * concurrent pairs can never deadlock, and a nested same-key call cannot
+   * happen (`runExclusive` is not re-entrant).
+   */
+  async lockPairForWrite<T>(a: string, b: string, fn: () => Promise<T>): Promise<T> {
+    const keyA = await this.pathGuard.validatePathForWrite(a);
+    const keyB = await this.pathGuard.validatePathForWrite(b);
+    if (keyA === keyB) return runExclusive(keyA, fn);
+    const [first, second] = keyA < keyB ? [keyA, keyB] : [keyB, keyA];
+    return runExclusive(first, () => runExclusive(second, fn));
+  }
+
   async stat(
     filePath: string,
     options?: { signal?: AbortSignal | undefined },

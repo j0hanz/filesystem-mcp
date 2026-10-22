@@ -36,8 +36,7 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import type { UndoJournal } from '../core/undo.ts';
-import { UndoCapture } from '../core/undo.ts';
+import type { UndoCapture, UndoJournal } from '../core/undo.ts';
 import { getToolTimeoutMs, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
@@ -512,6 +511,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     } catch (error) {
       return this.failProgress(error, this.#undoSuffix());
     } finally {
+      this.toolCtx.undoJournal.endCapture(this.capture);
       await this.#progressSession.flush();
     }
   }
@@ -556,10 +556,12 @@ export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I
     register(deps: ToolDeps): RegisteredTool {
       return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) => {
         // Tools marked noUndo are never captured (no redo); read-only calls
-        // change nothing.
+        // change nothing. Past the journal's live-capture cap the call runs,
+        // pre-abandoned with the reason. The slot is released in execute()'s
+        // finally.
         const capture =
           deps.undoJournal.enabled && !def.readOnlyHint && !def.noUndo
-            ? new UndoCapture(deps.undoJournal.maxBytes)
+            ? deps.undoJournal.beginCapture()
             : undefined;
         return new ToolExecutor<I, O>(
           def.name,

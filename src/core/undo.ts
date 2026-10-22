@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import {
   lstat as fsLstat,
   readdir as fsReaddir,
@@ -46,10 +46,22 @@ export interface UndoEntry {
 const MAX_ENTRIES = 64;
 const TTL_MS = 30 * 60 * 1000;
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+/** In-flight captures allowed at once; past it a mutating call runs, just not undoable. */
+const MAX_LIVE_CAPTURES = 8;
+/**
+ * Flat memory weight charged per record, whatever its op: the record object
+ * plus its path strings (a rename carries two). An estimate, not a measure —
+ * it exists so a tree of empty entries cannot bypass the byte budget.
+ */
+const RECORD_OVERHEAD_BYTES = 512;
 
-/** Byte weight of an entry: the saved bytes it pins. */
+/** Memory weight of one record: its saved bytes plus object/path overhead. */
+const recordWeight = (record: UndoRecord): number =>
+  record.op === 'write' ? RECORD_OVERHEAD_BYTES + record.bytes.length : RECORD_OVERHEAD_BYTES;
+
+/** Byte weight of an entry: what its records pin. */
 const weigh = (records: readonly UndoRecord[]): number =>
-  records.reduce((n, r) => n + (r.op === 'write' ? r.bytes.length : 0), 0);
+  records.reduce((n, r) => n + recordWeight(r), 0);
 
 export class UndoJournal {
   // Insertion order is call order; nothing ever re-inserts, so the last key is the newest call.
@@ -71,11 +83,37 @@ export class UndoJournal {
   }
 
   #newId(): string {
-    // 4 chars from the 36-char alphabet via randomBytes; regenerate on a live collision.
-    const make = () => [...randomBytes(4)].map((b) => ID_ALPHABET[b % ID_ALPHABET.length]).join('');
+    // 4 chars from the 36-char alphabet via randomInt; regenerate on a live collision.
+    const make = () =>
+      Array.from({ length: 4 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('');
     let id = make();
     while (this.#byId.has(id)) id = make();
     return id;
+  }
+
+  #live = 0;
+
+  /**
+   * Start a capture for a mutating call. Past the live cap the call still
+   * runs, its capture is pre-abandoned with the reason, and it takes no slot;
+   * pair every `beginCapture` with `endCapture` when the call finishes.
+   */
+  beginCapture(): UndoCapture {
+    const capture = new UndoCapture(this.maxBytes);
+    if (this.#live < MAX_LIVE_CAPTURES) {
+      this.#live += 1;
+      capture.holdsSlot = true;
+    } else {
+      capture.abandon('too many concurrent calls to keep for undo');
+    }
+    return capture;
+  }
+
+  endCapture(capture: UndoCapture | undefined): void {
+    if (capture?.holdsSlot) {
+      capture.holdsSlot = false;
+      this.#live -= 1;
+    }
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -126,6 +164,8 @@ export class UndoJournal {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   unavailable: string | undefined;
+  /** True while this capture holds one of the journal's live-capture slots. */
+  holdsSlot = false;
   #bytes = 0;
   readonly maxBytes: number;
 
@@ -133,14 +173,13 @@ export class UndoCapture {
     this.maxBytes = maxBytes;
   }
 
-  /** Reserve n saved bytes; past the budget the capture is abandoned and false comes back. */
+  /** Gate before reading n more saved bytes; the bytes are charged at `push`. */
   reserve(n: number): boolean {
     if (this.unavailable !== undefined) return false;
     if (this.#bytes + n > this.maxBytes) {
       this.abandon('too large to keep for undo');
       return false;
     }
-    this.#bytes += n;
     return true;
   }
 
@@ -154,7 +193,15 @@ export class UndoCapture {
 
   push(...records: UndoRecord[]): void {
     if (this.unavailable !== undefined) return;
-    this.records.push(...records);
+    for (const record of records) {
+      const cost = recordWeight(record);
+      if (this.#bytes + cost > this.maxBytes) {
+        this.abandon('too many changes to keep for undo');
+        return;
+      }
+      this.#bytes += cost;
+      this.records.push(record);
+    }
   }
 }
 
@@ -242,6 +289,10 @@ export async function snapshotTree(
       records.push({ op: 'mkdir', path: validPath });
       return records;
     }
+    // Anything else (FIFO, socket, device) has no restore record. Journaling
+    // the parent without it would report a restore that silently misses the
+    // entry, so the whole capture is refused instead.
+    capture.abandon('cannot capture a non-regular entry');
     return [];
   } catch {
     capture.abandon('could not read the deleted files');
@@ -279,17 +330,19 @@ export async function restoreEntry(
   // Values are null (absent), a 64-char sha256 hex (regular file), or 'dir'/'link'/'moved'.
   const simulated = opts.simulated ?? new Map<string, string | null>();
   const results: UndoFileResult[] = [];
-  const remaining: UndoRecord[] = [];
+  // Skipped/failed records, each with its capture order, so the retry runs the
+  // same reverse pass instead of re-reversing an already-reversed list.
+  const remaining: { record: UndoRecord; order: number }[] = [];
   const SKIP_MSG = 'Not restored: modified since this undo step was recorded';
-  const skip = (record: UndoRecord, path: string): void => {
-    remaining.push(record);
+  const skip = (record: UndoRecord, order: number, path: string): void => {
+    remaining.push({ record, order });
     results.push({ path, error: Problem.cancelled(SKIP_MSG, { path }) });
   };
   const done = (path: string): void => {
     results.push({ path, value: { restored: true } });
   };
-  const fail = (record: UndoRecord, path: string, error: unknown): void => {
-    remaining.push(record);
+  const fail = (record: UndoRecord, order: number, path: string, error: unknown): void => {
+    remaining.push({ record, order });
     results.push({ path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path) });
   };
   const absent = async (path: string): Promise<boolean> => {
@@ -320,17 +373,18 @@ export async function restoreEntry(
 
   // Run non-rmdir records in reverse first, then deduplicated rmdirs deepest-first
   // so parallel batch creates/moves empty shared parent folders before removing them.
-  const reversed = [...entry.records].reverse();
+  const indexed = entry.records.map((record, order) => ({ record, order }));
+  const reversed = [...indexed].reverse();
   const seenRmdir = new Set<string>();
   const rmdirs = reversed
-    .filter((r): r is Extract<UndoRecord, { op: 'rmdir' }> => {
-      if (r.op !== 'rmdir' || seenRmdir.has(r.path)) return false;
-      seenRmdir.add(r.path);
+    .filter((x): x is { record: Extract<UndoRecord, { op: 'rmdir' }>; order: number } => {
+      if (x.record.op !== 'rmdir' || seenRmdir.has(x.record.path)) return false;
+      seenRmdir.add(x.record.path);
       return true;
     })
-    .sort((a, b) => b.path.length - a.path.length);
+    .sort((a, b) => b.record.path.length - a.record.path.length);
 
-  for (const record of [...reversed.filter((r) => r.op !== 'rmdir'), ...rmdirs]) {
+  for (const { record, order } of [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs]) {
     try {
       switch (record.op) {
         case 'write': {
@@ -344,7 +398,7 @@ export async function restoreEntry(
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
             } else {
-              skip(record, record.path);
+              skip(record, order, record.path);
             }
           });
           break;
@@ -358,7 +412,7 @@ export async function restoreEntry(
               simulate(record.path, null);
               done(record.path);
             } else {
-              skip(record, record.path);
+              skip(record, order, record.path);
             }
           });
           break;
@@ -370,7 +424,7 @@ export async function restoreEntry(
           } catch (error) {
             if (!isMissing(error)) {
               if (!isNodeError(error) || error.code !== 'ENOTEMPTY') throw error;
-              skip(record, record.path);
+              skip(record, order, record.path);
               break;
             }
           }
@@ -393,7 +447,7 @@ export async function restoreEntry(
           ) {
             done(record.path);
           } else {
-            skip(record, record.path);
+            skip(record, order, record.path);
           }
           break;
         }
@@ -403,54 +457,81 @@ export async function restoreEntry(
             simulate(record.path, 'link');
             done(record.path);
           } else {
-            skip(record, record.path);
+            skip(record, order, record.path);
           }
           break;
         }
         case 'rename': {
-          const same = (s: { dev: number; ino: number; birthtimeMs: number }): boolean =>
-            s.dev === record.identity.dev &&
-            s.ino === record.identity.ino &&
-            s.birthtimeMs === record.identity.birthtimeMs;
-          const toKnown = simulated.get(record.to);
-          const toHere =
-            toKnown === null
-              ? false
-              : await fs.lstat(record.to).then(
-                  (r) => same(r.stats),
-                  (error: unknown) => {
-                    if (!isMissing(error)) throw error;
-                    return false;
-                  },
-                );
-          const fromKnown = simulated.get(record.from);
-          const fromFree =
-            fromKnown !== undefined
-              ? fromKnown === null
-              : await fs.lstat(record.from).then(
-                  (r) => same(r.stats),
-                  (error: unknown) => {
-                    if (!isMissing(error)) throw error;
-                    return true;
-                  },
-                );
-          if (toHere && fromFree) {
-            if (!dryRun) {
-              await fs.mkdir(dirname(record.from), { recursive: true });
-              await fs.rename(record.to, record.from);
+          // Both paths locked: without the pair, a concurrent create can land
+          // on `from` between the absence check and the rename, and the rename
+          // would overwrite it. The pair is taken in a fixed key order (and
+          // deduped) so two concurrent pairs cannot deadlock.
+          await fs.lockPairForWrite(record.from, record.to, async () => {
+            const same = (s: { dev: number; ino: number; birthtimeMs: number }): boolean =>
+              s.dev === record.identity.dev &&
+              s.ino === record.identity.ino &&
+              s.birthtimeMs === record.identity.birthtimeMs;
+            const toKnown = simulated.get(record.to);
+            let toHere: boolean;
+            // What undoing leaves at `from`, so an older record's check can
+            // match it in a later simulated step: a hash, or 'dir'/'link'.
+            let toState: string | undefined;
+            if (toKnown !== undefined) {
+              toHere = toKnown !== null;
+              toState = toKnown ?? undefined;
+            } else {
+              const at = await fs.lstat(record.to).then(
+                (r) => r,
+                (error: unknown) => {
+                  if (!isMissing(error)) throw error;
+                  return undefined;
+                },
+              );
+              if (at !== undefined && same(at.stats)) {
+                toHere = true;
+                if (dryRun) {
+                  toState = at.stats.isDirectory()
+                    ? 'dir'
+                    : at.stats.isSymbolicLink()
+                      ? 'link'
+                      : await hashFile(fs, record.to);
+                }
+              } else {
+                toHere = false;
+              }
             }
-            simulate(record.to, null);
-            simulate(record.from, toKnown ?? 'moved');
-            done(record.from);
-          } else {
-            skip(record, record.from);
-          }
+            const fromKnown = simulated.get(record.from);
+            const fromFree =
+              fromKnown !== undefined
+                ? fromKnown === null
+                : await fs.lstat(record.from).then(
+                    (r) => same(r.stats),
+                    (error: unknown) => {
+                      if (!isMissing(error)) throw error;
+                      return true;
+                    },
+                  );
+            if (toHere && fromFree) {
+              if (!dryRun) {
+                await fs.mkdir(dirname(record.from), { recursive: true });
+                await fs.rename(record.to, record.from);
+              }
+              simulate(record.to, null);
+              simulate(record.from, toState ?? 'moved');
+              done(record.from);
+            } else {
+              skip(record, order, record.from);
+            }
+          });
           break;
         }
       }
     } catch (error) {
-      fail(record, record.op === 'rename' ? record.from : record.path, error);
+      fail(record, order, record.op === 'rename' ? record.from : record.path, error);
     }
   }
-  return { results, remaining };
+  return {
+    results,
+    remaining: remaining.sort((a, b) => a.order - b.order).map((x) => x.record),
+  };
 }

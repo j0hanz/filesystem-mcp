@@ -67,7 +67,8 @@ describe('UndoJournal', () => {
   });
 
   it('a byte cap keeps only the newest entries', () => {
-    const journal = new UndoJournal(10);
+    // One 6-byte record weighs 518 (512 overhead + bytes): two do not fit in 520.
+    const journal = new UndoJournal(520);
     const older = journal.add('edit', [writeRecord(6)]);
     const newer = journal.add('edit', [writeRecord(6)]);
     assert.strictEqual(journal.get(older), undefined);
@@ -105,6 +106,21 @@ describe('UndoJournal', () => {
   it('a maxBytes of 0 disables the journal', () => {
     assert.strictEqual(new UndoJournal(0).enabled, false);
     assert.strictEqual(new UndoJournal(1).enabled, true);
+  });
+
+  it('beginCapture past the live cap abandons; endCapture frees the slot', () => {
+    const journal = new UndoJournal(1024 * 1024);
+    const caps = Array.from({ length: 8 }, () => journal.beginCapture());
+    assert.ok(caps.every((c) => c.unavailable === undefined && c.holdsSlot));
+    const ninth = journal.beginCapture();
+    assert.strictEqual(ninth.unavailable, 'too many concurrent calls to keep for undo');
+    assert.strictEqual(ninth.holdsSlot, false);
+    journal.endCapture(caps[0]);
+    const tenth = journal.beginCapture();
+    assert.strictEqual(tenth.unavailable, undefined);
+    assert.strictEqual(tenth.holdsSlot, true);
+    journal.endCapture(undefined);
+    for (const c of [ninth, tenth, ...caps.slice(1)]) journal.endCapture(c);
   });
 });
 
@@ -228,6 +244,39 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const fs = makeFs(cap);
     await fs.writeFile(file, 'x');
     assert.ok(cap.unavailable !== undefined);
+    assert.deepStrictEqual(cap.records, []);
+  });
+
+  it('records carry overhead: empty entries still count against the budget', async () => {
+    const tree = join(tmpDir, 'empty-entries');
+    await mkdir(join(tree, 'sub'), { recursive: true });
+    for (let i = 0; i < 5; i++) await writeFile(join(tree, `e${i}.txt`), '');
+    // 7 records (5 empty files, sub, tree) cost 7 * 512 overhead: over 3 KiB.
+    const cap = new UndoCapture(3 * 1024);
+    const fs = makeFs(cap);
+    await fs.rm(tree, { recursive: true, force: true });
+    assert.strictEqual(cap.unavailable, 'too many changes to keep for undo');
+    assert.deepStrictEqual(cap.records, []);
+  });
+
+  it('POSIX only: a tree containing a FIFO refuses capture, not silent omission', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX only');
+      return;
+    }
+    const { spawnSync } = await import('node:child_process');
+    const tree = join(tmpDir, 'fifo-tree');
+    await mkdir(tree, { recursive: true });
+    await writeFile(join(tree, 'ok.txt'), 'keep');
+    const mk = spawnSync('mkfifo', [join(tree, 'pipe.fifo')]);
+    if (mk.error !== undefined) {
+      t.skip('mkfifo not available');
+      return;
+    }
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.rm(tree, { recursive: true, force: true });
+    assert.strictEqual(cap.unavailable, 'cannot capture a non-regular entry');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -553,6 +602,61 @@ describe('restoreEntry', () => {
     const failed = outcome.results.find((r) => 'error' in r);
     assert.ok(failed?.error, 'must report a failure, not throw');
     assert.ok(outcome.remaining.length > 0);
+  });
+
+  it('a skipped move-over retries in dependency order once from is free', async () => {
+    const from = join(tmpDir, 'retry-from.txt');
+    const to = join(tmpDir, 'retry-to.txt');
+    await writeFile(from, 'incoming');
+    await writeFile(to, 'clobbered-old');
+    const entry = await captureOne((fs) => fs.rename(from, to));
+    // Occupy `from` so both records skip: the rename has nowhere to go and
+    // the overwritten file is still in place at `to`.
+    await writeFile(from, 'squatter');
+    const first = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(first.remaining.length, 2);
+    await rm(from);
+    // The retry must run the rename first, then write the old bytes back to
+    // `to`; the reverse order leaves `to` missing until a third try.
+    const retry = await restoreEntry({ ...entry, records: first.remaining }, newFs(), {
+      dryRun: false,
+    });
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(from, 'utf8'), 'incoming');
+    assert.strictEqual(await fsPromises.readFile(to, 'utf8'), 'clobbered-old');
+    assert.deepStrictEqual(retry.remaining, []);
+  });
+
+  it('dry run: a write undone by an earlier-step rename still reports restored', async () => {
+    const a = join(tmpDir, 'sim-edit-a.txt');
+    const b = join(tmpDir, 'sim-edit-b.txt');
+    await writeFile(a, 'v1');
+    const entry = await captureOne(async (fs) => {
+      await fs.writeFile(a, 'v2');
+      await fs.rename(a, b);
+    });
+    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    assert.deepStrictEqual(
+      dry.results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run: chained moves restore through simulated intermediate paths', async () => {
+    const a = join(tmpDir, 'chain-a.txt');
+    const b = join(tmpDir, 'chain-b.txt');
+    const c = join(tmpDir, 'chain-c.txt');
+    await writeFile(a, 'data');
+    const entry = await captureOne(async (fs) => {
+      await fs.rename(a, b);
+      await fs.rename(b, c);
+    });
+    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    assert.deepStrictEqual(
+      dry.results.filter((r) => 'error' in r),
+      [],
+    );
+    assert.deepStrictEqual(dry.remaining, []);
   });
 });
 
