@@ -506,6 +506,54 @@ describe('restoreEntry', () => {
     assert.deepStrictEqual(outcome.remaining, []);
   });
 
+  it('a deleted directory comes back with its mode, never wider', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('directory mode bits are POSIX-only');
+      return;
+    }
+    const fsPromises = await import('node:fs/promises');
+    const tree = join(tmpDir, 'private-tree');
+    const empty = join(tmpDir, 'private-empty');
+    await mkdir(join(tree, 'inner'), { recursive: true });
+    await mkdir(empty);
+    await fsPromises.chmod(tree, 0o700);
+    await fsPromises.chmod(join(tree, 'inner'), 0o700);
+    await fsPromises.chmod(empty, 0o700);
+    const entry = await captureOne(async (fs) => {
+      await fs.rm(tree, { recursive: true, force: true }); // snapshotTree path
+      await fs.rmdir(empty); // GuardedFileSystem.rmdir path
+    });
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual((await fsPromises.stat(tree)).mode & 0o777, 0o700);
+    assert.strictEqual((await fsPromises.stat(join(tree, 'inner'))).mode & 0o777, 0o700);
+    assert.strictEqual((await fsPromises.stat(empty)).mode & 0o777, 0o700);
+  });
+
+  it('a restored directory keeps owner rwx so its children come back', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('directory mode bits are POSIX-only');
+      return;
+    }
+    // A non-owner can delete a 0557 tree through the other-write bit; the
+    // restore's mkdir then makes the server the owner of an owner-r-x folder.
+    const fsPromises = await import('node:fs/promises');
+    const dir = join(tmpDir, 'owner-narrow');
+    const child = join(dir, 'f.txt');
+    const entry: UndoEntry = {
+      id: 'test',
+      tool: 'test',
+      createdAt: Date.now(),
+      records: [
+        { op: 'write', path: child, bytes: Buffer.from('kept'), mode: 0o644, expect: null },
+        { op: 'mkdir', path: dir, mode: 0o557 },
+      ],
+    };
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.deepStrictEqual(outcome.remaining, []);
+    assert.strictEqual(await fsPromises.readFile(child, 'utf8'), 'kept');
+    assert.strictEqual((await fsPromises.stat(dir)).mode & 0o700, 0o700);
+  });
+
   it('a created file and its created parents are removed', async () => {
     const file = join(tmpDir, 'created-parents', 'a', 'new.txt');
     const entry = await captureOne(async (fs) => {

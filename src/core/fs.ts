@@ -581,11 +581,14 @@ export class GuardedFileSystem {
 
   async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
-    const was = this.#capture
-      ? await fsLstat(validPath).then(identityOf, () => undefined)
-      : undefined;
+    const before = this.#capture ? await fsLstat(validPath).catch(() => undefined) : undefined;
     await fsRmdir(validPath, options);
-    this.#capture?.push({ op: 'mkdir', path: validPath, was });
+    this.#capture?.push({
+      op: 'mkdir',
+      path: validPath,
+      mode: before && before.mode & 0o777,
+      was: before && identityOf(before),
+    });
   }
 
   async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {
@@ -605,7 +608,7 @@ export class GuardedFileSystem {
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.
     // ponytail: upgrade path is snapshotting destination entries here before
-    // fsCp, the way #snapshotTree does.
+    // fsCp, the way snapshotTree does.
     this.#capture?.abandon('copies are not undoable yet');
     await fsCp(validSource, validDest, options);
   }

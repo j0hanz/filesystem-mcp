@@ -159,7 +159,8 @@ async function gate(
     console.log(preview);
   }
   // ponytail: no stale-preview check between dry run and apply; exact-match
-  // edit fails instead of corrupting, and the model sees that error.
+  // edit fails instead of corrupting, and the model sees that error. Add a
+  // content-hash check if a user reports an apply that differs from its preview.
   const answer = (await ask('apply? [y/N/why] '))?.trim() ?? '';
   if (answer.toLowerCase() === 'y') return null;
   const why = /^why:\s*(.+)/i.exec(answer)?.[1];

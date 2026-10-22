@@ -14,13 +14,17 @@ ceiling: SDK unsubscribe contract has no per-subscription id.
 upgrade: per-subscription-id keying retires both quirks (see memory
 `watcher-no-subscription-id`).
 
-## src/core/undo.ts:383
+## src/core/undo.ts:661
 
-Recreated directory gets the default mode on undo. Simplified: no chmod record;
-mkdir's mode is masked by the umask. Files get their exact mode back;
-directories do not.
-ceiling: `GuardedFileSystem` has no chmod.
-upgrade: add a chmod record.
+Recreated directory gets its recorded mode back through `mkdir` on undo, with
+owner rwx forced so the server can write the children back. Simplified: no
+chmod; mkdir's mode is masked by the umask, so group/other bits can come back
+narrower than they were, never wider.
+ceiling: umask-cleared bits (group/other write, e.g. `0775` as `0755`) are not
+restored; an owner-read-only folder comes back owner-writable; a parent that an
+older move's undo recreated first keeps the default mode (its `mkdir` record
+then counts it as done).
+upgrade: a guarded `chmod` on `GuardedFileSystem` for exact bits.
 
 ## src/core/store.ts:297
 
@@ -32,37 +36,35 @@ store so any caller can drive it.
 upgrade: pass a byte weight to `set` the way `ResourceStore` does, if memory
 pressure shows up.
 
-## src/core/schema.ts:232 (no-trigger)
+## src/core/schema.ts:232
 
 Charset regex, not `z.base64url()`. Simplified: the SDK's AJV warns on the
 unknown `base64url` format; the server's own decode (cursor.ts) is the real
 validation, so the alphabet-only client schema is safe.
 ceiling: client-facing schema accepts any base64url-alphabet string.
-upgrade: none named — comment argues the simplification is permanently safe
-and gives no revisit trigger. Rot risk: revisit if the SDK's AJV ever learns
-the `base64url` format.
+upgrade: `z.base64url()`, once the SDK's AJV registers the `base64url` format.
 
-## src/core/fs.ts:269
+## src/core/fs.ts:301
 
 Rename undo check is identity-only. Simplified: a moved directory whose
 contents changed after the move is still moved back.
 ceiling: no content fidelity for moved directories.
 upgrade: hash the tree under `to` before recording it.
 
-## src/core/fs.ts:413
+## src/core/fs.ts:446
 
 Undo capture saves the whole old file, not its size. Simplified: a multi-GB
 append goes over the capture budget and reads as not undoable.
 ceiling: whole-file capture against the undo budget.
 upgrade: a `truncate` record with a streamed after-hash.
 
-## src/core/fs.ts:570
+## src/core/fs.ts:610
 
 Forced `cp` abandons the undo capture. Simplified: undoing a forced cp means
 telling new files apart from overwritten ones across a merged tree.
 ceiling: copies are not undoable.
 upgrade: snapshot destination entries here before `fsCp`, the way
-`#snapshotTree` does.
+`snapshotTree` does.
 
 ## src/server.ts:143
 
@@ -74,14 +76,15 @@ ceiling: cross-tick bursts (batch externalizations separated by fs awaits)
 still fan out; protects the stdio/in-memory leg only.
 upgrade: a store-level debounce, if clients ever report the cross-tick burst.
 
-## examples/clients/gatekeeper/agent.ts:161 (no-trigger)
+## examples/clients/gatekeeper/agent.ts:161
 
 No stale-preview check between dry run and apply. Simplified: exact-match edit
 fails instead of corrupting, and the model sees that error.
 ceiling: an edit applied after the file changed under it fails rather than
 being caught pre-apply.
-upgrade: none named — example code, low rot risk, but no revisit trigger.
+upgrade: a content-hash check, if a user reports an apply that differs from its
+preview.
 
 ---
 
-10 markers, 2 with no trigger.
+9 markers, 0 with no trigger.

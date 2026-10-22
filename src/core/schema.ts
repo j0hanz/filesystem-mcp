@@ -232,6 +232,7 @@ export function mapOptionalPath<T extends { path?: string | undefined }>(
 // ponytail: charset regex, not z.base64url() — the SDK's AJV warns on the
 // unknown `base64url` format; the server's own decode (cursor.ts) is the real
 // validation, so loosening the client-facing schema to the alphabet is safe.
+// Revisit if the SDK's AJV registers `base64url`: z.base64url() then fits.
 const base64urlCursor = z.string().regex(/^[A-Za-z0-9_-]+$/);
 
 // Ships once per paginated tool — wording is budgeted (TOOL-SURFACE-002).
