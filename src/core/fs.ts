@@ -608,7 +608,7 @@ export class GuardedFileSystem {
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.
     // ponytail: upgrade path is snapshotting destination entries here before
-    // fsCp, the way #snapshotTree does.
+    // fsCp, the way snapshotTree does.
     this.#capture?.abandon('copies are not undoable yet');
     await fsCp(validSource, validDest, options);
   }
