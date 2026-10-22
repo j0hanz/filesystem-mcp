@@ -5,6 +5,7 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { defaultFalseBoolean } from '../core/schema.ts';
 import type { UndoEntry, UndoFileResult } from '../core/undo.ts';
 import { restoreEntry } from '../core/undo.ts';
+import { isTotalFailure, summarize } from './batch.ts';
 import { defineTool } from './define.ts';
 
 const UndoInputSchema = z.strictObject({
@@ -25,8 +26,6 @@ const UndoInputSchema = z.strictObject({
 interface UndoOutput {
   steps: { id: string; tool: string; results: UndoFileResult[] }[];
 }
-
-const SKIPPED_OR_FAILED = (r: UndoFileResult): boolean => 'error' in r;
 
 export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
   name: 'undo',
@@ -68,7 +67,7 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     } else if (steps !== undefined) {
       entries = journal.newest(steps);
     } else if (dryRun) {
-      entries = journal.list();
+      entries = journal.newest(Infinity);
     } else {
       entries = journal.newest(1);
     }
@@ -80,8 +79,6 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     // valid (their recorded bytes are what the latest call left behind only
     // once the later writes are gone).
     const stepResults: UndoOutput['steps'] = [];
-    let total = 0;
-    let skippedOrFailed = 0;
     // One simulated-state map across every entry: a dry run must see what
     // reverting the newer entries would change, or its per-step preview lies.
     const simulated = dryRun ? new Map<string, string | null>() : undefined;
@@ -101,8 +98,6 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       // A cancelled restore keeps what it finished: done records left the journal above.
       ctx.signal.throwIfAborted();
       stepResults.push({ id: entry.id, tool: entry.tool, results: outcome.results });
-      total += outcome.results.length;
-      skippedOrFailed += outcome.results.filter(SKIPPED_OR_FAILED).length;
     }
 
     const text = stepResults
@@ -118,7 +113,7 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     return {
       structured: { steps: stepResults },
       text,
-      isError: total > 0 && skippedOrFailed === total,
+      isError: isTotalFailure(summarize(stepResults.flatMap((s) => s.results))),
     };
   },
 });

@@ -212,11 +212,6 @@ export class UndoJournal {
     else this.#renameIndex?.set(key, [record]);
   }
 
-  list(): UndoEntry[] {
-    this.#pruneExpired(Date.now());
-    return [...this.#byId.values()].reverse();
-  }
-
   clear(): void {
     this.#renameIndex = undefined;
     this.#byId.clear();

@@ -52,7 +52,7 @@ describe('UndoJournal', () => {
       newestTwo.map((e) => e.id),
       [third, second],
     );
-    assert.strictEqual(journal.list()[0]?.id, third);
+    assert.strictEqual(journal.newest(Infinity)[0]?.id, third);
   });
 
   it('the 65th add evicts the oldest', () => {
@@ -62,8 +62,8 @@ describe('UndoJournal', () => {
     assert.ok(ids[0] && ids[1]);
     assert.strictEqual(journal.get(ids[0]), undefined);
     assert.ok(journal.get(ids[1]));
-    assert.strictEqual(journal.list().length, 64);
-    assert.strictEqual(journal.list().at(-1)?.id, ids[1]);
+    assert.strictEqual(journal.newest(Infinity).length, 64);
+    assert.strictEqual(journal.newest(Infinity).at(-1)?.id, ids[1]);
   });
 
   it('a byte cap keeps only the newest entries', () => {
@@ -84,7 +84,7 @@ describe('UndoJournal', () => {
     assert.ok(journal.get(id));
     now = 30 * 60 * 1000;
     assert.strictEqual(journal.get(id), undefined);
-    assert.deepStrictEqual(journal.list(), []);
+    assert.deepStrictEqual(journal.newest(Infinity), []);
   });
 
   it('replaceRecords keeps position; empty records delete the entry', (t) => {
@@ -96,7 +96,7 @@ describe('UndoJournal', () => {
     journal.replaceRecords(first, kept);
     assert.strictEqual(journal.get(first)?.records, kept);
     assert.deepStrictEqual(
-      journal.list().map((e) => e.id),
+      journal.newest(Infinity).map((e) => e.id),
       [second, first],
     );
     journal.replaceRecords(second, []);
@@ -675,7 +675,7 @@ describe('restoreEntry', () => {
     ) => {
       journal.reidentify(was, identity);
     };
-    const movedInJournal = journal.list()[0];
+    const movedInJournal = journal.newest(Infinity)[0];
     assert.ok(movedInJournal);
     const second = await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
     const first = await restoreEntry(movedInJournal, newFs(), { dryRun: false });
