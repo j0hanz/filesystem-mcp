@@ -646,14 +646,34 @@ describe('restoreEntry', () => {
     const a = join(tmpDir, 'edit-after-move-a.txt');
     const b = join(tmpDir, 'edit-after-move-b.txt');
     await writeFile(a, 'v1');
+    const journal = new UndoJournal();
     const moved = await captureOne((fs) => fs.rename(a, b));
     const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
-    const reidentified = new Map();
-    const second = await restoreEntry(edited, newFs(), { dryRun: false, reidentified });
-    const first = await restoreEntry(moved, newFs(), { dryRun: false, reidentified });
+    journal.add('move', moved.records);
+    const onRewrite = (path: string, identity: Parameters<UndoJournal['reidentify']>[1]) => {
+      journal.reidentify(path, identity);
+    };
+    const movedInJournal = journal.list()[0];
+    assert.ok(movedInJournal);
+    const second = await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
+    const first = await restoreEntry(movedInJournal, newFs(), { dryRun: false });
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual([second.remaining, first.remaining], [[], []]);
     assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
+  });
+
+  it('a skipped directory restore does not restore its children through a symlink', async (t) => {
+    const tree = join(tmpDir, 'swapped-tree');
+    const elsewhere = join(tmpDir, 'swapped-elsewhere');
+    await mkdir(tree, { recursive: true });
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(tree, 'file.txt'), 'saved');
+    const entry = await captureOne((fs) => fs.rm(tree, { recursive: true, force: true }));
+    if (!(await trySymlink(elsewhere, tree, () => t.skip('symlink not permitted')))) return;
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual(await fsPromises.readdir(elsewhere), []);
+    assert.strictEqual(outcome.remaining.length, entry.records.length);
   });
 
   it('live captures share one byte budget', () => {

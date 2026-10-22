@@ -5,7 +5,7 @@ import {
   readlink as fsReadlink,
   stat as fsStat,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 import {
   ErrorCode,
@@ -18,7 +18,7 @@ import {
 import type { GuardedFileSystem } from './fs.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
-export interface FileIdentity {
+interface FileIdentity {
   dev: number;
   ino: number;
   birthtimeMs: number;
@@ -159,6 +159,15 @@ export class UndoJournal {
     }
     const entry = this.#byId.get(id);
     if (entry) entry.records = records;
+  }
+
+  /** Re-key every move record that ends at `path`: a restore replaced the file there. */
+  reidentify(path: string, identity: FileIdentity): void {
+    for (const entry of this.#byId.values()) {
+      for (const record of entry.records) {
+        if (record.op === 'rename' && record.to === path) record.identity = identity;
+      }
+    }
   }
 
   list(): UndoEntry[] {
@@ -398,16 +407,22 @@ export async function restoreEntry(
   opts: {
     dryRun: boolean;
     simulated?: Map<string, string | null> | undefined;
-    /** Restored files get a new inode; a rename record for the path still matches it. */
-    reidentified?: Map<string, FileIdentity> | undefined;
+    /**
+     * A restore wrote a new file at `path`, so it has a new inode; the owner
+     * of the journal re-keys any move record that ends there, in this entry
+     * or an older one, so that move still finds its file.
+     */
+    onRewrite?: ((path: string, identity: FileIdentity) => void) | undefined;
   },
 ): Promise<RestoreOutcome> {
   const { dryRun } = opts;
   // Shared across entries by the caller when the whole run is simulated.
   // Values are null (absent), a 64-char sha256 hex (regular file), or 'dir'/'link'/'moved'.
   const simulated = opts.simulated ?? new Map<string, string | null>();
-  // Shared across entries like `simulated`, for real runs.
-  const reidentified = opts.reidentified ?? new Map<string, FileIdentity>();
+  // Records that did not run because a directory they sit under was not restored.
+  const blocked: string[] = [];
+  const isBlocked = (path: string): boolean =>
+    blocked.some((dir) => path === dir || path.startsWith(dir + sep));
   const results: UndoFileResult[] = [];
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
@@ -464,6 +479,11 @@ export async function restoreEntry(
     .sort((a, b) => b.record.path.length - a.record.path.length);
 
   for (const { record, order } of [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs]) {
+    const anchor = record.op === 'rename' ? record.from : record.path;
+    if (isBlocked(anchor)) {
+      skip(record, order, anchor);
+      continue;
+    }
     try {
       switch (record.op) {
         case 'write': {
@@ -476,7 +496,7 @@ export async function restoreEntry(
               if (!dryRun) {
                 await fs.writeFile(record.path, record.bytes, { mode: record.mode });
                 const at = await fs.lstat(record.path);
-                reidentified.set(record.path, {
+                opts.onRewrite?.(record.path, {
                   dev: at.stats.dev,
                   ino: at.stats.ino,
                   birthtimeMs: at.stats.birthtimeMs,
@@ -534,6 +554,7 @@ export async function restoreEntry(
           ) {
             done(record.path);
           } else {
+            blocked.push(record.path);
             skip(record, order, record.path);
           }
           break;
@@ -554,15 +575,10 @@ export async function restoreEntry(
           // would overwrite it. The pair is taken in a fixed key order (and
           // deduped) so two concurrent pairs cannot deadlock.
           await fs.lockPairForWrite(record.from, record.to, async () => {
-            // The recorded object, or the file an earlier restore wrote back to `to`.
-            const sameAs = (id: FileIdentity, s: FileIdentity): boolean =>
-              s.dev === id.dev && s.ino === id.ino && s.birthtimeMs === id.birthtimeMs;
-            const same = (s: FileIdentity): boolean => {
-              const rewritten = reidentified.get(record.to);
-              return (
-                sameAs(record.identity, s) || (rewritten !== undefined && sameAs(rewritten, s))
-              );
-            };
+            const same = (s: FileIdentity): boolean =>
+              s.dev === record.identity.dev &&
+              s.ino === record.identity.ino &&
+              s.birthtimeMs === record.identity.birthtimeMs;
             const toKnown = simulated.get(record.to);
             let toHere: boolean;
             let toIsRealDir = false;
