@@ -487,14 +487,33 @@ export async function restoreEntry(
      * folder where it still sits on disk.
      */
     relocations?: [string, string][] | undefined;
+    /** Dry-run directories map to their on-disk tree, or null when rebuilt from saved records. */
+    directoryBackings?: Map<string, string | null> | undefined;
   },
 ): Promise<RestoreOutcome> {
   const { dryRun, signal } = opts;
   const relocations = opts.relocations ?? [];
+  const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
+  const hasPathBoundary = (directory: string, candidate: string): boolean =>
+    candidate.length === directory.length ||
+    directory.endsWith('/') ||
+    (IS_WINDOWS && directory.endsWith('\\')) ||
+    candidate[directory.length] === '/' ||
+    (IS_WINDOWS && candidate[directory.length] === '\\');
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (isPathInsideDirectory(from, out)) out = to + out.slice(from.length);
+      if (out.startsWith(from) && hasPathBoundary(from, out)) {
+        out = to + out.slice(from.length);
+      } else if (
+        isPathInsideDirectory(from, out) &&
+        from.toLowerCase().length === from.length &&
+        out.slice(0, from.length).toLowerCase().length === from.length &&
+        out.slice(0, from.length).toLowerCase() === from.toLowerCase() &&
+        hasPathBoundary(from, out)
+      ) {
+        out = to + out.slice(from.length);
+      }
     }
     return out;
   };
@@ -545,8 +564,15 @@ export async function restoreEntry(
       (await hashFile(fs, disk(path), signal)) === expect
     );
   };
-  const simulate = (path: string, state: string | null): void => {
-    if (dryRun) simulated.set(path, state);
+  const simulate = (
+    path: string,
+    state: string | null,
+    directoryBacking: string | null = null,
+  ): void => {
+    if (!dryRun) return;
+    simulated.set(path, state);
+    if (state === 'dir') directoryBackings.set(path, directoryBacking);
+    else directoryBackings.delete(path);
   };
 
   // Run non-rmdir records in reverse first, then deduplicated rmdirs deepest-first
@@ -672,22 +698,16 @@ export async function restoreEntry(
             const toKnown = simulated.get(record.to);
             let toHere: boolean;
             let toIsRealDir = false;
+            let toBacking: string | undefined;
             // What undoing leaves at `from`, so an older record's check can
             // match it in a later simulated step: a hash, or 'dir'/'link'.
             let toState: string | undefined;
             if (toKnown !== undefined) {
               toHere = toKnown !== null;
               toState = toKnown ?? undefined;
-              // A folder an earlier simulated step moved to `to` still sits at
-              // disk(to); relocate through it like a folder read from disk.
               if (dryRun && toKnown === 'dir') {
-                toIsRealDir = await fs.lstat(disk(record.to)).then(
-                  (r) => r.stats.isDirectory(),
-                  (error: unknown) => {
-                    if (!isMissing(error)) throw error;
-                    return false;
-                  },
-                );
+                toBacking = directoryBackings.get(record.to) ?? undefined;
+                toIsRealDir = toBacking !== undefined;
               }
             } else {
               const at = await fs.lstat(disk(record.to)).then(
@@ -700,6 +720,7 @@ export async function restoreEntry(
               if (at !== undefined && sameIdentity(at.stats, record.identity)) {
                 toHere = true;
                 toIsRealDir = at.stats.isDirectory();
+                if (toIsRealDir) toBacking = disk(record.to);
                 if (dryRun) {
                   toState = at.stats.isDirectory()
                     ? 'dir'
@@ -723,8 +744,8 @@ export async function restoreEntry(
                     },
                   );
             if (toHere && fromFree) {
-              if (toIsRealDir) {
-                await assertTreeKeepsPolicy(fs, disk(record.to), record.to, record.from);
+              if (toIsRealDir && toBacking !== undefined) {
+                await assertTreeKeepsPolicy(fs, toBacking, record.to, record.from);
               }
               if (!dryRun) {
                 await fs.mkdir(dirname(record.from), { recursive: true });
@@ -737,9 +758,9 @@ export async function restoreEntry(
                   opts.onRewrite?.(record.identity, landed);
                 }
               }
-              if (dryRun && toIsRealDir) relocations.push([record.from, disk(record.to)]);
+              if (dryRun && toBacking !== undefined) relocations.push([record.from, toBacking]);
               simulate(record.to, null);
-              simulate(record.from, toState ?? 'moved');
+              simulate(record.from, toState ?? 'moved', toBacking ?? null);
               done(record.from);
             } else {
               skip(record, order, record.from);

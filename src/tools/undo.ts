@@ -83,12 +83,14 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     // reverting the newer entries would change, or its per-step preview lies.
     const simulated = dryRun ? new Map<string, string | null>() : undefined;
     const relocations: [string, string][] = [];
+    const directoryBackings = dryRun ? new Map<string, string | null>() : undefined;
     for (const entry of entries) {
       ctx.signal.throwIfAborted();
       const outcome = await restoreEntry(entry, ctx.fs, {
         dryRun,
         simulated,
         relocations,
+        directoryBackings,
         signal: ctx.signal,
         onRewrite: (was, identity) => {
           journal.reidentify(was, identity);

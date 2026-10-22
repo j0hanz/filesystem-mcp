@@ -3,6 +3,7 @@ import type { Client } from '@modelcontextprotocol/client';
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
 import { after, before, describe, it } from 'node:test';
 
 import type { Problem } from '../src/core/errors.ts';
@@ -422,10 +423,18 @@ describe('restoreEntry', () => {
   const dryRunAll = async (entries: UndoEntry[]) => {
     const simulated = new Map<string, string | null>();
     const relocations: [string, string][] = [];
+    const directoryBackings = new Map<string, string | null>();
     const results = [];
     for (const entry of entries) {
       results.push(
-        ...(await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations })).results,
+        ...(
+          await restoreEntry(entry, newFs(), {
+            dryRun: true,
+            simulated,
+            relocations,
+            directoryBackings,
+          })
+        ).results,
       );
     }
     return results;
@@ -795,9 +804,15 @@ describe('restoreEntry', () => {
     const moved = await captureOne((fs) => fs.rename(a, b));
     const simulated = new Map<string, string | null>();
     const relocations: [string, string][] = [];
+    const directoryBackings = new Map<string, string | null>();
     const results = [];
     for (const entry of [moved, edited]) {
-      const out = await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations });
+      const out = await restoreEntry(entry, newFs(), {
+        dryRun: true,
+        simulated,
+        relocations,
+        directoryBackings,
+      });
       results.push(...out.results);
     }
     assert.deepStrictEqual(
@@ -819,6 +834,36 @@ describe('restoreEntry', () => {
     assert.deepStrictEqual(
       results.filter((r) => 'error' in r),
       [],
+    );
+  });
+
+  it('dry run does not remap a length-changing lowercase alias', async (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const from = join(tmpDir, 'unicode-İ');
+    const to = join(tmpDir, 'unicode-moved');
+    await mkdir(from, { recursive: true });
+    await writeFile(join(from, 'f.txt'), 'before');
+    const edited = await captureOne((fs) => fs.writeFile(join(from, 'f.txt'), 'after'));
+    const moved = await captureOne((fs) => fs.rename(from, to));
+    const aliasEntry: UndoEntry = {
+      ...edited,
+      records: edited.records.map((record) =>
+        record.op === 'write'
+          ? { ...record, path: join(tmpDir, 'unicode-i\u0307', 'f.txt') }
+          : record,
+      ),
+    };
+    const malformed = `${to}\u0307`;
+    await mkdir(malformed, { recursive: true });
+    await writeFile(join(malformed, 'f.txt'), 'after');
+
+    const results = await dryRunAll([moved, aliasEntry]);
+    assert.deepStrictEqual(
+      results.filter((result) => 'error' in result).map((result) => result.path),
+      [join(tmpDir, 'unicode-i\u0307', 'f.txt')],
     );
   });
 
@@ -864,6 +909,56 @@ describe('restoreEntry', () => {
       results.filter((r) => 'error' in r),
       [],
     );
+  });
+
+  it('dry run does not use a replacement tree as backing for a recreated directory', async () => {
+    const policyCtx = await withEnv({ FS_DENYLIST: '**/X/blocked.txt' }, () =>
+      createTestServer([tmpDir]),
+    );
+    try {
+      const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
+        const cap = new UndoCapture(32 * 1024 * 1024);
+        await run(new GuardedFileSystem(policyCtx.pathGuard, cap));
+        assert.strictEqual(cap.unavailable, undefined);
+        return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
+      };
+      const x = join(tmpDir, 'X');
+      const p = join(tmpDir, 'P');
+      const q = join(tmpDir, 'Q');
+      assert.strictEqual(policyCtx.pathGuard.isSensitive(join(x, 'blocked.txt')), true);
+      assert.strictEqual(policyCtx.pathGuard.isSensitive(join(p, 'blocked.txt')), false);
+      await mkdir(x, { recursive: true });
+      await writeFile(join(x, 'f.txt'), 'saved');
+      const movedX = await capture((fs) => fs.rename(x, p));
+      const deletedP = await capture((fs) => fs.rm(p, { recursive: true, force: true }));
+      await mkdir(q, { recursive: true });
+      await writeFile(join(q, 'blocked.txt'), 'not part of X');
+      const movedQ = await capture((fs) => fs.rename(q, p));
+
+      const simulated = new Map<string, string | null>();
+      const relocations: [string, string][] = [];
+      const directoryBackings = new Map<string, string | null>();
+      const results = [];
+      for (const entry of [movedQ, deletedP, movedX]) {
+        results.push(
+          ...(
+            await restoreEntry(entry, new GuardedFileSystem(policyCtx.pathGuard), {
+              dryRun: true,
+              simulated,
+              relocations,
+              directoryBackings,
+            })
+          ).results,
+        );
+      }
+      assert.deepStrictEqual(
+        results.filter((result) => 'error' in result),
+        [],
+      );
+    } finally {
+      policyCtx.disposeRuntimeState();
+      await policyCtx.mcp.close();
+    }
   });
 
   it('an aborted restore returns every unprocessed record and touches nothing', async () => {
