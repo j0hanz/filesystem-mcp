@@ -182,11 +182,27 @@ export class GuardedFileSystem {
    * happen (`runExclusive` is not re-entrant).
    */
   async lockPairForWrite<T>(a: string, b: string, fn: () => Promise<T>): Promise<T> {
+    // `a` is where a rename lands (resolved like the move tool's destination);
+    // `b` is the entry being moved, kept as itself so a symlink is locked as
+    // the link, not its target. A `b` whose parent is gone (a dry-run
+    // intermediate) falls back to write validation.
     const keyA = await this.pathGuard.validatePathForWrite(a);
-    const keyB = await this.pathGuard.validatePathForWrite(b);
+    const keyB = await this.pathGuard
+      .validatePathForDelete(b)
+      .catch(() => this.pathGuard.validatePathForWrite(b));
     if (keyA === keyB) return runExclusive(keyA, fn);
     const [first, second] = keyA < keyB ? [keyA, keyB] : [keyB, keyA];
     return runExclusive(first, () => runExclusive(second, fn));
+  }
+
+  /**
+   * Bytes of a regular file for undo capture, read through the same
+   * O_NOFOLLOW, descriptor-verified open as every other reader: a path swapped
+   * for a symlink after validation fails instead of pulling outside bytes in.
+   */
+  async readSaved(validPath: string): Promise<Buffer> {
+    await using handle = await this.#openVerified(validPath, validPath);
+    return await handle.readFile();
   }
 
   async stat(
@@ -269,7 +285,7 @@ export class GuardedFileSystem {
           capture.abandon('move replaced a directory');
         } else if (dest.isFile()) {
           if (capture.reserve(dest.size)) {
-            destBytes = await fsReadFile(validNew);
+            destBytes = await this.readSaved(validNew);
             destMode = dest.mode & 0o777;
           }
         } else {
@@ -332,7 +348,7 @@ export class GuardedFileSystem {
         if (!existing.isFile()) {
           this.#capture.abandon('cannot capture a write over a non-regular file');
         } else if (this.#capture.reserve(existing.size)) {
-          oldBytes = await fsReadFile(validPath);
+          oldBytes = await this.readSaved(validPath);
         }
       }
     } catch (error) {
@@ -430,7 +446,7 @@ export class GuardedFileSystem {
     if (this.#capture && !this.#capture.unavailable && existing) {
       try {
         if (this.#capture.reserve(existing.size)) {
-          oldBytes = await fsReadFile(validPath);
+          oldBytes = await this.readSaved(validPath);
           oldMode = existing.mode & 0o777;
         }
       } catch {
@@ -474,6 +490,9 @@ export class GuardedFileSystem {
       // write stays.
       await handle.writeFile(content, { signal });
     } catch (error) {
+      // A failure after the open can leave a prefix of the content behind,
+      // which no record covers; the call is then not undoable.
+      this.#capture?.abandon('the append failed part-way');
       if (created) {
         await fsUnlink(validPath).catch((unlinkError: unknown) => {
           Logger.warn(
@@ -549,8 +568,7 @@ export class GuardedFileSystem {
     // recursive rm can fail halfway with files already gone.
     const capture = this.#capture;
     if (capture && !capture.unavailable) {
-      const records = await snapshotTree(capture, this.pathGuard, validPath);
-      capture.push(...records);
+      await snapshotTree(capture, this, validPath);
     }
     await fsRm(validPath, options);
   }

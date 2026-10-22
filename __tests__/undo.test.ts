@@ -642,6 +642,35 @@ describe('restoreEntry', () => {
     );
   });
 
+  it('an edit after a move: undoing both steps still moves the file back', async () => {
+    const a = join(tmpDir, 'edit-after-move-a.txt');
+    const b = join(tmpDir, 'edit-after-move-b.txt');
+    await writeFile(a, 'v1');
+    const moved = await captureOne((fs) => fs.rename(a, b));
+    const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
+    const reidentified = new Map();
+    const second = await restoreEntry(edited, newFs(), { dryRun: false, reidentified });
+    const first = await restoreEntry(moved, newFs(), { dryRun: false, reidentified });
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual([second.remaining, first.remaining], [[], []]);
+    assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
+  });
+
+  it('live captures share one byte budget', () => {
+    const journal = new UndoJournal(4096);
+    const one = journal.beginCapture();
+    const two = journal.beginCapture();
+    assert.ok(one.reserve(2000));
+    one.push(writeRecord(2000));
+    assert.strictEqual(two.reserve(2000), false);
+    assert.strictEqual(two.unavailable, 'too large to keep for undo');
+    journal.endCapture(one);
+    journal.endCapture(two);
+    const three = journal.beginCapture();
+    assert.ok(three.reserve(2000));
+    journal.endCapture(three);
+  });
+
   it('dry run: chained moves restore through simulated intermediate paths', async () => {
     const a = join(tmpDir, 'chain-a.txt');
     const b = join(tmpDir, 'chain-b.txt');

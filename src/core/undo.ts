@@ -2,18 +2,23 @@ import { createHash, randomInt } from 'node:crypto';
 import {
   lstat as fsLstat,
   readdir as fsReaddir,
-  readFile as fsReadFile,
   readlink as fsReadlink,
   stat as fsStat,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { ErrorCode, isMissing, isNodeError, type PerPathResult, Problem } from './errors.ts';
+import {
+  ErrorCode,
+  FsError,
+  isMissing,
+  isNodeError,
+  type PerPathResult,
+  Problem,
+} from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import type { PathGuard } from './path.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
-interface FileIdentity {
+export interface FileIdentity {
   dev: number;
   ino: number;
   birthtimeMs: number;
@@ -92,6 +97,8 @@ export class UndoJournal {
   }
 
   #live = 0;
+  /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
+  readonly #pool: LivePool = { bytes: 0 };
 
   /**
    * Start a capture for a mutating call. Past the live cap the call still
@@ -99,7 +106,7 @@ export class UndoJournal {
    * pair every `beginCapture` with `endCapture` when the call finishes.
    */
   beginCapture(): UndoCapture {
-    const capture = new UndoCapture(this.maxBytes);
+    const capture = new UndoCapture(this.maxBytes, this.#pool);
     if (this.#live < MAX_LIVE_CAPTURES) {
       this.#live += 1;
       capture.holdsSlot = true;
@@ -110,6 +117,9 @@ export class UndoJournal {
   }
 
   endCapture(capture: UndoCapture | undefined): void {
+    // Its records now live in the journal (or were dropped); either way the
+    // live pool no longer owes them.
+    capture?.release();
     if (capture?.holdsSlot) {
       capture.holdsSlot = false;
       this.#live -= 1;
@@ -161,6 +171,10 @@ export class UndoJournal {
   }
 }
 
+interface LivePool {
+  bytes: number;
+}
+
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   unavailable: string | undefined;
@@ -168,15 +182,41 @@ export class UndoCapture {
   holdsSlot = false;
   #bytes = 0;
   readonly maxBytes: number;
+  readonly #pool: LivePool | undefined;
 
-  constructor(maxBytes: number) {
+  constructor(maxBytes: number, pool?: LivePool) {
     this.maxBytes = maxBytes;
+    this.#pool = pool;
   }
 
-  /** Gate before reading n more saved bytes; the bytes are charged at `push`. */
+  /** Bytes charged against the budget: the shared live total when pooled. */
+  #used(): number {
+    return this.#pool?.bytes ?? this.#bytes;
+  }
+
+  #charge(n: number): void {
+    this.#bytes += n;
+    if (this.#pool) this.#pool.bytes += n;
+  }
+
+  /** True once abandoned; a method so callers re-read it after an await. */
+  isAbandoned(): boolean {
+    return this.unavailable !== undefined;
+  }
+
+  /** Return this capture's charge to the shared pool; call when the call ends. */
+  release(): void {
+    if (this.#pool) this.#pool.bytes -= this.#bytes;
+    this.#bytes = 0;
+  }
+
+  /**
+   * Gate before reading n more saved bytes (plus the record that will hold
+   * them); the bytes are charged at `push`.
+   */
   reserve(n: number): boolean {
     if (this.unavailable !== undefined) return false;
-    if (this.#bytes + n > this.maxBytes) {
+    if (this.#used() + n + RECORD_OVERHEAD_BYTES > this.maxBytes) {
       this.abandon('too large to keep for undo');
       return false;
     }
@@ -188,18 +228,18 @@ export class UndoCapture {
     if (this.unavailable !== undefined) return;
     this.unavailable = reason;
     this.records.length = 0;
-    this.#bytes = 0;
+    this.release();
   }
 
   push(...records: UndoRecord[]): void {
     if (this.unavailable !== undefined) return;
     for (const record of records) {
       const cost = recordWeight(record);
-      if (this.#bytes + cost > this.maxBytes) {
+      if (this.#used() + cost > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
       }
-      this.#bytes += cost;
+      this.#charge(cost);
       this.records.push(record);
     }
   }
@@ -236,32 +276,34 @@ export async function plannedMkdirChain(
 }
 
 /**
- * Post-order snapshot of the tree at `validPath` for undo: children first,
- * so a parent is recreated before its children on restore. Any read failure
- * abandons the whole capture; a sensitive path anywhere in the tree refuses
- * to be captured.
+ * Post-order snapshot of the tree at `validPath` for undo, pushed onto
+ * `capture` as the walk goes: children first, so a parent is recreated before
+ * its children on restore. Charging per entry stops an oversized tree before
+ * it is all in memory. Any read failure abandons the whole capture; a
+ * sensitive path anywhere in the tree refuses to be captured.
  */
 export async function snapshotTree(
   capture: UndoCapture,
-  pathGuard: PathGuard,
+  fs: GuardedFileSystem,
   validPath: string,
-): Promise<UndoRecord[]> {
-  if (capture.unavailable !== undefined) return [];
+): Promise<void> {
+  if (capture.unavailable !== undefined) return;
   try {
     const stats = await fsLstat(validPath).catch((error: unknown) => {
       if (!isMissing(error)) throw error;
       return undefined;
     });
     // ENOENT on the root (the `force` case): nothing will be deleted.
-    if (stats === undefined) return [];
-    if (pathGuard.isSensitive(validPath)) {
+    if (stats === undefined) return;
+    if (fs.pathGuard.isSensitive(validPath)) {
       capture.abandon('contains protected files');
-      return [];
+      return;
     }
     if (stats.isFile()) {
-      if (!capture.reserve(stats.size)) return [];
-      const bytes = await fsReadFile(validPath);
-      return [{ op: 'write', path: validPath, bytes, mode: stats.mode & 0o777, expect: null }];
+      if (!capture.reserve(stats.size)) return;
+      const bytes = await fs.readSaved(validPath);
+      capture.push({ op: 'write', path: validPath, bytes, mode: stats.mode & 0o777, expect: null });
+      return;
     }
     if (stats.isSymbolicLink()) {
       const target = await fsReadlink(validPath);
@@ -276,27 +318,57 @@ export async function snapshotTree(
           : false;
       if (isDir === undefined) {
         capture.abandon('could not type a link whose target is gone');
-        return [];
+        return;
       }
-      return [{ op: 'symlink', path: validPath, target, type: isDir ? 'junction' : 'file' }];
+      capture.push({ op: 'symlink', path: validPath, target, type: isDir ? 'junction' : 'file' });
+      return;
     }
     if (stats.isDirectory()) {
       const children = await fsReaddir(validPath);
-      const records: UndoRecord[] = [];
       for (const name of children) {
-        records.push(...(await snapshotTree(capture, pathGuard, join(validPath, name))));
+        await snapshotTree(capture, fs, join(validPath, name));
+        if (capture.isAbandoned()) return;
       }
-      records.push({ op: 'mkdir', path: validPath });
-      return records;
+      capture.push({ op: 'mkdir', path: validPath });
+      return;
     }
     // Anything else (FIFO, socket, device) has no restore record. Journaling
     // the parent without it would report a restore that silently misses the
     // entry, so the whole capture is refused instead.
     capture.abandon('cannot capture a non-regular entry');
-    return [];
   } catch {
     capture.abandon('could not read the deleted files');
-    return [];
+  }
+}
+
+/**
+ * A directory may go back only if every entry keeps its sensitive-file status,
+ * as the move tool requires: path rules (`secrets/**`) follow the path, so
+ * something created under the moved directory since would leave protection.
+ * Fails closed when the tree cannot be fully listed.
+ */
+async function assertTreeKeepsPolicy(
+  fs: GuardedFileSystem,
+  from: string,
+  to: string,
+): Promise<void> {
+  const refuse = (cause?: unknown): never => {
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      'Undo refused: the directory contains entries whose protection would change when moved back',
+      to,
+      cause,
+    );
+  };
+  try {
+    const guard = fs.pathGuard;
+    const names = ['', ...(await fsReaddir(from, { recursive: true }))];
+    for (const name of names) {
+      if (guard.isSensitive(join(from, name)) !== guard.isSensitive(join(to, name))) refuse();
+    }
+  } catch (error) {
+    if (error instanceof FsError) throw error;
+    refuse(error);
   }
 }
 
@@ -323,12 +395,19 @@ async function hashFile(fs: GuardedFileSystem, path: string): Promise<string> {
 export async function restoreEntry(
   entry: UndoEntry,
   fs: GuardedFileSystem,
-  opts: { dryRun: boolean; simulated?: Map<string, string | null> | undefined },
+  opts: {
+    dryRun: boolean;
+    simulated?: Map<string, string | null> | undefined;
+    /** Restored files get a new inode; a rename record for the path still matches it. */
+    reidentified?: Map<string, FileIdentity> | undefined;
+  },
 ): Promise<RestoreOutcome> {
   const { dryRun } = opts;
   // Shared across entries by the caller when the whole run is simulated.
   // Values are null (absent), a 64-char sha256 hex (regular file), or 'dir'/'link'/'moved'.
   const simulated = opts.simulated ?? new Map<string, string | null>();
+  // Shared across entries like `simulated`, for real runs.
+  const reidentified = opts.reidentified ?? new Map<string, FileIdentity>();
   const results: UndoFileResult[] = [];
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
@@ -394,7 +473,15 @@ export async function restoreEntry(
                 ? await absent(record.path)
                 : await matchesHash(record.path, record.expect);
             if (ok) {
-              if (!dryRun) await fs.writeFile(record.path, record.bytes, { mode: record.mode });
+              if (!dryRun) {
+                await fs.writeFile(record.path, record.bytes, { mode: record.mode });
+                const at = await fs.lstat(record.path);
+                reidentified.set(record.path, {
+                  dev: at.stats.dev,
+                  ino: at.stats.ino,
+                  birthtimeMs: at.stats.birthtimeMs,
+                });
+              }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
             } else {
@@ -467,12 +554,18 @@ export async function restoreEntry(
           // would overwrite it. The pair is taken in a fixed key order (and
           // deduped) so two concurrent pairs cannot deadlock.
           await fs.lockPairForWrite(record.from, record.to, async () => {
-            const same = (s: { dev: number; ino: number; birthtimeMs: number }): boolean =>
-              s.dev === record.identity.dev &&
-              s.ino === record.identity.ino &&
-              s.birthtimeMs === record.identity.birthtimeMs;
+            // The recorded object, or the file an earlier restore wrote back to `to`.
+            const sameAs = (id: FileIdentity, s: FileIdentity): boolean =>
+              s.dev === id.dev && s.ino === id.ino && s.birthtimeMs === id.birthtimeMs;
+            const same = (s: FileIdentity): boolean => {
+              const rewritten = reidentified.get(record.to);
+              return (
+                sameAs(record.identity, s) || (rewritten !== undefined && sameAs(rewritten, s))
+              );
+            };
             const toKnown = simulated.get(record.to);
             let toHere: boolean;
+            let toIsRealDir = false;
             // What undoing leaves at `from`, so an older record's check can
             // match it in a later simulated step: a hash, or 'dir'/'link'.
             let toState: string | undefined;
@@ -489,6 +582,7 @@ export async function restoreEntry(
               );
               if (at !== undefined && same(at.stats)) {
                 toHere = true;
+                toIsRealDir = at.stats.isDirectory();
                 if (dryRun) {
                   toState = at.stats.isDirectory()
                     ? 'dir'
@@ -512,6 +606,7 @@ export async function restoreEntry(
                     },
                   );
             if (toHere && fromFree) {
+              if (toIsRealDir) await assertTreeKeepsPolicy(fs, record.to, record.from);
               if (!dryRun) {
                 await fs.mkdir(dirname(record.from), { recursive: true });
                 await fs.rename(record.to, record.from);
