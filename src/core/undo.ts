@@ -419,6 +419,7 @@ export async function snapshotTree(
  */
 async function assertTreeKeepsPolicy(
   fs: GuardedFileSystem,
+  listedAt: string,
   from: string,
   to: string,
 ): Promise<void> {
@@ -432,7 +433,7 @@ async function assertTreeKeepsPolicy(
   };
   try {
     const guard = fs.pathGuard;
-    const names = ['', ...(await fsReaddir(from, { recursive: true }))];
+    const names = ['', ...(await fsReaddir(listedAt, { recursive: true }))];
     for (const name of names) {
       if (guard.isSensitive(join(from, name)) !== guard.isSensitive(join(to, name))) refuse();
     }
@@ -682,6 +683,17 @@ export async function restoreEntry(
             if (toKnown !== undefined) {
               toHere = toKnown !== null;
               toState = toKnown ?? undefined;
+              // A folder an earlier simulated step moved to `to` still sits at
+              // disk(to); relocate through it like a folder read from disk.
+              if (dryRun && toKnown === 'dir') {
+                toIsRealDir = await fs.lstat(disk(record.to)).then(
+                  (r) => r.stats.isDirectory(),
+                  (error: unknown) => {
+                    if (!isMissing(error)) throw error;
+                    return false;
+                  },
+                );
+              }
             } else {
               const at = await fs.lstat(disk(record.to)).then(
                 (r) => r,
@@ -716,7 +728,9 @@ export async function restoreEntry(
                     },
                   );
             if (toHere && fromFree) {
-              if (toIsRealDir) await assertTreeKeepsPolicy(fs, record.to, record.from);
+              if (toIsRealDir) {
+                await assertTreeKeepsPolicy(fs, disk(record.to), record.to, record.from);
+              }
               if (!dryRun) {
                 await fs.mkdir(dirname(record.from), { recursive: true });
                 await fs.rename(record.to, record.from);

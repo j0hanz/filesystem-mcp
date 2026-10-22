@@ -406,6 +406,17 @@ describe('restoreEntry', () => {
     assert.strictEqual(cap.unavailable, undefined);
     return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
   };
+  const dryRunAll = async (entries: UndoEntry[]) => {
+    const simulated = new Map<string, string | null>();
+    const relocations: [string, string][] = [];
+    const results = [];
+    for (const entry of entries) {
+      results.push(
+        ...(await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations })).results,
+      );
+    }
+    return results;
+  };
 
   it('overwrite, then restore, gives the old bytes back', async () => {
     const file = join(tmpDir, 'restore-overwrite.txt');
@@ -776,6 +787,66 @@ describe('restoreEntry', () => {
       const out = await restoreEntry(entry, newFs(), { dryRun: true, simulated, relocations });
       results.push(...out.results);
     }
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run: an edit inside a folder moved twice previews as restored', async () => {
+    const a = join(tmpDir, 'twice-a');
+    const b = join(tmpDir, 'twice-b');
+    const c = join(tmpDir, 'twice-c');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
+    const first = await captureOne((fs) => fs.rename(a, b));
+    const second = await captureOne((fs) => fs.rename(b, c));
+    const results = await dryRunAll([second, first, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('an edit inside a folder moved twice restores for real', async () => {
+    const a = join(tmpDir, 'twice-real-a');
+    const b = join(tmpDir, 'twice-real-b');
+    const c = join(tmpDir, 'twice-real-c');
+    await mkdir(a, { recursive: true });
+    await writeFile(join(a, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
+    const first = await captureOne((fs) => fs.rename(a, b));
+    const second = await captureOne((fs) => fs.rename(b, c));
+    for (const entry of [second, first, edited]) {
+      assert.deepStrictEqual((await restoreEntry(entry, newFs(), { dryRun: false })).remaining, []);
+    }
+    const fsPromises = await import('node:fs/promises');
+    assert.strictEqual(await fsPromises.readFile(join(a, 'f.txt'), 'utf8'), 'v1');
+  });
+
+  it('dry run: a folder move inside a folder that was later moved previews as restored', async () => {
+    const p = join(tmpDir, 'nested-p');
+    const s = join(tmpDir, 'nested-s');
+    await mkdir(join(p, 'q'), { recursive: true });
+    await writeFile(join(p, 'q', 'f.txt'), 'v1');
+    const inner = await captureOne((fs) => fs.rename(join(p, 'q'), join(p, 'r')));
+    const outer = await captureOne((fs) => fs.rename(p, s));
+    const results = await dryRunAll([outer, inner]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run: a moved folder that a later delete removed previews as restored', async () => {
+    const k = join(tmpDir, 'recreated-k');
+    const m = join(tmpDir, 'recreated-m');
+    await mkdir(k, { recursive: true });
+    await writeFile(join(k, 'f.txt'), 'v1');
+    const moved = await captureOne((fs) => fs.rename(k, m));
+    const deleted = await captureOne((fs) => fs.rm(m, { recursive: true, force: true }));
+    const results = await dryRunAll([deleted, moved]);
     assert.deepStrictEqual(
       results.filter((r) => 'error' in r),
       [],
