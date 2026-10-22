@@ -112,10 +112,10 @@ describe('UndoJournal', () => {
     const journal = new UndoJournal(1024 * 1024);
     const caps = Array.from({ length: 9 }, () => journal.beginCapture());
     assert.ok(caps.every((c) => c.unavailable === undefined));
-    for (const c of caps) journal.endCapture(c);
+    for (const c of caps) c.release();
   });
 
-  it('an abandoned capture keeps its charge until endCapture', () => {
+  it('an abandoned capture keeps its charge until release', () => {
     // One reserve of 2000 charges 2512 (512 record overhead).
     const journal = new UndoJournal(4096);
     const one = journal.beginCapture();
@@ -124,11 +124,11 @@ describe('UndoJournal', () => {
     assert.strictEqual(one.unavailable, 'too large to keep for undo');
     const two = journal.beginCapture();
     assert.strictEqual(two.reserve(2000), false);
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
     const three = journal.beginCapture();
     assert.ok(three.reserve(2000));
-    journal.endCapture(three);
+    three.release();
   });
 
   it('an abandoned capture frees the bytes of the records it dropped', () => {
@@ -140,8 +140,8 @@ describe('UndoJournal', () => {
     assert.strictEqual(big.reserve(2000), false);
     const small = journal.beginCapture();
     assert.ok(small.reserve(1200));
-    journal.endCapture(big);
-    journal.endCapture(small);
+    big.release();
+    small.release();
   });
 });
 
@@ -846,8 +846,8 @@ describe('restoreEntry', () => {
     const two = journal.beginCapture();
     assert.ok(one.reserve(2000));
     assert.strictEqual(two.reserve(2000), false);
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
   });
 
   it('a deleted moved directory: undoing both steps moves the new tree back', async () => {
@@ -1131,11 +1131,11 @@ describe('restoreEntry', () => {
     one.push(writeRecord(2000));
     assert.strictEqual(two.reserve(2000), false);
     assert.strictEqual(two.unavailable, 'too large to keep for undo');
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
     const three = journal.beginCapture();
     assert.ok(three.reserve(2000));
-    journal.endCapture(three);
+    three.release();
   });
 
   it('dry run: chained moves restore through simulated intermediate paths', async () => {

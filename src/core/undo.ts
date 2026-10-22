@@ -133,15 +133,9 @@ export class UndoJournal {
   /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
   readonly #pool: LivePool = { bytes: 0 };
 
-  /** Start a capture for a mutating call; pair it with `endCapture` when the call finishes. */
+  /** Start a capture for a mutating call; `release()` it when the call finishes. */
   beginCapture(): UndoCapture {
     return new UndoCapture(this.maxBytes, this.#pool);
-  }
-
-  endCapture(capture: UndoCapture | undefined): void {
-    // Its records now live in the journal (or were dropped); either way the
-    // live pool no longer owes them.
-    capture?.release();
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -281,7 +275,7 @@ export class UndoCapture {
     this.unavailable = reason;
     this.records.length = 0;
     // Dropped records free their bytes now. Reservations stay charged until
-    // endCapture: a read reserved before the abandon may still be in flight.
+    // release(): a read reserved before the abandon may still be in flight.
     if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
     this.#bytes = this.#reserved;
   }
