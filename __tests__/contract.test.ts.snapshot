@@ -18,7 +18,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. edit or patch changes part of an existing file.",
+      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. Replacing an existing file needs user confirmation unless overwrite: true; append never does. edit or patch changes part of an existing file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. Revert with undo.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. A recursive delete of a non-empty directory needs user confirmation. undo reverts a delete whose result gives an undo id.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -162,7 +162,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "edit",
       "title": "Edit Files",
-      "description": "Edit text files in place by replacing exact oldText with newText, like str_replace. Each oldText must match exactly once, and a file is written only if all its edits match. replace_text replaces every occurrence across files.",
+      "description": "Edit text files in place by replacing exact oldText with newText, like str_replace. Pass path with edits, or files for a batch; never both. Each oldText must match exactly once, and a file is written only if all its edits match. replace_text replaces every occurrence across files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -350,7 +350,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. Overwriting an existing file asks the user first, unless a copy passes overwrite: true. undo reverts a move whose result gives an undo id; a copy cannot be undone.",
+      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. Overwriting an existing file needs user confirmation, unless a copy passes overwrite: true. undo reverts a move whose result gives an undo id; a copy cannot be undone.",
       "inputSchema": {
         "type": "object",
         "properties": {

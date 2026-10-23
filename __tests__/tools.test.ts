@@ -1316,6 +1316,18 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('edit refuses path with edits and files in one call, writing nothing', async () => {
+    const f = await writeTestFile(tmpDir, 'edit_both_forms.txt', 'one\n');
+    const spec = [{ oldText: 'one', newText: 'two' }];
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: f, edits: spec, files: [{ path: f, edits: spec }] },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Provide exactly one of 'path' or 'files'/u);
+    assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
+  });
+
   it('create refuses a batch whose combined content exceeds the file limit', async () => {
     const limit = getMaxTextFileSize();
     const half = 'x'.repeat(Math.ceil(limit / 2) + 1);
@@ -2711,6 +2723,30 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.strictEqual(s.moves?.length, 1);
       assert.strictEqual(s.skipped, undefined);
       assert.strictEqual(await readFile(dst, 'utf-8'), 'move me');
+    } finally {
+      await eh.close();
+    }
+  });
+
+  it('TC-FUNC-067b: a client without elicitation gets a tool error for a move onto an existing file', async () => {
+    const eh = await createElicitationClientPair(
+      [tmpDir],
+      async () => {
+        throw new Error('the server must not ask a client that cannot answer');
+      },
+      { noElicitation: true },
+    );
+    try {
+      const src = await writeTestFile(tmpDir, 'move_no_elicit_src.txt', 'src\n');
+      const dst = await writeTestFile(tmpDir, 'move_no_elicit_dst.txt', 'dst\n');
+      const result = await eh.client.callTool({
+        name: 'move',
+        arguments: { moves: [{ source: src, destination: dst }] },
+      });
+      assert.strictEqual(result.isError, true, 'must surface as a tool error');
+      assert.match(firstTextBlock(result).text ?? '', /confirmation this client cannot show/i);
+      assert.strictEqual(await readFile(src, 'utf-8'), 'src\n');
+      assert.strictEqual(await readFile(dst, 'utf-8'), 'dst\n');
     } finally {
       await eh.close();
     }
@@ -4201,8 +4237,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Raised 2026-10-23 to 9850 read-only (full unchanged): the list and diff
   // descriptions name their default skips and refusals, gaps the Glama TDQS
   // review flagged; measured 20397 / 9668.
+  // Raised 2026-10-23 to 20850 full (read-only unchanged): the edit, create,
+  // delete and move descriptions say which edit form to use and when a write
+  // needs user confirmation, gaps the Glama TDQS review flagged (#122);
+  // measured 20806 / 9792.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_550;
+    const BUDGET_CHARS = 20_850;
     const BUDGET_CHARS_READ_ONLY = 9_850;
 
     const full = await createTestClientPair([tmpDir]);
