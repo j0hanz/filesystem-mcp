@@ -5,7 +5,8 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { defaultFalseBoolean } from '../core/schema.ts';
 import type { UndoEntry, UndoFileResult } from '../core/undo.ts';
-import { restoreEntry } from '../core/undo.ts';
+import { restoreEntry, restoreOrder } from '../core/undo.ts';
+import { MIB } from '../core/util.ts';
 import { isTotalFailure, summarize } from './batch.ts';
 import { defineTool } from './define.ts';
 
@@ -25,7 +26,48 @@ const UndoInputSchema = z.strictObject({
 });
 
 interface UndoOutput {
-  steps: { id: string; tool: string; results: UndoFileResult[] }[];
+  steps: {
+    id: string;
+    tool: string;
+    results: UndoFileResult[];
+    truncated?: true;
+    totalResults?: number;
+  }[];
+}
+
+/**
+ * Caps on listed paths. An undo of a large recursive delete restores one
+ * record per entry, and listing them all overflows the stdio message cap
+ * after the restore has already landed. Paths have no fixed length, so a
+ * byte budget shared by every step backs the per-step count.
+ */
+const MAX_STEP_RESULTS = 100;
+const MAX_LISTED_BYTES = 2 * MIB;
+
+/** Each step's results within the caps, in restore order; skipped and failed paths are kept before restored ones. */
+function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
+  let budget = MAX_LISTED_BYTES;
+  return steps.map((step) => {
+    const keep = new Set<UndoFileResult>();
+    const ranked = [
+      ...step.results.filter((r) => 'error' in r),
+      ...step.results.filter((r) => !('error' in r)),
+    ];
+    for (const result of ranked) {
+      if (keep.size === MAX_STEP_RESULTS) break;
+      const bytes = Buffer.byteLength(JSON.stringify(result));
+      if (bytes > budget) break;
+      budget -= bytes;
+      keep.add(result);
+    }
+    if (keep.size === step.results.length) return step;
+    return {
+      ...step,
+      results: step.results.filter((r) => keep.has(r)),
+      truncated: true,
+      totalResults: step.results.length,
+    };
+  });
 }
 
 export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
@@ -88,6 +130,8 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       const simulated = dryRun ? new Map<string, string | null>() : undefined;
       const relocations: [string, string][] = [];
       const directoryBackings = dryRun ? new Map<string, string | null>() : undefined;
+      const total = entries.reduce((n, entry) => n + restoreOrder(entry.records).length, 0);
+      let started = 0;
       for (const entry of entries) {
         ctx.signal.throwIfAborted();
         const outcome = await restoreEntry(entry, ctx.fs, {
@@ -98,6 +142,10 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
           signal: ctx.signal,
           onRewrite: (was, identity) => {
             journal.reidentify(was, identity);
+          },
+          onRecord: () => {
+            started += 1;
+            ctx.onProgress({ current: started, total });
           },
         });
         if (!dryRun) journal.replaceRecords(entry.id, outcome.remaining);
@@ -117,7 +165,7 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
         })
         .join(' · ');
       return {
-        structured: { steps: stepResults },
+        structured: { steps: listSteps(stepResults) },
         text,
         isError: isTotalFailure(summarize(stepResults.flatMap((s) => s.results))),
       };

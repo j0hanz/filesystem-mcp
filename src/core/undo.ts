@@ -463,6 +463,26 @@ async function hashFile(
 }
 
 /**
+ * The records a restore runs, each with its capture order: non-rmdir records
+ * in reverse first, then deduplicated rmdirs deepest-first, so parallel batch
+ * creates/moves empty shared parent folders before removing them.
+ */
+export function restoreOrder(
+  records: readonly UndoRecord[],
+): { record: UndoRecord; order: number }[] {
+  const reversed = records.map((record, order) => ({ record, order })).reverse();
+  const seenRmdir = new Set<string>();
+  const rmdirs = reversed
+    .filter((x): x is { record: Extract<UndoRecord, { op: 'rmdir' }>; order: number } => {
+      if (x.record.op !== 'rmdir' || seenRmdir.has(x.record.path)) return false;
+      seenRmdir.add(x.record.path);
+      return true;
+    })
+    .sort((a, b) => b.record.path.length - a.record.path.length);
+  return [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs];
+}
+
+/**
  * Revert one journal entry: its records, in reverse capture order, put back
  * what the call changed. A record whose target no longer matches what the
  * call wrote is skipped, not restored — a skip never fails the call.
@@ -481,6 +501,8 @@ export async function restoreEntry(
     onRewrite?: ((was: FileIdentity, identity: FileIdentity) => void) | undefined;
     /** Stops the run between records; the unprocessed ones come back in `remaining`. */
     signal?: AbortSignal | undefined;
+    /** Called as each record starts, so a long restore can report progress. */
+    onRecord?: (() => void) | undefined;
     /**
      * Dry run only, shared across entries like `simulated`: directories the
      * simulation moved back, so a later probe of a path inside one reads the
@@ -560,25 +582,13 @@ export async function restoreEntry(
     else directoryBackings.delete(path);
   };
 
-  // Run non-rmdir records in reverse first, then deduplicated rmdirs deepest-first
-  // so parallel batch creates/moves empty shared parent folders before removing them.
-  const indexed = entry.records.map((record, order) => ({ record, order }));
-  const reversed = [...indexed].reverse();
-  const seenRmdir = new Set<string>();
-  const rmdirs = reversed
-    .filter((x): x is { record: Extract<UndoRecord, { op: 'rmdir' }>; order: number } => {
-      if (x.record.op !== 'rmdir' || seenRmdir.has(x.record.path)) return false;
-      seenRmdir.add(x.record.path);
-      return true;
-    })
-    .sort((a, b) => b.record.path.length - a.record.path.length);
-
-  for (const { record, order } of [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs]) {
+  for (const { record, order } of restoreOrder(entry.records)) {
     const anchor = record.op === 'rename' ? record.from : record.path;
     if (signal?.aborted) {
       remaining.push({ record, order });
       continue;
     }
+    opts.onRecord?.();
     if (isBlocked(anchor)) {
       skip(record, order, anchor);
       continue;
