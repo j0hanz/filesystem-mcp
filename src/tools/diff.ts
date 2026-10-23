@@ -26,7 +26,9 @@ interface DiffOutput {
 export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
   name: 'diff',
   title: 'Diff',
-  description: 'Compare two text files and return a unified diff from a to b, like diff -u.',
+  description:
+    'Compare two text files and return a unified diff from a to b, like diff -u. ' +
+    'Identical files give no hunks; binary and non-UTF-8 files are refused.',
   input: DiffInputSchema,
   readOnlyHint: true,
   progress: (args) => ({
