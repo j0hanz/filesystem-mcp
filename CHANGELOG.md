@@ -10,13 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`move`, `list` and `diff` descriptions say more about how each tool
-  behaves.** `move` says that overwriting an existing file asks the user
-  first unless a copy passes `overwrite: true`, and that `undo` reverts a
-  move whose result gives an undo id, but never a copy. `list` says it shows one level by default. It skips
+  behaves.** `move` says that `undo` reverts a move whose result gives an
+  undo id, but never a copy. `list` says it shows one level by default. It skips
   hidden entries unless `includeHidden` is set, and ignored ones, such as
   `.gitignore` matches, `node_modules`, `dist`, `build`, `out` and `tmp`,
   unless `includeIgnored` is set. `diff` says that identical files give no
   hunks and that binary and non-UTF-8 files are refused.
+- **`search_text`, `find_files` and `stat` descriptions are clearer.**
+  `search_text` says that `searchPattern` is the text to find and that
+  `pattern` filters files by glob. `search_text` and
+  `find_files` no longer name `edit`, which `--read-only` removes. `stat` says
+  that each missing path gets its own `NOT_FOUND` entry.
+- **`edit` and `delete` descriptions are more exact.** `edit` says that
+  `path` with `edits` and `files` are two forms that exclude each other.
+  `delete` says that `undo` reverts a delete only when its result gives an
+  undo id. Before, it promised undo for every delete.
 
 ### Fixed
 

@@ -1316,6 +1316,18 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('edit refuses path with edits and files in one call, writing nothing', async () => {
+    const f = await writeTestFile(tmpDir, 'edit_both_forms.txt', 'one\n');
+    const spec = [{ oldText: 'one', newText: 'two' }];
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: f, edits: spec, files: [{ path: f, edits: spec }] },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Provide exactly one of 'path' or 'files'/u);
+    assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
+  });
+
   it('create refuses a batch whose combined content exceeds the file limit', async () => {
     const limit = getMaxTextFileSize();
     const half = 'x'.repeat(Math.ceil(limit / 2) + 1);
@@ -2716,6 +2728,30 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('TC-FUNC-067b: a client without elicitation gets a tool error for a move onto an existing file', async () => {
+    const eh = await createElicitationClientPair(
+      [tmpDir],
+      async () => {
+        throw new Error('the server must not ask a client that cannot answer');
+      },
+      { noElicitation: true },
+    );
+    try {
+      const src = await writeTestFile(tmpDir, 'move_no_elicit_src.txt', 'src\n');
+      const dst = await writeTestFile(tmpDir, 'move_no_elicit_dst.txt', 'dst\n');
+      const result = await eh.client.callTool({
+        name: 'move',
+        arguments: { moves: [{ source: src, destination: dst }] },
+      });
+      assert.strictEqual(result.isError, true, 'must surface as a tool error');
+      assert.match(firstTextBlock(result).text ?? '', /confirmation this client cannot show/i);
+      assert.strictEqual(await readFile(src, 'utf-8'), 'src\n');
+      assert.strictEqual(await readFile(dst, 'utf-8'), 'dst\n');
+    } finally {
+      await eh.close();
+    }
+  });
+
   it('TC-FUNC-068: delete skip via choice round-trip leaves dir in place', async () => {
     const eh = await createElicitationClientPair([tmpDir], async () => ({
       action: 'accept' as const,
@@ -3403,6 +3439,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(value, 'stat must return a value');
     assert.strictEqual(value.type, 'file');
     assert.strictEqual(value.symlinkTarget, undefined);
+  });
+
+  it('stat batch gives a missing path its own NOT_FOUND entry and keeps the rest', async () => {
+    const present = await writeTestFile(tmpDir, 'stat_batch_present.txt', 'x');
+    const missing = join(tmpDir, 'stat_batch_missing.txt');
+    const result = await harness.client.callTool({
+      name: 'stat',
+      arguments: { paths: [present, missing] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const { results } = result.structuredContent as {
+      results: { value?: { type: string }; error?: { code: string } }[];
+    };
+    assert.strictEqual(results[0]?.value?.type, 'file');
+    assert.strictEqual(results[1]?.error?.code, 'NOT_FOUND');
   });
 
   it('TC-FUNC-072: search_text finds a literal match via callTool', async () => {
@@ -4211,6 +4262,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         size <= BUDGET_CHARS_READ_ONLY,
         `read-only tools/list is ${String(size)} chars, over the ${String(BUDGET_CHARS_READ_ONLY)} budget`,
       );
+    } finally {
+      await ro.close();
+    }
+  });
+
+  it('TOOL-SURFACE-003: no read-only tool description names a write tool', async () => {
+    const full = await createTestClientPair([tmpDir]);
+    let writeNames: string[];
+    try {
+      const { tools } = await full.client.listTools();
+      writeNames = tools.filter((t) => t.annotations?.readOnlyHint !== true).map((t) => t.name);
+    } finally {
+      await full.close();
+    }
+    assert.ok(writeNames.length > 0);
+
+    const ro = await createTestClientPair([tmpDir], { readOnly: true });
+    try {
+      const { tools } = await ro.client.listTools();
+      for (const tool of tools) {
+        for (const name of writeNames) {
+          assert.doesNotMatch(
+            tool.description ?? '',
+            new RegExp(`\\b${name}\\b`, 'u'),
+            `${tool.name} names the write tool ${name}, absent under --read-only`,
+          );
+        }
+      }
     } finally {
       await ro.close();
     }

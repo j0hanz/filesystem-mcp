@@ -416,7 +416,8 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   name: 'delete',
   title: 'Delete File',
   description:
-    'Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. Revert with undo.',
+    'Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. ' +
+    'undo reverts a delete whose result gives an undo id.',
   input: DeleteInputSchema,
   readOnlyHint: false,
   progress: (args) => ({

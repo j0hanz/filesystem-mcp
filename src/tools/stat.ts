@@ -172,7 +172,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   description:
     'Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), ' +
     'tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. ' +
-    'Also checks whether paths exist.',
+    'Also checks whether paths exist: each missing path gets its own NOT_FOUND entry.',
   input: StatInputSchema,
   readOnlyHint: true,
   deadline: true,
