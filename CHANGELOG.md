@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.10.0] - 2026-10-23
+
+A feature release. A new `undo` tool reverts earlier calls that changed
+files, while the server runs. Before upgrading, read Changed if you parse
+the text result of a tool that changes files, or budget server memory.
 
 ### Added
 
@@ -20,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns undo off.
 - Copies (`move` with `copy: true`) and cross-device moves report
   `not undoable` instead of being captured.
+
+### Changed
+
+- The first line of a text result from a tool that changes files ends with
+  `· undo <id>` or `· not undoable: <reason>`, errors included. Parsers
+  that match that whole line need to allow the suffix.
+- The server keeps up to 32 MiB of replaced file content for undo by
+  default. Set `FS_MAX_UNDO_BYTES=0` to keep the old memory profile.
+- `delete` no longer describes itself as permanent; it names `undo`.
 
 ## [2.9.1] - 2026-10-16
 
