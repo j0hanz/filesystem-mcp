@@ -29,17 +29,17 @@
 
 ## Decisions
 
-| Tool          | Change             | New fact the schema lacks                      |
-| :------------ | :----------------- | :--------------------------------------------- |
-| `find_files`  | drop `or edit`     | none (rule fix)                                |
-| `search_text` | drop `or edit`, add clause | which pattern is text, which is a glob |
-| `stat`        | add clause, split sentence | missing path = own `NOT_FOUND` entry   |
-| `edit`        | add clause         | `path`+`edits` and `files` exclude each other |
-| `create`      | add clause         | `append` never needs confirmation             |
-| `delete`      | add clause, fix claim | recursive non-empty delete needs confirmation |
-| `move`        | reword tier 1 clause | same confirmation wording as siblings        |
-| `patch`       | none               | skipped, reason below                          |
-| `undo`        | none yet           | not scored; Task 3                             |
+| Tool          | Change                     | New fact the schema lacks                     |
+| :------------ | :------------------------- | :-------------------------------------------- |
+| `find_files`  | drop `or edit`             | none (rule fix)                               |
+| `search_text` | drop `or edit`, add clause | which pattern is text, which is a glob        |
+| `stat`        | add clause, split sentence | missing path = own `NOT_FOUND` entry          |
+| `edit`        | add clause                 | `path`+`edits` and `files` exclude each other |
+| `create`      | add clause                 | `append` never needs confirmation             |
+| `delete`      | add clause, fix claim      | recursive non-empty delete needs confirmation |
+| `move`        | reword tier 1 clause       | same confirmation wording as siblings         |
+| `patch`       | none                       | skipped, reason below                         |
+| `undo`        | none yet                   | not scored; Task 3                            |
 
 - **`edit`** spells out the exclusivity, because issue #122 asks for it. The schema states it only in property descriptions.
 - **`delete`** today says "Revert with undo." with no condition. That is false for a delete whose undo capture was abandoned (protected files, over `FS_MAX_UNDO_BYTES`, a non-regular entry). The new text copies tier 1's `move` fix (1fc496c0).
@@ -62,6 +62,7 @@ Measured with the exact copy below: full `tools/list` goes from 20424 to 20806 c
 ### Task 1: Read-only descriptions and the read-only naming guard
 
 **Files:**
+
 - Modify: `src/tools/find-files.ts:65-67`
 - Modify: `src/tools/search-text.ts:180-182`
 - Modify: `src/tools/stat.ts:172-175`
@@ -70,39 +71,40 @@ Measured with the exact copy below: full `tools/list` goes from 20424 to 20806 c
 - Modify: `CHANGELOG.md` (`## [Unreleased]` → `### Changed`)
 
 **Interfaces:**
+
 - Consumes: `createTestClientPair(roots, { readOnly?: boolean })`, `writeTestFile(dir, name, content)` and `harness`/`tmpDir` from the enclosing `describe`, as used by the neighboring tests.
 - Produces: test `TOOL-SURFACE-003`. Task 2 does not depend on it.
 
 - [ ] **Step 1: Write the guard test after TOOL-SURFACE-002**
 
 ```ts
-  it('TOOL-SURFACE-003: no read-only tool description names a write tool', async () => {
-    const full = await createTestClientPair([tmpDir]);
-    let writeNames: string[];
-    try {
-      const { tools } = await full.client.listTools();
-      writeNames = tools.filter((t) => t.annotations?.readOnlyHint !== true).map((t) => t.name);
-    } finally {
-      await full.close();
-    }
-    assert.ok(writeNames.length > 0);
+it('TOOL-SURFACE-003: no read-only tool description names a write tool', async () => {
+  const full = await createTestClientPair([tmpDir]);
+  let writeNames: string[];
+  try {
+    const { tools } = await full.client.listTools();
+    writeNames = tools.filter((t) => t.annotations?.readOnlyHint !== true).map((t) => t.name);
+  } finally {
+    await full.close();
+  }
+  assert.ok(writeNames.length > 0);
 
-    const ro = await createTestClientPair([tmpDir], { readOnly: true });
-    try {
-      const { tools } = await ro.client.listTools();
-      for (const tool of tools) {
-        for (const name of writeNames) {
-          assert.doesNotMatch(
-            tool.description ?? '',
-            new RegExp(`\\b${name}\\b`, 'u'),
-            `${tool.name} names the write tool ${name}, absent under --read-only`,
-          );
-        }
+  const ro = await createTestClientPair([tmpDir], { readOnly: true });
+  try {
+    const { tools } = await ro.client.listTools();
+    for (const tool of tools) {
+      for (const name of writeNames) {
+        assert.doesNotMatch(
+          tool.description ?? '',
+          new RegExp(`\\b${name}\\b`, 'u'),
+          `${tool.name} names the write tool ${name}, absent under --read-only`,
+        );
       }
-    } finally {
-      await ro.close();
     }
-  });
+  } finally {
+    await ro.close();
+  }
+});
 ```
 
 - [ ] **Step 2: Run it and see it fail**
@@ -113,20 +115,20 @@ Expected: FAIL with `search_text names the write tool edit, absent under --read-
 - [ ] **Step 3: Write the `stat` pin test after `stat reports a regular file under a symlinked parent as a file`**
 
 ```ts
-  it('stat batch gives a missing path its own NOT_FOUND entry and keeps the rest', async () => {
-    const present = await writeTestFile(tmpDir, 'stat_batch_present.txt', 'x');
-    const missing = join(tmpDir, 'stat_batch_missing.txt');
-    const result = await harness.client.callTool({
-      name: 'stat',
-      arguments: { paths: [present, missing] },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const { results } = result.structuredContent as {
-      results: { value?: { type: string }; error?: { code: string } }[];
-    };
-    assert.strictEqual(results[0]?.value?.type, 'file');
-    assert.strictEqual(results[1]?.error?.code, 'NOT_FOUND');
+it('stat batch gives a missing path its own NOT_FOUND entry and keeps the rest', async () => {
+  const present = await writeTestFile(tmpDir, 'stat_batch_present.txt', 'x');
+  const missing = join(tmpDir, 'stat_batch_missing.txt');
+  const result = await harness.client.callTool({
+    name: 'stat',
+    arguments: { paths: [present, missing] },
   });
+  assert.notStrictEqual(result.isError, true);
+  const { results } = result.structuredContent as {
+    results: { value?: { type: string }; error?: { code: string } }[];
+  };
+  assert.strictEqual(results[0]?.value?.type, 'file');
+  assert.strictEqual(results[1]?.error?.code, 'NOT_FOUND');
+});
 ```
 
 Run: `node --test --test-timeout=60000 --test-name-pattern="stat batch gives" __tests__/tools.test.ts`
@@ -198,6 +200,7 @@ Claude-Session: https://claude.ai/code/session_015x93MERvWLDzoqaguLSmJj"
 ### Task 2: Write-tool descriptions, confirmation wording, budget raise
 
 **Files:**
+
 - Modify: `src/tools/edit.ts:456-459`
 - Modify: `src/tools/create.ts:130-132`
 - Modify: `src/tools/delete.ts:418-419`
@@ -207,51 +210,52 @@ Claude-Session: https://claude.ai/code/session_015x93MERvWLDzoqaguLSmJj"
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
+
 - Consumes: `createElicitationClientPair(roots, handler, { noElicitation: true })` and `firstTextBlock(result)`, as used by TC-FUNC-009p (`__tests__/tools.test.ts:666`).
 - Produces: nothing later tasks use.
 
 - [ ] **Step 1: Write the `edit` pin test after `edit refuses a batch that names the same file twice`**
 
 ```ts
-  it('edit refuses path with edits and files in one call, writing nothing', async () => {
-    const f = await writeTestFile(tmpDir, 'edit_both_forms.txt', 'one\n');
-    const spec = [{ oldText: 'one', newText: 'two' }];
-    const result = await harness.client.callTool({
-      name: 'edit',
-      arguments: { path: f, edits: spec, files: [{ path: f, edits: spec }] },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(firstTextBlock(result).text ?? '', /Provide exactly one of 'path' or 'files'/u);
-    assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
+it('edit refuses path with edits and files in one call, writing nothing', async () => {
+  const f = await writeTestFile(tmpDir, 'edit_both_forms.txt', 'one\n');
+  const spec = [{ oldText: 'one', newText: 'two' }];
+  const result = await harness.client.callTool({
+    name: 'edit',
+    arguments: { path: f, edits: spec, files: [{ path: f, edits: spec }] },
   });
+  assert.strictEqual(result.isError, true);
+  assert.match(firstTextBlock(result).text ?? '', /Provide exactly one of 'path' or 'files'/u);
+  assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
+});
 ```
 
 - [ ] **Step 2: Write the `move` pin test after TC-FUNC-067**
 
 ```ts
-  it('TC-FUNC-067b: a client without elicitation gets a tool error for a move onto an existing file', async () => {
-    const eh = await createElicitationClientPair(
-      [tmpDir],
-      async () => {
-        throw new Error('the server must not ask a client that cannot answer');
-      },
-      { noElicitation: true },
-    );
-    try {
-      const src = await writeTestFile(tmpDir, 'move_no_elicit_src.txt', 'src\n');
-      const dst = await writeTestFile(tmpDir, 'move_no_elicit_dst.txt', 'dst\n');
-      const result = await eh.client.callTool({
-        name: 'move',
-        arguments: { moves: [{ source: src, destination: dst }] },
-      });
-      assert.strictEqual(result.isError, true, 'must surface as a tool error');
-      assert.match(firstTextBlock(result).text ?? '', /confirmation this client cannot show/i);
-      assert.strictEqual(await readFile(src, 'utf-8'), 'src\n');
-      assert.strictEqual(await readFile(dst, 'utf-8'), 'dst\n');
-    } finally {
-      await eh.close();
-    }
-  });
+it('TC-FUNC-067b: a client without elicitation gets a tool error for a move onto an existing file', async () => {
+  const eh = await createElicitationClientPair(
+    [tmpDir],
+    async () => {
+      throw new Error('the server must not ask a client that cannot answer');
+    },
+    { noElicitation: true },
+  );
+  try {
+    const src = await writeTestFile(tmpDir, 'move_no_elicit_src.txt', 'src\n');
+    const dst = await writeTestFile(tmpDir, 'move_no_elicit_dst.txt', 'dst\n');
+    const result = await eh.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: src, destination: dst }] },
+    });
+    assert.strictEqual(result.isError, true, 'must surface as a tool error');
+    assert.match(firstTextBlock(result).text ?? '', /confirmation this client cannot show/i);
+    assert.strictEqual(await readFile(src, 'utf-8'), 'src\n');
+    assert.strictEqual(await readFile(dst, 'utf-8'), 'dst\n');
+  } finally {
+    await eh.close();
+  }
+});
 ```
 
 - [ ] **Step 3: Run both pin tests**
@@ -306,10 +310,10 @@ Expected: FAIL with `tools/list is 20806 chars, over the 20550 budget`.
 In `__tests__/tools.test.ts`, add after the `// review flagged; measured 20397 / 9668.` comment line (4188):
 
 ```ts
-  // Raised 2026-10-23 to 20850 full (read-only unchanged): the edit, create,
-  // delete and move descriptions say which edit form to use and when a write
-  // needs user confirmation, gaps the Glama TDQS review flagged (#122);
-  // measured 20806 / 9792.
+// Raised 2026-10-23 to 20850 full (read-only unchanged): the edit, create,
+// delete and move descriptions say which edit form to use and when a write
+// needs user confirmation, gaps the Glama TDQS review flagged (#122);
+// measured 20806 / 9792.
 ```
 
 Set `const BUDGET_CHARS = 20_850;`. Keep `BUDGET_CHARS_READ_ONLY = 9_850`. If the date is not 2026-10-23, use the commit date. If the measured numbers differ, the copy differs from this plan. Fix the copy, not the comment.
