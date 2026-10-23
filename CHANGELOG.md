@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `undo` moves a file back after an append to it. Before, undoing a move, an
+  append to the moved file and a later write to it skipped the move as
+  modified, though nothing outside the server had touched the file.
+
 ## [2.10.0] - 2026-10-23
 
 A feature release. A new `undo` tool reverts earlier calls that changed
