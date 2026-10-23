@@ -1,5 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import type { BigIntStats, Stats } from 'node:fs';
 import {
   lstat as fsLstat,
   readdir as fsReaddir,
@@ -21,10 +21,15 @@ import type { GuardedFileSystem } from './fs.ts';
 import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
+/**
+ * Exact, from bigint stats: as a number an NTFS file ID loses its low bits,
+ * and files created in one clock tick share a birth time, so siblings a batch
+ * call made could read as one file.
+ */
 export interface FileIdentity {
-  dev: number;
-  ino: number;
-  birthtimeMs: number;
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
 }
 
 export type UndoRecord =
@@ -56,19 +61,19 @@ export type UndoRecord =
   | { op: 'rename'; from: string; to: string; identity: FileIdentity };
 
 /** The identity a move record is matched on. */
-export const identityOf = (s: { dev: number; ino: number; birthtimeMs: number }): FileIdentity => ({
+export const identityOf = (s: BigIntStats): FileIdentity => ({
   dev: s.dev,
   ino: s.ino,
-  birthtimeMs: s.birthtimeMs,
+  birthtimeNs: s.birthtimeNs,
 });
 
 type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
 
 const identityKey = (i: FileIdentity): string =>
-  `${String(i.dev)}:${String(i.ino)}:${String(i.birthtimeMs)}`;
+  `${String(i.dev)}:${String(i.ino)}:${String(i.birthtimeNs)}`;
 
-export const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
-  a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
+const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>
+  a.dev === b.dev && a.ino === b.ino && a.birthtimeNs === b.birthtimeNs;
 
 /** One restored path, in the batch tools' per-path result shape. */
 export type UndoFileResult = PerPathResult<{ restored: true }>;
@@ -332,10 +337,16 @@ export async function saveOld(
   capture: UndoCapture,
   fs: GuardedFileSystem,
   path: string,
-  stats: Stats,
+  stats: Stats | BigIntStats,
 ): Promise<SavedFile | undefined> {
-  if (!capture.reserve(stats.size)) return undefined;
-  return { bytes: await fs.readSaved(path), mode: stats.mode & 0o777, was: identityOf(stats) };
+  if (!capture.reserve(Number(stats.size))) return undefined;
+  const exact =
+    typeof stats.ino === 'bigint' ? (stats as BigIntStats) : await fsLstat(path, { bigint: true });
+  return {
+    bytes: await fs.readSaved(path),
+    mode: Number(stats.mode) & 0o777,
+    was: identityOf(exact),
+  };
 }
 
 /**
@@ -352,7 +363,7 @@ export async function snapshotTree(
 ): Promise<void> {
   if (capture.unavailable !== undefined) return;
   try {
-    const stats = await unlessMissing(fsLstat(validPath));
+    const stats = await unlessMissing(fsLstat(validPath, { bigint: true }));
     // ENOENT on the root (the `force` case): nothing will be deleted.
     if (stats === undefined) return;
     if (fs.pathGuard.isSensitive(validPath)) {
@@ -396,7 +407,7 @@ export async function snapshotTree(
       capture.push({
         op: 'mkdir',
         path: validPath,
-        mode: stats.mode & 0o777,
+        mode: Number(stats.mode) & 0o777,
         was: identityOf(stats),
       });
       return;
@@ -515,7 +526,7 @@ interface RestoreWorld {
   rewrite(was: FileIdentity, now: FileIdentity): void;
 }
 
-const kindOf = (stats: Stats): Entry['kind'] =>
+const kindOf = (stats: Stats | BigIntStats): Entry['kind'] =>
   stats.isFile() ? 'file' : stats.isDirectory() ? 'dir' : stats.isSymbolicLink() ? 'link' : 'other';
 
 function diskWorld(
@@ -525,10 +536,10 @@ function diskWorld(
 ): RestoreWorld {
   return {
     probe: async (path) => {
-      const at = await unlessMissing(fs.lstat(path));
+      const at = await unlessMissing(fs.lstatExact(path));
       return at && { kind: kindOf(at.stats), identity: identityOf(at.stats) };
     },
-    identity: async (path) => identityOf((await fs.lstat(path)).stats),
+    identity: async (path) => identityOf((await fs.lstatExact(path)).stats),
     hash: (path) => hashFile(fs, path, signal),
     writeFile: async (path, bytes, mode) => {
       await fs.writeFile(path, bytes, { mode });
@@ -733,7 +744,7 @@ export class UndoPreview {
 
   #mint(): FileIdentity {
     this.#minted += 1;
-    return { dev: -1, ino: this.#minted, birthtimeMs: 0 };
+    return { dev: -1n, ino: BigInt(this.#minted), birthtimeNs: 0n };
   }
 
   #assertAllowed(path: string): void {
@@ -836,8 +847,10 @@ export class UndoPreview {
     structural: boolean,
   ): Promise<{ node: PreviewNode; validPath: string }> {
     const at = structural
-      ? await unlessMissing(fsLstat(path)).then((stats) => stats && { stats, validPath: path })
-      : await unlessMissing(this.#fs.lstat(path));
+      ? await unlessMissing(fsLstat(path, { bigint: true })).then(
+          (stats) => stats && { stats, validPath: path },
+        )
+      : await unlessMissing(this.#fs.lstatExact(path));
     if (at === undefined) return { node: ABSENT, validPath: path };
     const { stats, validPath } = at;
     const identity = identityOf(stats);

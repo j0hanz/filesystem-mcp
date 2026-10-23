@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
-import type { Dir, Dirent, Stats } from 'node:fs';
+import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
@@ -213,6 +213,12 @@ export class GuardedFileSystem {
     return { stats, validPath };
   }
 
+  /** As `lstat`, with exact (bigint) fields: what undo identities are built from. */
+  async lstatExact(filePath: string): Promise<{ stats: BigIntStats; validPath: string }> {
+    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    return { stats: await fsLstat(validPath, { bigint: true }), validPath };
+  }
+
   async readlink(
     filePath: string,
     options?: Parameters<typeof fsReadlink>[1],
@@ -284,7 +290,7 @@ export class GuardedFileSystem {
     // the tree under `to` before recording it.
     if (this.#capture && !this.#capture.unavailable) {
       if (saved) this.#capture.push({ op: 'write', path: validNew, ...saved, expect: null });
-      const identity = await fsLstat(validNew).then(identityOf, () => undefined);
+      const identity = await fsLstat(validNew, { bigint: true }).then(identityOf, () => undefined);
       if (identity !== undefined) {
         this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
       } else {
@@ -535,12 +541,14 @@ export class GuardedFileSystem {
 
   async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
-    const before = this.#capture ? await fsLstat(validPath).catch(() => undefined) : undefined;
+    const before = this.#capture
+      ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
+      : undefined;
     await fsRmdir(validPath, options);
     this.#capture?.push({
       op: 'mkdir',
       path: validPath,
-      mode: before && before.mode & 0o777,
+      mode: before && Number(before.mode) & 0o777,
       was: before && identityOf(before),
     });
   }
