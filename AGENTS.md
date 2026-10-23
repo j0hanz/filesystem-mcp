@@ -24,6 +24,35 @@ prompts, resource templates, capabilities, instructions, get-help text). When a 
 change is intended, run `node --test --test-update-snapshots __tests__/contract.test.ts`
 with no `FS_*` variables set, and commit the `.snapshot` diff with the change.
 
+## Architecture
+
+```text
+index.ts ──cli──► transport.ts (facade)
+  ├─► transport/stdio.ts   one pinned server per connection
+  └─► transport/http.ts    fresh server per request, shared runtime state
+        └─► server.ts createServer() ──► tools/ prompts/ resources/
+                core/     PathGuard, stores, undo, errors, config
+```
+
+- `src/server.ts` `createServer()` builds the `McpServer` and registers
+  tools/prompts/resources. Its `extraDeps` let the HTTP leg share one
+  `PathGuard`/`ResourceStore`/`PageSnapshotStore`/`UndoJournal`/watcher
+  registry across per-request instances; when omitted (stdio) the instance
+  owns them and clears them on close.
+- Two protocol eras: `legacy` (initialize handshake, pinned connection) and
+  `modern` (stateless per-request HTTP). `ToolDeps.era` carries it; sunset
+  plan in `docs/adr/002-legacy-protocol-paths-sunset.md`. Other decisions in
+  `docs/adr/`.
+- Every tool is a `ToolDef` (`src/tools/define.ts`); `ToolExecutor` wraps every
+  call with relative-path resolution, the access-grant `input_required`
+  round-trip, undo capture, progress, and the stdio 10 MiB oversize refusal.
+  `src/tools/index.ts` owns the tool inventory and the `--read-only` gate.
+- `src/core/path.ts` `PathGuard` owns allowed-roots assembly and per-path
+  validation (symlink resolution, Windows path spellings); the sensitive-file
+  denylist is `src/core/sensitive.ts`.
+- No tool publishes an `outputSchema`; tools that author text ship metadata
+  under `_meta`, the rest use `structuredContent` (see `buildSuccessResponse`).
+
 ## Releases
 
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps
