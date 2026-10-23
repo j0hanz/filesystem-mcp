@@ -177,7 +177,7 @@ export function normalizePath(p: string): string {
   return resolved;
 }
 
-const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
+export const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
 
 function normalizeCaseForComparison(value: string): string {
   return IS_CASE_INSENSITIVE_FS ? value.toLowerCase() : value;

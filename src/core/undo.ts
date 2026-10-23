@@ -18,7 +18,7 @@ import {
   unlessMissing,
 } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
 export interface FileIdentity {
@@ -418,7 +418,7 @@ export async function snapshotTree(
  */
 async function assertTreeKeepsPolicy(
   fs: GuardedFileSystem,
-  listedAt: string,
+  listNames: () => Promise<string[]>,
   from: string,
   to: string,
 ): Promise<void> {
@@ -432,8 +432,7 @@ async function assertTreeKeepsPolicy(
   };
   try {
     const guard = fs.pathGuard;
-    const names = ['', ...(await fsReaddir(listedAt, { recursive: true }))];
-    for (const name of names) {
+    for (const name of await listNames()) {
       if (guard.isSensitive(join(from, name)) !== guard.isSensitive(join(to, name))) refuse();
     }
   } catch (error) {
@@ -482,6 +481,426 @@ export function restoreOrder(
   return [...reversed.filter((x) => x.record.op !== 'rmdir'), ...rmdirs];
 }
 
+/** What sits at a path, as a restore sees it: never following a final link. */
+interface Entry {
+  kind: 'file' | 'dir' | 'link' | 'other';
+  identity: FileIdentity;
+}
+
+/**
+ * Where a restore reads and changes the tree. The real run uses the disk; a
+ * dry run uses an `UndoPreview`, so both run the same checks in the same order.
+ * The preview differs where the disk changes under it, or where the OS refuses
+ * what the preview allows (a symlink without the privilege to make one).
+ */
+interface RestoreWorld {
+  probe(path: string): Promise<Entry | undefined>;
+  /** The identity of the entry at `path`; fails when there is none. */
+  identity(path: string): Promise<FileIdentity>;
+  hash(path: string): Promise<string>;
+  writeFile(path: string, bytes: Buffer, mode: number): Promise<void>;
+  rm(path: string): Promise<void>;
+  rmdir(path: string): Promise<void>;
+  mkdir(path: string, mode: number): Promise<void>;
+  mkdirp(path: string): Promise<void>;
+  symlink(target: string, path: string, type: 'file' | 'junction'): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  /** Names under the directory at `path`, relative to it, with '' for the directory itself. */
+  treeNames(path: string): Promise<string[]>;
+  lock<T>(path: string, fn: () => Promise<T>): Promise<T>;
+  lockPair<T>(a: string, b: string, fn: () => Promise<T>): Promise<T>;
+  /** The identity a move record's `identity` names now, after earlier re-keys. */
+  tracked(identity: FileIdentity): FileIdentity;
+  /** A restore replaced the entry `was` with `now`; see `onRewrite`. */
+  rewrite(was: FileIdentity, now: FileIdentity): void;
+}
+
+const kindOf = (stats: Stats): Entry['kind'] =>
+  stats.isFile() ? 'file' : stats.isDirectory() ? 'dir' : stats.isSymbolicLink() ? 'link' : 'other';
+
+function diskWorld(
+  fs: GuardedFileSystem,
+  signal: AbortSignal | undefined,
+  onRewrite: ((was: FileIdentity, identity: FileIdentity) => void) | undefined,
+): RestoreWorld {
+  return {
+    probe: async (path) => {
+      const at = await unlessMissing(fs.lstat(path));
+      return at && { kind: kindOf(at.stats), identity: identityOf(at.stats) };
+    },
+    identity: async (path) => identityOf((await fs.lstat(path)).stats),
+    hash: (path) => hashFile(fs, path, signal),
+    writeFile: async (path, bytes, mode) => {
+      await fs.writeFile(path, bytes, { mode });
+    },
+    rm: (path) => fs.rm(path),
+    rmdir: (path) => fs.rmdir(path),
+    mkdir: (path, mode) => fs.mkdir(path, { mode }),
+    mkdirp: (path) => fs.mkdir(path, { recursive: true }),
+    symlink: (target, path, type) => fs.symlink(target, path, type),
+    rename: (oldPath, newPath) => fs.rename(oldPath, newPath),
+    treeNames: async (path) => ['', ...(await fsReaddir(path, { recursive: true }))],
+    lock: (path, fn) => fs.lockForWrite(path, fn),
+    lockPair: (a, b, fn) => fs.lockPairForWrite(a, b, fn),
+    tracked: (identity) => identity,
+    rewrite: (was, now) => {
+      onRewrite?.(was, now);
+    },
+  };
+}
+
+type PreviewNode =
+  | { kind: 'absent' }
+  /** `disk` holds the bytes for an entry the preview has not rewritten; `hash` the bytes it wrote. */
+  | { kind: 'file'; identity: FileIdentity; disk?: string; hash?: string }
+  /** `backing` is the folder on disk whose children show through, or null for a rebuilt one. */
+  | { kind: 'dir'; identity: FileIdentity; backing: string | null }
+  /** `disk` is the link on disk, which the OS follows to reach entries under it. */
+  | { kind: 'link'; identity: FileIdentity; disk?: string }
+  | { kind: 'other'; identity: FileIdentity };
+
+const ABSENT: PreviewNode = { kind: 'absent' };
+
+/**
+ * A path's key in the preview, folded where the filesystem folds case. ASCII
+ * folds both ways; another character folds only when its lowercase maps back
+ * to it, since NTFS keeps pairs such as the Kelvin sign and `k`, or `İ` and
+ * `i̇`, apart.
+ */
+function previewKey(path: string): string {
+  if (!IS_CASE_INSENSITIVE_FS) return path;
+  // eslint-disable-next-line no-control-regex -- the ASCII range, control characters included
+  if (/^[\u0000-\u007f]*$/u.test(path)) return path.toLowerCase();
+  return Array.from(path, (ch) => {
+    const lower = ch.toLowerCase();
+    return lower.toUpperCase() === ch ? lower : ch;
+  }).join('');
+}
+
+const UV_MESSAGES: Record<string, string> = {
+  EEXIST: 'file already exists',
+  EISDIR: 'illegal operation on a directory',
+  ENOENT: 'no such file or directory',
+  ENOTDIR: 'not a directory',
+  ENOTEMPTY: 'directory not empty',
+};
+
+/** The error the OS would raise, in the shape Node gives it. */
+const errnoError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
+  Object.assign(new Error(`${code}: ${UV_MESSAGES[code] ?? code}, ${syscall} '${path}'`), {
+    code,
+    syscall,
+    path,
+  });
+
+/**
+ * A dry run's view of the tree: what the restored entries would leave,
+ * layered over the disk, which it never changes. Shared across the entries of
+ * one undo call, so an older step's preview sees what reverting the newer ones
+ * would do. Identities the preview mints follow the journal's re-keying, so a
+ * move is previewed against the same identity check the real run makes.
+ */
+export class UndoPreview {
+  readonly #fs: GuardedFileSystem;
+  readonly #signal: AbortSignal | undefined;
+  readonly #nodes = new Map<string, PreviewNode>();
+  /**
+   * Keys by their parent's key, so a subtree is found without a scan. Every
+   * ancestor of an override is linked, whether or not it has a node itself.
+   */
+  readonly #children = new Map<string, Set<string>>();
+  /** Emulates `UndoJournal.reidentify`: an identity's key to its replacement. */
+  readonly #alias = new Map<string, FileIdentity>();
+  #minted = 0;
+
+  constructor(fs: GuardedFileSystem, signal?: AbortSignal) {
+    this.#fs = fs;
+    this.#signal = signal;
+  }
+
+  /** The world `restoreEntry` runs against in a dry run. */
+  world(): RestoreWorld {
+    return {
+      probe: async (path) => {
+        const node = await this.#node(path);
+        return node.kind === 'absent' ? undefined : { kind: node.kind, identity: node.identity };
+      },
+      identity: async (path) => {
+        const node = await this.#node(path);
+        if (node.kind === 'absent') throw errnoError('ENOENT', 'lstat', path);
+        return node.identity;
+      },
+      hash: async (path) => {
+        const node = await this.#node(path);
+        if (node.kind !== 'file') throw errnoError('EISDIR', 'open', path);
+        return node.hash ?? (await hashFile(this.#fs, node.disk ?? path, this.#signal));
+      },
+      writeFile: async (path, bytes) => {
+        await this.#parentDir(path, 'open');
+        this.#put(previewKey(path), {
+          kind: 'file',
+          identity: this.#mint(),
+          hash: sha256Hex(bytes),
+        });
+      },
+      rm: (path) => {
+        this.#put(previewKey(path), ABSENT);
+        return Promise.resolve();
+      },
+      rmdir: async (path) => {
+        const node = await this.#node(path);
+        if (node.kind === 'absent') throw errnoError('ENOENT', 'rmdir', path);
+        if (node.kind !== 'dir') throw errnoError('ENOTDIR', 'rmdir', path);
+        if (!(await this.#isEmpty(path, node))) throw errnoError('ENOTEMPTY', 'rmdir', path);
+        this.#replace(previewKey(path), ABSENT);
+      },
+      mkdir: async (path) => {
+        await this.#parentDir(path, 'mkdir');
+        this.#put(previewKey(path), { kind: 'dir', identity: this.#mint(), backing: null });
+      },
+      mkdirp: async (path) => {
+        const missing: string[] = [];
+        for (let at = path; dirname(at) !== at; at = dirname(at)) {
+          const node = await this.#node(at, true);
+          if (node.kind === 'absent') {
+            missing.push(at);
+            continue;
+          }
+          // Node's recursive mkdir: EEXIST on the target itself, ENOTDIR above it.
+          if (!(await this.#isDirLike(node))) {
+            throw errnoError(at === path ? 'EEXIST' : 'ENOTDIR', 'mkdir', path);
+          }
+          break;
+        }
+        for (const at of missing.reverse()) {
+          this.#put(previewKey(at), { kind: 'dir', identity: this.#mint(), backing: null });
+        }
+      },
+      symlink: async (_target, path) => {
+        await this.#parentDir(path, 'symlink');
+        this.#put(previewKey(path), { kind: 'link', identity: this.#mint() });
+      },
+      rename: async (oldPath, newPath) => {
+        const node = await this.#node(oldPath);
+        if (node.kind === 'absent') throw errnoError('ENOENT', 'rename', oldPath);
+        const oldKey = previewKey(oldPath);
+        const newKey = previewKey(newPath);
+        if (oldKey === newKey) {
+          this.#put(newKey, node); // a case-only rename keeps the entry
+          return;
+        }
+        const moved = this.#descendants(oldKey).map((key) => [key, this.#nodes.get(key)] as const);
+        this.#replace(newKey, node);
+        for (const [key, child] of moved) {
+          this.#drop(key);
+          if (child !== undefined) this.#put(newKey + key.slice(oldKey.length), child);
+        }
+        this.#put(oldKey, ABSENT);
+      },
+      treeNames: async (path) => {
+        const node = await this.#node(path);
+        const names = [''];
+        if (node.kind === 'dir') await this.#listTree(path, node.backing, '', names);
+        return names;
+      },
+      // Nothing is written, so there is nothing to serialize; the checks are the
+      // ones validation makes without reading a disk the preview has moved on from.
+      lock: (path, fn) => {
+        this.#assertAllowed(path);
+        return fn();
+      },
+      lockPair: (a, b, fn) => {
+        this.#assertAllowed(a);
+        this.#assertAllowed(b);
+        return fn();
+      },
+      tracked: (identity) => {
+        let current = identity;
+        for (;;) {
+          const next = this.#alias.get(identityKey(current));
+          if (next === undefined) return current;
+          current = next;
+        }
+      },
+      rewrite: (was, now) => {
+        // Only records that track `was` now are re-keyed: once `was` was
+        // replaced, nothing tracks it.
+        const key = identityKey(was);
+        if (!this.#alias.has(key) && key !== identityKey(now)) this.#alias.set(key, now);
+      },
+    };
+  }
+
+  #mint(): FileIdentity {
+    this.#minted += 1;
+    return { dev: -1, ino: this.#minted, birthtimeMs: 0 };
+  }
+
+  #assertAllowed(path: string): void {
+    const guard = this.#fs.pathGuard;
+    if (guard.allowedRootContaining(path) === undefined || guard.isSensitive(path)) {
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Outside allowed directories.', path);
+    }
+  }
+
+  #put(key: string, node: PreviewNode): void {
+    this.#nodes.set(key, node);
+    for (let child = key, parent = dirname(key); parent !== child;) {
+      const siblings = this.#children.get(parent);
+      if (siblings?.has(child)) break; // the rest of the chain is linked already
+      if (siblings) siblings.add(child);
+      else this.#children.set(parent, new Set([child]));
+      child = parent;
+      parent = dirname(parent);
+    }
+  }
+
+  /** Remove `key`'s node, and its link once nothing under it needs one. */
+  #drop(key: string): void {
+    this.#nodes.delete(key);
+    for (let child = key, parent = dirname(key); parent !== child;) {
+      if (this.#nodes.has(child) || this.#children.has(child)) break;
+      const siblings = this.#children.get(parent);
+      siblings?.delete(child);
+      if (siblings?.size !== 0) break;
+      this.#children.delete(parent);
+      child = parent;
+      parent = dirname(parent);
+    }
+  }
+
+  /** Keys under `key`, with or without a node, parents before children. */
+  #descendants(key: string): string[] {
+    const out: string[] = [];
+    const queue = [key];
+    for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+      for (const child of this.#children.get(next) ?? []) {
+        out.push(child);
+        queue.push(child);
+      }
+    }
+    return out;
+  }
+
+  /** Set `key`, dropping overrides left under an entry that no longer has those children. */
+  #replace(key: string, node: PreviewNode): void {
+    for (const other of this.#descendants(key)) this.#drop(other);
+    this.#put(key, node);
+  }
+
+  async #isDirLike(node: PreviewNode): Promise<boolean> {
+    if (node.kind === 'dir') return true;
+    if (node.kind !== 'link' || node.disk === undefined) return false;
+    return fsStat(node.disk).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
+  }
+
+  async #parentDir(path: string, syscall: string): Promise<void> {
+    const parent = await this.#node(dirname(path), true);
+    if (await this.#isDirLike(parent)) return;
+    // Windows reports a file in the way as a missing path.
+    const code = parent.kind === 'absent' || IS_WINDOWS ? 'ENOENT' : 'ENOTDIR';
+    throw errnoError(code, syscall, path);
+  }
+
+  /**
+   * The node at `path`: its own override, else what the nearest overridden
+   * folder (or link) shows, else the disk. `structural` probes skip path
+   * validation, as the real run's folder creation does: a parent may be a
+   * workspace root.
+   */
+  async #node(path: string, structural = false): Promise<PreviewNode> {
+    const own = this.#nodes.get(previewKey(path));
+    if (own !== undefined) return own;
+    for (let child = path, parent = dirname(path); parent !== child;) {
+      const above = this.#nodes.get(previewKey(parent));
+      if (above !== undefined) {
+        const through =
+          above.kind === 'dir' ? above.backing : above.kind === 'link' ? above.disk : undefined;
+        if (through === undefined || through === null) return ABSENT;
+        return (await this.#fromDisk(through + path.slice(parent.length), structural)).node;
+      }
+      child = parent;
+      parent = dirname(parent);
+    }
+    const { node, validPath } = await this.#fromDisk(path, structural);
+    // Validation found the entry under another Unicode spelling; an override
+    // the preview made at that spelling stands for it.
+    return (validPath === path ? undefined : this.#nodes.get(previewKey(validPath))) ?? node;
+  }
+
+  async #fromDisk(
+    path: string,
+    structural: boolean,
+  ): Promise<{ node: PreviewNode; validPath: string }> {
+    const at = structural
+      ? await unlessMissing(fsLstat(path)).then((stats) => stats && { stats, validPath: path })
+      : await unlessMissing(this.#fs.lstat(path));
+    if (at === undefined) return { node: ABSENT, validPath: path };
+    const { stats, validPath } = at;
+    const identity = identityOf(stats);
+    const kind = kindOf(stats);
+    const node: PreviewNode =
+      kind === 'file'
+        ? { kind, identity, disk: validPath }
+        : kind === 'dir'
+          ? { kind, identity, backing: validPath }
+          : kind === 'link'
+            ? { kind, identity, disk: validPath }
+            : { kind, identity };
+    return { node, validPath };
+  }
+
+  /** The tree under `path` as the preview shows it: the backing folder's entries, minus or plus overrides. */
+  async #listTree(path: string, backing: string | null, rel: string, out: string[]): Promise<void> {
+    const key = previewKey(path);
+    const listed = new Set<string>();
+    const visit = async (
+      name: string,
+      child: PreviewNode | undefined,
+      diskDir: string | undefined,
+    ) => {
+      const childRel = rel === '' ? name : join(rel, name);
+      out.push(childRel);
+      if (child?.kind === 'dir')
+        await this.#listTree(join(path, name), child.backing, childRel, out);
+      else if (child === undefined && diskDir !== undefined) {
+        await this.#listTree(join(path, name), diskDir, childRel, out);
+      }
+    };
+    if (backing !== null) {
+      for (const entry of await fsReaddir(backing, { withFileTypes: true })) {
+        const childKey = previewKey(join(path, entry.name));
+        listed.add(childKey);
+        const child = this.#nodes.get(childKey);
+        if (child?.kind === 'absent') continue;
+        await visit(entry.name, child, entry.isDirectory() ? join(backing, entry.name) : undefined);
+      }
+    }
+    for (const childKey of this.#children.get(key) ?? []) {
+      const child = this.#nodes.get(childKey);
+      if (listed.has(childKey) || child === undefined || child.kind === 'absent') continue;
+      await visit(childKey.slice(key.length + 1), child, undefined);
+    }
+  }
+
+  async #isEmpty(path: string, node: Extract<PreviewNode, { kind: 'dir' }>): Promise<boolean> {
+    const key = previewKey(path);
+    // A child linked without a node of its own is on disk, if anywhere: the listing below sees it.
+    for (const child of this.#children.get(key) ?? []) {
+      const over = this.#nodes.get(child);
+      if (over !== undefined && over.kind !== 'absent') return false;
+    }
+    if (node.backing === null) return true;
+    for (const name of await fsReaddir(node.backing)) {
+      if (this.#nodes.get(previewKey(join(path, name)))?.kind !== 'absent') return false;
+    }
+    return true;
+  }
+}
+
 /**
  * Revert one journal entry: its records, in reverse capture order, put back
  * what the call changed. A record whose target no longer matches what the
@@ -492,7 +911,8 @@ export async function restoreEntry(
   fs: GuardedFileSystem,
   opts: {
     dryRun: boolean;
-    simulated?: Map<string, string | null> | undefined;
+    /** The dry run's view, shared across the entries of one undo; one is made when absent. */
+    preview?: UndoPreview | undefined;
     /**
      * A restore replaced the file `was` with a new inode; the owner of the
      * journal re-keys the move records that tracked `was`, in this entry or an
@@ -503,39 +923,12 @@ export async function restoreEntry(
     signal?: AbortSignal | undefined;
     /** Called as each record starts, so a long restore can report progress. */
     onRecord?: (() => void) | undefined;
-    /**
-     * Dry run only, shared across entries like `simulated`: directories the
-     * simulation moved back, so a later probe of a path inside one reads the
-     * folder where it still sits on disk.
-     */
-    relocations?: [string, string][] | undefined;
-    /** Dry-run directories map to their on-disk tree, or null when rebuilt from saved records. */
-    directoryBackings?: Map<string, string | null> | undefined;
   },
 ): Promise<RestoreOutcome> {
-  const { dryRun, signal } = opts;
-  const relocations = opts.relocations ?? [];
-  const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
-  const disk = (path: string): string => {
-    let out = path;
-    for (const [from, to] of relocations.toReversed()) {
-      const prefix = out.slice(0, from.length);
-      const foldedFrom = from.toLowerCase();
-      const foldedPrefix = prefix.toLowerCase();
-      const samePrefix =
-        out.startsWith(from) ||
-        (foldedFrom.length === from.length &&
-          foldedPrefix.length === prefix.length &&
-          foldedPrefix === foldedFrom);
-      if (samePrefix && isPathInsideDirectory(from, out)) {
-        out = to + out.slice(from.length);
-      }
-    }
-    return out;
-  };
-  // Shared across entries by the caller when the whole run is simulated.
-  // Values are null (absent), a 64-char sha256 hex (regular file), or 'dir'/'link'/'moved'.
-  const simulated = opts.simulated ?? new Map<string, string | null>();
+  const { signal } = opts;
+  const world = opts.dryRun
+    ? (opts.preview ?? new UndoPreview(fs, signal)).world()
+    : diskWorld(fs, signal, opts.onRewrite);
   // Records that did not run because a directory they sit under was not restored.
   const blocked: string[] = [];
   const isBlocked = (path: string): boolean =>
@@ -556,31 +949,8 @@ export async function restoreEntry(
     remaining.push({ record, order });
     results.push({ path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path) });
   };
-  const absent = async (path: string): Promise<boolean> => {
-    const known = simulated.get(path);
-    if (known !== undefined) return known === null;
-    return (await unlessMissing(fs.lstat(disk(path)))) === undefined;
-  };
-  const matchesHash = async (path: string, expect: string): Promise<boolean> => {
-    const known = simulated.get(path);
-    if (known !== undefined) return known === expect;
-    const existing = await unlessMissing(fs.lstat(disk(path)));
-    return (
-      existing !== undefined &&
-      existing.stats.isFile() &&
-      (await hashFile(fs, disk(path), signal)) === expect
-    );
-  };
-  const simulate = (
-    path: string,
-    state: string | null,
-    directoryBacking: string | null = null,
-  ): void => {
-    if (!dryRun) return;
-    simulated.set(path, state);
-    if (state === 'dir') directoryBackings.set(path, directoryBacking);
-    else directoryBackings.delete(path);
-  };
+  const matchesHash = async (path: string, expect: string): Promise<boolean> =>
+    (await world.probe(path))?.kind === 'file' && (await world.hash(path)) === expect;
 
   for (const { record, order } of restoreOrder(entry.records)) {
     const anchor = record.op === 'rename' ? record.from : record.path;
@@ -596,23 +966,20 @@ export async function restoreEntry(
     try {
       switch (record.op) {
         case 'write': {
-          await fs.lockForWrite(record.path, async () => {
+          await world.lock(record.path, async () => {
             const ok =
               record.expect === null
-                ? await absent(record.path)
+                ? (await world.probe(record.path)) === undefined
                 : await matchesHash(record.path, record.expect);
             if (ok) {
-              if (!dryRun) {
-                // An append keeps its inode, so its `was` may already be re-keyed by a
-                // newer restore; the moves now track the file this write replaces.
-                const replaced =
-                  record.expect === null ? undefined : (await fs.lstat(record.path)).stats;
-                await fs.writeFile(record.path, record.bytes, { mode: record.mode });
-                const at = identityOf((await fs.lstat(record.path)).stats);
-                if (record.was) opts.onRewrite?.(record.was, at);
-                if (replaced) opts.onRewrite?.(identityOf(replaced), at);
-              }
-              simulate(record.path, sha256Hex(record.bytes));
+              // An append keeps its inode, so its `was` may already be re-keyed by a
+              // newer restore; the moves now track the file this write replaces.
+              const replaced =
+                record.expect === null ? undefined : await world.identity(record.path);
+              await world.writeFile(record.path, record.bytes, record.mode);
+              const at = await world.identity(record.path);
+              if (record.was) world.rewrite(record.was, at);
+              if (replaced) world.rewrite(replaced, at);
               done(record.path);
             } else if (await matchesHash(record.path, sha256Hex(record.bytes))) {
               done(record.path); // already holds what undo would write
@@ -623,12 +990,11 @@ export async function restoreEntry(
           break;
         }
         case 'remove': {
-          await fs.lockForWrite(record.path, async () => {
-            if (await absent(record.path)) {
+          await world.lock(record.path, async () => {
+            if ((await world.probe(record.path)) === undefined) {
               done(record.path);
             } else if (await matchesHash(record.path, record.expect)) {
-              if (!dryRun) await fs.rm(record.path);
-              simulate(record.path, null);
+              await world.rm(record.path);
               done(record.path);
             } else {
               skip(record, order, record.path);
@@ -637,9 +1003,13 @@ export async function restoreEntry(
           break;
         }
         case 'rmdir': {
-          if (dryRun) break; // emptiness depends on writes the dry run did not make
+          // A link that took the folder's place is not the folder this call made.
+          if ((await world.probe(record.path))?.kind === 'link') {
+            skip(record, order, record.path);
+            break;
+          }
           try {
-            await fs.rmdir(record.path);
+            await world.rmdir(record.path);
           } catch (error) {
             if (!isMissing(error)) {
               if (!isNodeError(error) || error.code !== 'ENOTEMPTY') throw error;
@@ -651,27 +1021,18 @@ export async function restoreEntry(
           break;
         }
         case 'mkdir': {
-          const known = simulated.get(record.path);
-          if (await absent(record.path)) {
+          const at = await world.probe(record.path);
+          if (at === undefined) {
             // Owner rwx is forced: the server owns the recreated folder and must
             // write its children back into it.
             // ponytail: mkdir's mode is masked by the umask, so group/other bits can
             // come back narrower (0775 as 0755), never wider; a parent an older
             // move's undo recreated first keeps the default mode. Upgrade: a guarded
             // chmod on GuardedFileSystem for exact bits.
-            if (!dryRun) {
-              await fs.mkdir(record.path, { mode: (record.mode ?? 0o777) | 0o700 });
-              if (record.was) {
-                opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
-              }
-            }
-            simulate(record.path, 'dir');
+            await world.mkdir(record.path, (record.mode ?? 0o777) | 0o700);
+            if (record.was) world.rewrite(record.was, await world.identity(record.path));
             done(record.path);
-          } else if (
-            known !== undefined
-              ? known === 'dir'
-              : (await fs.lstat(disk(record.path))).stats.isDirectory()
-          ) {
+          } else if (at.kind === 'dir') {
             done(record.path);
           } else {
             blocked.push(record.path);
@@ -680,14 +1041,9 @@ export async function restoreEntry(
           break;
         }
         case 'symlink': {
-          if (await absent(record.path)) {
-            if (!dryRun) {
-              await fs.symlink(record.target, record.path, record.type);
-              if (record.was) {
-                opts.onRewrite?.(record.was, identityOf((await fs.lstat(record.path)).stats));
-              }
-            }
-            simulate(record.path, 'link');
+          if ((await world.probe(record.path)) === undefined) {
+            await world.symlink(record.target, record.path, record.type);
+            if (record.was) world.rewrite(record.was, await world.identity(record.path));
             done(record.path);
           } else {
             skip(record, order, record.path);
@@ -699,63 +1055,28 @@ export async function restoreEntry(
           // on `from` between the absence check and the rename, and the rename
           // would overwrite it. The pair is taken in a fixed key order (and
           // deduped) so two concurrent pairs cannot deadlock.
-          await fs.lockPairForWrite(record.from, record.to, async () => {
-            const toKnown = simulated.get(record.to);
-            let toHere: boolean;
-            let toIsRealDir = false;
-            let toBacking: string | undefined;
-            // What undoing leaves at `from`, so an older record's check can
-            // match it in a later simulated step: a hash, or 'dir'/'link'.
-            let toState: string | undefined;
-            if (toKnown !== undefined) {
-              toHere = toKnown !== null;
-              toState = toKnown ?? undefined;
-              if (dryRun && toKnown === 'dir') {
-                toBacking = directoryBackings.get(record.to) ?? undefined;
-                toIsRealDir = toBacking !== undefined;
-              }
-            } else {
-              const at = await unlessMissing(fs.lstat(disk(record.to)));
-              if (at !== undefined && sameIdentity(at.stats, record.identity)) {
-                toHere = true;
-                toIsRealDir = at.stats.isDirectory();
-                if (toIsRealDir) toBacking = disk(record.to);
-                if (dryRun) {
-                  toState = at.stats.isDirectory()
-                    ? 'dir'
-                    : at.stats.isSymbolicLink()
-                      ? 'link'
-                      : await hashFile(fs, disk(record.to), signal);
-                }
-              } else {
-                toHere = false;
-              }
-            }
-            const fromKnown = simulated.get(record.from);
-            const fromFree =
-              fromKnown !== undefined
-                ? fromKnown === null
-                : await unlessMissing(fs.lstat(disk(record.from))).then(
-                    (at) => at === undefined || sameIdentity(at.stats, record.identity),
-                  );
+          await world.lockPair(record.from, record.to, async () => {
+            const tracked = world.tracked(record.identity);
+            const to = await world.probe(record.to);
+            const from = await world.probe(record.from);
+            const toHere = to !== undefined && sameIdentity(to.identity, tracked);
+            const fromFree = from === undefined || sameIdentity(from.identity, tracked);
             if (toHere && fromFree) {
-              if (toIsRealDir && toBacking !== undefined) {
-                await assertTreeKeepsPolicy(fs, toBacking, record.to, record.from);
+              if (to.kind === 'dir') {
+                await assertTreeKeepsPolicy(
+                  fs,
+                  () => world.treeNames(record.to),
+                  record.to,
+                  record.from,
+                );
               }
-              if (!dryRun) {
-                await fs.mkdir(dirname(record.from), { recursive: true });
-                await fs.rename(record.to, record.from);
-                // A move can change a file's creation time (NTFS restores the
-                // one an older file had at that name), so carry the identity
-                // it now has to the other moves that tracked it.
-                const landed = identityOf((await fs.lstat(record.from)).stats);
-                if (!sameIdentity(landed, record.identity)) {
-                  opts.onRewrite?.(record.identity, landed);
-                }
-              }
-              if (dryRun && toBacking !== undefined) relocations.push([record.from, toBacking]);
-              simulate(record.to, null);
-              simulate(record.from, toState ?? 'moved', toBacking ?? null);
+              await world.mkdirp(dirname(record.from));
+              await world.rename(record.to, record.from);
+              // A move can change a file's creation time (NTFS restores the
+              // one an older file had at that name), so carry the identity
+              // it now has to the other moves that tracked it.
+              const landed = await world.identity(record.from);
+              if (!sameIdentity(landed, tracked)) world.rewrite(tracked, landed);
               done(record.from);
             } else {
               skip(record, order, record.from);
