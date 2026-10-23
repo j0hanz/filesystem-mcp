@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -363,6 +363,20 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const fs = makeFs(cap);
     await fs.rm(link);
     assert.strictEqual(cap.unavailable, 'could not type a link whose target is gone');
+  });
+
+  it('a move records the exact file id, so batch siblings stay apart', async () => {
+    const from = join(tmpDir, 'exact-id-a.txt');
+    const to = join(tmpDir, 'exact-id-b.txt');
+    await writeFile(from, 'x');
+    const cap = capture();
+    await makeFs(cap).rename(from, to);
+    const exact = await lstat(to, { bigint: true });
+    assert.deepStrictEqual(cap.records.find(isRename)?.identity, {
+      dev: exact.dev,
+      ino: exact.ino,
+      birthtimeNs: exact.birthtimeNs,
+    });
   });
 
   it('rename of a.txt to A.txt pushes exactly one rename record', async (t) => {

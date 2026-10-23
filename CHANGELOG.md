@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `undo` leaves a link that took the place of a folder the undone call
   created, and reports that folder as skipped. Before, undoing the call
   removed the link, on Windows a junction, in the folder's place.
+- `undo` tells apart files a batch call created together. Before, on
+  Windows two such files could share one identity, so undoing a change to
+  one could skip moving the other back.
 
 ## [2.10.0] - 2026-10-23
 

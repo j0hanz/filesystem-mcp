@@ -26,11 +26,19 @@ import {
 } from '../core/input-required.ts';
 import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
-import { sameIdentity } from '../core/undo.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
+
+/**
+ * One path over time: a replacement made after the plan has a later birth
+ * time, so number fields are exact enough here (undo needs bigint ones).
+ */
+const sameIdentity = (
+  a: { dev: number; ino: number; birthtimeMs: number },
+  b: { dev: number; ino: number; birthtimeMs: number },
+): boolean => a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 const DeleteInputSchema = z.strictObject({
   paths: z
