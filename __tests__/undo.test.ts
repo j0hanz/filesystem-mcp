@@ -840,6 +840,36 @@ describe('restoreEntry', () => {
     assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
   });
 
+  it('an append between a move and an edit: three steps undo back to the start', async () => {
+    const a = join(tmpDir, 'append-chain-a.txt');
+    const b = join(tmpDir, 'append-chain-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    const ids = [
+      journal.add('move', (await captureOne((fs) => fs.rename(a, b))).records),
+      // An append keeps the inode, so it saves the same identity the edit saves next.
+      journal.add('append', (await captureOne((fs) => fs.appendFile(b, '+'))).records),
+      journal.add('edit', (await captureOne((fs) => fs.writeFile(b, 'v2'))).records),
+    ];
+    const onRewrite = (
+      was: Parameters<UndoJournal['reidentify']>[0],
+      identity: Parameters<UndoJournal['reidentify']>[1],
+    ) => {
+      journal.reidentify(was, identity);
+    };
+    const remaining: number[] = [];
+    for (const id of ids.reverse()) {
+      const entry = journal.get(id);
+      assert.ok(entry);
+      remaining.push(
+        (await restoreEntry(entry, newFs(), { dryRun: false, onRewrite })).remaining.length,
+      );
+    }
+    const fsPromises = await import('node:fs/promises');
+    assert.deepStrictEqual(remaining, [0, 0, 0]);
+    assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
+  });
+
   it('reserve charges before the read, so two captures cannot both pass the gate', () => {
     const journal = new UndoJournal(4096);
     const one = journal.beginCapture();

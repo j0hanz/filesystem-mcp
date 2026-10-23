@@ -593,9 +593,14 @@ export async function restoreEntry(
                 : await matchesHash(record.path, record.expect);
             if (ok) {
               if (!dryRun) {
+                // An append keeps its inode, so its `was` may already be re-keyed by a
+                // newer restore; the moves now track the file this write replaces.
+                const replaced =
+                  record.expect === null ? undefined : (await fs.lstat(record.path)).stats;
                 await fs.writeFile(record.path, record.bytes, { mode: record.mode });
-                const at = await fs.lstat(record.path);
-                if (record.was) opts.onRewrite?.(record.was, identityOf(at.stats));
+                const at = identityOf((await fs.lstat(record.path)).stats);
+                if (record.was) opts.onRewrite?.(record.was, at);
+                if (replaced) opts.onRewrite?.(identityOf(replaced), at);
               }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
