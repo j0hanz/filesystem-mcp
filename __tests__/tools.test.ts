@@ -4183,9 +4183,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // includeSizes and sortBy inputs (#99); measured 19219 / 9357.
   // Raised 2026-10-22 to 20550 full (read-only unchanged): undo tool (#111);
   // measured 19949 / 9357.
+  // Raised 2026-10-23 to 9850 read-only (full unchanged): the list and diff
+  // descriptions name their default skips and refusals, gaps the Glama TDQS
+  // review flagged; measured 20397 / 9668.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
     const BUDGET_CHARS = 20_550;
-    const BUDGET_CHARS_READ_ONLY = 9_550;
+    const BUDGET_CHARS_READ_ONLY = 9_850;
 
     const full = await createTestClientPair([tmpDir]);
     try {

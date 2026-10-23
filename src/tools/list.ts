@@ -301,8 +301,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   name: 'list',
   title: 'List',
   description:
-    "List a directory's files and subdirectories as a tree of names, like ls or tree. " +
-    'includeSizes adds sizes and a total; stat returns dates.',
+    "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. " +
+    'Hidden entries are skipped unless includeHidden is set, and ignored ones ' +
+    '(.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. ' +
+    'includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.',
   input: ListInputSchema,
   readOnlyHint: true,
   deadline: true,

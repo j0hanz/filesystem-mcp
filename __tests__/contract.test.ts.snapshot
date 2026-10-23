@@ -123,7 +123,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -285,7 +285,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. includeSizes adds sizes and a total; stat returns dates.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -350,7 +350,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created.",
+      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. Overwriting an existing file asks the user first, unless a copy passes overwrite: true. undo reverts a move whose result gives an undo id; a copy cannot be undone.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -944,7 +944,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -983,7 +983,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. includeSizes adds sizes and a total; stat returns dates.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
       "inputSchema": {
         "type": "object",
         "properties": {
