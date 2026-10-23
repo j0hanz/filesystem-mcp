@@ -47,8 +47,6 @@ interface CollectOptions extends RenderOptions {
   includeIgnored: boolean;
   signal: AbortSignal;
   fs: GuardedFileSystem;
-  /** Upper bound on the stored, paginable entry array. */
-  entryCap: number;
   onProgress: (progress: { current: number; total?: number }) => void;
 }
 
@@ -97,7 +95,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   const comparator = entryComparator(options.sortBy);
   const keepBest = (): void => {
     entries.sort(comparator);
-    if (entries.length > options.entryCap) entries.length = options.entryCap;
+    if (entries.length > MAX_LIST_ENTRIES) entries.length = MAX_LIST_ENTRIES;
   };
 
   await processEntriesConcurrently<GlobEntry>(
@@ -166,9 +164,9 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
           type: entryType,
           ...(size !== undefined ? { size } : {}),
         });
-        // Keep at most the best entryCap: prune whenever the buffer doubles,
-        // so memory stays O(entryCap) and the sorts O(n log entryCap) overall.
-        if (entries.length >= options.entryCap * 2) keepBest();
+        // Keep at most the best MAX_LIST_ENTRIES: prune whenever the buffer doubles,
+        // so memory stays O(MAX_LIST_ENTRIES) and the sorts O(n log MAX_LIST_ENTRIES) overall.
+        if (entries.length >= MAX_LIST_ENTRIES * 2) keepBest();
       },
     },
   );
@@ -331,7 +329,6 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
           includeIgnored: args.includeIgnored,
           signal: ctx.signal,
           fs: ctx.fs,
-          entryCap: MAX_LIST_ENTRIES,
           onProgress: ctx.onProgress,
         });
         return {
