@@ -8,6 +8,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { runExclusive } from './concurrency.ts';
 import {
   ErrorCode,
   FsError,
@@ -703,17 +704,8 @@ export class UndoPreview {
         if (node.kind === 'dir') await this.#listTree(path, node.backing, '', names);
         return names;
       },
-      // Nothing is written, so there is nothing to serialize; the checks are the
-      // ones validation makes without reading a disk the preview has moved on from.
-      lock: (path, fn) => {
-        this.#assertAllowed(path);
-        return fn();
-      },
-      lockPair: (a, b, fn) => {
-        this.#assertAllowed(a);
-        this.#assertAllowed(b);
-        return fn();
-      },
+      lock: (path, fn) => this.#locked([path], fn),
+      lockPair: (a, b, fn) => this.#locked([a, b], fn),
       tracked: (identity) => {
         let current = identity;
         for (;;) {
@@ -734,6 +726,26 @@ export class UndoPreview {
   #mint(): FileIdentity {
     this.#minted += 1;
     return { dev: -1, ino: this.#minted, birthtimeMs: 0 };
+  }
+
+  /**
+   * The writers' locks, so a preview never reads a write half done. The checks
+   * are the ones validation makes without reading a disk the preview has moved
+   * on from: a key validation cannot settle falls back to the path itself.
+   */
+  async #locked<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
+    for (const path of paths) this.#assertAllowed(path);
+    const guard = this.#fs.pathGuard;
+    const keys = await Promise.all(
+      paths.map((path) => guard.validatePathForWrite(path).catch(() => path)),
+    );
+    // Sorted and deduped, as lockPairForWrite takes them: no deadlock, no re-entry.
+    const ordered = [...new Set(keys)].sort();
+    const run = (i: number): Promise<T> => {
+      const key = ordered[i];
+      return key === undefined ? fn() : runExclusive(key, () => run(i + 1));
+    };
+    return run(0);
   }
 
   #assertAllowed(path: string): void {
