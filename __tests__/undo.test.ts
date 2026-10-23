@@ -1442,6 +1442,38 @@ describe('restoreEntry', () => {
     });
   });
 
+  it('a dry run waits for a writer that holds the path', async () => {
+    const file = join(tmpDir, 'preview-lock.txt');
+    await writeFile(file, 'v1');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'v2'));
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holding = (): void => undefined;
+    const taken = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    const writer = newFs().lockForWrite(file, async () => {
+      holding();
+      await held;
+    });
+    await taken;
+    let finished = false;
+    const dry = restoreEntry(entry, newFs(), { dryRun: true }).then((out) => {
+      finished = true;
+      return out;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(finished, false, 'the preview read the file while a writer held it');
+    release();
+    await writer;
+    assert.deepStrictEqual(
+      (await dry).results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
   it('dry run: chained moves restore through simulated intermediate paths', async () => {
     const a = join(tmpDir, 'chain-a.txt');
     const b = join(tmpDir, 'chain-b.txt');
