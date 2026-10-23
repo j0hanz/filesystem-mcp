@@ -729,15 +729,25 @@ export class UndoPreview {
   }
 
   /**
-   * The writers' locks, so a preview never reads a write half done. The checks
-   * are the ones validation makes without reading a disk the preview has moved
-   * on from: a key validation cannot settle falls back to the path itself.
+   * The writers' locks, so a preview never reads a write half done, keyed and
+   * validated as `lockForWrite`/`lockPairForWrite` do (the pair's second path
+   * as the entry itself). Validation reads the disk, so it decides only for a
+   * path the preview has not changed; one it has changed gets the checks that
+   * read no disk, and is locked under its own spelling.
    */
   async #locked<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
-    for (const path of paths) this.#assertAllowed(path);
     const guard = this.#fs.pathGuard;
     const keys = await Promise.all(
-      paths.map((path) => guard.validatePathForWrite(path).catch(() => path)),
+      paths.map((path, i) =>
+        (i === 0
+          ? guard.validatePathForWrite(path)
+          : guard.validatePathForDelete(path).catch(() => guard.validatePathForWrite(path))
+        ).catch((error: unknown) => {
+          if (!this.#touched(path)) throw error;
+          this.#assertAllowed(path);
+          return path;
+        }),
+      ),
     );
     // Sorted and deduped, as lockPairForWrite takes them: no deadlock, no re-entry.
     const ordered = [...new Set(keys)].sort();
@@ -746,6 +756,14 @@ export class UndoPreview {
       return key === undefined ? fn() : runExclusive(key, () => run(i + 1));
     };
     return run(0);
+  }
+
+  /** True when the preview overrides `path` or a folder above it. */
+  #touched(path: string): boolean {
+    for (let at = path; ; at = dirname(at)) {
+      if (this.#nodes.has(previewKey(at))) return true;
+      if (dirname(at) === at) return false;
+    }
   }
 
   #assertAllowed(path: string): void {
