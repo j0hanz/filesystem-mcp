@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `undo` moves a file back after an append to it. Before, undoing a move, an
   append to the moved file and a later write to it skipped the move as
   modified, though nothing outside the server had touched the file.
+- `undo` of a large call no longer drops a stdio connection. Each step lists
+  at most 100 paths in restore order, within 2 MiB shared by all steps;
+  skipped and failed paths are kept before restored ones, and a cut list
+  carries `truncated` and `totalResults`. Before, undoing a recursive delete
+  of tens of thousands of files restored them all and then sent a result
+  past the 10 MiB stdio message limit, which closed the connection.
+- `undo` reports progress per restored path, so a client that resets its
+  request timeout on progress no longer cancels a long restore part-way.
 
 ## [2.10.0] - 2026-10-23
 

@@ -325,6 +325,7 @@ What is where:
 | `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                                                                                              |
 | `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                                                                                               |
 | `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                                                                                                      |
+| `undo`                           | `steps[]` (`id`, `tool`, `results[]` each `{ path, value }` or `{ path, error }`); a step listing fewer paths than it ran has `truncated` and `totalResults`                                            |
 
 Notes on individual tools:
 

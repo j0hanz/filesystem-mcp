@@ -1515,6 +1515,9 @@ describe('undo tool', () => {
       assert.notStrictEqual(undone.isError, true);
       const text = firstTextBlock(undone) ?? '';
       assert.ok(!text.includes('SKIPPED') && !text.includes('FAILED'), text);
+      const [step] = (undone._meta as { steps: { truncated?: true; totalResults?: number }[] })
+        .steps;
+      assert.deepStrictEqual([step?.truncated, step?.totalResults], [undefined, undefined]);
       const fsPromises = await import('node:fs/promises');
       assert.strictEqual(
         await fsPromises.stat(join(tmp, 'batch-new')).then(
@@ -1522,6 +1525,99 @@ describe('undo tool', () => {
           () => false,
         ),
         false,
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a large step lists 100 paths, skipped ones first, and reports the total', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const files = Array.from({ length: 100 }, (_, i) =>
+        join(tmp, 'wide', `d${String(i)}`, 'f.txt'),
+      );
+      const created = await call(pair.client, 'create', {
+        files: files.map((path) => ({ path, content: 'x' })),
+      });
+      assert.notStrictEqual(created.isError, true);
+      // Three changed files: their removes and folders skip, and so does the shared parent.
+      for (const path of files.slice(-3)) await writeFile(path, 'changed');
+      const undone = await call(pair.client, 'undo', {});
+      const [step] = (
+        undone._meta as {
+          steps: { results: { error?: unknown }[]; truncated?: true; totalResults?: number }[];
+        }
+      ).steps;
+      assert.ok(step);
+      assert.strictEqual(step.results.length, 100);
+      assert.strictEqual(step.truncated, true);
+      assert.ok((step.totalResults ?? 0) > 200, `totalResults: ${String(step.totalResults)}`);
+      assert.strictEqual(step.results.filter((r) => r.error !== undefined).length, 7);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('listed paths share one byte budget across steps', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      // ~2.5 KB paths, listed twice per skipped result: five 100-path steps outgrow the budget.
+      const deep = join(
+        tmp,
+        ...Array.from({ length: 12 }, (_, i) => `${String(i)}${'d'.repeat(199)}`),
+      );
+      await mkdir(deep, { recursive: true });
+      const files: string[] = [];
+      for (let k = 0; k < 5; k++) {
+        const batch = Array.from({ length: 100 }, (_, i) =>
+          join(deep, `f${String(k)}-${String(i)}.txt`),
+        );
+        await call(pair.client, 'create', { files: batch.map((path) => ({ path, content: 'x' })) });
+        files.push(...batch);
+      }
+      for (const path of files) await writeFile(path, 'changed');
+      const undone = await call(pair.client, 'undo', { steps: 5 });
+      const { steps } = undone._meta as {
+        steps: { results: unknown[]; truncated?: true; totalResults?: number }[];
+      };
+      const listed = steps.flatMap((s) => s.results);
+      assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 2 * 1024 * 1024);
+      assert.ok(listed.length < 500, `listed: ${String(listed.length)}`);
+      assert.ok(steps.some((s) => s.truncated === true && s.totalResults === 100));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a restore reports progress per record while it runs', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const files = Array.from({ length: 100 }, (_, i) => join(tmp, 'ticks', `f${String(i)}.txt`));
+      await call(pair.client, 'create', { files: files.map((path) => ({ path, content: 'x' })) });
+      const frames: { progress: number; total?: number | undefined }[] = [];
+      const undone = await pair.client.callTool(
+        { name: 'undo', arguments: {} },
+        {
+          onprogress: (p) => {
+            frames.push(p);
+          },
+        },
+      );
+      // The first tick always clears the rate limit; the complete frame alone has progress === total.
+      const ticks = frames.filter((p) => p.total !== undefined && p.progress < p.total);
+      assert.ok(ticks.length > 0, JSON.stringify(frames));
+      // Each folder the batch created is recorded once per file but removed once.
+      const [step] = (undone._meta as { steps: { totalResults?: number }[] }).steps;
+      assert.ok(
+        ticks.every((p) => p.total === step?.totalResults),
+        JSON.stringify(frames),
       );
     } finally {
       await pair.close();
