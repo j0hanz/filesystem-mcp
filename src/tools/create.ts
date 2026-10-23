@@ -19,7 +19,7 @@ import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { isTotalFailure, runOverPaths } from './batch.ts';
+import { isTotalFailure, postWriteStat, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -374,12 +374,7 @@ async function createOne(
     });
     validPath = written.validPath;
     const nowIso = new Date().toISOString();
-    let fileStats: Stats | undefined;
-    try {
-      fileStats = (await ctx.fs.stat(written.validPath)).stats;
-    } catch {
-      /* post-commit metadata only */
-    }
+    const fileStats = await postWriteStat(ctx, written.validPath);
     created = fileStats?.birthtime.toISOString() ?? nowIso;
     modified = fileStats?.mtime.toISOString() ?? nowIso;
     meta = buildWrittenFileMeta({
