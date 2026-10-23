@@ -164,7 +164,7 @@ jobs:
           npm ci --ignore-scripts
           npm run check
 
-      - name: Release-only build paths (Docker, MCPB, Smithery dry run)
+      - name: Release-only build paths (Docker, MCPB)
         run: bash scripts/check-release-paths.sh
 
       - name: Commit, tag & push
@@ -364,11 +364,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "v$VERSION" filesystem-mcp.mcpb --clobber
-
-      - name: Publish to Smithery
-        env:
-          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
-        run: node scripts/publish-smithery.mjs
 
       - name: Summary
         run: |

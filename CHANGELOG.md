@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **Smithery publishing.** Releases no longer update the Smithery listing.
+  Smithery's API has refused every server update since 2.10.0 and shuts
+  down on 2026-10-31, along with its CLI and API keys. Each release still
+  ships to npm, GHCR, the MCP Registry and the `.mcpb` release asset.
+
 ## [2.10.1] - 2026-10-23
 
 A fix patch. `undo` restores, previews and reports large calls correctly,
