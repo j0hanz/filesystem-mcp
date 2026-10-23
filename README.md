@@ -2,6 +2,8 @@
 
 # Filesystem MCP
 
+[![AgentShield Security](https://merx.help/badge/A+.svg)](https://merx.help/shield)
+
 **Let your AI assistant work with your files, safely.**
 
 Read, search, edit, and patch files in the folders you choose.<br>
