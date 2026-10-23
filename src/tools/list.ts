@@ -47,7 +47,6 @@ interface CollectOptions extends RenderOptions {
   includeIgnored: boolean;
   signal: AbortSignal;
   fs: GuardedFileSystem;
-  pathGuard: PathGuard;
   /** Upper bound on the stored, paginable entry array. */
   entryCap: number;
   onProgress: (progress: { current: number; total?: number }) => void;
@@ -61,21 +60,20 @@ interface CollectResult {
   totalBytes?: number;
 }
 
-function entryTypeRank(type: EntryType): number {
-  if (type === 'directory') return 0;
-  return 1;
+/** The entry's parent folder, relative like the entry; '' at the top level. */
+function parentOf(entry: CollectedEntry): string {
+  const slash = entry.relativePath.lastIndexOf('/');
+  return slash === -1 ? '' : entry.relativePath.slice(0, slash);
 }
 
 // Compare by parent directory first (depth-level grouping), then within the
 // same parent: directories first, then by size (descending) or alphabetical.
 function entryComparator(sortBy: 'name' | 'size') {
   return (a: CollectedEntry, b: CollectedEntry): number => {
-    const slashA = a.relativePath.lastIndexOf('/');
-    const slashB = b.relativePath.lastIndexOf('/');
-    const parentA = slashA === -1 ? '' : a.relativePath.slice(0, slashA);
-    const parentB = slashB === -1 ? '' : b.relativePath.slice(0, slashB);
+    const parentA = parentOf(a);
+    const parentB = parentOf(b);
     if (parentA !== parentB) return parentA.localeCompare(parentB);
-    const rankDiff = entryTypeRank(a.type) - entryTypeRank(b.type);
+    const rankDiff = Number(b.type === 'directory') - Number(a.type === 'directory');
     if (rankDiff !== 0) return rankDiff;
     if (sortBy === 'size') {
       const sizeDiff = (b.size ?? 0) - (a.size ?? 0);
@@ -94,7 +92,8 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   let totalDirectories = 0;
   let totalBytes = 0;
   let fatalError: Error | undefined;
-  const ceiling = options.pathGuard.allowedRootContaining(rootPath);
+  const { pathGuard } = options.fs;
+  const ceiling = pathGuard.allowedRootContaining(rootPath);
   const comparator = entryComparator(options.sortBy);
   const keepBest = (): void => {
     entries.sort(comparator);
@@ -108,9 +107,8 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
       skipIgnored: !options.includeIgnored,
       ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
       signal: options.signal,
-      pathGuard: options.pathGuard,
+      pathGuard,
       includeHidden: options.includeHidden,
-      baseNameMatch: false,
       // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
       // globEntries primitive is now 0-based, so subtract one here. options.maxDepth
       // is guaranteed >= 1 by its PositiveInt schema, so this never underflows.
@@ -134,7 +132,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
         // A sensitive-named directory never reaches the walk (globEntries
         // prunes it via pathGuard), so no ancestor re-check is needed here.
 
-        const accessible = await options.pathGuard.isEntryAccessible(entry.path);
+        const accessible = await pathGuard.isEntryAccessible(entry.path);
         if (!accessible) return;
 
         let size: number | undefined;
@@ -226,37 +224,24 @@ function renderMarkdown(
     }
   }
   entries.sort(entryComparator(opts.sortBy));
-
-  // Group entries by parent path
-  const childrenOf = new Map<string, CollectedEntry[]>();
-  for (const entry of entries) {
-    const slash = entry.relativePath.lastIndexOf('/');
-    const parentKey = slash === -1 ? '' : entry.relativePath.slice(0, slash);
-    if (!childrenOf.has(parentKey)) childrenOf.set(parentKey, []);
-    const children = childrenOf.get(parentKey);
-    if (children) children.push(entry);
-  }
+  const childrenOf = Map.groupBy(entries, parentOf);
 
   const lines: string[] = [rootName];
 
   function renderChildren(parentKey: string, prefix: string): void {
-    const children = childrenOf.get(parentKey);
-    if (!children) return;
-
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-      if (!child) continue;
+    const children = childrenOf.get(parentKey) ?? [];
+    for (const [i, child] of children.entries()) {
       const isLast = i === children.length - 1;
-      const connector = isLast ? ELBOW : TEE;
       const sizeText =
         opts.includeSizes && child.size !== undefined ? ` (${formatByteSize(child.size)})` : '';
       lines.push(
-        prefix + connector + child.name + (child.type === 'directory' ? '/' : '') + sizeText,
+        prefix +
+          (isLast ? ELBOW : TEE) +
+          child.name +
+          (child.type === 'directory' ? '/' : '') +
+          sizeText,
       );
-
-      const childKey = child.relativePath;
-      const nextPrefix = prefix + (isLast ? INDENT : PIPE);
-      renderChildren(childKey, nextPrefix);
+      renderChildren(child.relativePath, prefix + (isLast ? INDENT : PIPE));
     }
   }
 
@@ -346,7 +331,6 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
           includeIgnored: args.includeIgnored,
           signal: ctx.signal,
           fs: ctx.fs,
-          pathGuard: ctx.fs.pathGuard,
           entryCap: MAX_LIST_ENTRIES,
           onProgress: ctx.onProgress,
         });

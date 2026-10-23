@@ -81,15 +81,15 @@ export const SafeGlobPattern = z
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')
   .meta({ examples: ['**/*.ts', 'src/**/*.js', '**/*.{ts,tsx}'] });
 
-export function validateReadRange(
-  value: {
-    head?: number | undefined;
-    tail?: number | undefined;
-    startLine?: number | undefined;
-    endLine?: number | undefined;
-  },
-  ctx: z.RefinementCtx,
-): void {
+/** The line-range args of a read; `validateReadRange` checks how they combine. */
+export interface ReadRange {
+  head?: number | undefined;
+  tail?: number | undefined;
+  startLine?: number | undefined;
+  endLine?: number | undefined;
+}
+
+export function validateReadRange(value: ReadRange, ctx: z.RefinementCtx): void {
   const hasHead = value.head !== undefined;
   const hasTail = value.tail !== undefined;
   const hasStart = value.startLine !== undefined;

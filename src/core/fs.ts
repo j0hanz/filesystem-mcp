@@ -29,8 +29,9 @@ import {
   isMissing,
   isNodeError,
   isNotFoundErrno,
+  unlessMissing,
 } from './errors.ts';
-import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
+import { detectMimeFromContent, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import { isSamePath, normalizePath, respellSpellingOnlyTarget } from './path-utils.ts';
@@ -44,9 +45,10 @@ import {
   O_NOFOLLOW,
   READ_NOFOLLOW,
   readFileWithStats,
+  readProbe,
 } from './read.ts';
-import { identityOf, plannedMkdirChain, snapshotTree } from './undo.ts';
-import type { UndoCapture, UndoRecord } from './undo.ts';
+import { identityOf, plannedMkdirChain, saveOld, snapshotTree } from './undo.ts';
+import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
 export type { FileType };
@@ -113,24 +115,12 @@ export class GuardedFileSystem {
     requestedPath: string,
     signal?: AbortSignal,
   ): Promise<FileHandle> {
-    const opening = fsOpen(validPath, READ_NOFOLLOW);
-    let handle: FileHandle;
-    try {
-      handle = await withAbort(opening, signal);
-    } catch (error) {
-      // An open the signal abandoned still lands; close it then.
-      void opening
-        .then(
-          (late) => late.close(),
-          () => undefined,
-        )
-        .catch((closeErr: unknown) => {
-          Logger.warn(
-            `Failed to close file handle for ${validPath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
-          );
-        });
-      throw error;
-    }
+    const handle = await this.#abandonOnAbort(
+      fsOpen(validPath, READ_NOFOLLOW),
+      signal,
+      (late) => late.close(),
+      `file handle for ${validPath}`,
+    );
     try {
       await this.#assertFdWithinRoots(handle, requestedPath);
       return handle;
@@ -271,25 +261,16 @@ export class GuardedFileSystem {
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;
-    let destBytes: Buffer | undefined;
-    let destMode: number | undefined;
-    let destWas: ReturnType<typeof identityOf> | undefined;
+    let saved: SavedFile | undefined;
     if (capture && !capture.unavailable && !spellingOnly) {
       try {
-        const dest = await fsLstat(validNew).catch((error: unknown) => {
-          if (!isMissing(error)) throw error;
-          return undefined;
-        });
+        const dest = await unlessMissing(fsLstat(validNew));
         if (dest === undefined) {
           // absent: nothing to save, the rename record alone restores it.
         } else if (dest.isDirectory()) {
           capture.abandon('move replaced a directory');
         } else if (dest.isFile()) {
-          if (capture.reserve(dest.size)) {
-            destBytes = await this.readSaved(validNew);
-            destMode = dest.mode & 0o777;
-            destWas = identityOf(dest);
-          }
+          saved = await saveOld(capture, this, validNew, dest);
         } else {
           capture.abandon('could not inspect the move destination');
         }
@@ -302,16 +283,7 @@ export class GuardedFileSystem {
     // contents changed after the move is still moved back; upgrade by hashing
     // the tree under `to` before recording it.
     if (this.#capture && !this.#capture.unavailable) {
-      if (destBytes !== undefined && destMode !== undefined) {
-        this.#capture.push({
-          op: 'write',
-          path: validNew,
-          bytes: destBytes,
-          mode: destMode,
-          expect: null,
-          was: destWas,
-        });
-      }
+      if (saved) this.#capture.push({ op: 'write', path: validNew, ...saved, expect: null });
       const identity = await fsLstat(validNew).then(identityOf, () => undefined);
       if (identity !== undefined) {
         this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
@@ -336,8 +308,7 @@ export class GuardedFileSystem {
     // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
-    let oldBytes: Buffer | undefined;
-    let oldWas: ReturnType<typeof identityOf> | undefined;
+    let saved: SavedFile | undefined;
     try {
       const existing = await fsStat(validPath);
       existingMode = existing.mode & 0o777;
@@ -348,9 +319,8 @@ export class GuardedFileSystem {
       if (this.#capture && !this.#capture.unavailable) {
         if (!existing.isFile()) {
           this.#capture.abandon('cannot capture a write over a non-regular file');
-        } else if (this.#capture.reserve(existing.size)) {
-          oldBytes = await this.readSaved(validPath);
-          oldWas = identityOf(existing);
+        } else {
+          saved = await saveOld(this.#capture, this, validPath, existing);
         }
       }
     } catch (error) {
@@ -398,19 +368,13 @@ export class GuardedFileSystem {
       throw error;
     }
     if (this.#capture && !this.#capture.unavailable) {
-      const contentBytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
-      if (oldBytes !== undefined && existingMode !== undefined) {
-        this.#capture.push({
-          op: 'write',
-          path: validPath,
-          bytes: oldBytes,
-          mode: existingMode,
-          expect: sha256Hex(contentBytes),
-          was: oldWas,
-        });
-      } else {
-        this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(contentBytes) });
-      }
+      // A string hashes as its UTF-8 bytes, which is what the write stored.
+      const expect = sha256Hex(content);
+      this.#capture.push(
+        saved
+          ? { op: 'write', path: validPath, ...saved, expect }
+          : { op: 'remove', path: validPath, expect },
+      );
     }
     return { validPath };
   }
@@ -444,16 +408,10 @@ export class GuardedFileSystem {
     // Undo capture: the whole old file is saved, not its size — a multi-GB
     // append goes over the budget and reads as not undoable.
     // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
-    let oldBytes: Buffer | undefined;
-    let oldMode: number | undefined;
-    let oldWas: ReturnType<typeof identityOf> | undefined;
+    let saved: SavedFile | undefined;
     if (this.#capture && !this.#capture.unavailable && existing) {
       try {
-        if (this.#capture.reserve(existing.size)) {
-          oldBytes = await this.readSaved(validPath);
-          oldMode = existing.mode & 0o777;
-          oldWas = identityOf(existing);
-        }
+        saved = await saveOld(this.#capture, this, validPath, existing);
       } catch {
         this.#capture.abandon('could not read the old content');
       }
@@ -510,18 +468,16 @@ export class GuardedFileSystem {
       await handle.close();
     }
     if (this.#capture && !this.#capture.unavailable) {
-      if (oldBytes !== undefined && oldMode !== undefined) {
-        this.#capture.push({
-          op: 'write',
-          path: validPath,
-          bytes: oldBytes,
-          mode: oldMode,
-          expect: sha256Hex(Buffer.concat([oldBytes, Buffer.from(content, 'utf8')])),
-          was: oldWas,
-        });
-      } else {
-        this.#capture.push({ op: 'remove', path: validPath, expect: sha256Hex(content) });
-      }
+      this.#capture.push(
+        saved
+          ? {
+              op: 'write',
+              path: validPath,
+              ...saved,
+              expect: sha256Hex(Buffer.concat([saved.bytes, Buffer.from(content, 'utf8')])),
+            }
+          : { op: 'remove', path: validPath, expect: sha256Hex(content) },
+      );
     }
     return { validPath };
   }
@@ -533,9 +489,7 @@ export class GuardedFileSystem {
    */
   async readLeadingSample(filePath: string): Promise<Buffer> {
     await using handle = await this.open(filePath);
-    const buffer = Buffer.alloc(MIME_SAMPLE_SIZE);
-    const { bytesRead } = await handle.read(buffer, 0, MIME_SAMPLE_SIZE, 0);
-    return buffer.subarray(0, bytesRead);
+    return await readProbe(handle);
   }
 
   /**

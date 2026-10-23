@@ -8,9 +8,9 @@ import { after, before, describe, it } from 'node:test';
 import type { Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import type { UndoRecord } from '../src/core/undo.ts';
+import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
-import { restoreEntry, UndoCapture, UndoJournal } from '../src/core/undo.ts';
+import { restoreEntry, UndoJournal } from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -112,10 +112,10 @@ describe('UndoJournal', () => {
     const journal = new UndoJournal(1024 * 1024);
     const caps = Array.from({ length: 9 }, () => journal.beginCapture());
     assert.ok(caps.every((c) => c.unavailable === undefined));
-    for (const c of caps) journal.endCapture(c);
+    for (const c of caps) c.release();
   });
 
-  it('an abandoned capture keeps its charge until endCapture', () => {
+  it('an abandoned capture keeps its charge until release', () => {
     // One reserve of 2000 charges 2512 (512 record overhead).
     const journal = new UndoJournal(4096);
     const one = journal.beginCapture();
@@ -124,11 +124,11 @@ describe('UndoJournal', () => {
     assert.strictEqual(one.unavailable, 'too large to keep for undo');
     const two = journal.beginCapture();
     assert.strictEqual(two.reserve(2000), false);
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
     const three = journal.beginCapture();
     assert.ok(three.reserve(2000));
-    journal.endCapture(three);
+    three.release();
   });
 
   it('an abandoned capture frees the bytes of the records it dropped', () => {
@@ -140,8 +140,8 @@ describe('UndoJournal', () => {
     assert.strictEqual(big.reserve(2000), false);
     const small = journal.beginCapture();
     assert.ok(small.reserve(1200));
-    journal.endCapture(big);
-    journal.endCapture(small);
+    big.release();
+    small.release();
   });
 });
 
@@ -164,7 +164,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     }
   });
 
-  const capture = () => new UndoCapture(32 * 1024 * 1024);
+  const capture = () => new UndoJournal(32 * 1024 * 1024).beginCapture();
   const makeFs = (cap: UndoCapture) => new GuardedFileSystem(ctx.pathGuard, cap);
 
   it('an overwrite pushes write with the old bytes and the new hash', async () => {
@@ -261,7 +261,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
   it('a budget of 3 bytes with a 4-byte file abandons', async () => {
     const file = join(tmpDir, 'big.txt');
     await writeFile(file, 'abcd');
-    const cap = new UndoCapture(3);
+    const cap = new UndoJournal(3).beginCapture();
     const fs = makeFs(cap);
     await fs.writeFile(file, 'x');
     assert.ok(cap.unavailable !== undefined);
@@ -273,7 +273,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await mkdir(join(tree, 'sub'), { recursive: true });
     for (let i = 0; i < 5; i++) await writeFile(join(tree, `e${i}.txt`), '');
     // 7 records (5 empty files, sub, tree) cost 7 * 512 overhead: over 3 KiB.
-    const cap = new UndoCapture(3 * 1024);
+    const cap = new UndoJournal(3 * 1024).beginCapture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
     assert.strictEqual(cap.unavailable, 'too many changes to keep for undo');
@@ -413,7 +413,7 @@ describe('restoreEntry', () => {
   const captureOne = async (
     run: (fs: GuardedFileSystem) => Promise<unknown>,
   ): Promise<UndoEntry> => {
-    const cap = new UndoCapture(32 * 1024 * 1024);
+    const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
     const fs = new GuardedFileSystem(ctx.pathGuard, cap);
     await run(fs);
     assert.strictEqual(cap.unavailable, undefined);
@@ -453,6 +453,37 @@ describe('restoreEntry', () => {
       'before',
     );
     assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a write whose path already holds the saved bytes counts as restored', async () => {
+    const file = join(tmpDir, 'already-restored.txt');
+    await writeFile(file, 'A');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
+    await writeFile(file, 'A');
+    const dry = await dryRunAll([entry]);
+    assert.deepStrictEqual(
+      dry.filter((r) => 'error' in r),
+      [],
+    );
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.deepStrictEqual(
+      outcome.results.filter((r) => 'error' in r),
+      [],
+    );
+    assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('a symlink to the saved bytes is still skipped', async (t) => {
+    const file = join(tmpDir, 'link-restored.txt');
+    const target = join(tmpDir, 'link-restored-target.txt');
+    await writeFile(file, 'A');
+    await writeFile(target, 'A');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
+    await rm(file);
+    if (!(await trySymlink(target, file, () => t.skip('symlinks unavailable'), 'file'))) return;
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(outcome.results.filter((r) => 'error' in r).length, 1);
+    assert.strictEqual(outcome.remaining.length, 1);
   });
 
   it('an outside write after capture is skipped as modified since', async () => {
@@ -815,8 +846,8 @@ describe('restoreEntry', () => {
     const two = journal.beginCapture();
     assert.ok(one.reserve(2000));
     assert.strictEqual(two.reserve(2000), false);
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
   });
 
   it('a deleted moved directory: undoing both steps moves the new tree back', async () => {
@@ -914,6 +945,51 @@ describe('restoreEntry', () => {
     );
   });
 
+  it('dry run across a case-only folder rename and a move previews as restored', async (t) => {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const lower = join(tmpDir, 'case-cd');
+    const upper = join(tmpDir, 'CASE-CD');
+    const away = join(tmpDir, 'case-away');
+    await mkdir(lower, { recursive: true });
+    await writeFile(join(lower, 'f.txt'), 'v1');
+    const edited = await captureOne((fs) => fs.writeFile(join(lower, 'f.txt'), 'v2'));
+    const recased = await captureOne((fs) => fs.rename(lower, upper));
+    const moved = await captureOne((fs) => fs.rename(upper, away));
+    const results = await dryRunAll([moved, recased, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
+  it('dry run after an external case-only folder rename previews as restored', async (t) => {
+    const lower = join(tmpDir, 'external-case-cd');
+    const upper = join(tmpDir, 'EXTERNAL-CASE-CD');
+    const away = join(tmpDir, 'external-case-away');
+    await mkdir(lower, { recursive: true });
+    await writeFile(join(lower, 'f.txt'), 'v1');
+    const fsPromises = await import('node:fs/promises');
+    const caseInsensitive = await fsPromises.stat(upper).then(
+      () => true,
+      () => false,
+    );
+    if (!caseInsensitive) {
+      t.skip('case-insensitive filesystem required');
+      return;
+    }
+    const edited = await captureOne((fs) => fs.writeFile(join(lower, 'f.txt'), 'v2'));
+    await fsPromises.rename(lower, upper);
+    const moved = await captureOne((fs) => fs.rename(upper, away));
+    const results = await dryRunAll([moved, edited]);
+    assert.deepStrictEqual(
+      results.filter((r) => 'error' in r),
+      [],
+    );
+  });
+
   it('an edit inside a folder moved twice restores for real', async () => {
     const a = join(tmpDir, 'twice-real-a');
     const b = join(tmpDir, 'twice-real-b');
@@ -964,7 +1040,7 @@ describe('restoreEntry', () => {
     );
     try {
       const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
-        const cap = new UndoCapture(32 * 1024 * 1024);
+        const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
         await run(new GuardedFileSystem(policyCtx.pathGuard, cap));
         assert.strictEqual(cap.unavailable, undefined);
         return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
@@ -1080,11 +1156,11 @@ describe('restoreEntry', () => {
     one.push(writeRecord(2000));
     assert.strictEqual(two.reserve(2000), false);
     assert.strictEqual(two.unavailable, 'too large to keep for undo');
-    journal.endCapture(one);
-    journal.endCapture(two);
+    one.release();
+    two.release();
     const three = journal.beginCapture();
     assert.ok(three.reserve(2000));
-    journal.endCapture(three);
+    three.release();
   });
 
   it('dry run: chained moves restore through simulated intermediate paths', async () => {
@@ -1256,6 +1332,56 @@ describe('undo tool', () => {
       const result = await call(pair.client, 'undo', {});
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(firstTextBlock(result), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a second concurrent undo of one id does not bring restored records back', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const x = join(tmp, 'tx.txt');
+      const y = join(tmp, 'ty.txt');
+      await writeFile(x, 'X0');
+      await writeFile(y, 'Y0');
+      const made = await call(pair.client, 'create', {
+        files: [
+          { path: x, content: 'X1', overwrite: true },
+          { path: y, content: 'Y1', overwrite: true },
+        ],
+      });
+      const id = (made.structuredContent as { undo?: string }).undo ?? '';
+      await writeFile(y, 'Y-external');
+      await Promise.all([call(pair.client, 'undo', { id }), call(pair.client, 'undo', { id })]);
+      const third = firstTextBlock(await call(pair.client, 'undo', { id })) ?? '';
+      assert.match(third, /ty\.txt SKIPPED/u);
+      assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a second concurrent undo of a fully restored id reports it gone', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const x = join(tmp, 'full.txt');
+      await writeFile(x, 'X0');
+      const made = await call(pair.client, 'create', {
+        files: [{ path: x, content: 'X1', overwrite: true }],
+      });
+      const id = (made.structuredContent as { undo?: string }).undo ?? '';
+      const results = await Promise.all([
+        call(pair.client, 'undo', { id }),
+        call(pair.client, 'undo', { id }),
+      ]);
+      assert.strictEqual(results.filter((r) => r.isError !== true).length, 1);
+      const failed = results.find((r) => r.isError === true);
+      assert.match(firstTextBlock(failed) ?? '', /Unknown or expired undo id/u);
+      assert.strictEqual(await import('node:fs/promises').then((m) => m.readFile(x, 'utf8')), 'X0');
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);

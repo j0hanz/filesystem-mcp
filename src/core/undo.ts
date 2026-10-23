@@ -1,4 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import {
   lstat as fsLstat,
   readdir as fsReaddir,
@@ -14,6 +15,7 @@ import {
   isNodeError,
   type PerPathResult,
   Problem,
+  unlessMissing,
 } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
@@ -133,15 +135,9 @@ export class UndoJournal {
   /** Bytes held by all in-flight captures together, so concurrent calls share one budget. */
   readonly #pool: LivePool = { bytes: 0 };
 
-  /** Start a capture for a mutating call; pair it with `endCapture` when the call finishes. */
+  /** Start a capture for a mutating call; `release()` it when the call finishes. */
   beginCapture(): UndoCapture {
     return new UndoCapture(this.maxBytes, this.#pool);
-  }
-
-  endCapture(capture: UndoCapture | undefined): void {
-    // Its records now live in the journal (or were dropped); either way the
-    // live pool no longer owes them.
-    capture?.release();
   }
 
   add(tool: string, records: UndoRecord[]): string {
@@ -229,21 +225,16 @@ export class UndoCapture {
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
   readonly maxBytes: number;
-  readonly #pool: LivePool | undefined;
+  readonly #pool: LivePool;
 
-  constructor(maxBytes: number, pool?: LivePool) {
+  constructor(maxBytes: number, pool: LivePool) {
     this.maxBytes = maxBytes;
     this.#pool = pool;
   }
 
-  /** Bytes charged against the budget: the shared live total when pooled. */
-  #used(): number {
-    return this.#pool?.bytes ?? this.#bytes;
-  }
-
   #charge(n: number): void {
     this.#bytes += n;
-    if (this.#pool) this.#pool.bytes += n;
+    this.#pool.bytes += n;
   }
 
   /** True once abandoned; a method so callers re-read it after an await. */
@@ -253,7 +244,7 @@ export class UndoCapture {
 
   /** Return this capture's charge to the shared pool; call when the call ends. */
   release(): void {
-    if (this.#pool) this.#pool.bytes -= this.#bytes;
+    this.#pool.bytes -= this.#bytes;
     this.#bytes = 0;
     this.#reserved = 0;
   }
@@ -266,7 +257,8 @@ export class UndoCapture {
   reserve(n: number): boolean {
     if (this.unavailable !== undefined) return false;
     const cost = n + RECORD_OVERHEAD_BYTES;
-    if (this.#used() + cost > this.maxBytes) {
+    // The budget is shared: every live capture's charge counts.
+    if (this.#pool.bytes + cost > this.maxBytes) {
       this.abandon('too large to keep for undo');
       return false;
     }
@@ -281,8 +273,8 @@ export class UndoCapture {
     this.unavailable = reason;
     this.records.length = 0;
     // Dropped records free their bytes now. Reservations stay charged until
-    // endCapture: a read reserved before the abandon may still be in flight.
-    if (this.#pool) this.#pool.bytes -= this.#bytes - this.#reserved;
+    // release(): a read reserved before the abandon may still be in flight.
+    this.#pool.bytes -= this.#bytes - this.#reserved;
     this.#bytes = this.#reserved;
   }
 
@@ -291,7 +283,7 @@ export class UndoCapture {
     for (const record of records) {
       const cost = recordWeight(record);
       const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
-      if (this.#used() + (cost - drawn) > this.maxBytes) {
+      if (this.#pool.bytes + (cost - drawn) > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
       }
@@ -317,11 +309,7 @@ export async function plannedMkdirChain(
     for (;;) {
       const parent = dirname(probe);
       if (parent === probe) break;
-      const stats = await fsLstat(probe).catch((error: unknown) => {
-        if (!isMissing(error)) throw error;
-        return undefined;
-      });
-      if (stats !== undefined) break;
+      if ((await unlessMissing(fsLstat(probe))) !== undefined) break;
       created.push(probe);
       probe = parent;
     }
@@ -330,6 +318,24 @@ export async function plannedMkdirChain(
     capture.abandon('could not inspect the parent folders');
     return [];
   }
+}
+
+/** A regular file's bytes, mode and identity before a call replaces it: a write record's fields. */
+export interface SavedFile {
+  bytes: Buffer;
+  mode: number;
+  was: FileIdentity;
+}
+
+/** Read `path`'s current bytes for undo; `undefined` once they would go over the budget. */
+export async function saveOld(
+  capture: UndoCapture,
+  fs: GuardedFileSystem,
+  path: string,
+  stats: Stats,
+): Promise<SavedFile | undefined> {
+  if (!capture.reserve(stats.size)) return undefined;
+  return { bytes: await fs.readSaved(path), mode: stats.mode & 0o777, was: identityOf(stats) };
 }
 
 /**
@@ -346,10 +352,7 @@ export async function snapshotTree(
 ): Promise<void> {
   if (capture.unavailable !== undefined) return;
   try {
-    const stats = await fsLstat(validPath).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-      return undefined;
-    });
+    const stats = await unlessMissing(fsLstat(validPath));
     // ENOENT on the root (the `force` case): nothing will be deleted.
     if (stats === undefined) return;
     if (fs.pathGuard.isSensitive(validPath)) {
@@ -357,16 +360,8 @@ export async function snapshotTree(
       return;
     }
     if (stats.isFile()) {
-      if (!capture.reserve(stats.size)) return;
-      const bytes = await fs.readSaved(validPath);
-      capture.push({
-        op: 'write',
-        path: validPath,
-        bytes,
-        mode: stats.mode & 0o777,
-        expect: null,
-        was: identityOf(stats),
-      });
+      const saved = await saveOld(capture, fs, validPath, stats);
+      if (saved) capture.push({ op: 'write', path: validPath, ...saved, expect: null });
       return;
     }
     if (stats.isSymbolicLink()) {
@@ -499,24 +494,18 @@ export async function restoreEntry(
   const { dryRun, signal } = opts;
   const relocations = opts.relocations ?? [];
   const directoryBackings = opts.directoryBackings ?? new Map<string, string | null>();
-  const hasPathBoundary = (directory: string, candidate: string): boolean =>
-    candidate.length === directory.length ||
-    directory.endsWith('/') ||
-    (IS_WINDOWS && directory.endsWith('\\')) ||
-    candidate[directory.length] === '/' ||
-    (IS_WINDOWS && candidate[directory.length] === '\\');
   const disk = (path: string): string => {
     let out = path;
     for (const [from, to] of relocations.toReversed()) {
-      if (out.startsWith(from) && hasPathBoundary(from, out)) {
-        out = to + out.slice(from.length);
-      } else if (
-        isPathInsideDirectory(from, out) &&
-        from.toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase().length === from.length &&
-        out.slice(0, from.length).toLowerCase() === from.toLowerCase() &&
-        hasPathBoundary(from, out)
-      ) {
+      const prefix = out.slice(0, from.length);
+      const foldedFrom = from.toLowerCase();
+      const foldedPrefix = prefix.toLowerCase();
+      const samePrefix =
+        out.startsWith(from) ||
+        (foldedFrom.length === from.length &&
+          foldedPrefix.length === prefix.length &&
+          foldedPrefix === foldedFrom);
+      if (samePrefix && isPathInsideDirectory(from, out)) {
         out = to + out.slice(from.length);
       }
     }
@@ -548,21 +537,12 @@ export async function restoreEntry(
   const absent = async (path: string): Promise<boolean> => {
     const known = simulated.get(path);
     if (known !== undefined) return known === null;
-    try {
-      await fs.lstat(disk(path));
-      return false;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-      return true;
-    }
+    return (await unlessMissing(fs.lstat(disk(path)))) === undefined;
   };
   const matchesHash = async (path: string, expect: string): Promise<boolean> => {
     const known = simulated.get(path);
     if (known !== undefined) return known === expect;
-    const existing = await fs.lstat(disk(path)).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-      return undefined;
-    });
+    const existing = await unlessMissing(fs.lstat(disk(path)));
     return (
       existing !== undefined &&
       existing.stats.isFile() &&
@@ -619,6 +599,8 @@ export async function restoreEntry(
               }
               simulate(record.path, sha256Hex(record.bytes));
               done(record.path);
+            } else if (await matchesHash(record.path, sha256Hex(record.bytes))) {
+              done(record.path); // already holds what undo would write
             } else {
               skip(record, order, record.path);
             }
@@ -718,13 +700,7 @@ export async function restoreEntry(
                 toIsRealDir = toBacking !== undefined;
               }
             } else {
-              const at = await fs.lstat(disk(record.to)).then(
-                (r) => r,
-                (error: unknown) => {
-                  if (!isMissing(error)) throw error;
-                  return undefined;
-                },
-              );
+              const at = await unlessMissing(fs.lstat(disk(record.to)));
               if (at !== undefined && sameIdentity(at.stats, record.identity)) {
                 toHere = true;
                 toIsRealDir = at.stats.isDirectory();
@@ -744,12 +720,8 @@ export async function restoreEntry(
             const fromFree =
               fromKnown !== undefined
                 ? fromKnown === null
-                : await fs.lstat(disk(record.from)).then(
-                    (r) => sameIdentity(r.stats, record.identity),
-                    (error: unknown) => {
-                      if (!isMissing(error)) throw error;
-                      return true;
-                    },
+                : await unlessMissing(fs.lstat(disk(record.from))).then(
+                    (at) => at === undefined || sameIdentity(at.stats, record.identity),
                   );
             if (toHere && fromFree) {
               if (toIsRealDir && toBacking !== undefined) {
