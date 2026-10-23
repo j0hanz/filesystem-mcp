@@ -109,16 +109,6 @@ export function entryReadResult(entry: ResourceEntry): {
   return { contents: [{ uri: entry.uri, mimeType: entry.mimeType, text: entry.text }] };
 }
 
-interface ResourceStoreOptions {
-  /**
-   * Refuse an entry whose `resources/read` result encodes past this many
-   * bytes. stdio sets it: the entry is re-encoded there as one JSON string,
-   * where escaping can outgrow the bytes stored, and a link the connection
-   * can never carry back is worth no more than an entry over the cap.
-   */
-  readonly maxReadResultBytes?: number;
-}
-
 export class ResourceStore {
   // Not readonly: a call view (`forCall`) shares its store's entries.
   #entries = new TtlLru<ResourceEntry>({
@@ -127,13 +117,13 @@ export class ResourceStore {
     ttlMs: ENTRY_TTL_MS,
   });
   readonly #onListChanged: (() => void) | undefined;
-  readonly #options: ResourceStoreOptions;
+  readonly #maxReadResultBytes: number | undefined;
   /** A call view's own puts; `undefined` on the store itself. */
   #putUris: string[] | undefined;
 
-  constructor(onListChanged?: () => void, options: ResourceStoreOptions = {}) {
+  constructor(onListChanged?: () => void, maxReadResultBytes?: number) {
     this.#onListChanged = onListChanged;
-    this.#options = options;
+    this.#maxReadResultBytes = maxReadResultBytes;
   }
 
   /**
@@ -141,7 +131,7 @@ export class ResourceStore {
    * through it, so {@link discard} can take one tool call's entries back.
    */
   forCall(): ResourceStore {
-    const view = new ResourceStore(this.#onListChanged, this.#options);
+    const view = new ResourceStore(this.#onListChanged, this.#maxReadResultBytes);
     view.#entries = this.#entries;
     view.#putUris = [];
     return view;
@@ -187,7 +177,7 @@ export class ResourceStore {
       expiresAt: new Date(now + ENTRY_TTL_MS).toISOString(),
       text: params.text,
     };
-    const { maxReadResultBytes } = this.#options;
+    const maxReadResultBytes = this.#maxReadResultBytes;
     const readBytes =
       maxReadResultBytes === undefined
         ? undefined

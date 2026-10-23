@@ -176,7 +176,7 @@ export async function createServer(
         voidSend(server.server.sendResourceListChanged(), 'resource list_changed');
       },
       // A tool hands out no result-store link that this connection's resources/read refuses; file links are gated in writtenFileLinks.
-      extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},
+      extraDeps?.transport === 'stdio' ? MAX_OUTBOUND_RESULT_BYTES : undefined,
     );
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
   const undoJournal = extraDeps?.undoJournal ?? new UndoJournal();
