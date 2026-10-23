@@ -5,7 +5,7 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { defaultFalseBoolean } from '../core/schema.ts';
 import type { UndoEntry, UndoFileResult } from '../core/undo.ts';
-import { restoreEntry, restoreOrder } from '../core/undo.ts';
+import { restoreEntry, restoreOrder, UndoPreview } from '../core/undo.ts';
 import { MIB } from '../core/util.ts';
 import { isTotalFailure, summarize } from './batch.ts';
 import { defineTool } from './define.ts';
@@ -125,20 +125,16 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       // valid (their recorded bytes are what the latest call left behind only
       // once the later writes are gone).
       const stepResults: UndoOutput['steps'] = [];
-      // One simulated-state map across every entry: a dry run must see what
-      // reverting the newer entries would change, or its per-step preview lies.
-      const simulated = dryRun ? new Map<string, string | null>() : undefined;
-      const relocations: [string, string][] = [];
-      const directoryBackings = dryRun ? new Map<string, string | null>() : undefined;
+      // One preview across every entry: a dry run must see what reverting the
+      // newer entries would change, or its per-step preview lies.
+      const preview = dryRun ? new UndoPreview(ctx.fs, ctx.signal) : undefined;
       const total = entries.reduce((n, entry) => n + restoreOrder(entry.records).length, 0);
       let started = 0;
       for (const entry of entries) {
         ctx.signal.throwIfAborted();
         const outcome = await restoreEntry(entry, ctx.fs, {
           dryRun,
-          simulated,
-          relocations,
-          directoryBackings,
+          preview,
           signal: ctx.signal,
           onRewrite: (was, identity) => {
             journal.reidentify(was, identity);

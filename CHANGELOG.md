@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past the 10 MiB stdio message limit, which closed the connection.
 - `undo` reports progress per restored path, so a client that resets its
   request timeout on progress no longer cancels a long restore part-way.
+- `undo` with `dryRun: true` lists what the undo then does, folders it
+  removes included. Before, after folder moves, deletes, or changes made
+  outside the server, the preview could report a file restored that the
+  undo then skipped, or skipped one the undo then restored.
+- `undo` leaves a link that took the place of a folder the undone call
+  created, and reports that folder as skipped. Before, undoing the call
+  removed the link, on Windows a junction, in the folder's place.
 
 ## [2.10.0] - 2026-10-23
 

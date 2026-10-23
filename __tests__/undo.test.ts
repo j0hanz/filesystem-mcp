@@ -2,7 +2,7 @@ import type { Client } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type { Problem } from '../src/core/errors.ts';
@@ -10,7 +10,7 @@ import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
-import { restoreEntry, UndoJournal } from '../src/core/undo.ts';
+import { restoreEntry, UndoJournal, UndoPreview } from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -420,21 +420,10 @@ describe('restoreEntry', () => {
     return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
   };
   const dryRunAll = async (entries: UndoEntry[]) => {
-    const simulated = new Map<string, string | null>();
-    const relocations: [string, string][] = [];
-    const directoryBackings = new Map<string, string | null>();
+    const preview = new UndoPreview(newFs());
     const results = [];
     for (const entry of entries) {
-      results.push(
-        ...(
-          await restoreEntry(entry, newFs(), {
-            dryRun: true,
-            simulated,
-            relocations,
-            directoryBackings,
-          })
-        ).results,
-      );
+      results.push(...(await restoreEntry(entry, newFs(), { dryRun: true, preview })).results);
     }
     return results;
   };
@@ -910,19 +899,7 @@ describe('restoreEntry', () => {
     await writeFile(join(a, 'f.txt'), 'v1');
     const edited = await captureOne((fs) => fs.writeFile(join(a, 'f.txt'), 'v2'));
     const moved = await captureOne((fs) => fs.rename(a, b));
-    const simulated = new Map<string, string | null>();
-    const relocations: [string, string][] = [];
-    const directoryBackings = new Map<string, string | null>();
-    const results = [];
-    for (const entry of [moved, edited]) {
-      const out = await restoreEntry(entry, newFs(), {
-        dryRun: true,
-        simulated,
-        relocations,
-        directoryBackings,
-      });
-      results.push(...out.results);
-    }
+    const results = await dryRunAll([moved, edited]);
     assert.deepStrictEqual(
       results.filter((r) => 'error' in r),
       [],
@@ -1088,21 +1065,11 @@ describe('restoreEntry', () => {
       await writeFile(join(q, 'blocked.txt'), 'not part of X');
       const movedQ = await capture((fs) => fs.rename(q, p));
 
-      const simulated = new Map<string, string | null>();
-      const relocations: [string, string][] = [];
-      const directoryBackings = new Map<string, string | null>();
+      const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
+      const preview = new UndoPreview(policyFs);
       const results = [];
       for (const entry of [movedQ, deletedP, movedX]) {
-        results.push(
-          ...(
-            await restoreEntry(entry, new GuardedFileSystem(policyCtx.pathGuard), {
-              dryRun: true,
-              simulated,
-              relocations,
-              directoryBackings,
-            })
-          ).results,
-        );
+        results.push(...(await restoreEntry(entry, policyFs, { dryRun: true, preview })).results);
       }
       assert.deepStrictEqual(
         results.filter((result) => 'error' in result),
@@ -1191,6 +1158,306 @@ describe('restoreEntry', () => {
     const three = journal.beginCapture();
     assert.ok(three.reserve(2000));
     three.release();
+  });
+
+  describe('a dry run lists what the real undo then does', () => {
+    /** Journal the captured calls oldest first, preview them all, then undo them all. */
+    /** `only` undoes just that call, by its index in `calls`, the way an undo by id does. */
+    const previewThenUndo = async (calls: UndoEntry[], only?: number) => {
+      const journal = new UndoJournal();
+      const added = calls.map((call) => journal.add(call.tool, call.records));
+      const ids = only === undefined ? added.reverse() : added.slice(only, only + 1);
+      const outcome = (r: { path: string; error?: { code: string } }) =>
+        `${r.path} ${r.error?.code ?? 'ok'}`;
+      const entries = ids.map((id) => journal.get(id)).filter((e) => e !== undefined);
+      const dry = (await dryRunAll(entries)).map(outcome);
+      const real: string[] = [];
+      for (const id of ids) {
+        const entry = journal.get(id);
+        assert.ok(entry);
+        const out = await restoreEntry(entry, newFs(), {
+          dryRun: false,
+          onRewrite: (was, identity) => {
+            journal.reidentify(was, identity);
+          },
+        });
+        journal.replaceRecords(id, out.remaining);
+        real.push(...out.results.map(outcome));
+      }
+      return { dry, real };
+    };
+
+    it('an edit inside a folder, the folder moved, then edited again', async () => {
+      const d = join(tmpDir, 'oracle-d1');
+      const e = join(tmpDir, 'oracle-d1-moved');
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, 'f.txt'), 'v0');
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.writeFile(join(d, 'f.txt'), 'v1')),
+        await captureOne((fs) => fs.rename(d, e)),
+        await captureOne((fs) => fs.writeFile(join(e, 'f.txt'), 'v2')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('nested folder moves across a deleted parent', async () => {
+      const a = join(tmpDir, 'oracle-d2-a');
+      const c = join(tmpDir, 'oracle-d2-c');
+      const n = join(tmpDir, 'oracle-d2-n');
+      await mkdir(join(a, 'b', 'x'), { recursive: true });
+      await mkdir(c, { recursive: true });
+      await writeFile(join(a, 'one.txt'), '1');
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.rename(join(a, 'b', 'x'), join(a, 'b', 'y'))),
+        await captureOne((fs) => fs.rename(a, join(c, 'a2'))),
+        await captureOne((fs) => fs.rename(join(c, 'a2', 'b'), n)),
+        await captureOne((fs) => fs.rm(c, { recursive: true, force: true })),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a moved file changed outside the server is not promised back', async () => {
+      const f = join(tmpDir, 'oracle-d3-f.txt');
+      const g = join(tmpDir, 'oracle-d3-g.txt');
+      await writeFile(f, 'v0');
+      const moved = await captureOne((fs) => fs.rename(f, g));
+      const overwritten = await captureOne((fs) => fs.writeFile(g, 'v1'));
+      await writeFile(g, 'external');
+      const edited = await captureOne((fs) => fs.writeFile(g, 'v3'));
+      const { dry, real } = await previewThenUndo([moved, overwritten, edited]);
+      assert.deepStrictEqual(
+        real.map((r) => r.split(' ').pop()),
+        ['ok', 'CANCELLED', 'CANCELLED'],
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a file moved out of a folder that was then removed outside the server', async () => {
+      const a = join(tmpDir, 'oracle-parent-a');
+      await mkdir(a, { recursive: true });
+      await writeFile(join(a, 'x.txt'), 'x');
+      const moved = await captureOne((fs) =>
+        fs.rename(join(a, 'x.txt'), join(tmpDir, 'oracle-parent-x.txt')),
+      );
+      await rm(a, { recursive: true });
+      const { dry, real } = await previewThenUndo([moved]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a deleted folder holding a symlink', async (t) => {
+      const dir = join(tmpDir, 'oracle-link-dir');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'target.txt'), 'x');
+      const link = join(dir, 'link');
+      if (
+        !(await trySymlink(
+          join(dir, 'target.txt'),
+          link,
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.rm(dir, { recursive: true, force: true })),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a change two folders down moves with the folder it sits in', async () => {
+      const c = join(tmpDir, 'oracle-deep-c');
+      const d = join(tmpDir, 'oracle-deep-d');
+      await mkdir(join(c, 'x', 'y'), { recursive: true });
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.writeFile(join(c, 'x', 'y', 'g.txt'), 'g1')),
+        await captureOne((fs) => fs.rm(join(c, 'x', 'y', 'g.txt'))),
+        await captureOne((fs) => fs.rename(c, d)),
+        await captureOne((fs) => fs.writeFile(join(d, 'x', 'y', 'g.txt'), 'g2')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a folder the call made, now a link, is left in place', async (t) => {
+      const made = join(tmpDir, 'oracle-made');
+      const target = join(tmpDir, 'oracle-made-target');
+      const link = join(tmpDir, 'oracle-made-link');
+      await mkdir(target, { recursive: true });
+      await writeFile(join(target, 'keep.txt'), 'k');
+      if (!(await trySymlink(target, link, () => t.skip('symlink not permitted')))) return;
+      const calls = [
+        await captureOne((fs) => fs.mkdir(made, { recursive: true })),
+        await captureOne((fs) => fs.rmdir(made)),
+        await captureOne((fs) => fs.rename(link, made)),
+      ];
+      const { dry, real } = await previewThenUndo(calls, 0);
+      assert.deepStrictEqual(
+        real.map((r) => r.split(' ').pop()),
+        ['CANCELLED'],
+      );
+      assert.deepStrictEqual(dry, real);
+      const fsPromises = await import('node:fs/promises');
+      assert.ok((await fsPromises.lstat(made)).isSymbolicLink());
+    });
+
+    it('a folder move back under a parent that is now a file', async () => {
+      const a = join(tmpDir, 'oracle-filed');
+      await mkdir(a, { recursive: true });
+      await writeFile(join(a, 'x.txt'), 'x');
+      const calls = [
+        await captureOne((fs) => fs.rename(join(a, 'x.txt'), join(tmpDir, 'oracle-filed-x.txt'))),
+        await captureOne((fs) => fs.rm(a, { recursive: true })),
+        await captureOne((fs) => fs.writeFile(a, 'a file now')),
+      ];
+      const { dry, real } = await previewThenUndo(calls, 0);
+      assert.ok(!real[0]?.endsWith(' ok'), real.join('\n'));
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('protection checked on the tree the earlier steps leave', async () => {
+      // `.aws/config` is denylisted by default; `aws-old/config` is not.
+      for (const external of [false, true]) {
+        const aws = join(tmpDir, `oracle-policy-${String(external)}`, '.aws');
+        const old = join(dirname(aws), 'aws-old');
+        await mkdir(aws, { recursive: true });
+        await writeFile(join(aws, 'notes.txt'), 'n');
+        const moved = await captureOne((fs) => fs.rename(aws, old));
+        if (external) await writeFile(join(old, 'config'), 'outside the server');
+        const later = await captureOne((fs) =>
+          external ? fs.rm(join(old, 'config')) : fs.writeFile(join(old, 'config'), 'c'),
+        );
+        const { dry, real } = await previewThenUndo([moved, later]);
+        assert.deepStrictEqual(dry, real, `external: ${String(external)}`);
+      }
+    });
+
+    it('a link to outside the roots that an earlier step moves away', async (t) => {
+      const outside = await createTestRoot();
+      try {
+        const d = join(tmpDir, 'oracle-lock-d');
+        const link = join(tmpDir, 'oracle-lock-l');
+        await mkdir(d, { recursive: true });
+        await writeFile(join(d, 'f.txt'), 'v0');
+        if (!(await trySymlink(outside, link, () => t.skip('symlink not permitted')))) return;
+        const calls = [
+          await captureOne((fs) => fs.writeFile(join(d, 'f.txt'), 'v1')),
+          await captureOne((fs) => fs.rm(d, { recursive: true, force: true })),
+          await captureOne((fs) => fs.rename(link, d)),
+        ];
+        const { dry, real } = await previewThenUndo(calls);
+        assert.ok(
+          real.every((r) => r.endsWith(' ok')),
+          real.join('\n'),
+        );
+        assert.deepStrictEqual(dry, real);
+      } finally {
+        await cleanupTestRoot(outside);
+      }
+    });
+
+    it('win32 only: the Kelvin sign and k name two files', async (t) => {
+      if (process.platform !== 'win32') {
+        t.skip('NTFS case folding');
+        return;
+      }
+      const k = join(tmpDir, 'oracle-k.txt');
+      const kelvin = join(tmpDir, 'oracle-K.txt');
+      await writeFile(k, 'k0');
+      await writeFile(kelvin, 'K0');
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.writeFile(k, 'k1')),
+        await captureOne((fs) => fs.writeFile(kelvin, 'K1')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a folder now spelled in the other Unicode form', async () => {
+      const nfc = join(tmpDir, 'oracle-café');
+      const nfd = join(tmpDir, 'oracle-café');
+      const calls = [
+        await captureOne((fs) => fs.mkdir(nfc, { recursive: true })),
+        await captureOne((fs) => fs.rename(nfc, nfd)),
+        await captureOne((fs) => fs.writeFile(join(nfd, 'keep.txt'), 'k')),
+      ];
+      const { dry, real } = await previewThenUndo(calls, 0);
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a folder moved onto the name of a deleted folder', async () => {
+      const s = join(tmpDir, 'oracle-d5-s');
+      const t = join(tmpDir, 'oracle-d5-t');
+      await mkdir(s, { recursive: true });
+      await writeFile(join(s, 'f.txt'), 'from-s');
+      const { dry, real } = await previewThenUndo([
+        await captureOne(async (fs) => {
+          await fs.mkdir(t, { recursive: true });
+          await fs.writeFile(join(t, 'f.txt'), 'from-t');
+        }),
+        await captureOne((fs) => fs.rm(t, { recursive: true, force: true })),
+        await captureOne((fs) => fs.rename(s, t)),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+  });
+
+  it('a dry run waits for a writer that holds the path', async () => {
+    const file = join(tmpDir, 'preview-lock.txt');
+    await writeFile(file, 'v1');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'v2'));
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holding = (): void => undefined;
+    const taken = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    const writer = newFs().lockForWrite(file, async () => {
+      holding();
+      await held;
+    });
+    await taken;
+    let finished = false;
+    const dry = restoreEntry(entry, newFs(), { dryRun: true }).then((out) => {
+      finished = true;
+      return out;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(finished, false, 'the preview read the file while a writer held it');
+    release();
+    await writer;
+    assert.deepStrictEqual(
+      (await dry).results.filter((r) => 'error' in r),
+      [],
+    );
   });
 
   it('dry run: chained moves restore through simulated intermediate paths', async () => {
