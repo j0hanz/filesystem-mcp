@@ -1,6 +1,6 @@
 {
   "name": "filesystem-mcp",
-  "version": "2.10.0",
+  "version": "2.10.1",
   "description": "Filesystem MCP server for AI assistants. Search, read, edit, and manage local files in directories you choose.",
   "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
   "homepage": "https://github.com/j0hanz/filesystem-mcp#readme",
