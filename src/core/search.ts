@@ -526,7 +526,6 @@ export async function searchContent(
       onEntry: () => {
         dispatched++;
       },
-      onError: () => undefined,
       runEntry: async (entryPath) => {
         const index = dispatched - 1;
         const scan = await scanFile(entryPath, scanCtx);
@@ -649,7 +648,6 @@ export async function searchFiles(
     onEntry: () => {
       dispatched++;
     },
-    onError: () => undefined,
     runEntry: async (entryPath) => {
       const index = dispatched - 1;
       try {
