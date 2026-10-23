@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`move`, `list` and `diff` descriptions say more about how each tool
   behaves.** `move` says that overwriting an existing file asks the user
   first unless a copy passes `overwrite: true`, and that `undo` reverts a
-  move but not a copy. `list` says it shows one level by default. It skips
+  move whose result gives an undo id, but never a copy. `list` says it shows one level by default. It skips
   hidden entries unless `includeHidden` is set, and ignored ones, such as
   `.gitignore` matches, `node_modules`, `dist`, `build`, `out` and `tmp`,
   unless `includeIgnored` is set. `diff` says that identical files give no

@@ -612,7 +612,7 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
     'Move, rename, or copy files and directories, like mv or cp -r. ' +
     'Each destination is the full new path, not a folder to move into; missing parent directories are created. ' +
     'Overwriting an existing file asks the user first, unless a copy passes overwrite: true. ' +
-    'A move can be reverted with undo; a copy cannot.',
+    'undo reverts a move whose result gives an undo id; a copy cannot be undone.',
   input: MoveInputSchema,
   readOnlyHint: false,
   progress: (args) => {
