@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.10.1] - 2026-10-23
+
+A fix patch. `undo` restores, previews and reports large calls correctly,
+and eight tool descriptions say more exactly what each tool does. Before
+upgrading, read the large-call `undo` entry under Fixed if you read every
+path from an `undo` result: a step now lists at most 100 paths.
 
 ### Changed
 
@@ -14,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   undo id, but never a copy. `list` says it shows one level by default. It skips
   hidden entries unless `includeHidden` is set, and ignored ones, such as
   `.gitignore` matches, `node_modules`, `dist`, `build`, `out` and `tmp`,
-  unless `includeIgnored` is set. `diff` says that identical files give no
+  unless `includeIgnored` is set. It points to `find_files` for a search by
+  name pattern. `diff` says that identical files give no
   hunks and that binary and non-UTF-8 files are refused.
 - **`search_text`, `find_files` and `stat` descriptions are clearer.**
   `search_text` says that `searchPattern` is the text to find and that
@@ -43,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes included. Before, after folder moves, deletes, or changes made
   outside the server, the preview could report a file restored that the
   undo then skipped, or skipped one the undo then restored.
+- `undo` with `dryRun: true` reads each file under the lock a write to it
+  holds. Before, a preview that overlapped an `edit` could judge a restore
+  from a half-written file.
+- `undo` with `dryRun: true` fails on the same path check as the undo.
+  Before, on Linux, when a folder's parent had become a file, the preview
+  reported a later check's error instead.
 - `undo` leaves a link that took the place of a folder the undone call
   created, and reports that folder as skipped. Before, undoing the call
   removed the link, on Windows a junction, in the folder's place.
