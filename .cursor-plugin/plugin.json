@@ -1,6 +1,6 @@
 {
   "name": "filesystem-mcp",
-  "version": "2.9.1",
+  "version": "2.10.0",
   "description": "Filesystem MCP server for AI assistants. Search, read, edit, and manage local files in directories you choose.",
   "author": { "name": "j0hanz" },
   "logo": "assets/logo.png",
