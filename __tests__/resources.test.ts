@@ -312,7 +312,7 @@ describe('MCP Resources', () => {
 
     it('maxReadResultBytes refuses an entry whose resources/read result encodes past it', () => {
       const text = '"'.repeat(1000);
-      const store = new ResourceStore(undefined, { maxReadResultBytes: 1500 });
+      const store = new ResourceStore(undefined, 1500);
       assert.throws(
         () => store.putText({ name: 'escaped', text }),
         fsErrorMatcher(ErrorCode.TOO_LARGE, /once JSON-encoded/),

@@ -17,7 +17,7 @@ import {
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import { escapeRegExp } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
+import { type BatchResult, isTotalFailure, postWriteStat, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z.strictObject({
@@ -383,11 +383,7 @@ async function editOnce(
   // run wrote nothing, so it reports the time of the preview.
   let modified = new Date().toISOString();
   if (!options.dryRun) {
-    try {
-      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
-    } catch {
-      /* post-commit metadata only */
-    }
+    modified = (await postWriteStat(ctx, validPath))?.mtime.toISOString() ?? modified;
   }
   const meta = buildWrittenFileMeta({
     validPath,

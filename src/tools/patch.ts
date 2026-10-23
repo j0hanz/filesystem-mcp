@@ -7,6 +7,7 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
+import { postWriteStat } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const PatchInputSchema = z.strictObject({
@@ -142,11 +143,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   // patch's atomic write. The file content itself is always consistent.
   let modified = stats.mtime.toISOString();
   if (!args.dryRun) {
-    try {
-      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
-    } catch {
-      modified = new Date().toISOString();
-    }
+    modified = ((await postWriteStat(ctx, validPath))?.mtime ?? new Date()).toISOString();
   }
   const meta = buildWrittenFileMeta({
     validPath,

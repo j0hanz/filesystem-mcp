@@ -3,17 +3,10 @@ import type { Notification, ProgressNotificationParams } from '@modelcontextprot
 import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 
-/** Where progress frames go: the `notifications/progress` sink for one `progressToken`. */
-export interface ProgressSink {
-  toolName: string;
-  token: string | number;
-  notify: (n: Notification) => Promise<void>;
-}
-
 interface ProgressSessionOptions {
   label: string;
   /** Absent when the client sent no `progressToken`; the session then only tracks state. */
-  sink?: ProgressSink;
+  sink?: { toolName: string; token: string | number; notify: (n: Notification) => Promise<void> };
 }
 
 /** Minimum gap between two tick frames on the wire. */
@@ -27,7 +20,7 @@ const RATE_LIMIT_MS = 50;
  */
 export class ProgressSession {
   readonly #label: string;
-  readonly #sink: ProgressSink | undefined;
+  readonly #sink: ProgressSessionOptions['sink'];
   readonly #startTime: number;
   readonly #pending = new Set<Promise<void>>();
 

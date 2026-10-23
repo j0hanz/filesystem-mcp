@@ -136,7 +136,6 @@ export async function processEntriesConcurrently<E extends { path: string } = { 
     await Promise.race(pending);
   };
 
-  let walkFailed = false;
   let walkError: unknown;
   try {
     for await (const entry of entries) {
@@ -184,17 +183,14 @@ export async function processEntriesConcurrently<E extends { path: string } = { 
     // A walk the signal cut short throws its reason (see globEntries): that is
     // the same timeout as the check above, not a failed walk.
     if (signal?.aborted) stoppedReason = 'timeout';
-    else {
-      walkFailed = true;
-      walkError = error;
-    }
+    else walkError = error;
   }
 
   if (pending.size > 0) {
     await Promise.allSettled([...pending]);
   }
 
-  if (walkFailed) throw walkError;
+  if (walkError !== undefined) throw walkError as unknown;
   return stoppedReason;
 }
 

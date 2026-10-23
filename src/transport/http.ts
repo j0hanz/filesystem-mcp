@@ -157,9 +157,7 @@ function setupExpressApp(
 
   app.use('/mcp', bearerAuthMiddleware(apiKey, allowedHosts.length > 0, publicUrl));
 
-  const resourceUpdateSink = (uri: string): void => {
-    notifier.resourceUpdated(uri);
-  };
+  const resourceUpdateSink = notifier.resourceUpdated.bind(notifier);
 
   // One bound for both transports, derived from the write tools' own limit
   // (getMaxInboundMessageBytes): a create the schema accepts must not be

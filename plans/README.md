@@ -1078,3 +1078,4 @@ behaviour.
 | 078 | Dedupe PathGuard test recompute pairs | P2 | S | — | TODO — commit dda3542b |
 | 079 | Single unicode fold primitive for search | P3 | S | — | TODO — commit dda3542b |
 | 080 | Enforce coverage floor on all runners | P3 | S | — | TODO — commit dda3542b |
+| 081 | Shared post-write stat and six micro-cuts: one shared `postWriteStat` helper plus six in-place micro-cuts (~-35 lines) | P3 | S | — | DONE (2026-10-23; 2026-10-23 second-pass ponytail audit (Tier A); branch `refactor/ponytail-tier-a-2026-10-23`) |
