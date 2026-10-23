@@ -3405,6 +3405,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(value.symlinkTarget, undefined);
   });
 
+  it('stat batch gives a missing path its own NOT_FOUND entry and keeps the rest', async () => {
+    const present = await writeTestFile(tmpDir, 'stat_batch_present.txt', 'x');
+    const missing = join(tmpDir, 'stat_batch_missing.txt');
+    const result = await harness.client.callTool({
+      name: 'stat',
+      arguments: { paths: [present, missing] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const { results } = result.structuredContent as {
+      results: { value?: { type: string }; error?: { code: string } }[];
+    };
+    assert.strictEqual(results[0]?.value?.type, 'file');
+    assert.strictEqual(results[1]?.error?.code, 'NOT_FOUND');
+  });
+
   it('TC-FUNC-072: search_text finds a literal match via callTool', async () => {
     const dir = join(tmpDir, 'grep_dir');
     await mkdir(dir, { recursive: true });
@@ -4211,6 +4226,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         size <= BUDGET_CHARS_READ_ONLY,
         `read-only tools/list is ${String(size)} chars, over the ${String(BUDGET_CHARS_READ_ONLY)} budget`,
       );
+    } finally {
+      await ro.close();
+    }
+  });
+
+  it('TOOL-SURFACE-003: no read-only tool description names a write tool', async () => {
+    const full = await createTestClientPair([tmpDir]);
+    let writeNames: string[];
+    try {
+      const { tools } = await full.client.listTools();
+      writeNames = tools.filter((t) => t.annotations?.readOnlyHint !== true).map((t) => t.name);
+    } finally {
+      await full.close();
+    }
+    assert.ok(writeNames.length > 0);
+
+    const ro = await createTestClientPair([tmpDir], { readOnly: true });
+    try {
+      const { tools } = await ro.client.listTools();
+      for (const tool of tools) {
+        for (const name of writeNames) {
+          assert.doesNotMatch(
+            tool.description ?? '',
+            new RegExp(`\\b${name}\\b`, 'u'),
+            `${tool.name} names the write tool ${name}, absent under --read-only`,
+          );
+        }
+      }
     } finally {
       await ro.close();
     }
