@@ -4237,12 +4237,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Raised 2026-10-23 to 9850 read-only (full unchanged): the list and diff
   // descriptions name their default skips and refusals, gaps the Glama TDQS
   // review flagged; measured 20397 / 9668.
-  // Raised 2026-10-23 to 20850 full (read-only unchanged): the edit, create,
-  // delete and move descriptions say which edit form to use and when a write
-  // needs user confirmation, gaps the Glama TDQS review flagged (#122);
-  // measured 20806 / 9792.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_850;
+    const BUDGET_CHARS = 20_550;
     const BUDGET_CHARS_READ_ONLY = 9_850;
 
     const full = await createTestClientPair([tmpDir]);

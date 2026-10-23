@@ -180,7 +180,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   description:
     'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
     'and paths relative to the root, ready to pass to read. ' +
-    'searchPattern is the text to find, matched within one line; pattern is a glob that limits which files are searched. ' +
+    'searchPattern is the text to find, matched within one line; pattern filters files by glob. ' +
     'find_files matches file names.',
   input: GrepInputSchema,
   readOnlyHint: true,

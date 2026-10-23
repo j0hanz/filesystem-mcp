@@ -27,6 +27,18 @@
   `Claude-Session: https://claude.ai/code/session_015x93MERvWLDzoqaguLSmJj`
 - `npm run check` passes at the end of Task 2.
 
+## Revision after review
+
+The user ruled that a description explains the tool and when to use it, and
+nothing else. After Task 2, the final pass therefore removed every
+confirmation clause (`create`, `delete`, and tier 1's `move` sentence). The
+model never handles the prompt, and the text read like a hint to pass
+`overwrite: true`. It also trimmed the `search_text` glob clause to
+`pattern filters files by glob` and reverted the `stat` sentence split.
+`create` ships unchanged. The full `tools/list` measures 20518 and read-only
+9759, so no budget raise is needed. The exact copy below is the pre-revision
+draft; the source files are authoritative.
+
 ## Decisions
 
 | Tool          | Change                     | New fact the schema lacks                     |
