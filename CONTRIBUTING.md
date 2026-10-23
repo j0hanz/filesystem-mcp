@@ -125,7 +125,7 @@ filesystem-mcp/
 ├── docs/                Configuration reference, ADRs, and design notes
 ├── examples/            Runnable example MCP clients
 ├── mcpb/manifest.json   Claude Desktop extension manifest
-├── scripts/             Release scripts (MCPB pack, Smithery publish)
+├── scripts/             Release scripts (MCPB pack, release-path checks)
 └── Dockerfile           Multi-stage Alpine build, non-root user
 ```
 
