@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
@@ -19,9 +20,9 @@ import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { after, before, describe, it, mock } from 'node:test';
 
-import { ErrorCode, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
+import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
-import { GuardedFileSystem } from '../src/core/fs.ts';
+import { destExists, GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
@@ -1245,6 +1246,15 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
   });
 });
 
+// Settles like `promise`, or rejects once `ms` passes, so a call that never settles fails fast.
+const failIfPendingAfter = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+};
+
 describe('GuardedFileSystem.countEntries', () => {
   let root: string;
   let ctx: FilesystemServerContext;
@@ -1253,14 +1263,6 @@ describe('GuardedFileSystem.countEntries', () => {
   // Linux reports ENOTDIR for it (O_DIRECTORY is checked first); ELOOP is accepted as well.
   const refusedSymlinkOpen = (error: unknown) =>
     isNodeError(error) && ['ENOTDIR', 'ELOOP'].includes(error.code ?? '');
-  // Settles like `promise`, or rejects once `ms` passes, so a call that never settles fails fast.
-  const failIfPendingAfter = <T>(promise: Promise<T>, ms: number): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
-    });
-    return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
-  };
 
   before(async () => {
     root = await createTestRoot();
@@ -1738,5 +1740,160 @@ describe('GuardedFileSystem.countEntries', () => {
     } finally {
       await chmod(dir, 0o755);
     }
+  });
+});
+
+describe('GuardedFileSystem.stat', () => {
+  let root: string;
+  let ctx: FilesystemServerContext;
+  let fs: GuardedFileSystem;
+
+  before(async () => {
+    root = await createTestRoot();
+    ctx = await createTestServer([root]);
+    fs = new GuardedFileSystem(ctx.pathGuard);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (root) {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  // Runs `swap` once, right after the guard validates `target`, as a racing process would.
+  const swapAfterValidation = (
+    method: 'validateExistingPath' | 'validateExistingPathDetailed',
+    target: string,
+    swap: () => Promise<void>,
+  ): (() => void) => {
+    const guard = ctx.pathGuard;
+    const validate = guard[method].bind(guard) as (path: string) => Promise<unknown>;
+    let swapped = false;
+    Object.assign(guard, {
+      [method]: async (requestedPath: string) => {
+        const result = await validate(requestedPath);
+        if (requestedPath === target && !swapped) {
+          swapped = true;
+          await swap();
+        }
+        return result;
+      },
+    });
+    return () => Reflect.deleteProperty(guard, method);
+  };
+
+  it(
+    'STAT-FD-001: refuses an ancestor swapped for a symlink out of the roots',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async () => {
+      const dir = join(root, 'swap-ancestor');
+      const file = await writeTestFile(dir, 'f.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      await writeTestFile(outside, 'f.txt', 'outside, longer');
+      const restore = swapAfterValidation('validateExistingPath', file, async () => {
+        await rename(dir, `${dir}.bak`);
+        await symlink(outside, dir, 'dir');
+      });
+      try {
+        await assert.rejects(fs.stat(file), fsErrorMatcher(ErrorCode.ACCESS_DENIED, 'TOCTOU'));
+      } finally {
+        restore();
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it(
+    'STAT-FD-002: refuses a final component swapped for a symlink',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async () => {
+      const file = await writeTestFile(root, 'swap-final.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const secret = await writeTestFile(outside, 'secret.txt', 'outside, longer');
+      const restore = swapAfterValidation('validateExistingPath', file, async () => {
+        await rename(file, `${file}.bak`);
+        await symlink(secret, file);
+      });
+      try {
+        await assert.rejects(
+          fs.stat(file),
+          fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
+        );
+      } finally {
+        restore();
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it(
+    'STAT-FD-003: a FIFO stats without blocking',
+    { skip: process.platform === 'win32' && 'Windows has no FIFOs' },
+    async (t) => {
+      const { spawnSync } = await import('node:child_process');
+      const fifo = join(root, 'stat.fifo');
+      if (spawnSync('mkfifo', [fifo]).error !== undefined) return t.skip('mkfifo not available');
+      try {
+        const { stats } = await failIfPendingAfter(fs.stat(fifo), 2000);
+        assert.ok(stats.isFIFO());
+      } finally {
+        // A read-only open of a FIFO blocks until a writer opens it; a read-write open
+        // releases any open a regression left blocked, so the test process can exit.
+        const release = await fsPromises.open(fifo, constants.O_RDWR | constants.O_NONBLOCK);
+        await release.close();
+      }
+    },
+  );
+
+  it('STAT-FD-004: an entry without read permission still stats', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX mode bits and a non-root user');
+    }
+    const file = await writeTestFile(root, 'locked.txt', 'x');
+    const dir = join(root, 'locked-dir');
+    await writeTestFile(dir, 'child.txt', 'y');
+    await chmod(file, 0o000);
+    await chmod(dir, 0o311);
+    try {
+      assert.strictEqual((await fs.stat(file)).stats.size, 1);
+      assert.ok((await fs.stat(dir)).stats.isDirectory());
+    } finally {
+      await chmod(file, 0o644);
+      await chmod(dir, 0o755);
+    }
+  });
+
+  it(
+    'STAT-FD-005: statDetailed refuses a final component swapped for a symlink',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async () => {
+      const file = await writeTestFile(root, 'swap-detailed.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const secret = await writeTestFile(outside, 'secret.txt', 'outside, longer');
+      const restore = swapAfterValidation('validateExistingPathDetailed', file, async () => {
+        await rename(file, `${file}.bak`);
+        await symlink(secret, file);
+      });
+      try {
+        await assert.rejects(
+          fs.statDetailed(file),
+          fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
+        );
+      } finally {
+        restore();
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it('STAT-FD-006: destExists counts a refused stat as present', async () => {
+    const refused = new FsError(ErrorCode.ACCESS_DENIED, 'refused', 'x');
+    const refusingFs = { stat: () => Promise.reject(refused) };
+    assert.strictEqual(await destExists(refusingFs, 'x', 'test'), true);
+    assert.strictEqual(await destExists(fs, join(root, 'never-created.txt'), 'test'), false);
   });
 });
