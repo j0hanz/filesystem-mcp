@@ -7,6 +7,9 @@
 
 ## Status
 
+- **Superseded** 2026-10-24 by `docs/superpowers/plans/2026-10-24-stat-through-fd.md`
+  (commit `ce61be43`). The branch's `O_RDONLY|O_NOFOLLOW` open blocks on a
+  FIFO and fails `EACCES` on a mode-000 entry; do not merge it.
 - **Priority**: P1
 - **Effort**: S
 - **Risk**: LOW

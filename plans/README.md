@@ -1073,7 +1073,7 @@ testing helpers, `codemod` and `server-legacy` beyond confirming they do not
 apply (the codebase is already on the v2 split packages), and POSIX runtime
 behaviour.
 
-| 076 | Bind guarded stat to open fd | P1 | S | — | DONE (worktree branch `advisor/076-bind-guarded-stat-to-fd`, commit `f4194c7f`, reviewed 2026-10-16; unmerged — user rules merge) |
+| 076 | Bind guarded stat to open fd | P1 | S | — | SUPERSEDED by docs/superpowers/plans/2026-10-24-stat-through-fd.md (commit ce61be43); branch advisor/076-bind-guarded-stat-to-fd must not merge |
 | 077 | Inline single-use hop helpers | P2 | S | — | TODO — commit dda3542b |
 | 078 | Dedupe PathGuard test recompute pairs | P2 | S | — | TODO — commit dda3542b |
 | 079 | Single unicode fold primitive for search | P3 | S | — | TODO — commit dda3542b |

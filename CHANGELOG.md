@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP SDK 2.4.0.** `@modelcontextprotocol/server` and the test client move
+  from 2.3.1 to 2.4.0, and `@modelcontextprotocol/node` from 2.1.1 to 2.1.2.
+  The server uses none of the SDK's new features, such as the Skills
+  extension: the advertised tools, prompts, resources and capabilities are
+  unchanged. `@modelcontextprotocol/express` 2.0.2 is unchanged (latest).
+
 ### Removed
 
 - **Smithery publishing.** Releases no longer update the Smithery listing.
@@ -16,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A path swapped for a symlink while a tool checks it is refused on
+  Linux.** `stat`, and every tool that checks a file's size or type before
+  acting (`move`, `edit`, `read`, `list` with sizes, resource reads), now stat
+  an open descriptor that is re-checked against the allowed folders. A parent
+  directory swapped for a symlink out of the roots is refused with
+  `ACCESS_DENIED`, and a file swapped for a symlink with
+  `SYMLINK_NOT_ALLOWED`. Before, the stat could describe the outside file.
+  FIFOs and files without read permission stat as before.
+- **`create` and `move` ask before overwriting a destination they cannot
+  stat.** A destination whose stat failed for any reason other than "not
+  found" used to count as absent, so it could be overwritten without the
+  usual confirmation.
 - **A grant can no longer reach a system folder by its real path on
   macOS.** `/etc` there is a link to `/private/etc`, and the grant check
   compared the resolved path against `/etc` only, so a folder link that

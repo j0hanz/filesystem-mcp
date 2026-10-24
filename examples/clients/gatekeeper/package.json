@@ -12,6 +12,6 @@
     "test": "node check.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.3.1"
+    "@modelcontextprotocol/client": "2.4.0"
   }
 }

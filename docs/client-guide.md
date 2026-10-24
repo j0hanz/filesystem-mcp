@@ -485,7 +485,7 @@ while (result.resultType === 'input_required') {
   for (const [key, request] of Object.entries<any>(result.inputRequests)) {
     inputResponses[key] = await askUserLater(request.params); // { action, content }
   }
-  // The retry fields are not in callTool()'s parameter type (SDK 2.3.1), hence the cast.
+  // The retry fields are not in callTool()'s parameter type (SDK 2.4.0), hence the cast.
   const retry = { ...params, inputResponses, requestState: result.requestState };
   result = await client.callTool(retry as CallToolRequest['params'], { allowInputRequired: true });
 }
