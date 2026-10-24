@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.11.0] - 2026-10-24
+
+A security release. On Linux, tools refuse a path swapped for a symlink
+while they check it; on macOS, grants refuse system folders reached by their
+real path; and the MCP SDK moves to 2.4.0. Before upgrading, read the
+`create` and `move` entry under Security if you script either tool: a
+destination whose stat fails for a reason other than "not found" now needs
+confirmation. On Linux, a file literally named with a trailing ` (deleted)`
+is now refused by `stat` and `list` sizes, as reads already refuse it.
+
+### Security
+
+- **A path swapped for a symlink while a tool checks it is refused on
+  Linux.** `stat`, and every tool that checks a file's size or type before
+  acting (`move`, `edit`, `read`, `list` with sizes, resource reads), now stat
+  an open descriptor that is re-checked against the allowed folders. A parent
+  directory swapped for a symlink out of the roots is refused with
+  `ACCESS_DENIED`, and a file swapped for a symlink with
+  `SYMLINK_NOT_ALLOWED`. Before, the stat could describe the outside file.
+  FIFOs and files without read permission stat as before.
+- **`create` and `move` ask before overwriting a destination they cannot
+  stat.** A destination whose stat failed for any reason other than "not
+  found" used to count as absent, so it could be overwritten without the
+  usual confirmation. This applies on every platform, including Windows
+  lock errors.
+- **A grant can no longer reach a system folder by its real path on
+  macOS.** `/etc` there is a link to `/private/etc`, and the grant check
+  compared the resolved path against `/etc` only, so a folder link that
+  resolved into `/etc` was offered for access. Each system folder now also
+  counts by its real path, so `--allow-cwd` from `/private` itself is
+  refused too.
 
 ### Changed
 
@@ -21,26 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Smithery's API has refused every server update since 2.10.0 and shuts
   down on 2026-10-31, along with its CLI and API keys. Each release still
   ships to npm, GHCR, the MCP Registry and the `.mcpb` release asset.
-
-### Security
-
-- **A path swapped for a symlink while a tool checks it is refused on
-  Linux.** `stat`, and every tool that checks a file's size or type before
-  acting (`move`, `edit`, `read`, `list` with sizes, resource reads), now stat
-  an open descriptor that is re-checked against the allowed folders. A parent
-  directory swapped for a symlink out of the roots is refused with
-  `ACCESS_DENIED`, and a file swapped for a symlink with
-  `SYMLINK_NOT_ALLOWED`. Before, the stat could describe the outside file.
-  FIFOs and files without read permission stat as before.
-- **`create` and `move` ask before overwriting a destination they cannot
-  stat.** A destination whose stat failed for any reason other than "not
-  found" used to count as absent, so it could be overwritten without the
-  usual confirmation.
-- **A grant can no longer reach a system folder by its real path on
-  macOS.** `/etc` there is a link to `/private/etc`, and the grant check
-  compared the resolved path against `/etc` only, so a folder link that
-  resolved into `/etc` was offered for access. Each system folder now also
-  counts by its real path.
 
 ## [2.10.1] - 2026-10-23
 
