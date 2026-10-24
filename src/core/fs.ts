@@ -26,6 +26,7 @@ import {
   ErrorCode,
   formatUnknownErrorMessage,
   FsError,
+  isFsError,
   isMissing,
   isNodeError,
   isNotFoundErrno,
@@ -225,9 +226,12 @@ export class GuardedFileSystem {
       (late) => late.close(),
       `stat descriptor for ${validPath}`,
     );
+    let pendingStat: Promise<Stats> | undefined;
     try {
       await this.#assertFdWithinRoots(handle, requestedPath);
-      const stats = await withAbort(handle.stat(), signal);
+      pendingStat = handle.stat();
+      const stats = await withAbort(pendingStat, signal);
+      pendingStat = undefined;
       if (stats.isSymbolicLink()) {
         throw new FsError(
           ErrorCode.SYMLINK_NOT_ALLOWED,
@@ -237,7 +241,17 @@ export class GuardedFileSystem {
       }
       return stats;
     } finally {
-      await handle.close();
+      // A failed close must not replace the stat result or refusal, so it is logged, not thrown.
+      const close = () =>
+        handle.close().catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close stat descriptor for ${validPath}: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      // close() queues behind an fstat still in flight (a stalled mount), so after an abort
+      // close once that fstat settles, without waiting for it.
+      if (pendingStat) void pendingStat.then(close, close);
+      else await close();
     }
   }
 
@@ -615,7 +629,7 @@ export class GuardedFileSystem {
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const stats = await withAbort(fsStat(validPath), spec.signal);
+    const stats = await this.#statVerified(validPath, filePath, spec.signal);
     return readFileWithStats(filePath, validPath, stats, spec, () =>
       this.#openVerified(validPath, filePath, spec.signal),
     );
@@ -664,7 +678,7 @@ export class GuardedFileSystem {
     options?.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     options?.signal?.throwIfAborted();
-    const stats = await withAbort(fsStat(validPath), options?.signal);
+    const stats = await this.#statVerified(validPath, filePath, options?.signal);
     assertFileStats(filePath, stats);
     // Enforce size limit before reading to avoid loading large files into memory.
     // Binary detection is best-effort, but this is a hard limit.
@@ -852,7 +866,11 @@ export async function destExists(
     await fs.stat(path);
     return true;
   } catch (err) {
-    if (isMissing(err)) return false;
+    // A path under a regular file cannot exist, so it is absent, not refused.
+    const underFile =
+      (isFsError(err) && err.code === ErrorCode.NOT_DIRECTORY) ||
+      (isNodeError(err) && err.code === 'ENOTDIR');
+    if (isMissing(err) || underFile) return false;
     Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
     return true;
   }

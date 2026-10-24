@@ -1896,4 +1896,106 @@ describe('GuardedFileSystem.stat', () => {
     assert.strictEqual(await destExists(refusingFs, 'x', 'test'), true);
     assert.strictEqual(await destExists(fs, join(root, 'never-created.txt'), 'test'), false);
   });
+
+  it(
+    'STAT-FD-007: a cancelled stat returns without waiting for the descriptor to close',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async (t) => {
+      const file = await writeTestFile(root, 'stalled-stat.txt', 'x');
+      const opened: { handle: FileHandle; close: () => Promise<void> }[] = [];
+      const realOpen = fsPromises.open.bind(fsPromises);
+      // A stalled fstat (a hung NFS mount) keeps close() queued behind it.
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await realOpen(...args);
+        opened.push({ handle, close: handle.close.bind(handle) });
+        handle.stat = (() => new Promise(() => {})) as FileHandle['stat'];
+        handle.close = () => new Promise(() => {});
+        return handle;
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(
+          failIfPendingAfter(fs.stat(file, { signal: AbortSignal.timeout(50) }), 2000),
+          (error: unknown) => error instanceof Error && error.name === 'TimeoutError',
+        );
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        for (const { close } of opened) await close();
+      }
+    },
+  );
+
+  it(
+    'STAT-FD-008: a failed descriptor close does not replace the stat result',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async (t) => {
+      const file = await writeTestFile(root, 'close-fails.txt', 'abc');
+      const realOpen = fsPromises.open.bind(fsPromises);
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await realOpen(...args);
+        const realClose = handle.close.bind(handle);
+        handle.close = async () => {
+          await realClose();
+          throw new Error('close-fail');
+        };
+        return handle;
+      });
+      syncBuiltinESMExports();
+      try {
+        assert.strictEqual((await fs.stat(file)).stats.size, 3);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it(
+    'STAT-FD-009: content reads stat the descriptor, not a swapped path',
+    { skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only' },
+    async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const big = await writeTestFile(outside, 'big.bin', 'x'.repeat(1.5 * 1024 * 1024));
+      const rawFile = await writeTestFile(root, 'swap-raw.txt', 'inside');
+      const textFile = await writeTestFile(root, 'swap-text.txt', 'inside');
+      try {
+        // readRaw would report the outside file's size in its TOO_LARGE refusal.
+        let restore = swapAfterValidation('validateExistingPath', rawFile, async () => {
+          await rename(rawFile, `${rawFile}.bak`);
+          await symlink(big, rawFile);
+        });
+        try {
+          await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, () =>
+            assert.rejects(
+              fs.readRaw(rawFile),
+              fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
+            ),
+          );
+        } finally {
+          restore();
+        }
+        // readFile would report the outside entry's type (a directory here).
+        restore = swapAfterValidation('validateExistingPath', textFile, async () => {
+          await rename(textFile, `${textFile}.bak`);
+          await symlink(outside, textFile, 'dir');
+        });
+        try {
+          await assert.rejects(
+            fs.readFile(textFile, { kind: 'full' }),
+            fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
+          );
+        } finally {
+          restore();
+        }
+      } finally {
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it('STAT-FD-010: destExists counts a path under a regular file as absent', async () => {
+    const file = await writeTestFile(root, 'plain-file.txt', 'x');
+    assert.strictEqual(await destExists(fs, join(file, 'child.txt'), 'test'), false);
+  });
 });
