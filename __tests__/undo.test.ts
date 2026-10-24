@@ -1843,38 +1843,45 @@ describe('undo tool', () => {
     }
   });
 
-  it('listed paths share one byte budget across steps', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      // ~2.5 KB paths, listed twice per skipped result: five 100-path steps outgrow the budget.
-      const deep = join(
-        tmp,
-        ...Array.from({ length: 12 }, (_, i) => `${String(i)}${'d'.repeat(199)}`),
-      );
-      await mkdir(deep, { recursive: true });
-      const files: string[] = [];
-      for (let k = 0; k < 5; k++) {
-        const batch = Array.from({ length: 100 }, (_, i) =>
-          join(deep, `f${String(k)}-${String(i)}.txt`),
+  it(
+    'listed paths share one byte budget across steps',
+    // The test needs ~2.5 KB paths; macOS caps a path at 1024 bytes (PATH_MAX).
+    { skip: process.platform === 'darwin' && 'macOS PATH_MAX is below the paths this needs' },
+    async () => {
+      const tmp = await createTestRoot();
+      const pair = await createTestClientPair([tmp]);
+      try {
+        // ~2.5 KB paths, listed twice per skipped result: five 100-path steps outgrow the budget.
+        const deep = join(
+          tmp,
+          ...Array.from({ length: 12 }, (_, i) => `${String(i)}${'d'.repeat(199)}`),
         );
-        await call(pair.client, 'create', { files: batch.map((path) => ({ path, content: 'x' })) });
-        files.push(...batch);
+        await mkdir(deep, { recursive: true });
+        const files: string[] = [];
+        for (let k = 0; k < 5; k++) {
+          const batch = Array.from({ length: 100 }, (_, i) =>
+            join(deep, `f${String(k)}-${String(i)}.txt`),
+          );
+          await call(pair.client, 'create', {
+            files: batch.map((path) => ({ path, content: 'x' })),
+          });
+          files.push(...batch);
+        }
+        for (const path of files) await writeFile(path, 'changed');
+        const undone = await call(pair.client, 'undo', { steps: 5 });
+        const { steps } = undone._meta as {
+          steps: { results: unknown[]; truncated?: true; totalResults?: number }[];
+        };
+        const listed = steps.flatMap((s) => s.results);
+        assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 2 * 1024 * 1024);
+        assert.ok(listed.length < 500, `listed: ${String(listed.length)}`);
+        assert.ok(steps.some((s) => s.truncated === true && s.totalResults === 100));
+      } finally {
+        await pair.close();
+        await cleanupTestRoot(tmp);
       }
-      for (const path of files) await writeFile(path, 'changed');
-      const undone = await call(pair.client, 'undo', { steps: 5 });
-      const { steps } = undone._meta as {
-        steps: { results: unknown[]; truncated?: true; totalResults?: number }[];
-      };
-      const listed = steps.flatMap((s) => s.results);
-      assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 2 * 1024 * 1024);
-      assert.ok(listed.length < 500, `listed: ${String(listed.length)}`);
-      assert.ok(steps.some((s) => s.truncated === true && s.totalResults === 100));
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
+    },
+  );
 
   it('a restore reports progress per record while it runs', async () => {
     const tmp = await createTestRoot();

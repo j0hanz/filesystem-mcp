@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stat.** A destination whose stat failed for any reason other than "not
   found" used to count as absent, so it could be overwritten without the
   usual confirmation.
+- **A grant can no longer reach a system folder by its real path on
+  macOS.** `/etc` there is a link to `/private/etc`, and the grant check
+  compared the resolved path against `/etc` only, so a folder link that
+  resolved into `/etc` was offered for access. Each system folder now also
+  counts by its real path.
 
 ## [2.10.1] - 2026-10-23
 
