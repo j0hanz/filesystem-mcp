@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
+import { isUnsafeCwdPath } from '../src/core/path-discovery.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import {
@@ -233,6 +235,22 @@ describe('PathGuard grant round-trip', () => {
       'the resolved unsafe path must not appear in allowed dirs',
     );
   });
+
+  it(
+    'TC-PG-019: the real spelling of a system dir is unsafe',
+    { skip: process.platform === 'win32' && 'Windows system dirs have no alias spelling' },
+    () => {
+      for (const dir of ['/etc', '/usr', '/bin', '/sbin']) {
+        let real: string;
+        try {
+          real = realpathSync.native(dir);
+        } catch {
+          continue;
+        }
+        assert.ok(isUnsafeCwdPath(real), `${real} (real spelling of ${dir}) must be unsafe`);
+      }
+    },
+  );
 
   it('TC-PG-013: precheckAccess never offers an ancestor of home, a subtree of a system dir, or a secret subtree of home', async () => {
     delete process.env['FS_ROOT_BOUNDARY'];
