@@ -238,9 +238,9 @@ function setupExpressApp(
   });
 
   // Answer non-POST here rather than handing it to `modernNodeHandler`. The
-  // SDK's own 405 is byte-identical to this one, but it omits the `Allow`
-  // header RFC 9110 §15.5.6 requires and routes every routine GET probe through
-  // the handler's `onerror` — which this server logs at error level.
+  // SDK's own 405 has the same body and, since 2.4.0, an `Allow: POST` header,
+  // but it leaves out the OPTIONS this app answers and routes every routine GET
+  // probe through the handler's `onerror` — which this server logs at error level.
   app.all('/mcp', (_req: Request, res: Response) => {
     sendJsonRpcError(res, 405, JSONRPC_SERVER_ERROR, 'Method not allowed.', null, {
       Allow: 'POST, OPTIONS',

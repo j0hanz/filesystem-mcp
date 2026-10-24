@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP SDK 2.4.0.** `@modelcontextprotocol/server` and the test client move
+  from 2.3.1 to 2.4.0, and `@modelcontextprotocol/node` from 2.1.1 to 2.1.2.
+  The server uses none of the SDK's new features, such as the Skills
+  extension: the advertised tools, prompts, resources and capabilities are
+  unchanged. `@modelcontextprotocol/express` 2.0.2 is unchanged (latest).
+
 ### Removed
 
 - **Smithery publishing.** Releases no longer update the Smithery listing.
