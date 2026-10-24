@@ -10,7 +10,7 @@ their own client with `@modelcontextprotocol/client`, or with the Python
   with `node <file>.ts` on Node 24. No build step, no `tsx`, only erasable
   TypeScript (`import type`, no `enum`).
 - Pin `@modelcontextprotocol/client` to the repository's devDependency
-  version (currently `2.3.1`), and regenerate the app's `package-lock.json`
+  version (currently `2.4.0`), and regenerate the app's `package-lock.json`
   with `npm install` when it changes.
 - Launch the server with `npx -y @j0hanz/filesystem-mcp <dir>`, and use
   `node $FS_MCP_BIN <dir>` instead when `FS_MCP_BIN` is set.
