@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   down on 2026-10-31, along with its CLI and API keys. Each release still
   ships to npm, GHCR, the MCP Registry and the `.mcpb` release asset.
 
+### Security
+
+- **A path swapped for a symlink while a tool checks it is refused on
+  Linux.** `stat`, and every tool that checks a file's size or type before
+  acting (`move`, `edit`, `read`, `list` with sizes, resource reads), now stat
+  an open descriptor that is re-checked against the allowed folders. A parent
+  directory swapped for a symlink out of the roots is refused with
+  `ACCESS_DENIED`, and a file swapped for a symlink with
+  `SYMLINK_NOT_ALLOWED`. Before, the stat could describe the outside file.
+  FIFOs and files without read permission stat as before.
+- **`create` and `move` ask before overwriting a destination they cannot
+  stat.** A destination whose stat failed for any reason other than "not
+  found" used to count as absent, so it could be overwritten without the
+  usual confirmation.
+
 ## [2.10.1] - 2026-10-23
 
 A fix patch. `undo` restores, previews and reports large calls correctly,

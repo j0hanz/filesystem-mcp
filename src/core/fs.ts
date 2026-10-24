@@ -26,6 +26,7 @@ import {
   ErrorCode,
   formatUnknownErrorMessage,
   FsError,
+  isFsError,
   isMissing,
   isNodeError,
   isNotFoundErrno,
@@ -57,8 +58,13 @@ export type { Stats };
 // Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
 // directory; used only under COUNT_THROUGH_FD, like the re-check it feeds.
 const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
+// Descriptor open for stat. O_PATH opens no file content, so a FIFO cannot block it and a
+// mode-000 entry still stats. Node does not export O_PATH; 0o10000000 is its value on every
+// Linux architecture Node builds for. Used only under COUNT_THROUGH_FD.
+const STAT_NOFOLLOW = 0o10000000 | O_NOFOLLOW;
 // The descriptor re-check and the read through /proc/self/fd need Linux with procfs mounted,
-// as the read path's re-check does; elsewhere the count reads the directory by path.
+// as the read path's re-check does; elsewhere the count reads the directory by path, and
+// stat stats it by path.
 const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/fd');
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
@@ -200,8 +206,53 @@ export class GuardedFileSystem {
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const stats = await withAbort(fsStat(validPath), options?.signal);
-    return { stats, validPath };
+    return { stats: await this.#statVerified(validPath, filePath, options?.signal), validPath };
+  }
+
+  /**
+   * Stats `validPath` through a descriptor under COUNT_THROUGH_FD, by path elsewhere: an
+   * ancestor swapped for a symlink after validation fails the re-check, and a final
+   * component swapped for one opens as the link itself.
+   */
+  async #statVerified(
+    validPath: string,
+    requestedPath: string,
+    signal: AbortSignal | undefined,
+  ): Promise<Stats> {
+    if (!COUNT_THROUGH_FD) return await withAbort(fsStat(validPath), signal);
+    const handle = await this.#abandonOnAbort(
+      fsOpen(validPath, STAT_NOFOLLOW),
+      signal,
+      (late) => late.close(),
+      `stat descriptor for ${validPath}`,
+    );
+    let pendingStat: Promise<Stats> | undefined;
+    try {
+      await this.#assertFdWithinRoots(handle, requestedPath);
+      pendingStat = handle.stat();
+      const stats = await withAbort(pendingStat, signal);
+      pendingStat = undefined;
+      if (stats.isSymbolicLink()) {
+        throw new FsError(
+          ErrorCode.SYMLINK_NOT_ALLOWED,
+          'Path changed under validation and is now a symlink (TOCTOU).',
+          requestedPath,
+        );
+      }
+      return stats;
+    } finally {
+      // A failed close must not replace the stat result or refusal, so it is logged, not thrown.
+      const close = () =>
+        handle.close().catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close stat descriptor for ${validPath}: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      // close() queues behind an fstat still in flight (a stalled mount), so after an abort
+      // close once that fstat settles, without waiting for it.
+      if (pendingStat) void pendingStat.then(close, close);
+      else await close();
+    }
   }
 
   async lstat(
@@ -578,7 +629,7 @@ export class GuardedFileSystem {
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const stats = await withAbort(fsStat(validPath), spec.signal);
+    const stats = await this.#statVerified(validPath, filePath, spec.signal);
     return readFileWithStats(filePath, validPath, stats, spec, () =>
       this.#openVerified(validPath, filePath, spec.signal),
     );
@@ -627,7 +678,7 @@ export class GuardedFileSystem {
     options?.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     options?.signal?.throwIfAborted();
-    const stats = await withAbort(fsStat(validPath), options?.signal);
+    const stats = await this.#statVerified(validPath, filePath, options?.signal);
     assertFileStats(filePath, stats);
     // Enforce size limit before reading to avoid loading large files into memory.
     // Binary detection is best-effort, but this is a hard limit.
@@ -671,7 +722,7 @@ export class GuardedFileSystem {
   ): Promise<{ requestedPath: string; isSymlink: boolean; stats: Stats }> {
     const { requestedPath, resolvedPath, isSymlink } =
       await this.pathGuard.validateExistingPathDetailed(filePath);
-    const stats = await withAbort(fsStat(resolvedPath), options?.signal);
+    const stats = await this.#statVerified(resolvedPath, filePath, options?.signal);
     return { requestedPath, isSymlink, stats };
   }
 
@@ -801,8 +852,10 @@ export class GuardedFileSystem {
 }
 
 /**
- * Returns whether `path` exists, treating "not found" as absent and logging any
- * other stat failure. Used for TOCTOU re-checks between plan and execute phases.
+ * Returns whether `path` exists, treating "not found" as absent. Any other stat
+ * failure is logged and counts as present, so a destination whose stat is refused
+ * is confirmed before it is overwritten, never written over as if absent. Used for
+ * TOCTOU re-checks between plan and execute phases.
  */
 export async function destExists(
   fs: Pick<GuardedFileSystem, 'stat'>,
@@ -813,9 +866,12 @@ export async function destExists(
     await fs.stat(path);
     return true;
   } catch (err) {
-    if (!isMissing(err)) {
-      Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
-    }
-    return false;
+    // A path under a regular file cannot exist, so it is absent, not refused.
+    const underFile =
+      (isFsError(err) && err.code === ErrorCode.NOT_DIRECTORY) ||
+      (isNodeError(err) && err.code === 'ENOTDIR');
+    if (isMissing(err) || underFile) return false;
+    Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
+    return true;
   }
 }
