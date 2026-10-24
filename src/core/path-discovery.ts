@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
@@ -56,9 +57,25 @@ export async function resolveConfiguredDirs(
 // Per platform on purpose: on POSIX `normalizePath('C:\\Windows')` resolves
 // against the cwd, so a cross-platform list would make the cwd itself
 // "contain a system dir" and refuse --allow-cwd.
-const UNSAFE_SYSTEM_DIRS = IS_WINDOWS
-  ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
-  : ['/usr', '/etc', '/bin', '/sbin', '/System'];
+// Each entry also counts by its real spelling: on macOS /etc is /private/etc.
+const UNSAFE_SYSTEM_DIRS = withRealSpellings(
+  IS_WINDOWS
+    ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
+    : ['/usr', '/etc', '/bin', '/sbin', '/System'],
+);
+
+function withRealSpellings(dirs: readonly string[]): string[] {
+  const all = [...dirs];
+  for (const dir of dirs) {
+    try {
+      const real = realpathSync.native(dir);
+      if (!isSamePath(normalizePath(real), normalizePath(dir))) all.push(real);
+    } catch {
+      // A system dir missing on this platform has no other spelling.
+    }
+  }
+  return all;
+}
 
 // Subtrees of home that hold credentials. Home itself and its other
 // subdirectories stay grantable: projects live there.
