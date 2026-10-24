@@ -18,6 +18,7 @@
 
 ## Status
 
+- **Superseded** 2026-10-24 by `docs/superpowers/plans/2026-10-24-ci-macos-node26-legs.md`; do not execute this plan.
 - **Priority**: P2
 - **Effort**: S for the change itself. The first macOS run may surface
   failures that need triage, and this plan bounds that triage.

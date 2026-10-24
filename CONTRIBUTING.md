@@ -75,7 +75,7 @@ Pass test runner flags after `--`, for example
 
 `__tests__/contract.test.ts` snapshots the tools, prompts, resource templates, capabilities, and instructions the server advertises. When you change any of them on purpose, regenerate the snapshot with `node --test --test-update-snapshots __tests__/contract.test.ts` (no `FS_*` variables set), and review the snapshot diff in your PR.
 
-CI runs the same checks as separate steps on Ubuntu and Windows, and the Ubuntu leg runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
+CI runs the same checks as separate steps on Ubuntu and Windows, plus two legs that report but do not block: macOS, and Ubuntu on Node 26. The Ubuntu leg on the pinned Node runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
 
 ## Isolated capability lab
 
