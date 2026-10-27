@@ -116,7 +116,8 @@ export async function waitForResourceUpdate(
  * Rounds are always at least the 50 ms watcher debounce apart, and macOS FSEvents can split one
  * write into two of them; a duplicated sink instead fires twice inside one round, under 1 ms
  * apart. The stamps are taken on the client, where a stall can pull two rounds closer, so the
- * floor sits well below the debounce.
+ * floor sits well below the debounce. Only for a server in this process: a server process keeps
+ * sending while this one stalls, and its pipe then hands two rounds over at once.
  */
 export function assertOneNotificationPerRound(arrivalsMs: readonly number[], what: string): void {
   assert.ok(arrivalsMs.length > 0, `${what}: no notification arrived`);
