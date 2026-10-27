@@ -3823,6 +3823,46 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('search_text counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'search_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'needle');
+    await writeTestFile(dir, 'locked/x.ts', 'needle');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'needle' },
+      });
+      const meta = result._meta as { skippedInaccessible?: number };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('search_text on a named unreadable file fails the call', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'search_named_locked');
+    const file = join(dir, 'b.txt');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    await chmod(file, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: file, searchPattern: 'needle' },
+      });
+      assert.strictEqual(result.isError, true);
+    } finally {
+      await chmod(file, 0o644);
+    }
+  });
+
   it('search_text: anchors, word boundaries and CRLF behave per line (prefilter must not change them)', async () => {
     const dir = join(tmpDir, 'prefilter_semantics');
     await writeTestFile(tmpDir, 'prefilter_semantics/lf.txt', 'x\nimport a\n  import b\nfoo$bar\n');
@@ -3896,8 +3936,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
       }
       const guard = await makeGuard([root]);
-      const a = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
-      const b = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const a = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
+      const b = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
       const key = (r: typeof a) => r.matches.map((m) => `${basename(m.file)}:${m.line}`);
       assert.deepStrictEqual(key(a), key(b));
       assert.strictEqual(a.matches.length, 7);
@@ -3919,7 +3959,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
       );
       const guard = await makeGuard([root]);
-      const r = await searchContent(root, 'CAP_ONE', { maxResults: 5 }, guard);
+      const r = await searchContent({ root }, 'CAP_ONE', { maxResults: 5 }, guard);
       assert.strictEqual(r.matches.length, 5);
       assert.strictEqual(r.summary.matchingLines, 5);
       assert.strictEqual(r.summary.filesMatched, 1);
@@ -4558,7 +4598,7 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
 
       const outcome = await searchContent(
-        dir,
+        { root: dir },
         'NEEDLE',
         { isRegex: true },
         pair.serverCtx.pathGuard,
@@ -4567,12 +4607,17 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
 
       // The wasm module is still alive for a second search in the same process.
-      const again = await searchContent(dir, 'NEEDLE', { isRegex: true }, pair.serverCtx.pathGuard);
+      const again = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: true },
+        pair.serverCtx.pathGuard,
+      );
       assert.strictEqual(again.matches.length, 1);
 
       // A literal is matched natively, so the long line holds no hazard and is searched.
       const literal = await searchContent(
-        dir,
+        { root: dir },
         'NEEDLE',
         { isRegex: false },
         pair.serverCtx.pathGuard,
@@ -4589,7 +4634,7 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       await writeTestFile(dir, 'line.txt', 'needle\n'.repeat(200_000));
       const controller = new AbortController();
       const search = searchContent(
-        dir,
+        { root: dir },
         'needle',
         { isRegex: false, maxResults: 100_000, signal: controller.signal },
         pair.serverCtx.pathGuard,

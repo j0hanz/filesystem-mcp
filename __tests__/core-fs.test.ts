@@ -839,7 +839,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
 
       const outcome = await searchContent(
-        searchContentDir,
+        { root: searchContentDir },
         'TARGET_LITERAL_STRING',
         { isRegex: false },
         ctx.pathGuard,
@@ -860,12 +860,17 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       await writeFile(join(dir, 'latin1.txt'), Buffer.from('caf\xe9 NEEDLE\n', 'latin1'));
 
-      const outcome = await searchContent(dir, 'NEEDLE;$', { isRegex: true }, ctx.pathGuard);
+      const outcome = await searchContent(
+        { root: dir },
+        'NEEDLE;$',
+        { isRegex: true },
+        ctx.pathGuard,
+      );
       assert.strictEqual(outcome.matches.length, 1);
       assert.strictEqual(basename(outcome.matches[0]?.file ?? ''), 'crlf.txt');
       assert.strictEqual(outcome.matches[0]?.content, 'NEEDLE;');
 
-      const all = await searchContent(dir, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      const all = await searchContent({ root: dir }, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
       assert.deepStrictEqual(all.matches.map((m) => basename(m.file)).sort(), [
         'crlf.txt',
         'latin1.txt',
@@ -879,7 +884,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         await fs.mkdir(join(dir, `d${String(i)}`, 'inner'), { recursive: true });
       const signal = AbortSignal.abort(new Error('deadline'));
 
-      const content = await searchContent(dir, 'NEEDLE', { isRegex: false, signal }, ctx.pathGuard);
+      const content = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: false, signal },
+        ctx.pathGuard,
+      );
       assert.strictEqual(content.matches.length, 0);
       assert.strictEqual(content.summary.stoppedReason, 'timeout');
     });
@@ -1022,9 +1032,9 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
         try {
           searched = await searchContent(
-            root,
+            { root, explicitFile: victim },
             'TOP_SECRET',
-            { explicitFile: victim },
+            {},
             ctx.pathGuard,
           );
         } catch {
@@ -1086,9 +1096,9 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
         try {
           searched = await searchContent(
-            root,
+            { root, explicitFile: victim },
             'TOP_SECRET',
-            { explicitFile: victim },
+            {},
             ctx.pathGuard,
           );
         } catch {

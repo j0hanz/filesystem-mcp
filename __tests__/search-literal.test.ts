@@ -70,9 +70,9 @@ describe('literal search matches what RE2 would', () => {
         const search = async (pattern: string, isRegex: boolean) =>
           (
             await searchContent(
-              root,
+              { root, explicitFile: file },
               pattern,
-              { isRegex, caseSensitive, explicitFile: file, maxResults: 1000 },
+              { isRegex, caseSensitive, maxResults: 1000 },
               guard,
             )
           ).matches;
@@ -94,9 +94,9 @@ describe('a file whose size reads as 0 while it holds text', () => {
     it(`is searched to its end (${isRegex ? 'regex' : 'literal'})`, { skip }, async () => {
       const guard = await makeGuard([procDir]);
       const outcome = await searchContent(
-        procDir,
+        { root: procDir, explicitFile: join(procDir, 'status') },
         'Name',
-        { isRegex, caseSensitive: true, explicitFile: join(procDir, 'status') },
+        { isRegex, caseSensitive: true },
         guard,
       );
       assert.strictEqual(outcome.summary.filesMatched, 1, JSON.stringify(outcome.summary));
@@ -136,9 +136,9 @@ describe('reading a file for a search', () => {
     };
     try {
       const outcome = await searchContent(
-        root,
+        { root, explicitFile: file },
         'needle',
-        { isRegex: false, explicitFile: file, signal: controller.signal },
+        { isRegex: false, signal: controller.signal },
         await makeGuard([root]),
       );
       assert.strictEqual(reads, 1, 'no read after the cancel');
