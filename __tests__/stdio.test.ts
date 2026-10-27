@@ -103,9 +103,8 @@ describe('Stdio Transport (real subprocess)', () => {
     const uri = buildFileResourceUri(filePath);
 
     subscriptions.push(await harness.client.listen({ resourceSubscriptions: [uri] }));
-    await writeFile(filePath, 'changed');
 
-    await waitForResourceUpdate(harness.client, uri);
+    await waitForResourceUpdate(harness.client, uri, () => writeFile(filePath, 'changed'));
   });
 
   it('STDIO-004: re-listening on one URI registers one watcher callback, not one per listen', async () => {
@@ -120,10 +119,14 @@ describe('Stdio Transport (real subprocess)', () => {
     const filePath = await writeTestFile(tmpDir, 'relisten.txt', 'initial');
     const uri = buildFileResourceUri(filePath);
     const streams = 2;
-    let count = 0;
+    // Updates per listen stream, keyed by the SDK's subscription id.
+    const counts = new Map<unknown, number>();
 
     harness.client.setNotificationHandler('notifications/resources/updated', (n) => {
-      if ((n.params as { uri: string }).uri === uri) count += 1;
+      const params = n.params as { uri: string; _meta?: Record<string, unknown> };
+      if (params.uri !== uri) return;
+      const stream = params._meta?.['io.modelcontextprotocol/subscriptionId'];
+      counts.set(stream, (counts.get(stream) ?? 0) + 1);
     });
 
     for (let i = 0; i < streams; i += 1) {
@@ -131,16 +134,24 @@ describe('Stdio Transport (real subprocess)', () => {
     }
 
     await writeFile(filePath, 'changed');
-    await waitFor(() => count >= streams, 5000);
+    await waitFor(() => counts.size >= streams, 5000);
     // Settle past the registry's 50ms debounce so a stacked second callback
     // would have landed by now.
-    await waitFor(() => count > streams, 500);
+    await setTimeout(200);
 
-    assert.strictEqual(
-      count,
-      streams,
-      'one change must yield one update per listen stream; more means a stacked notify callback',
-    );
+    assert.strictEqual(counts.size, streams, 'one update stream per listen');
+    // macOS FSEvents can split one write into two rounds, and a stall in this
+    // process lets the server's pipe hand both over at once, so no count or
+    // gap tells a split from a stacked callback there. The sink is the same
+    // code on every OS; the other legs pin it.
+    if (process.platform === 'darwin') return;
+    for (const [stream, count] of counts) {
+      assert.strictEqual(
+        count,
+        1,
+        `listen stream ${String(stream)}: two updates for one write means a stacked notify callback`,
+      );
+    }
   });
 
   it('STDIO-005: rejects a missing filesystem resource before acknowledging the listen', async () => {

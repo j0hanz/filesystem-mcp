@@ -18,14 +18,11 @@ concurrency:
 
 jobs:
   check:
-    # The first two legs keep their names exactly: the main ruleset and the
-    # release gate require `Check (ubuntu-latest)` and `Check (windows-latest)`.
+    # Every leg keeps its name exactly: the main ruleset and the release gate
+    # require all four `Check (...)` names this expression produces.
     name: Check (${{ matrix.os }}${{ matrix.node && format(', node {0}', matrix.node) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    # New legs report but do not fail the workflow until they have been green
-    # for a while; then delete their `experimental: true` lines.
-    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       # One leg failing must not cancel the others: the point is to see all.
       fail-fast: false
@@ -35,11 +32,8 @@ jobs:
         # include below merges into the default Ubuntu leg instead of adding one.
         node: ['']
         include:
-          - os: macos-latest
-            experimental: true
           - os: ubuntu-latest
             node: '26'
-            experimental: true
     # Mirrors package.json's check script (check:static + test) as separate
     # steps, so one failure does not hide the others. Keep the two in sync.
     steps:

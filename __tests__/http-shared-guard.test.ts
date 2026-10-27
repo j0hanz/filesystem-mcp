@@ -69,10 +69,9 @@ describe('HTTP shared PathGuard (grant persistence + watcher visibility)', () =>
     const uri = buildFileResourceUri(outFile);
 
     subscription = await client.listen({ resourceSubscriptions: [uri] });
-    await writeFile(outFile, 'changed');
 
     // No update means prepareListenWatchers validated against a guard
     // without the grant.
-    await waitForResourceUpdate(client, uri);
+    await waitForResourceUpdate(client, uri, () => writeFile(outFile, 'changed'));
   });
 });

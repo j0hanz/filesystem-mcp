@@ -83,10 +83,15 @@ export async function waitFor(condition: () => boolean, timeoutMs = 3000): Promi
   }
 }
 
-/** Resolve when `client` receives notifications/resources/updated for `uri`. Replaces any handler registered for the method. */
+/**
+ * Run `trigger` and resolve when `client` receives notifications/resources/updated for `uri`.
+ * The handler is registered before `trigger` runs, so an update that lands before it settles
+ * still counts. Replaces any handler registered for the method.
+ */
 export async function waitForResourceUpdate(
   client: Client,
   uri: string,
+  trigger: () => Promise<unknown>,
   timeoutMs = 5000,
 ): Promise<void> {
   const started = Date.now();
@@ -97,11 +102,29 @@ export async function waitForResourceUpdate(
     if (got === uri) arrived = true;
     else others.push(got);
   });
+  await trigger();
   await waitFor(() => arrived, timeoutMs);
   assert.ok(
     arrived,
     `no notifications/resources/updated for ${uri} within ${timeoutMs}ms ` +
       `(waited ${String(Date.now() - started)}ms; other URIs notified: ${others.length ? others.join(', ') : 'none'})`,
+  );
+}
+
+/**
+ * Assert each notification (`performance.now()` stamps, in order) came in its own debounce round.
+ * Rounds are always at least the 50 ms watcher debounce apart, and macOS FSEvents can split one
+ * write into two of them; a duplicated sink instead fires twice inside one round, under 1 ms
+ * apart. The stamps are taken on the client, where a stall can pull two rounds closer, so the
+ * floor sits well below the debounce. Only for a server in this process: a server process keeps
+ * sending while this one stalls, and its pipe then hands two rounds over at once.
+ */
+export function assertOneNotificationPerRound(arrivalsMs: readonly number[], what: string): void {
+  assert.ok(arrivalsMs.length > 0, `${what}: no notification arrived`);
+  const gaps = arrivalsMs.slice(1).map((at, i) => at - (arrivalsMs[i] ?? at));
+  assert.ok(
+    gaps.every((gap) => gap >= 10),
+    `${what}: notifications ${gaps.map((gap) => gap.toFixed(1)).join(', ')} ms apart, two in one debounce round`,
   );
 }
 

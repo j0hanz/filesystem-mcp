@@ -61,13 +61,13 @@ jobs:
           fi
 
       # The release re-runs the checks on Ubuntu only. This reads the CI result for
-      # the exact commit being released, so a red or unfinished Windows leg (or a
-      # commit whose CI never ran) cannot ship.
+      # the exact commit being released, so a red or unfinished leg on any OS or
+      # Node version (or a commit whose CI never ran) cannot ship.
       # Only check runs from the GitHub Actions app (id 15368) count.
       - name: Require green CI for this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Release build paths'
+          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Check (macos-latest)|Check (ubuntu-latest, node 26)|Release build paths'
         run: |
           runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
             --jq '.check_runs | map(select(.app.id == 15368)) | sort_by(.id) | reverse | .[] | [.name, .status, (.conclusion // "none")] | @tsv')
