@@ -9,6 +9,7 @@ import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
+import { readNamedText } from '../core/scan.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -340,7 +341,7 @@ async function editOnce(
   options: { dryRun: boolean; ignoreWhitespace: boolean },
   ctx: ToolCtx,
 ): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
-  const { validPath, content } = await ctx.fs.readEditableText(filePath, {
+  const { validPath, content } = await readNamedText(ctx.fs, filePath, {
     signal: ctx.signal,
   });
   const editResult = applyEdits(content, edits, options.ignoreWhitespace);

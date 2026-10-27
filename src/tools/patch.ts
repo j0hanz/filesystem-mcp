@@ -6,6 +6,7 @@ import { applyPatch, parsePatch } from 'diff';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
+import { readNamedText } from '../core/scan.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { postWriteStat } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
@@ -66,7 +67,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
 });
 
 async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolCtx) {
-  const { validPath, content, stats } = await ctx.fs.readEditableText(args.path, {
+  const { validPath, content, stats } = await readNamedText(ctx.fs, args.path, {
     signal: ctx.signal,
     tool: 'patch',
   });

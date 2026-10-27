@@ -635,35 +635,6 @@ export class GuardedFileSystem {
     );
   }
 
-  async readEditableText(
-    filePath: string,
-    options?: { signal?: AbortSignal; tool?: string },
-  ): Promise<{ validPath: string; content: string; stats: Stats }> {
-    const { stats, validPath } = await this.stat(filePath, options);
-    const maxSize = getMaxTextFileSize();
-    if (stats.size > maxSize) {
-      // `tool` labels the TOO_LARGE message so the client sees which tool refused.
-      throw new FsError(
-        ErrorCode.TOO_LARGE,
-        `File too large for ${options?.tool ?? 'edit'} (${stats.size} bytes > ${maxSize} bytes)`,
-        filePath,
-        { size: stats.size, maxFileSize: maxSize },
-      );
-    }
-    const { content } = await readFileWithStats(
-      filePath,
-      validPath,
-      stats,
-      {
-        kind: 'full',
-        strictUtf8: true,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      },
-      () => this.#openVerified(validPath, filePath, options?.signal),
-    );
-    return { validPath, content, stats };
-  }
-
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },

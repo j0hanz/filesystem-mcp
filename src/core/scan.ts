@@ -13,7 +13,7 @@ import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { binaryKind } from './read.ts';
+import { assertFileStats, binaryKind, binaryRefusal, NOT_UTF8_MESSAGE } from './read.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 /** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
@@ -106,6 +106,39 @@ export async function readText(
   // back must refuse any byte the decode would replace with U+FFFD.
   if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
   return { kind: 'text', bytes, stats };
+}
+
+/**
+ * A file the client named is not a scan (ADR-005): any verdict but text fails
+ * the call, with the refusals edit, patch and diff have always given.
+ */
+export async function readNamedText(
+  fs: GuardedFileSystem,
+  filePath: string,
+  options?: { readonly signal?: AbortSignal | undefined; readonly tool?: string },
+): Promise<{ validPath: string; content: string; stats: Stats }> {
+  const signal = options?.signal;
+  const { stats, validPath } = await fs.stat(filePath, { signal });
+  assertFileStats(filePath, stats);
+  const verdict = await readText(fs, validPath, signal);
+  switch (verdict.kind) {
+    case 'text':
+      return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
+    case 'tooLarge': {
+      const maxSize = getMaxTextFileSize();
+      // `tool` labels the TOO_LARGE message so the client sees which tool refused.
+      throw new FsError(
+        ErrorCode.TOO_LARGE,
+        `File too large for ${options?.tool ?? 'edit'} (${verdict.size} bytes > ${maxSize} bytes)`,
+        filePath,
+        { size: verdict.size, maxFileSize: maxSize },
+      );
+    }
+    case 'binary':
+      throw binaryRefusal(verdict.utf16 ? 'utf16' : 'binary', filePath);
+    case 'undecodable':
+      throw new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, filePath);
+  }
 }
 
 export interface ScanEntry {

@@ -165,7 +165,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     try {
       const reads: Record<string, () => Promise<unknown>> = {
         readFile: () => fs.readFile(filePath, { kind: 'full' }),
-        readEditableText: () => fs.readEditableText(filePath),
         readRaw: () => fs.readRaw(filePath),
         open: async () => {
           await (await fs.open(filePath)).close();
@@ -337,40 +336,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     });
   });
 
-  describe('Editable text loading', () => {
-    it('readEditableText returns validated path, content, and stats', async () => {
-      const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');
-
-      const result = await fs.readEditableText(filePath);
-
-      assert.strictEqual(result.validPath, normalizePath(filePath));
-      assert.strictEqual(result.content, 'editable content');
-      assert.strictEqual(result.stats.size, Buffer.byteLength('editable content'));
-    });
-
-    it('readEditableText rejects files above the configured text limit', async () => {
-      const limit = 1024 * 1024;
-      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
-        const filePath = join(tmpDir, 'too-large.txt');
-        await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
-
-        await assert.rejects(
-          fs.readEditableText(filePath),
-          fsErrorMatcher(ErrorCode.TOO_LARGE, 'File too large for edit'),
-        );
-      });
-    });
-
-    it('readEditableText rejects binary files', async () => {
-      const filePath = join(tmpDir, 'editable.png');
-      await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-
-      await assert.rejects(
-        fs.readEditableText(filePath),
-        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary file detected\.$/),
-      );
-    });
-
+  describe('Text decoding', () => {
     // Issue #11: the 512-byte binary probe must not reject a multi-byte
     // character cut by the sample boundary, but must still reject a byte that
     // no continuation can make valid.
@@ -383,7 +349,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         const filePath = join(tmpDir, name);
         await writeFile(filePath, text);
         assert.strictEqual((await fs.readFile(filePath, { kind: 'full' })).content, text, name);
-        assert.strictEqual((await fs.readEditableText(filePath)).content, text, name);
       }
 
       const invalid = join(tmpDir, 'split-invalid.txt');
@@ -416,7 +381,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
     });
 
-    it('readEditableText rejects non-UTF-8 bytes past the binary probe', async () => {
+    it('read stays lossy past the binary probe', async () => {
       const filePath = join(tmpDir, 'latin1-late.txt');
       await writeFile(
         filePath,
@@ -427,27 +392,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
           Buffer.from('\n'),
         ]),
       );
-      await assert.rejects(
-        fs.readEditableText(filePath),
-        fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
-      );
       // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
       const fullRead = await fs.readFile(filePath, { kind: 'full' });
-      assert.ok(fullRead.content.endsWith('caf\uFFFD\n'));
-
-      const utf16 = join(tmpDir, 'utf16le.txt');
-      await writeFile(
-        utf16,
-        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
-      );
-      // UTF-16 is named at the shared probe, for edit as for read.
-      await assert.rejects(
-        fs.readEditableText(utf16),
-        fsErrorMatcher(
-          ErrorCode.INVALID_INPUT,
-          /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
-        ),
-      );
+      assert.ok(fullRead.content.endsWith('caf�\n'));
     });
   });
 

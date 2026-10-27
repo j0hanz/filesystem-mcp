@@ -9,14 +9,21 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { toPosixPath } from '../src/core/path-utils.ts';
+import { normalizePath, toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
-import { probeDirectory, readText, resolveScanScope, scan } from '../src/core/scan.ts';
+import {
+  probeDirectory,
+  readNamedText,
+  readText,
+  resolveScanScope,
+  scan,
+} from '../src/core/scan.ts';
 import { MIB } from '../src/core/util.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   trySymlink,
   withEnv,
@@ -636,5 +643,97 @@ describe('readText', () => {
   it('readText pre-aborted signal rejects', async () => {
     const path = await put('f.txt', 'text');
     await assert.rejects(readText(fs, path, AbortSignal.abort()));
+  });
+});
+
+describe('readNamedText', () => {
+  let tmpDir: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    tmpDir = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([tmpDir]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('readNamedText returns validated path, content, and stats', async () => {
+    const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');
+
+    const result = await readNamedText(fs, filePath);
+
+    assert.strictEqual(result.validPath, normalizePath(filePath));
+    assert.strictEqual(result.content, 'editable content');
+    assert.strictEqual(result.stats.size, Buffer.byteLength('editable content'));
+  });
+
+  it('readNamedText rejects files above the configured text limit', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const filePath = join(tmpDir, 'too-large.txt');
+      await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
+
+      await assert.rejects(
+        readNamedText(fs, filePath),
+        fsErrorMatcher(ErrorCode.TOO_LARGE, 'File too large for edit'),
+      );
+    });
+  });
+
+  it('readNamedText rejects binary files', async () => {
+    const filePath = join(tmpDir, 'editable.png');
+    await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    await assert.rejects(
+      readNamedText(fs, filePath),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary file detected\.$/),
+    );
+  });
+
+  // Issue #11: the 512-byte binary probe must not reject a multi-byte
+  // character cut by the sample boundary.
+  it('readNamedText accepts UTF-8 split at the sample boundary', async () => {
+    for (const [name, text] of [
+      ['split-cjk.md', '我'.repeat(171)],
+      ['split-emoji.txt', `${'a'.repeat(510)}${'😀'.repeat(4)}`],
+      ['split-latin.txt', `${'a'.repeat(511)}${'é'.repeat(4)}`],
+    ] as const) {
+      const filePath = join(tmpDir, name);
+      await writeFile(filePath, text);
+      assert.strictEqual((await readNamedText(fs, filePath)).content, text, name);
+    }
+  });
+
+  it('readNamedText rejects non-UTF-8 bytes past the binary probe', async () => {
+    const filePath = join(tmpDir, 'latin1-late.txt');
+    await writeFile(
+      filePath,
+      Buffer.concat([
+        Buffer.alloc(600, 0x61),
+        Buffer.from('\ncaf'),
+        Buffer.from([0xe9]),
+        Buffer.from('\n'),
+      ]),
+    );
+    await assert.rejects(
+      readNamedText(fs, filePath),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
+    );
+
+    const utf16 = join(tmpDir, 'utf16le.txt');
+    await writeFile(
+      utf16,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
+    );
+    // UTF-16 is named at the shared probe, for edit as for read.
+    await assert.rejects(
+      readNamedText(fs, utf16),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+      ),
+    );
   });
 });

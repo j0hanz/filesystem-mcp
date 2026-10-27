@@ -18,7 +18,7 @@ import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import type { ResultPaths } from '../core/path.ts';
-import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
+import { createTooLargeError, NOT_UTF8_MESSAGE, readFileBufferWithLimit } from '../core/read.ts';
 import type { ScanOutcome } from '../core/scan.ts';
 import { resolveScanScope, scan } from '../core/scan.ts';
 import {
@@ -370,7 +370,7 @@ async function readReplacementPlan(
   // NUL is valid UTF-8 but marks a binary file, as it does for `read`.
   if (!isUtf8(buffer) || buffer.includes(0)) {
     if (ctx.singleFile) {
-      throw new FsError(ErrorCode.INVALID_INPUT, 'Binary or non-UTF-8 file detected.', validPath);
+      throw new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, validPath);
     }
     return 'binary';
   }
