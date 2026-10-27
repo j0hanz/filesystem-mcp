@@ -2,14 +2,14 @@ import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processEntriesConcurrently, withAbort } from '../core/concurrency.ts';
+import { withAbort } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode, normalizeUnknownError, rethrowIfAborted } from '../core/errors.ts';
+import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
 import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
-import { globEntries, type GlobEntry } from '../core/glob.ts';
-import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
+import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
+import { resolveScanScope, scan, type ScanScope } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -56,6 +56,8 @@ interface CollectResult {
   totalFiles: number;
   totalDirectories: number;
   totalBytes?: number;
+  skippedInaccessible: number;
+  stoppedReason?: 'timeout';
 }
 
 /** The entry's parent folder, relative like the entry; '' at the top level. */
@@ -81,98 +83,81 @@ function entryComparator(sortBy: 'name' | 'size') {
   };
 }
 
-async function collect(rootPath: string, options: CollectOptions): Promise<CollectResult> {
+async function collect(scope: ScanScope, options: CollectOptions): Promise<CollectResult> {
+  const rootPath = scope.root;
   const entries: CollectedEntry[] = [];
   const wantSizes = options.includeSizes || options.sortBy === 'size';
-  let scanned = 0;
   let totalEntries = 0;
   let totalFiles = 0;
   let totalDirectories = 0;
   let totalBytes = 0;
-  let fatalError: Error | undefined;
-  const { pathGuard } = options.fs;
-  const ceiling = pathGuard.allowedRootContaining(rootPath);
   const comparator = entryComparator(options.sortBy);
   const keepBest = (): void => {
     entries.sort(comparator);
     if (entries.length > MAX_LIST_ENTRIES) entries.length = MAX_LIST_ENTRIES;
   };
 
-  await processEntriesConcurrently<GlobEntry>(
-    globEntries({
-      cwd: rootPath,
-      pattern: '**/*',
-      skipIgnored: !options.includeIgnored,
-      ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
-      signal: options.signal,
-      pathGuard,
-      includeHidden: options.includeHidden,
-      // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
-      // globEntries primitive is now 0-based, so subtract one here. options.maxDepth
-      // is guaranteed >= 1 by its PositiveInt schema, so this never underflows.
-      maxDepth: options.maxDepth - 1,
-      onlyFiles: false,
-    }),
+  // onEntry keeps the totals and the top-K buffer itself, so scan stores nothing.
+  const outcome = await scan<never>(
+    scope,
     {
-      signal: options.signal,
+      pathGuard: options.fs.pathGuard,
+      pattern: '**/*',
+      baseNameMatch: false,
+      includeHidden: options.includeHidden,
+      includeIgnored: options.includeIgnored,
+      onlyFiles: false,
+      // ListInputSchema.maxDepth is 1-based (1 = top-level only); scan is
+      // 0-based. options.maxDepth is >= 1 by its PositiveInt schema.
+      maxDepth: options.maxDepth - 1,
       concurrency: PARALLEL_CONCURRENCY,
-      onEntry: () => {
-        scanned++;
-        options.onProgress({ current: scanned });
+      signal: options.signal,
+      onScanned: (n) => {
+        options.onProgress({ current: n });
       },
-      onError: (_entryPath, err) => {
-        fatalError ??= normalizeUnknownError(err);
-      },
-      runEntry: async (_entryPath, entry) => {
-        const entryType: EntryType = resolveEntryType(entry.dirent);
-        const relPath = toPosixRelative(rootPath, entry.path);
-        const name = basename(relPath);
-        // A sensitive-named directory never reaches the walk (globEntries
-        // prunes it via pathGuard), so no ancestor re-check is needed here.
+    },
+    async ({ path: entryPath, type: entryType }) => {
+      const relPath = toPosixRelative(rootPath, entryPath);
+      const name = basename(relPath);
 
-        const accessible = await pathGuard.isEntryAccessible(entry.path);
-        if (!accessible) return;
-
-        let size: number | undefined;
-        if (wantSizes && entryType === 'file') {
-          try {
-            // Race the abort from the first await: the guarded stat validates the
-            // path before statting, and that validation is not abort-aware, so
-            // the race must wrap the whole call.
-            const statted = await withAbort(
-              options.fs.stat(entry.path, { signal: options.signal }),
-              options.signal,
-            );
-            size = statted.stats.size;
-          } catch (error) {
-            rethrowIfAborted(error);
-            // A file can vanish between the walk and the stat; it keeps its place, without a size.
-          }
+      let size: number | undefined;
+      if (wantSizes && entryType === 'file') {
+        try {
+          // Race the abort from the first await: the guarded stat validates the
+          // path before statting, and that validation is not abort-aware, so
+          // the race must wrap the whole call.
+          const statted = await withAbort(
+            options.fs.stat(entryPath, { signal: options.signal }),
+            options.signal,
+          );
+          size = statted.stats.size;
+        } catch (error) {
+          rethrowIfAborted(error);
+          // A file can vanish between the walk and the stat; it keeps its place, without a size.
         }
+      }
 
-        totalEntries++;
-        if (entryType === 'directory') {
-          totalDirectories++;
-        } else if (entryType === 'file') {
-          totalFiles++;
-          if (size !== undefined) totalBytes += size;
-        }
+      totalEntries++;
+      if (entryType === 'directory') {
+        totalDirectories++;
+      } else if (entryType === 'file') {
+        totalFiles++;
+        if (size !== undefined) totalBytes += size;
+      }
 
-        entries.push({
-          name,
-          relativePath: relPath,
-          type: entryType,
-          ...(size !== undefined ? { size } : {}),
-        });
-        // Keep at most the best MAX_LIST_ENTRIES: prune whenever the buffer doubles,
-        // so memory stays O(MAX_LIST_ENTRIES) and the sorts O(n log MAX_LIST_ENTRIES) overall.
-        if (entries.length >= MAX_LIST_ENTRIES * 2) keepBest();
-      },
+      entries.push({
+        name,
+        relativePath: relPath,
+        type: entryType,
+        ...(size !== undefined ? { size } : {}),
+      });
+      // Keep at most the best MAX_LIST_ENTRIES: prune whenever the buffer doubles,
+      // so memory stays O(MAX_LIST_ENTRIES) and the sorts O(n log MAX_LIST_ENTRIES) overall.
+      if (entries.length >= MAX_LIST_ENTRIES * 2) keepBest();
+      return undefined;
     },
   );
 
-  if (fatalError !== undefined) throw fatalError;
-  options.signal.throwIfAborted();
   keepBest();
 
   return {
@@ -181,6 +166,8 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     totalFiles,
     totalDirectories,
     ...(wantSizes ? { totalBytes } : {}),
+    skippedInaccessible: outcome.skippedInaccessible,
+    ...(outcome.stoppedReason === 'timeout' ? { stoppedReason: 'timeout' as const } : {}),
   };
 }
 
@@ -288,6 +275,8 @@ interface ListPageMetadata {
   readonly totalFiles: number;
   readonly totalDirectories: number;
   readonly totalBytes?: number;
+  readonly skippedInaccessible?: number;
+  readonly stoppedReason?: 'timeout';
 }
 
 type ListOutput = ListPageMetadata & {
@@ -323,8 +312,9 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       cursor: args.cursor,
       pageSize: args.maxEntries,
       produce: async () => {
-        const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath);
-        const result = await collect(validDir, {
+        // No signal: a deadline that already fired must reach the scan and come back partial.
+        const scope = await resolveScanScope(resolvedPath, ctx.fs, { allowFile: false });
+        const result = await collect(scope, {
           ...renderOpts,
           maxDepth: args.maxDepth,
           includeHidden: args.includeHidden,
@@ -336,13 +326,18 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         return {
           items: result.entries,
           metadata: {
-            path: validDir,
+            path: scope.root,
             totalEntries: result.totalEntries,
             totalFiles: result.totalFiles,
             totalDirectories: result.totalDirectories,
             ...(result.totalBytes !== undefined ? { totalBytes: result.totalBytes } : {}),
+            ...(result.skippedInaccessible > 0
+              ? { skippedInaccessible: result.skippedInaccessible }
+              : {}),
+            ...(result.stoppedReason ? { stoppedReason: result.stoppedReason } : {}),
           },
-          truncated: result.totalEntries > result.entries.length,
+          truncated:
+            result.totalEntries > result.entries.length || result.stoppedReason !== undefined,
         };
       },
       externalize: (entries, metadata) => {
@@ -359,7 +354,13 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
           totalFiles: metadata.totalFiles,
           totalDirectories: metadata.totalDirectories,
           ...(metadata.totalBytes !== undefined ? { totalBytes: metadata.totalBytes } : {}),
-          ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
+          ...(metadata.skippedInaccessible !== undefined
+            ? { skippedInaccessible: metadata.skippedInaccessible }
+            : {}),
+          ...(metadata.stoppedReason ? { stoppedReason: metadata.stoppedReason } : {}),
+          ...(metadata.totalEntries > entries.length || metadata.stoppedReason !== undefined
+            ? { truncated: true }
+            : {}),
         };
         return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
       },
@@ -387,7 +388,11 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       tool: 'list',
       nextCursor: structured.nextCursor,
       nextArgs: args,
-      ...(structured.totalEntries > MAX_LIST_ENTRIES ? { stoppedReason: 'maxResults' } : {}),
+      // A timeout outranks the MAX_LIST_ENTRIES cap.
+      stoppedReason:
+        structured.stoppedReason ??
+        (structured.totalEntries > MAX_LIST_ENTRIES ? 'maxResults' : undefined),
+      skippedInaccessible: structured.skippedInaccessible,
     });
     const text =
       renderMarkdown(

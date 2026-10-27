@@ -394,10 +394,12 @@ readable with `resources/read` for about 60 seconds. These cached results
 appear in `resources/list`, and each one added or expired sends
 `notifications/resources/list_changed`.
 
-A `find_files` or `search_text` scan that hit a limit ends with
+A `find_files`, `search_text` or `list` scan that hit a limit ends with
 `// scan stopped early: ...` and sets `_meta.stoppedReason` (`maxResults` or
 `timeout`). The totals are then a floor, not a count. Narrow the path or the
-pattern. The [limits table](configuration.md#limits) has the numbers.
+pattern. The [limits table](configuration.md#limits) has the numbers. A scan
+does not follow a symlinked file, and `_meta.skippedInaccessible` counts the
+entries and directories it could not read.
 
 ## Progress, cancellation, and timeouts
 
@@ -409,9 +411,9 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list`, `stat` and `read` stop themselves after 5 seconds by default (the
+- `stat` and `read` stop themselves after 5 seconds by default (the
   server's `--tool-timeout` or `FS_TOOL_TIMEOUT_MS` changes this) with a
-  `TIMEOUT` error. `find_files` and `search_text` stop at the same
+  `TIMEOUT` error. `find_files`, `search_text` and `list` stop at the same
   deadline but return what they found so far, with
   `_meta.stoppedReason: 'timeout'` (see
   [Pagination](#pagination-and-cached-results)). `replace_text` stops at

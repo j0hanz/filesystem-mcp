@@ -18,6 +18,7 @@ import {
 } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
+import { ProgressSession } from '../src/tools/progress.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
@@ -2607,7 +2608,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
   });
 
-  it('TC-FUNC-063a: list does not return a successful partial result after abort', async (t) => {
+  it('TC-FUNC-063a: list returns a partial result after a timeout', async (t) => {
     t.mock.method(AbortSignal, 'timeout', () =>
       AbortSignal.abort(new DOMException('test timeout', 'TimeoutError')),
     );
@@ -2616,8 +2617,64 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: tmpDir, includeIgnored: true },
     });
 
-    assert.strictEqual(result.isError, true);
-    assert.strictEqual(result.structuredContent, undefined);
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+    assert.match(firstTextBlock(result).text ?? '', /scan stopped early: hit the time limit/);
+  });
+
+  it('a timed-out list externalizes a partial tree', async (t) => {
+    const dir = join(tmpDir, 'list_timeout_partial');
+    for (let i = 0; i < 20; i++) await writeTestFile(dir, `f${String(i)}.txt`, 'x');
+    const controller = new AbortController();
+    t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+    // A pre-aborted walk collects nothing, so the deadline fires on the third tick.
+    let ticks = 0;
+    t.mock.method(ProgressSession.prototype, 'set', () => {
+      if (++ticks === 3) controller.abort(new DOMException('test timeout', 'TimeoutError'));
+    });
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, maxEntries: 2 },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const meta = result._meta as { resourceUri?: string; stoppedReason?: string };
+    assert.strictEqual(meta.stoppedReason, 'timeout');
+    assert.ok(meta.resourceUri, 'a partial first page still carries the full-tree URI');
+    const resource = await harness.client.readResource({ uri: meta.resourceUri });
+    const first = resource.contents[0];
+    const tree = JSON.parse(first && 'text' in first ? first.text : '{}') as {
+      stoppedReason?: string;
+      truncated?: boolean;
+    };
+    assert.strictEqual(tree.stoppedReason, 'timeout');
+    assert.strictEqual(tree.truncated, true);
+  });
+
+  it('list counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'list_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: dir, maxDepth: 3 },
+      });
+      const meta = result._meta as {
+        entries?: { relativePath: string }[];
+        skippedInaccessible?: number;
+      };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
+      assert.match(JSON.stringify(result.content), /1 inaccessible file/);
+    } finally {
+      await chmod(locked, 0o755);
+    }
   });
 
   it('TC-LOG-001: Tool execution logs to stderr', async (t) => {
