@@ -24,3 +24,12 @@ _Avoid_: spelling-only rename, case rename
 A move or rename whose destination lands on its own source, in either
 direction (a link onto its target, or onto a link to it); it changes nothing.
 _Avoid_: no-op move, same-path move
+
+## Undo
+
+**Capture**:
+The record of a tool call's filesystem changes, held from before the first
+mutation until the result is returned; abandoned, with a reason, when undo
+becomes impossible or not worth the budget. A capture that is unavailable
+records nothing further, and the mutation still runs.
+_Avoid_: undo session, transaction, undo buffer

@@ -326,9 +326,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   #undoSuffix(structured?: Record<string, unknown>): string {
     const capture = this.capture;
     if (capture === undefined) return '';
-    if (capture.unavailable !== undefined) {
-      if (structured !== undefined) structured['undoUnavailable'] = capture.unavailable;
-      return ` · not undoable: ${capture.unavailable}`;
+    const reason = capture.unavailableReason();
+    if (reason !== undefined) {
+      if (structured !== undefined) structured['undoUnavailable'] = reason;
+      return ` · not undoable: ${reason}`;
     }
     if (capture.records.length === 0) return '';
     // Minted once: the catch path re-runs this after the success path, and a

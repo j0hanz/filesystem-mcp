@@ -111,7 +111,7 @@ describe('UndoJournal', () => {
   it('a ninth concurrent capture is undoable', () => {
     const journal = new UndoJournal(1024 * 1024);
     const caps = Array.from({ length: 9 }, () => journal.beginCapture());
-    assert.ok(caps.every((c) => c.unavailable === undefined));
+    assert.ok(caps.every((c) => c.unavailableReason() === undefined));
     for (const c of caps) c.release();
   });
 
@@ -121,7 +121,7 @@ describe('UndoJournal', () => {
     const one = journal.beginCapture();
     assert.ok(one.reserve(2000));
     assert.strictEqual(one.reserve(2000), false);
-    assert.strictEqual(one.unavailable, 'too large to keep for undo');
+    assert.strictEqual(one.unavailableReason(), 'too large to keep for undo');
     const two = journal.beginCapture();
     assert.strictEqual(two.reserve(2000), false);
     one.release();
@@ -174,7 +174,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const fs = makeFs(cap);
     await fs.writeFile(file, 'new-content');
     await rm(file);
-    assert.strictEqual(cap.unavailable, undefined);
+    assert.strictEqual(cap.unavailableReason(), undefined);
     const rec = cap.records[0];
     if (!isWrite(rec)) assert.fail('expected a write record');
     assert.strictEqual(rec.bytes.toString('utf8'), 'old-content');
@@ -234,7 +234,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailable, undefined);
+    assert.strictEqual(cap.unavailableReason(), undefined);
     const ops = cap.records.map((r) => r.op);
     // post-order: children of sub (none), sub, then tree's files/link, then tree
     assert.ok(ops.includes('write'));
@@ -254,7 +254,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailable, 'contains protected files');
+    assert.strictEqual(cap.unavailableReason(), 'contains protected files');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -264,7 +264,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = new UndoJournal(3).beginCapture();
     const fs = makeFs(cap);
     await fs.writeFile(file, 'x');
-    assert.ok(cap.unavailable !== undefined);
+    assert.ok(cap.unavailableReason() !== undefined);
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -276,7 +276,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = new UndoJournal(3 * 1024).beginCapture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailable, 'too many changes to keep for undo');
+    assert.strictEqual(cap.unavailableReason(), 'too many changes to keep for undo');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -297,7 +297,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailable, 'cannot capture a non-regular entry');
+    assert.strictEqual(cap.unavailableReason(), 'cannot capture a non-regular entry');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -308,7 +308,23 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.cp(src, dest);
-    assert.strictEqual(cap.unavailable, 'copies are not undoable yet');
+    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+  });
+
+  it('after an abandon, mutations run but record nothing, and the first reason wins', async () => {
+    const src = join(tmpDir, 'pin-src.txt');
+    const mid = join(tmpDir, 'pin-mid.txt');
+    await writeFile(src, 'src');
+    await writeFile(mid, 'mid');
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.cp(src, join(tmpDir, 'pin-dest.txt')); // abandons: copies are not undoable yet
+    await fs.writeFile(mid, 'replaced'); // the mutation runs; nothing is recorded
+    await fs.rename(mid, src); // overwrites src; nothing is recorded
+    assert.strictEqual((await lstat(src)).size, 8); // the write and rename both ran
+    await fs.rm(src); // snapshotTree skips; nothing is recorded
+    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+    assert.deepStrictEqual(cap.records, []);
   });
 
   it('POSIX only: overwriting a 0o200 file succeeds and abandons', async (t) => {
@@ -326,7 +342,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.writeFile(file, 'replacement');
-    assert.strictEqual(cap.unavailable, 'could not read the old content');
+    assert.strictEqual(cap.unavailableReason(), 'could not read the old content');
     await import('node:fs/promises').then((m) => m.chmod(file, 0o644));
   });
 
@@ -345,7 +361,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.writeFile(fifo, 'replacement');
-    assert.strictEqual(cap.unavailable, 'cannot capture a write over a non-regular file');
+    assert.strictEqual(cap.unavailableReason(), 'cannot capture a write over a non-regular file');
   });
 
   it('win32 only: deleting a directory link whose target is gone abandons', async (t) => {
@@ -362,7 +378,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(link);
-    assert.strictEqual(cap.unavailable, 'could not type a link whose target is gone');
+    assert.strictEqual(cap.unavailableReason(), 'could not type a link whose target is gone');
   });
 
   it('a move records the exact file id, so batch siblings stay apart', async () => {
@@ -430,7 +446,7 @@ describe('restoreEntry', () => {
     const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
     const fs = new GuardedFileSystem(ctx.pathGuard, cap);
     await run(fs);
-    assert.strictEqual(cap.unavailable, undefined);
+    assert.strictEqual(cap.unavailableReason(), undefined);
     return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
   };
   const dryRunAll = async (entries: UndoEntry[]) => {
@@ -1063,7 +1079,7 @@ describe('restoreEntry', () => {
       const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
         const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
         await run(new GuardedFileSystem(policyCtx.pathGuard, cap));
-        assert.strictEqual(cap.unavailable, undefined);
+        assert.strictEqual(cap.unavailableReason(), undefined);
         return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
       };
       const x = join(tmpDir, 'X');
@@ -1166,7 +1182,7 @@ describe('restoreEntry', () => {
     assert.ok(one.reserve(2000));
     one.push(writeRecord(2000));
     assert.strictEqual(two.reserve(2000), false);
-    assert.strictEqual(two.unavailable, 'too large to keep for undo');
+    assert.strictEqual(two.unavailableReason(), 'too large to keep for undo');
     one.release();
     two.release();
     const three = journal.beginCapture();

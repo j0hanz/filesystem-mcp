@@ -285,11 +285,11 @@ export class GuardedFileSystem {
     // create (each one currently absent), outermost first.
     const capture = this.#capture;
     let created: string[] = [];
-    if (capture && !capture.unavailable) {
+    if (capture) {
       created = await plannedMkdirChain(capture, validPath);
     }
     await fsMkdir(validPath, options);
-    if (capture && !capture.unavailable) {
+    if (capture) {
       capture.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
     }
   }
@@ -316,7 +316,7 @@ export class GuardedFileSystem {
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;
     let saved: SavedFile | undefined;
-    if (capture && !capture.unavailable && !spellingOnly) {
+    if (capture && !spellingOnly) {
       try {
         const dest = await unlessMissing(fsLstat(validNew));
         if (dest === undefined) {
@@ -336,7 +336,7 @@ export class GuardedFileSystem {
     // ponytail: the rename check is identity only. A moved directory whose
     // contents changed after the move is still moved back; upgrade by hashing
     // the tree under `to` before recording it.
-    if (this.#capture && !this.#capture.unavailable) {
+    if (this.#capture) {
       if (saved) this.#capture.push({ op: 'write', path: validNew, ...saved, expect: null });
       const identity = await fsLstat(validNew, { bigint: true }).then(identityOf, () => undefined);
       if (identity !== undefined) {
@@ -370,7 +370,7 @@ export class GuardedFileSystem {
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
       // entry is gone — so the capture refuses instead of lying.
-      if (this.#capture && !this.#capture.unavailable) {
+      if (this.#capture) {
         if (!existing.isFile()) {
           this.#capture.abandon('cannot capture a write over a non-regular file');
         } else {
@@ -421,7 +421,7 @@ export class GuardedFileSystem {
       }
       throw error;
     }
-    if (this.#capture && !this.#capture.unavailable) {
+    if (this.#capture) {
       // A string hashes as its UTF-8 bytes, which is what the write stored.
       const expect = sha256Hex(content);
       this.#capture.push(
@@ -463,7 +463,7 @@ export class GuardedFileSystem {
     // append goes over the budget and reads as not undoable.
     // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
     let saved: SavedFile | undefined;
-    if (this.#capture && !this.#capture.unavailable && existing) {
+    if (this.#capture && existing) {
       try {
         saved = await saveOld(this.#capture, this, validPath, existing);
       } catch {
@@ -521,7 +521,7 @@ export class GuardedFileSystem {
     } finally {
       await handle.close();
     }
-    if (this.#capture && !this.#capture.unavailable) {
+    if (this.#capture) {
       this.#capture.push(
         saved
           ? {
@@ -581,7 +581,7 @@ export class GuardedFileSystem {
     // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
     // recursive rm can fail halfway with files already gone.
     const capture = this.#capture;
-    if (capture && !capture.unavailable) {
+    if (capture) {
       await snapshotTree(capture, this, validPath);
     }
     await fsRm(validPath, options);
