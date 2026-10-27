@@ -13,7 +13,7 @@ import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
 import { UndoJournal } from './core/undo.ts';
 import { MAX_OUTBOUND_RESULT_BYTES, MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
-import type { WatcherRegistry } from './core/watcher-registry.ts';
+import { createWatcherRegistry, type WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
 import { registerPrompts } from './prompts.ts';
 import { registerResources } from './resources.ts';
@@ -35,38 +35,62 @@ export interface FilesystemServerContext {
   disposeRuntimeState(): void;
 }
 
+/** The state that outlives one `McpServer` instance: an endpoint's or a connection's. */
+export interface RuntimeState {
+  readonly pathGuard: PathGuard;
+  readonly resourceStore: ResourceStore;
+  readonly pageStore: PageSnapshotStore;
+  readonly undoJournal: UndoJournal;
+  readonly watcherRegistry: WatcherRegistry;
+  /** Destroys the registry and clears the three stores. Idempotent. */
+  dispose(): void;
+}
+
+export function createRuntimeState(
+  options: ServerOptions = {},
+  hooks: {
+    /** ResourceStore list-changed callback; read the live server lazily. */
+    onResourcesChanged?: () => void;
+    /** ResourceStore read cap; stdio passes MAX_OUTBOUND_RESULT_BYTES. */
+    maxReadResultBytes?: number | undefined;
+  } = {},
+): RuntimeState {
+  const watcherRegistry = createWatcherRegistry();
+  const pageStore = new PageSnapshotStore();
+  const undoJournal = new UndoJournal();
+  const resourceStore = new ResourceStore(hooks.onResourcesChanged, hooks.maxReadResultBytes);
+  let disposed = false;
+  return {
+    pathGuard: new PathGuard(options),
+    resourceStore,
+    pageStore,
+    undoJournal,
+    watcherRegistry,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      watcherRegistry.destroy();
+      pageStore.clear();
+      undoJournal.clear();
+      resourceStore.clear();
+    },
+  };
+}
+
 export async function createServer(
   options: ServerOptions = {},
   extraDeps?: {
-    /** Shared file-watcher registry for the modern (per-request) HTTP leg. */
-    watcherRegistry?: WatcherRegistry;
+    /**
+     * State shared across instances. The HTTP leg builds one for the whole
+     * endpoint and stdio one per connection, so an accepted access grant
+     * survives the request that accepted it (R8), an externalized result
+     * survives to the follow-up resources/read, and the listen-watcher path
+     * validates against the same allowed set. Omitted, the instance builds its
+     * own and disposes it on close.
+     */
+    state?: RuntimeState;
     /** Modern-leg typed notification publisher. */
     notifier?: ServerNotifier;
-    /**
-     * Guard to use instead of constructing one. The HTTP leg builds a single
-     * guard for the whole endpoint and passes it to every per-request instance,
-     * so an accepted access grant survives the request that accepted it (R8) and
-     * the listen-watcher path validates against the same allowed set. Omitted on
-     * stdio, where the instance is pinned for the connection and owns its guard.
-     */
-    pathGuard?: PathGuard;
-    /**
-     * Store to use instead of constructing one. The HTTP modern leg shares one
-     * store across every per-request instance, so a result a tool externalized
-     * in one POST survives to the follow-up resources/read. Omitted on stdio,
-     * where the pinned instance owns its store for the connection.
-     */
-    resourceStore?: ResourceStore;
-    /**
-     * Pagination snapshots shared by every modern HTTP request. Omitted on
-     * stdio, where the connection-owned context clears its store on close.
-     */
-    pageStore?: PageSnapshotStore;
-    /**
-     * Undo history shared by every modern HTTP request. Omitted on stdio,
-     * where the connection-owned context clears its journal on close.
-     */
-    undoJournal?: UndoJournal;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
     /**
@@ -165,23 +189,18 @@ export async function createServer(
     return Promise.resolve();
   };
 
-  const resourceStore =
-    extraDeps?.resourceStore ??
-    new ResourceStore(
-      () => {
-        if (extraDeps?.notifier) {
-          extraDeps.notifier.resourcesChanged();
-          return;
-        }
+  // False when the state is shared across instances and outlives this one.
+  const ownsState = extraDeps?.state === undefined;
+  const state =
+    extraDeps?.state ??
+    createRuntimeState(options, {
+      onResourcesChanged: () => {
         voidSend(server.server.sendResourceListChanged(), 'resource list_changed');
       },
       // A tool hands out no result-store link that this connection's resources/read refuses; file links are gated in writtenFileLinks.
-      extraDeps?.transport === 'stdio' ? MAX_OUTBOUND_RESULT_BYTES : undefined,
-    );
-  const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
-  const undoJournal = extraDeps?.undoJournal ?? new UndoJournal();
-
-  const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);
+      maxReadResultBytes: extraDeps?.transport === 'stdio' ? MAX_OUTBOUND_RESULT_BYTES : undefined,
+    });
+  const { pathGuard, pageStore, undoJournal, resourceStore, watcherRegistry } = state;
   // Recompute once per guard, keyed on the guard's own state rather than on
   // whether it was injected — an injected-but-uninitialized guard would
   // otherwise deny every path. Not unconditional: the HTTP leg shares one guard
@@ -198,7 +217,7 @@ export async function createServer(
     resourceStore,
     cacheScope,
     readOnly: options.readOnly ?? false,
-    ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
+    watcherRegistry,
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),
     ...(extraDeps?.transport ? { transport: extraDeps.transport } : {}),
@@ -208,9 +227,6 @@ export async function createServer(
   registerPrompts(deps);
   registerTools(deps);
 
-  // False when the store is shared across instances and outlives this one.
-  const ownsPages = extraDeps?.pageStore === undefined;
-  const ownsUndo = extraDeps?.undoJournal === undefined;
   let cleanedUp = false;
   const context: FilesystemServerContext = {
     mcp: server,
@@ -218,9 +234,8 @@ export async function createServer(
     disposeRuntimeState() {
       if (cleanedUp) return;
       cleanedUp = true;
-      if (ownsPages) pageStore.clear();
-      if (ownsUndo) undoJournal.clear();
       resourceDisposable.dispose();
+      if (ownsState) state.dispose();
     },
   };
   const previousOnClose = server.server.onclose;

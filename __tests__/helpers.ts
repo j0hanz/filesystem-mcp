@@ -30,11 +30,8 @@ import {
   isNodeError,
 } from '../src/core/errors.ts';
 import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.ts';
-import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
-import { UndoJournal } from '../src/core/undo.ts';
-import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
 import type { WatcherRegistry } from '../src/core/watcher-registry.ts';
-import { createServer } from '../src/server.ts';
+import { createRuntimeState, createServer } from '../src/server.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import { ALL_TOOLS } from '../src/tools/index.ts';
 import { startHttpServer } from '../src/transport.ts';
@@ -238,7 +235,7 @@ export type ElicitHandler = (request: ElicitRequest) => Promise<ElicitResult> | 
  * connects 2025-era instances only, which silently routed these flows through
  * the legacy shim — so this drives `createMcpHandler` through its fetch
  * function; the URL is never dialed. `legacy: 'reject'` plus the era assertion
- * below make a silent legacy fallback impossible. One `PathGuard` is shared
+ * below make a silent legacy fallback impossible. One runtime state is shared
  * across the per-request instances, like the production HTTP leg, so an
  * accepted access grant survives the request that accepted it.
  */
@@ -253,16 +250,12 @@ export async function createElicitationClientPair(
    */
   options: { noElicitation?: boolean } = {},
 ) {
-  const sharedRegistry = createWatcherRegistry();
-  const sharedPathGuard = new PathGuard({ cliAllowedDirs: allowedDirs });
-  await sharedPathGuard.recomputeAllowedDirectories();
+  const state = createRuntimeState({ cliAllowedDirs: allowedDirs });
+  await state.pathGuard.recomputeAllowedDirectories();
 
   const handler = createMcpHandler(
     async () => {
-      const serverCtx = await createServer(
-        { cliAllowedDirs: allowedDirs },
-        { watcherRegistry: sharedRegistry, pathGuard: sharedPathGuard },
-      );
+      const serverCtx = await createServer({ cliAllowedDirs: allowedDirs }, { state });
       return serverCtx.mcp;
     },
     { legacy: 'reject' },
@@ -295,7 +288,7 @@ export async function createElicitationClientPair(
     close: async () => {
       await client.close();
       await handler.close();
-      sharedRegistry.destroy();
+      state.dispose();
     },
   };
 }
@@ -313,8 +306,6 @@ export async function createTestHttpHarness(
   options: { legacy?: 'stateless' | 'reject' } = {},
 ): Promise<TestHttpContext> {
   const bus = new InMemoryServerEventBus();
-  const sharedRegistry = createWatcherRegistry();
-
   const notifier = {
     toolsChanged: () => {},
     promptsChanged: () => {},
@@ -323,27 +314,27 @@ export async function createTestHttpHarness(
       bus.publish({ kind: 'resource_updated', uri });
     },
   };
-  // One store for the whole harness, mirroring http.ts's sharedStore/
-  // sharedPageStore: createMcpHandler builds a fresh McpServer per request in
-  // both eras, so a per-request store would discard an externalized result
-  // before a follow-up resources/read (or a legacy request, which never
-  // shares an instance at all) could see it.
-  const sharedStore = new ResourceStore(() => {
-    notifier.resourcesChanged();
-  });
-  const sharedPageStore = new PageSnapshotStore();
-  const sharedUndoJournal = new UndoJournal();
+  // One state for the whole harness, mirroring http.ts: createMcpHandler
+  // builds a fresh McpServer per request in both eras, so a per-request store
+  // would discard an externalized result before a follow-up resources/read (or
+  // a legacy request, which never shares an instance at all) could see it.
+  const state = createRuntimeState(
+    { cliAllowedDirs: allowedDirs },
+    {
+      onResourcesChanged: () => {
+        notifier.resourcesChanged();
+      },
+    },
+  );
+  await state.pathGuard.recomputeAllowedDirectories();
   const handler = createMcpHandler(
     async ({ era }) => {
       const serverCtx = await createServer(
         { cliAllowedDirs: allowedDirs },
         {
-          watcherRegistry: sharedRegistry,
+          state,
           notifier,
           era,
-          resourceStore: sharedStore,
-          pageStore: sharedPageStore,
-          undoJournal: sharedUndoJournal,
           // As http.ts passes it: a guard that started refusing on HTTP fails here.
           transport: 'http',
         },
@@ -367,12 +358,11 @@ export async function createTestHttpHarness(
   return {
     client,
     handler,
-    registry: sharedRegistry,
+    registry: state.watcherRegistry,
     close: async () => {
       await client.close();
       await handler.close();
-      sharedUndoJournal.clear();
-      sharedRegistry.destroy();
+      state.dispose();
     },
   };
 }
