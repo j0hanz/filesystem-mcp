@@ -50,7 +50,7 @@ interface CollectOptions extends RenderOptions {
   onProgress: (progress: { current: number; total?: number }) => void;
 }
 
-interface CollectResult {
+export interface CollectResult {
   entries: CollectedEntry[];
   totalEntries: number;
   totalFiles: number;
@@ -277,7 +277,22 @@ interface ListPageMetadata {
   readonly totalDirectories: number;
   readonly totalBytes?: number;
   readonly skippedInaccessible?: number;
-  readonly stoppedReason?: 'timeout';
+  readonly stoppedReason?: 'timeout' | 'maxResults';
+}
+
+/** Past MAX_LIST_ENTRIES the list stopped at its own cap; a timeout outranks that. */
+export function listPageMetadata(path: string, result: CollectResult): ListPageMetadata {
+  const stoppedReason =
+    result.stoppedReason ?? (result.totalEntries > MAX_LIST_ENTRIES ? 'maxResults' : undefined);
+  return {
+    path,
+    totalEntries: result.totalEntries,
+    totalFiles: result.totalFiles,
+    totalDirectories: result.totalDirectories,
+    ...(result.totalBytes !== undefined ? { totalBytes: result.totalBytes } : {}),
+    ...(result.skippedInaccessible > 0 ? { skippedInaccessible: result.skippedInaccessible } : {}),
+    ...(stoppedReason ? { stoppedReason } : {}),
+  };
 }
 
 type ListOutput = ListPageMetadata & {
@@ -326,17 +341,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         });
         return {
           items: result.entries,
-          metadata: {
-            path: scope.root,
-            totalEntries: result.totalEntries,
-            totalFiles: result.totalFiles,
-            totalDirectories: result.totalDirectories,
-            ...(result.totalBytes !== undefined ? { totalBytes: result.totalBytes } : {}),
-            ...(result.skippedInaccessible > 0
-              ? { skippedInaccessible: result.skippedInaccessible }
-              : {}),
-            ...(result.stoppedReason ? { stoppedReason: result.stoppedReason } : {}),
-          },
+          metadata: listPageMetadata(scope.root, result),
           truncated:
             result.totalEntries > result.entries.length || result.stoppedReason !== undefined,
         };
@@ -389,10 +394,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       tool: 'list',
       nextCursor: structured.nextCursor,
       nextArgs: args,
-      // A timeout outranks the MAX_LIST_ENTRIES cap.
-      stoppedReason:
-        structured.stoppedReason ??
-        (structured.totalEntries > MAX_LIST_ENTRIES ? 'maxResults' : undefined),
+      stoppedReason: structured.stoppedReason,
       skippedInaccessible: structured.skippedInaccessible,
     });
     const text =
