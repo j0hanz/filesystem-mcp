@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 
 import type { StoppedReason } from './concurrency.ts';
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isSkippableErrno } from './errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
 import { Logger } from './observability.ts';
@@ -274,7 +274,8 @@ export async function scan<R>(
 
 /**
  * True when `dir` counts as skipped: fs.glob reads an unreadable directory as
- * empty, so opening it is how the Scan learns it skipped one. A sensitive
+ * empty, so opening it is how the Scan learns it skipped one. Any failure but
+ * an abort counts, as it does for an entry's verdict. A sensitive
  * directory, under either spelling, is never counted: the count would reveal it.
  * The open races the signal, so a stalled mount ends the probe at the deadline;
  * an abort rejects.
@@ -305,7 +306,7 @@ export async function probeDirectory(
     return false;
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (!isSkippableErrno(error) || pathGuard.isSensitive(dir)) return false;
+    if (pathGuard.isSensitive(dir)) return false;
     try {
       return !pathGuard.isSensitive(await realpath(dir));
     } catch {

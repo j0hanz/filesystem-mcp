@@ -361,6 +361,24 @@ describe('scan', () => {
     }
   });
 
+  it('a probe that fails with any other error is counted', async (t) => {
+    await files('a.txt', 'busy/b.txt');
+    const realOpendir = fsPromises.opendir;
+    t.mock.method(fsPromises, 'opendir', (path: string) =>
+      path.endsWith('busy')
+        ? Promise.reject(Object.assign(new Error('resource busy'), { code: 'EBUSY' }))
+        : realOpendir(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      const out = await scan({ root }, base(), byPath);
+      assert.equal(out.skippedInaccessible, 1);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('named file errors fail the call', async () => {
     await files('a.txt', '.env');
     await assert.rejects(
