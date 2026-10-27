@@ -54,9 +54,10 @@ Over stdio, a file is linkable when:
 
 - the caller wrote the content and it is text: the exact encoded
   `resources/read` result fits, measured as `wrapRead` measures it;
-- the file is not text: its base64 length is at most the limit;
+- the file is not text: its base64 length plus the result around it (URI,
+  MIME type, JSON framing) is at most the limit, which is exact;
 - the caller knows only the size of a text file (a read slice, a `create`
-  append): its raw size is at most the limit.
+  append): its raw size plus that same result is at most the limit.
 
 `read` and the write tools both ask the module before they link.
 
@@ -66,13 +67,11 @@ Over stdio, a file is linkable when:
   by its pre-check.
 - `create` with `append` over stdio links more often: any text file up to
   the limit, not only one under about 1.7 MB. A binary write links up to
-  the exact base64 limit, without the 64 KiB slack.
+  the exact size `resources/read` serves, without the 64 KiB slack.
 - A residual is accepted. A text file the server has only the size of can
   still be linked and then refused by `wrapRead`'s exact measure. That
   needs escapes that double the file past the limit (more than about
-  5.1 MB of quotes or backslashes), or a raw size within a few hundred
-  bytes of the limit, where the URI and MIME fields push the result over.
-  The refusal is a clean `TOO_LARGE`, not a dropped connection. The code
+  5.1 MB of quotes or backslashes). The refusal is a clean `TOO_LARGE`, not a dropped connection. The code
   marks the shortcut in `canLinkFile`, with what would make it worth
   measuring the file instead.
 - The refusal texts do not change, so the contract snapshot does not

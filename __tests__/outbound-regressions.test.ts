@@ -462,6 +462,24 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.ok(!result.content.some((block) => block.type === 'resource_link'));
   });
 
+  it('read of an svg slice whose base64 alone fills the limit links nothing', async () => {
+    // 3/4 of the limit encodes to exactly the limit; the resource wrapper tips it over.
+    const svg = join(root, 'edge.svg');
+    const open = '<svg xmlns="http://www.w3.org/2000/svg">\n';
+    const close = '\n</svg>\n';
+    const size = 3 * (MAX_OUTBOUND_RESULT_BYTES / 4);
+    await writeFile(svg, `${open}${'x'.repeat(size - open.length - close.length)}${close}`);
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: svg, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
   it('create append over stdio links a 2 MiB text file', async () => {
     const result = await harness.client.callTool(
       {

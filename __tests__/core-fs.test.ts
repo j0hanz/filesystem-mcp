@@ -769,8 +769,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const path = join(tmpDir, 'stdio-links.txt');
       const link = (size: number) =>
         writtenFileLinks(path, 'text/plain', size, false, undefined, 'stdio').resourceUri;
-      assert.ok(link(MAX_OUTBOUND_RESULT_BYTES));
-      assert.strictEqual(link(MAX_OUTBOUND_RESULT_BYTES + 1), undefined);
+      // The URI and MIME fields count, so an exact-limit file has no room left.
+      assert.ok(link(MAX_OUTBOUND_RESULT_BYTES - KIB));
+      assert.strictEqual(link(MAX_OUTBOUND_RESULT_BYTES), undefined);
     });
   });
 

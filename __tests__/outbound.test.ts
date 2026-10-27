@@ -133,17 +133,28 @@ describe('canLinkFile', () => {
     assert.ok(canLinkFile(undefined, text(100 * MIB)));
   });
 
-  it('size-only text links up to the limit', () => {
-    assert.ok(canLinkFile('stdio', text(MAX)));
-    assert.ok(!canLinkFile('stdio', text(MAX + 1)));
+  // What wrapRead measures around the file's bytes: the result with an empty body.
+  const envelope = (mimeType: string, body: 'text' | 'blob') =>
+    Buffer.byteLength(JSON.stringify({ contents: [{ uri, mimeType, [body]: '' }] }), 'utf8');
+
+  it('size-only text links up to the limit, wrapper included', () => {
+    const room = MAX - envelope('text/plain', 'text');
+    assert.ok(canLinkFile('stdio', text(room)));
+    assert.ok(!canLinkFile('stdio', text(room + 1)));
+    assert.ok(!canLinkFile('stdio', text(MAX)));
   });
 
-  it('binary links up to the exact base64 limit', () => {
-    const binary = (size: number) =>
-      ({ uri, mimeType: 'application/octet-stream', size, kind: 'binary' }) as const;
+  it('binary links up to the exact base64 limit, wrapper included', () => {
+    const mimeType = 'image/svg+xml';
+    const binary = (size: number) => ({ uri, mimeType, size, kind: 'image' }) as const;
+    // Base64 alone exactly at the limit: the wrapper pushes the read over.
     assert.strictEqual(base64EncodedBytes(3 * (MAX / 4)), MAX);
-    assert.ok(canLinkFile('stdio', binary(3 * (MAX / 4))));
-    assert.ok(!canLinkFile('stdio', binary(3 * (MAX / 4) + 1)));
+    assert.ok(!canLinkFile('stdio', binary(3 * (MAX / 4))));
+    const room = MAX - envelope(mimeType, 'blob');
+    const fits = 3 * Math.floor(room / 4);
+    assert.ok(base64EncodedBytes(fits) <= room);
+    assert.ok(canLinkFile('stdio', binary(fits)));
+    assert.ok(!canLinkFile('stdio', binary(fits + 1)));
   });
 
   it('written text is measured exactly', () => {

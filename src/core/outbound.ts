@@ -125,15 +125,23 @@ export interface LinkCandidate {
 /**
  * Whether stdio's resources/read would serve `file`, so a link to it is one
  * the client can follow. Written text is measured as the read encodes it;
- * otherwise the rule is the read's own size pre-check. HTTP always serves.
+ * otherwise the file's floor plus the result around it must fit, which is
+ * exact for base64. HTTP always serves.
  */
 export function canLinkFile(transport: Transport, file: LinkCandidate): boolean {
   if (transport !== 'stdio') return true;
   // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
-  if (file.kind !== 'text') return readFloorOver(transport, file.size, true) === undefined;
-  if (file.content === undefined) {
-    // shortcut: size-only text links skip escaping and the envelope, so wrapRead can still refuse > ~5.1 MB of quotes/backslashes or a file a few hundred bytes under the limit; measure the file if clients hit it (ADR-006)
-    return readFloorOver(transport, file.size, false) === undefined;
+  const binary = file.kind !== 'text';
+  if (binary || file.content === undefined) {
+    // The result wrapRead measures, with the file's bytes left out.
+    const wrapper = Buffer.byteLength(
+      JSON.stringify({
+        contents: [{ uri: file.uri, mimeType: file.mimeType, [binary ? 'blob' : 'text']: '' }],
+      }),
+      'utf8',
+    );
+    // shortcut: size-only text links skip escaping, so wrapRead can still refuse > ~5.1 MB of quotes/backslashes; measure the file if clients hit it (ADR-006)
+    return readResultFloor(file.size, binary) + wrapper <= MAX_OUTBOUND_RESULT_BYTES;
   }
   const result = {
     contents: [{ uri: file.uri, mimeType: file.mimeType, text: file.content }],
