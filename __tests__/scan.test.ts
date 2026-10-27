@@ -273,6 +273,27 @@ describe('scan', () => {
     assert.equal(out.stoppedReason, undefined);
   });
 
+  it('an early failure frees its slot for an entry refused before it ran', async (t) => {
+    await files('a.txt', 'b.txt');
+    const all = await scan({ root }, base(), byPath);
+    const [first, second] = all.results;
+    const verdict = guard.entryVerdict.bind(guard);
+    // `b`'s verdict is done when `a` is admitted, so `b` asks for a slot before `a` runs.
+    t.mock.method(guard, 'entryVerdict', async (path: string) => {
+      if (path === first) await sleep(30);
+      return verdict(path);
+    });
+    const out = await scan({ root }, base({ maxEntries: 1 }), async (entry) => {
+      if (entry.path === first) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return entry.path;
+    });
+    assert.deepEqual(out.results, [second]);
+    assert.equal(out.skippedInaccessible, 1);
+    assert.equal(out.stoppedReason, undefined);
+  });
+
   it('abort beats cap', async () => {
     await files('a.txt', 'b.txt', 'c.txt');
     const controller = new AbortController();

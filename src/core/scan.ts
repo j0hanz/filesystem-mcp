@@ -144,26 +144,31 @@ export async function scan<R>(
   // `maxEntries` admits exactly the first usable entries a caller may mutate.
   let admissions: Promise<void> = Promise.resolve();
   // Admitted entries whose onEntry has not settled: one may fail and free its slot.
-  const inFlight = new Set<Promise<unknown>>();
-  const admit = async (path: string, previous: Promise<void>, release: () => void) => {
+  const inFlight = new Set<Promise<undefined>>();
+  /** Resolves to the callback that frees the entry's inFlight slot, or undefined when refused. */
+  const admit = async (
+    path: string,
+    previous: Promise<void>,
+    release: () => void,
+  ): Promise<(() => void) | undefined> => {
     try {
       const verdict = await pathGuard.entryVerdict(path);
       await previous;
       // A count after a fatal error is moot: the scan rethrows it.
-      if (verdict === 'sensitive') return false;
+      if (verdict === 'sensitive') return undefined;
       if (verdict === 'inaccessible') {
         skippedInaccessible++;
-        return false;
+        return undefined;
       }
       for (;;) {
-        if (fatal !== undefined) return false;
+        if (fatal !== undefined) return undefined;
         if (signal?.aborted) {
           cut = true;
-          return false;
+          return undefined;
         }
         if (cap !== undefined && total >= cap) {
           capped ??= 'maxResults';
-          return false;
+          return undefined;
         }
         if (maxEntries !== undefined && started >= maxEntries) {
           if (inFlight.size > 0) {
@@ -171,10 +176,17 @@ export async function scan<R>(
             continue;
           }
           capped ??= 'maxFiles';
-          return false;
+          return undefined;
         }
         started++;
-        return true;
+        // Visible to later admissions before the chain is released, so a refusal
+        // waits for this entry even if it has not started running yet.
+        const slot = Promise.withResolvers<undefined>();
+        inFlight.add(slot.promise);
+        return () => {
+          inFlight.delete(slot.promise);
+          slot.resolve(undefined);
+        };
       }
     } finally {
       release();
@@ -202,8 +214,9 @@ export async function scan<R>(
     previous: Promise<void>,
     release: () => void,
   ): Promise<void> => {
-    if (!(await admit(path, previous, release))) return;
-    const settled = (async () => {
+    const free = await admit(path, previous, release);
+    if (free === undefined) return;
+    const done = await (async () => {
       try {
         return { result: await onEntry({ path, type, index }) };
       } catch {
@@ -217,9 +230,7 @@ export async function scan<R>(
         return undefined;
       }
     })();
-    inFlight.add(settled);
-    const done = await settled;
-    inFlight.delete(settled);
+    free();
     if (done === undefined) return;
     const { result } = done;
     scanned++;
