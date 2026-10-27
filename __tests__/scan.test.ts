@@ -198,6 +198,20 @@ describe('scan', () => {
     assert.equal(over.stoppedReason, 'maxFiles');
   });
 
+  it('maxEntries admits the first entries in walk order', async (t) => {
+    await files('a.txt', 'b.txt', 'c.txt', 'd.txt');
+    const all = await scan({ root }, base(), byPath);
+    const verdict = guard.entryVerdict.bind(guard);
+    // The first entry's verdict finishes last, so admission cannot follow verdict order.
+    t.mock.method(guard, 'entryVerdict', async (path: string) => {
+      if (path === all.results[0]) await sleep(30);
+      return verdict(path);
+    });
+    const out = await scan({ root }, base({ maxEntries: 2 }), byPath);
+    assert.deepEqual(out.results, all.results.slice(0, 2));
+    assert.equal(out.stoppedReason, 'maxFiles');
+  });
+
   it('abort beats cap', async () => {
     await files('a.txt', 'b.txt', 'c.txt');
     const controller = new AbortController();

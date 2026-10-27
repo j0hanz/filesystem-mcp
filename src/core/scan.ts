@@ -128,23 +128,43 @@ export async function scan<R>(
     }
   };
 
-  const visit = async (path: string, type: EntryType, index: number): Promise<void> => {
-    const verdict = await pathGuard.entryVerdict(path);
-    if (verdict === 'sensitive') return;
-    if (verdict === 'inaccessible') {
-      skippedInaccessible++;
-      return;
+  // Verdicts run concurrently, but admission (the counts and the caps) runs in
+  // walk order: each entry awaits the previous entry's admission, so
+  // `maxEntries` admits exactly the first usable entries a caller may mutate.
+  let admissions: Promise<void> = Promise.resolve();
+  const admit = async (path: string, previous: Promise<void>, release: () => void) => {
+    try {
+      const verdict = await pathGuard.entryVerdict(path);
+      await previous;
+      if (verdict === 'sensitive') return false;
+      if (verdict === 'inaccessible') {
+        skippedInaccessible++;
+        return false;
+      }
+      if (signal?.aborted) return false;
+      if (cap !== undefined && total >= cap) {
+        capped ??= 'maxResults';
+        return false;
+      }
+      if (maxEntries !== undefined && started >= maxEntries) {
+        capped ??= 'maxFiles';
+        return false;
+      }
+      started++;
+      return true;
+    } finally {
+      release();
     }
-    if (signal?.aborted) return;
-    if (cap !== undefined && total >= cap) {
-      capped ??= 'maxResults';
-      return;
-    }
-    if (maxEntries !== undefined && started >= maxEntries) {
-      capped ??= 'maxFiles';
-      return;
-    }
-    started++;
+  };
+
+  const visit = async (
+    path: string,
+    type: EntryType,
+    index: number,
+    previous: Promise<void>,
+    release: () => void,
+  ): Promise<void> => {
+    if (!(await admit(path, previous, release))) return;
     let result: R | undefined;
     try {
       result = await onEntry({ path, type, index });
@@ -187,7 +207,12 @@ export async function scan<R>(
       if (signal?.aborted || capped !== undefined || fatal !== undefined) break;
       await drainProbes();
       const at = index++;
-      await run(() => visit(path, resolveEntryType(dirent), at));
+      const previous = admissions;
+      let release!: () => void;
+      admissions = new Promise((resolve) => {
+        release = resolve;
+      });
+      await run(() => visit(path, resolveEntryType(dirent), at, previous, release));
     }
     if (!signal?.aborted && capped === undefined) await drainProbes();
   } catch (error) {
