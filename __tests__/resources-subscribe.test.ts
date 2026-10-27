@@ -11,6 +11,7 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
 import { createServer } from '../src/server.ts';
 import {
+  assertOneNotificationPerRound,
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
@@ -18,6 +19,18 @@ import {
   waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
+
+describe('assertOneNotificationPerRound', () => {
+  it('accepts one notification, and two rounds a debounce apart', () => {
+    assertOneNotificationPerRound([10], 'one');
+    assertOneNotificationPerRound([10, 70], 'macOS split round');
+  });
+
+  it('rejects two notifications in one round, and none at all', () => {
+    assert.throws(() => assertOneNotificationPerRound([10, 11], 'dup'), /one debounce round/);
+    assert.throws(() => assertOneNotificationPerRound([], 'silent'), /no notification/);
+  });
+});
 
 describe('Resource subscriptions round-trip', () => {
   let tmpDir: string;
@@ -87,10 +100,10 @@ describe('Resource subscriptions round-trip', () => {
   it('a repeated subscribe is one subscription: one notification, released by one unsubscribe', async () => {
     const filePath = await writeTestFile(tmpDir, 'dup.txt', 'initial');
     const uri = buildFileResourceUri(filePath);
-    let count = 0;
+    const arrivals: number[] = [];
 
     pair.client.setNotificationHandler('notifications/resources/updated', () => {
-      count += 1;
+      arrivals.push(performance.now());
     });
 
     // Subscribing twice for one URI is the same subscription on the wire. A
@@ -100,16 +113,16 @@ describe('Resource subscriptions round-trip', () => {
     await pair.client.subscribeResource({ uri });
 
     await writeFile(filePath, 'changed');
-    await waitFor(() => count > 0, 2000);
-    // Settle past the 50ms debounce so a second sink would have fired by now.
+    await waitFor(() => arrivals.length > 0, 2000);
+    // Count rounds, not raw notifications: one write may legitimately span two.
     await setTimeout(200);
-    assert.strictEqual(count, 1, 'a doubled subscribe must not double the notifications');
+    assertOneNotificationPerRound(arrivals, 'a doubled subscribe');
 
-    count = 0;
+    const seen = arrivals.length;
     await pair.client.unsubscribeResource({ uri });
     await writeFile(filePath, 'changed-again');
     await setTimeout(300);
-    assert.strictEqual(count, 0, 'one unsubscribe must end a doubled subscription');
+    assert.strictEqual(arrivals.length, seen, 'one unsubscribe must end a doubled subscription');
   });
 
   it('unsubscribing a URI never subscribed does not drop another holder watcher', async () => {

@@ -12,6 +12,7 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
 import { listenSubscriptionUris } from '../src/transport/shared.ts';
 import {
+  assertOneNotificationPerRound,
   bootHttpTest,
   cleanupTestRoot,
   createTestHttpHarness,
@@ -255,14 +256,14 @@ describe('HTTP watcher fan-out (multi-subscriber)', () => {
   it('both subscribers receive the update for one file URI', async () => {
     const filePath = join(tmpDir, 'fanout.txt');
     const uri = buildFileResourceUri(filePath);
-    let countA = 0;
-    let countB = 0;
+    const arrivalsA: number[] = [];
+    const arrivalsB: number[] = [];
 
     clientA.setNotificationHandler('notifications/resources/updated', (n) => {
-      if ((n.params as { uri: string }).uri === uri) countA += 1;
+      if ((n.params as { uri: string }).uri === uri) arrivalsA.push(performance.now());
     });
     clientB.setNotificationHandler('notifications/resources/updated', (n) => {
-      if ((n.params as { uri: string }).uri === uri) countB += 1;
+      if ((n.params as { uri: string }).uri === uri) arrivalsB.push(performance.now());
     });
 
     subA = await clientA.listen({ resourceSubscriptions: [uri] });
@@ -270,10 +271,10 @@ describe('HTTP watcher fan-out (multi-subscriber)', () => {
 
     await writeFile(filePath, 'changed');
 
-    await waitFor(() => countA >= 1 && countB >= 1);
+    await waitFor(() => arrivalsA.length > 0 && arrivalsB.length > 0);
     await setTimeout(150);
-    assert.strictEqual(countA, 1, 'subscriber A must receive exactly one update');
-    assert.strictEqual(countB, 1, 'subscriber B must receive exactly one update');
+    assertOneNotificationPerRound(arrivalsA, 'subscriber A');
+    assertOneNotificationPerRound(arrivalsB, 'subscriber B');
 
     await subA.close();
     await subB.close();
