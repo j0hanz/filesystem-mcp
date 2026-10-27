@@ -85,8 +85,19 @@ export async function readText(
     // A size of 0 is also what procfs and other virtual files report while
     // holding text, so those still read to EOF.
     if (size === 0) {
-      bytes = await handle.readFile({ signal });
-      if (bytes.length > maxFileSize) return { kind: 'tooLarge', size: bytes.length };
+      // Read to EOF in chunks, stopping once past the cap: such a file may never end.
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for (;;) {
+        signal?.throwIfAborted();
+        const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(chunk, 0, READ_CHUNK_BYTES, null);
+        if (bytesRead === 0) break;
+        total += bytesRead;
+        if (total > maxFileSize) return { kind: 'tooLarge', size: total };
+        chunks.push(chunk.subarray(0, bytesRead));
+      }
+      bytes = Buffer.concat(chunks, total);
     } else {
       bytes = Buffer.allocUnsafe(size);
       let filled = 0;

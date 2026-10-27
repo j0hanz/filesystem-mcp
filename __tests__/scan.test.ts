@@ -640,6 +640,26 @@ describe('readText', () => {
     });
   });
 
+  it('readText bounds the read of a file that reports size 0', async (t) => {
+    // procfs and some FUSE files report size 0 and stream on.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 0 })));
+      return handle;
+    });
+    const small = await readText(fs, await put('virtual.txt', 'text\n'));
+    assert.equal(small.kind, 'text');
+    const path = await put('stream.txt', Buffer.alloc(4 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      const verdict = await readText(fs, path);
+      assert.equal(verdict.kind, 'tooLarge');
+      if (verdict.kind !== 'tooLarge') return;
+      assert.ok(verdict.size > MIB && verdict.size < 2 * MIB, String(verdict.size));
+    });
+  });
+
   it('readText pre-aborted signal rejects', async () => {
     const path = await put('f.txt', 'text');
     await assert.rejects(readText(fs, path, AbortSignal.abort()));
