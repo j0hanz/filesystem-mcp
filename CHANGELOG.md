@@ -25,15 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`find_files`, `search_text`, `replace_text` and `list` count the entries
   and directories they could not read in `skippedInaccessible`.** Before, an
-  unreadable folder looked empty, and `replace_text` and `list` skipped such
-  entries without a word.
+  unreadable folder looked empty and `list` skipped such entries without a
+  word; `replace_text` skipped most of them without a word and reported a file
+  it was denied permission to read as a failure.
 - **`replace_text` returns its files and diff in walk order.** Before, they
   came back in a different order from one run to the next.
 - **`replace_text` honours `maxFiles` in walk order and no longer spends it on
   entries it skips.** Before, a skipped file used up a slot.
 - **`search_text` on a file you name but cannot read fails with the reason.**
   Before, it returned an empty result.
-
 - **A pending entry that disappears while the prompt is open no longer fails
   the whole call.** In `move`, `copy`, `create` and `delete`, that entry gets
   its own result and the rest proceeds.

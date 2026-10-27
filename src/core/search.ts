@@ -307,7 +307,7 @@ export interface SearchContentOutcome {
     filesScanned: number;
     filesMatched: number;
     truncated: boolean;
-    /** Files the guard rejected or that could not be stat'd. */
+    /** Entries and directories the scan could not read. */
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
