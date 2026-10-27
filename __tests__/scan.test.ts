@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, realpath } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
@@ -10,7 +10,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
-import { resolveScanScope, scan } from '../src/core/scan.ts';
+import { probeDirectory, resolveScanScope, scan } from '../src/core/scan.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
@@ -157,7 +157,8 @@ describe('scan', () => {
     await files('a.txt', 'b.txt', 'c.txt');
     const detailed = guard.validateExistingPathDetailed.bind(guard);
     t.mock.method(guard, 'validateExistingPathDetailed', async (path: string) => {
-      if (path.endsWith('b.txt')) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      if (path.endsWith('b.txt'))
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
       return detailed(path);
     });
     const out = await scan({ root }, base(), byPath);
@@ -341,6 +342,32 @@ describe('scan', () => {
     });
     assert.deepEqual(out.results, []);
     assert.equal(out.stoppedReason, 'timeout');
+  });
+
+  it('a failed probe of a sensitive directory is not counted', async (t) => {
+    const missing = join(root, 'gone');
+    assert.equal(await probeDirectory(missing, guard), true);
+    t.mock.method(guard, 'isSensitive', (path: string) => path === missing);
+    assert.equal(await probeDirectory(missing, guard), false);
+  });
+
+  it('a failed probe through a link to a sensitive directory is not counted', async (t) => {
+    if (skipUnlessPosix(t)) return;
+    await files('locked/b.txt');
+    const locked = join(root, 'locked');
+    const link = join(root, 'link');
+    if (!(await trySymlink(locked, link, () => t.skip('symlink creation not permitted')))) {
+      return;
+    }
+    const real = await realpath(locked);
+    await chmod(locked, 0o000);
+    try {
+      assert.equal(await probeDirectory(link, guard), true);
+      t.mock.method(guard, 'isSensitive', (path: string) => path === real);
+      assert.equal(await probeDirectory(link, guard), false);
+    } finally {
+      await chmod(locked, 0o755);
+    }
   });
 
   it('resolveScanScope', async () => {

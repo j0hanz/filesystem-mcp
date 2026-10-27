@@ -1,4 +1,4 @@
-import { opendir } from 'node:fs/promises';
+import { opendir, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { StoppedReason } from './concurrency.ts';
@@ -114,15 +114,9 @@ export async function scan<R>(
     void tracked.finally(() => pending.delete(tracked));
   };
 
-  // fs.glob reads an unreadable directory as empty; opening it is how the
-  // Scan learns it skipped one.
   const probes: string[] = [scope.root];
   const probe = async (dir: string): Promise<void> => {
-    try {
-      await (await opendir(dir)).close();
-    } catch (error) {
-      if (isSkippableErrno(error)) skippedInaccessible++;
-    }
+    if (await probeDirectory(dir, pathGuard)) skippedInaccessible++;
   };
   const drainProbes = async (): Promise<void> => {
     for (let dir = probes.shift(); dir !== undefined; dir = probes.shift()) {
@@ -245,6 +239,25 @@ export async function scan<R>(
     skippedInaccessible,
     ...(stoppedReason ? { stoppedReason } : {}),
   };
+}
+
+/**
+ * True when `dir` counts as skipped: fs.glob reads an unreadable directory as
+ * empty, so opening it is how the Scan learns it skipped one. A sensitive
+ * directory, under either spelling, is never counted: the count would reveal it.
+ */
+export async function probeDirectory(dir: string, pathGuard: PathGuard): Promise<boolean> {
+  try {
+    await (await opendir(dir)).close();
+    return false;
+  } catch (error) {
+    if (!isSkippableErrno(error) || pathGuard.isSensitive(dir)) return false;
+    try {
+      return !pathGuard.isSensitive(await realpath(dir));
+    } catch {
+      return true;
+    }
+  }
 }
 
 /** A named file: the guard's errors and onEntry's fail the call, unless the signal aborted. */
