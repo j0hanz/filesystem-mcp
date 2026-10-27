@@ -3,7 +3,8 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 import { randomUUID } from 'node:crypto';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { jsonBytesOver, MIB } from './util.ts';
+import { jsonBytesOver } from './outbound.ts';
+import { MIB } from './util.ts';
 
 // ─── TTL + LRU map ───────────────────────────────────────────────────────────
 

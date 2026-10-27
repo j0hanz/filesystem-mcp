@@ -30,10 +30,11 @@ import {
   sameIdentity,
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
+import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
-import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
+import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,

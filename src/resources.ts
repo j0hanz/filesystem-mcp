@@ -28,16 +28,12 @@ import {
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
 import { Logger, voidSend } from './core/observability.ts';
+import { base64EncodedBytes, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './core/outbound.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
 import { entryReadResult } from './core/store.ts';
-import {
-  base64EncodedBytes,
-  getMaxTextFileSize,
-  jsonBytesOver,
-  MAX_OUTBOUND_RESULT_BYTES,
-} from './core/util.ts';
+import { getMaxTextFileSize } from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,

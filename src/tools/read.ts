@@ -13,6 +13,7 @@ import {
   type FileKind,
   isKnownBinaryExtension,
 } from '../core/mime.ts';
+import { base64EncodedBytes } from '../core/outbound.ts';
 import {
   BINARY_FILE_MESSAGE,
   isBinaryRefusal,
@@ -27,7 +28,6 @@ import {
   validateReadRange,
 } from '../core/schema.ts';
 import {
-  base64EncodedBytes,
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,

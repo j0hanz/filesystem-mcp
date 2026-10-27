@@ -4,14 +4,10 @@ import { basename } from 'node:path';
 
 import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
+import { base64EncodedBytes, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './outbound.ts';
 import { IS_WINDOWS, toPosixPath } from './path-utils.ts';
 import { countLines } from './read.ts';
-import {
-  base64EncodedBytes,
-  getMaxTextFileSize,
-  jsonBytesOver,
-  MAX_OUTBOUND_RESULT_BYTES,
-} from './util.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 const KIB = 1024;
 

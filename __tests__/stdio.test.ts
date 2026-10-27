@@ -11,7 +11,8 @@ import { setTimeout } from 'node:timers/promises';
 
 import { isNodeError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { MAX_STDIO_REQUEST_ID_BYTES, MIB } from '../src/core/util.ts';
+import { MAX_STDIO_REQUEST_ID_BYTES } from '../src/core/outbound.ts';
+import { MIB } from '../src/core/util.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
