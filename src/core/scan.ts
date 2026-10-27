@@ -247,11 +247,16 @@ export async function scan<R>(
       try {
         return { result: await onEntry({ path, type, index }) };
       } catch {
+        // A file swapped for a sensitive link after admission leaves no trace;
+        // a re-check that throws counts the entry, as the failure does.
+        const verdict = signal?.aborted
+          ? undefined
+          : await pathGuard.entryVerdict(path).catch(() => undefined);
         // An abort is the stop, not this entry's failure.
         if (signal?.aborted) cut = true;
         else {
-          countInaccessible(path);
-          // Counted as inaccessible, it frees its maxEntries slot.
+          if (verdict !== 'sensitive') countInaccessible(path);
+          // Dropped or counted as inaccessible, it frees its maxEntries slot.
           started--;
         }
         return undefined;

@@ -155,6 +155,28 @@ describe('scan', () => {
     assert.equal(out.skippedInaccessible, 1);
   });
 
+  it('an entry swapped for a sensitive link before onEntry fails is not counted', async (t) => {
+    await files('a', '.env', 'b.txt');
+    const a = join(root, 'a');
+    let linked = true;
+    const out = await scan({ root }, base(), async (entry) => {
+      if (entry.path.endsWith(`${sep}a`)) {
+        await fsPromises.rm(a);
+        linked = await trySymlink(
+          join(root, '.env'),
+          a,
+          () => t.skip('symlink creation not permitted'),
+          'file',
+        );
+        throw new Error('refused');
+      }
+      return entry.path;
+    });
+    if (!linked) return;
+    assert.deepEqual(rel(out.results), ['b.txt']);
+    assert.equal(out.skippedInaccessible, 0);
+  });
+
   it('odd verdict error counts the entry', async (t) => {
     await files('a.txt', 'b.txt', 'c.txt');
     const detailed = guard.validateExistingPathDetailed.bind(guard);
