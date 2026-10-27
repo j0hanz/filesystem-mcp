@@ -563,6 +563,42 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'first\nsecond\n');
   });
 
+  it('create append reports the write time when the post-append stat fails', async (t) => {
+    const file = await writeTestFile(tmpDir, 'append_stat_fails.txt', 'first\n');
+    let appended = false;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const { appendFile, stat: statFile } = GuardedFileSystem.prototype;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'appendFile',
+      async function (this: GuardedFileSystem, ...args: Parameters<typeof appendFile>) {
+        const done = await appendFile.apply(this, args);
+        appended = true;
+        return done;
+      },
+    );
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'stat',
+      function (this: GuardedFileSystem, ...args: Parameters<typeof statFile>) {
+        return appended ? Promise.reject(new Error('stat failed')) : statFile.apply(this, args);
+      },
+    );
+    const before = Date.now();
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: file, content: 'second\n', append: true }] },
+    });
+    const after = Date.now();
+    t.mock.restoreAll();
+
+    assert.notStrictEqual(result.isError, true);
+    const modified = (result.structuredContent as { files: { modified: string }[] }).files[0]
+      ?.modified;
+    const at = Date.parse(modified ?? '');
+    assert.ok(at >= before && at <= after, modified);
+  });
+
   it('TC-FUNC-009f: create with append:true creates a missing file', async () => {
     const file = join(tmpDir, 'append_new.txt');
     const result = await harness.client.callTool({

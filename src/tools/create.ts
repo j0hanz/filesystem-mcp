@@ -18,9 +18,10 @@ import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '..
 import { destExists, destIdentity, type Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
+import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { isTotalFailure, postWriteStat, runOverPaths } from './batch.ts';
+import { isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -314,6 +315,7 @@ async function createOne(
     const appended = await ctx.fs.appendFile(path, content, {
       signal: ctx.signal,
     });
+    const writtenAt = new Date();
     validPath = appended.validPath;
     // The append is the commit point: the bytes are on disk, so
     // everything below is best-effort RESULT METADATA, not part of the
@@ -365,17 +367,18 @@ async function createOne(
         { kind },
       ),
     };
+    // An append did not create the file, so the write time is no birth time.
     created = (stats?.birthtime ?? EPOCH).toISOString();
-    modified = (stats?.mtime ?? EPOCH).toISOString();
+    modified = modifiedAfterWrite(stats, writtenAt);
   } else {
     const written = await ctx.fs.writeFile(path, content, {
       signal: ctx.signal,
     });
     validPath = written.validPath;
-    const nowIso = new Date().toISOString();
-    const fileStats = await postWriteStat(ctx, written.validPath);
-    created = fileStats?.birthtime.toISOString() ?? nowIso;
-    modified = fileStats?.mtime.toISOString() ?? nowIso;
+    const writtenAt = new Date();
+    const fileStats = await statAfterWrite(ctx.fs, written.validPath);
+    created = (fileStats?.birthtime ?? writtenAt).toISOString();
+    modified = modifiedAfterWrite(fileStats, writtenAt);
     meta = buildWrittenFileMeta({
       validPath: written.validPath,
       content,

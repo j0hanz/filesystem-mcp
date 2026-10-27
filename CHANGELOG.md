@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` stats each file right after it writes it.** Before, it
   stat'd only the first changed file, after the whole scan, so its link's
   `lastModified` could be a later writer's.
+- **`create` with `append` reports the write time when it cannot stat the
+  file afterwards.** Before, `modified` read 1970-01-01.
 - **`read` over stdio no longer offers a link that `resources/read`
   refuses.** Before, a slice of a text file just under the 10 MiB file size
   limit came back with a `resourceUri` and a `resource_link` that failed with

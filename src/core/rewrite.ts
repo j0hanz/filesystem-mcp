@@ -132,13 +132,13 @@ async function apply<T>(
 }
 
 /** The modified rule after a real write. */
-function modifiedAfterWrite(stats: Stats | undefined, writtenAt: Date): string {
+export function modifiedAfterWrite(stats: Stats | undefined, writtenAt: Date): string {
   return (stats?.mtime ?? writtenAt).toISOString();
 }
 
 /** Post-write stat for advisory metadata: undefined when the stat fails
  * (concurrent delete, etc.), so callers fall back to the write time. */
-async function statAfterWrite(
+export async function statAfterWrite(
   fs: GuardedFileSystem,
   validPath: string,
 ): Promise<Stats | undefined> {
