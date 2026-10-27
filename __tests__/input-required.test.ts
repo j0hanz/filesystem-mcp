@@ -200,36 +200,6 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(isInputRequiredResult(result), true);
   });
 
-  it('sealed identities survive minting and reissue', async () => {
-    const identities = [
-      { path: '/x', itemType: 'directory' as const, dev: 1, ino: 2, birthtimeMs: 3 },
-    ];
-    const opts = {
-      op: 'delete' as const,
-      pending: ['/x'],
-      buildInputs: () => [{ key: 'confirm_0', message: 'Delete /x?' }],
-    };
-    const first = await buildInputRequired(
-      { op: 'delete', paths: ['/x'], identities },
-      opts.buildInputs(),
-      bindContext(),
-    );
-    const original = await requestStateCodec.verify(first.requestState ?? '', bindContext());
-    assert.deepStrictEqual(original.identities, identities);
-    const second = await pendingRoundTrip(
-      {
-        requestState: () => original,
-        droppedInputResponseKeys: ['confirm_0'],
-        serverCtx: bindContext(),
-      },
-      opts,
-    );
-    assert.ok(second);
-    const reissued = await requestStateCodec.verify(second.requestState ?? '', bindContext());
-    assert.deepStrictEqual(reissued.identities, identities);
-    assert.strictEqual(reissued.reissued, true);
-  });
-
   it('4. pendingRoundTrip same-op + same paths returns undefined (proceed)', async () => {
     const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());

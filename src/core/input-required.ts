@@ -8,9 +8,10 @@
 // `requestState` round-trips through the client (attacker-controlled on
 // re-entry), so it is sealed with the SDK's HMAC-SHA256 codec. The payload binds
 // each confirmation to its operation kind and sorted target-path set (spec R9,
-// R10); the handler additionally rejects any retry whose decoded paths do not
-// match the retried request's parameters (the codec only proves the state was
-// not tampered — it cannot see the current args).
+// R10). For the access grant, `pendingRoundTrip` additionally rejects any retry
+// whose decoded paths do not match the retried request's parameters (the codec
+// only proves the state was not tampered — it cannot see the current args);
+// delete/move/copy/create ask again via `confirmation.ts` instead.
 import type {
   ClientCapabilities,
   InputRequest,
@@ -44,8 +45,9 @@ interface SealedIdentity extends EntryIdentity {
 /**
  * Integrity-protected state minted into an `input_required` result and echoed
  * back by the client on retry. `paths` is the sorted canonical set of target
- * paths the confirmation covers; the handler compares it to the retried
- * request's parameters and rejects a mismatch (R9).
+ * paths the confirmation covers; for the access grant the handler compares it
+ * to the retried request's parameters and rejects a mismatch (R9), while the
+ * Confirmation ops ask again on a mismatch (see `confirmation.ts`).
  */
 export interface PendingState {
   readonly op: PendingOp;
@@ -313,8 +315,8 @@ export async function pendingRoundTrip(
 /**
  * Round-trip key for `pendingSorted[index]` — the single home of the
  * `confirm_${i}` convention. The build side mints it with the map index; the
- * read side re-derives it from the same sorted pending set the requestState
- * binds (R9), so a format change lands here once instead of at six call
+ * read side re-derives it from the index in the list the requestState
+ * SEALED (not the current pending set; see `confirmation.ts`), so a format change lands here once instead of at six call
  * sites.
  */
 export function confirmKey(index: number): string {

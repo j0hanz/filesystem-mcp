@@ -129,10 +129,11 @@ describe('Confirmation gaps', () => {
       async ({ root, pair, prompts }) => {
         const source = await writeTestFile(root, 'src.txt', 'SOURCE');
         const destination = await writeTestFile(root, 'dest.txt', 'ORIGINAL');
-        await pair.client.callTool({
+        const result = await pair.client.callTool({
           name: 'move',
           arguments: { copy: true, moves: [{ source, destination }] },
         });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(prompts(), 2);
         assert.strictEqual(await readFile(destination, 'utf8'), 'SOURCE');
       },
@@ -147,10 +148,11 @@ describe('Confirmation gaps', () => {
       },
       async ({ root, pair, prompts }) => {
         const path = await writeTestFile(root, 'dst.txt', 'ORIGINAL');
-        await pair.client.callTool({
+        const result = await pair.client.callTool({
           name: 'create',
           arguments: { files: [{ path, content: 'NEW' }] },
         });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(prompts(), 2);
         assert.strictEqual(await readFile(path, 'utf8'), 'NEW');
       },

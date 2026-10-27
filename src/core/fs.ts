@@ -868,6 +868,8 @@ export function identityOf(stats: Stats): EntryIdentity {
   };
 }
 
+// On FAT/exFAT the file id comes from the directory slot, so a recreated file can
+// match every field; swaps there go undetected.
 export function sameIdentity(a: EntryIdentity, b: EntryIdentity): boolean {
   return (
     a.itemType === b.itemType &&

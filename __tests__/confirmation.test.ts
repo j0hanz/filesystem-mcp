@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import { confirm, type Confirmed, type ConfirmItem } from '../src/core/confirmation.ts';
 import { type EntryIdentity, UNKNOWN_IDENTITY } from '../src/core/fs.ts';
 import {
+  describeRefusal,
   type PendingCtx,
   type PendingState,
   requestStateCodec,
@@ -191,6 +192,22 @@ describe('Confirmation', () => {
     const state = await asRound(await run(ctx(sealed({ a: 1 }), {}, ['confirm_0']), [item('a')]));
     assert.strictEqual(state.reissued, true);
     assert.deepStrictEqual(state.identities, [{ path: 'a', ...id(1) }]);
+  });
+
+  it('reissued-dropped-again: refuses without a new round', async () => {
+    const done = asConfirmed(
+      await run(ctx(sealed({ a: 1 }, { reissued: true }), {}, ['confirm_0']), [item('a')]),
+    );
+    assert.deepStrictEqual(done.verdict('a'), {
+      refused: describeRefusal({ droppedInputResponseKeys: ['confirm_0'] }, 'confirm_0'),
+    });
+  });
+
+  it('vanish-then-dropped: a vanished entry’s dropped key does not re-issue', async () => {
+    const done = asConfirmed(
+      await run(ctx(sealed({ a: 1, b: 2 }), both, ['confirm_0']), [item('b', 2)]),
+    );
+    assert.strictEqual(done.verdict('b'), 'proceed');
   });
 
   it('unknown-identity: an unchanged unknown identity proceeds', async () => {

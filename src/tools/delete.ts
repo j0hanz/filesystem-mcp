@@ -308,7 +308,10 @@ async function handleDelete(
       path: plan.validPath,
       identity: identityOf(plan.firstStats.stats),
       required: plan.pending,
-      message: `Delete "${plan.validPath}" and all its contents?`,
+      message:
+        plan.itemType === 'directory'
+          ? `Delete "${plan.validPath}" and all its contents?`
+          : `Delete "${plan.validPath}"?`,
     })),
   );
   if (isInputRequiredResult(confirmed)) return confirmed;
