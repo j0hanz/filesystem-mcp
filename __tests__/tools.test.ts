@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
@@ -2621,6 +2622,33 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
     assert.match(firstTextBlock(result).text ?? '', /scan stopped early: hit the time limit/);
+  });
+
+  it('list reports a deadline that fires during a size stat', async (t) => {
+    const dir = join(tmpDir, 'list_timeout_stat');
+    await writeTestFile(dir, 'a.txt', 'x');
+    const controller = new AbortController();
+    t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realStat = GuardedFileSystem.prototype.stat;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'stat',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realStat>) {
+        if (!a[0].endsWith('a.txt')) return realStat.apply(this, a);
+        // Fire once list's abort race is armed, as a real stat would.
+        await setImmediatePromise();
+        const timeout = new DOMException('test timeout', 'TimeoutError');
+        controller.abort(timeout);
+        throw timeout;
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, includeSizes: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
   });
 
   it('a timed-out list externalizes a partial tree', async (t) => {

@@ -4,7 +4,7 @@ import * as z from 'zod/v4';
 
 import { withAbort } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
+import { ErrorCode } from '../core/errors.ts';
 import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
@@ -132,7 +132,8 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
           );
           size = statted.stats.size;
         } catch (error) {
-          rethrowIfAborted(error);
+          // A deadline's TimeoutError is no AbortError: the signal says the scan was cut.
+          if (options.signal.aborted) throw error;
           // A file can vanish between the walk and the stat; it keeps its place, without a size.
         }
       }
