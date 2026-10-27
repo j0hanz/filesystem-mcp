@@ -16,7 +16,7 @@ import {
   MAX_SEARCH_RESULTS,
   MAX_TOOL_INPUT_ELEMENTS,
 } from '../src/core/util.ts';
-import { createServer } from '../src/server.ts';
+import { createRuntimeState, createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -1918,18 +1918,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeFile(outsideFile, 'test content');
 
     let notified = false;
-    const notifier = {
-      toolsChanged: () => {},
-      promptsChanged: () => {},
-      resourcesChanged: () => {
-        notified = true;
+    // The ResourceStore's list-changed hook is the channel every transport
+    // routes resources/list_changed through.
+    const state = createRuntimeState(
+      { cliAllowedDirs: [rootDir] },
+      {
+        onResourcesChanged: () => {
+          notified = true;
+        },
       },
-      resourceUpdated: () => {},
-    };
+    );
 
     try {
       await withBoundary(parentDir, async () => {
-        const serverCtx = await createServer({ cliAllowedDirs: [rootDir] }, { notifier });
+        const serverCtx = await createServer({ cliAllowedDirs: [rootDir] }, { state });
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
         const client = new Client(
           { name: 'test-harness', version: '1.0.0' },
@@ -1964,6 +1966,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         }
       });
     } finally {
+      state.dispose();
       await cleanupTestRoot(parentDir);
     }
   });

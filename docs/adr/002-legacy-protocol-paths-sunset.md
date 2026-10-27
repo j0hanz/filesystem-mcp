@@ -24,8 +24,9 @@ when `era === 'legacy'`, calls the deprecated `listRoots()` to push-seed
 allowed roots (it is also the only caller of
 `PathGuard.applyGrant(dir, 'workspace')` in
 [`src/core/path.ts`](../../src/core/path.ts); the `'workspace'` kind, the
-`accessGrants` list and the `bases` filter in `recomputeAllowedDirectories`
-exist only to tell a declared root from an approved grant); the `resources/subscribe` / `resources/unsubscribe` request
+`accessGrants` list and the `accessGrants` clause of the `bases` filter in
+`recomputeAllowedDirectories` exist only to tell a declared root from an
+approved grant); the `resources/subscribe` / `resources/unsubscribe` request
 handlers in `registerResources`
 ([`src/resources.ts`](../../src/resources.ts)), registered only when `deps.era !== 'modern'`; and the deprecated
 `getClientCapabilities()` fallback in `toToolCtx`
@@ -125,6 +126,7 @@ project.
   (2026-10-14), after the last amendment, without the marker. Its only caller
   is `seedRootsFromClient`. With workspace grants gone every grant is an
   access grant, so the removal also deletes the `kind` parameter of
-  `applyGrant` and its branch, the `accessGrants` list, and the `bases`
-  filter in `recomputeAllowedDirectories`: every base is then a configured
-  root.
+  `applyGrant` and its branch, the `accessGrants` list, and the
+  `accessGrants` clause of the `bases` filter in
+  `recomputeAllowedDirectories`. The filter itself stays, keeping only
+  configured roots, so a relative path still never resolves against a grant.
