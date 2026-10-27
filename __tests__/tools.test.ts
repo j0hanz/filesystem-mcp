@@ -3279,6 +3279,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
+  it('replace_text failure rows name same-named files by their full relative paths', async () => {
+    const dir = join(tmpDir, 'regex_cap_rows');
+    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES + 1 - 5) + 'FIND\n';
+    await writeTestFile(dir, 'a/big.txt', body);
+    await writeTestFile(dir, 'b/big.txt', body);
+    const swept = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'FIND', replacement: 'FOUND', isRegex: true },
+    });
+    assert.strictEqual(swept.isError, true);
+    const text = firstTextBlock(swept).text ?? '';
+    assert.match(text, /a\/big\.txt: TOO_LARGE/);
+    assert.match(text, /b\/big\.txt: TOO_LARGE/);
+  });
+
   it('replace_text counts a binary file without a match', async () => {
     const dir = join(tmpDir, 'binrep_nomatch');
     await writeTestFile(dir, 'text.txt', 'foo\n');
