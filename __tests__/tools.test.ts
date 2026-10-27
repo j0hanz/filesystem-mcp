@@ -3316,7 +3316,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       'open',
       async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
         if (basename(dirname(a[0])) === 'replace_walk_order') {
-          if (++opened === 12) releaseFirst();
+          // Three others: fewer than the smallest pool (4) and scan window (8),
+          // which hold later files back until the first one settles.
+          if (++opened === 4) releaseFirst();
           // The walk's first file finishes last.
           if (basename(a[0]) === first) await othersOpened;
         }
