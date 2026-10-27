@@ -41,7 +41,7 @@ export interface Rewritten<T> {
   readonly written: boolean;
   readonly modified: string;
   /** Built on demand: replace_text links only its walk-first file. */
-  report(): WrittenFileReport;
+  readonly report: () => WrittenFileReport;
 }
 
 export type Skipped =

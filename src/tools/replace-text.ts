@@ -1,6 +1,6 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { Buffer, isUtf8 } from 'node:buffer';
+import { Buffer } from 'node:buffer';
 
 import * as z from 'zod/v4';
 
@@ -14,11 +14,12 @@ import {
   Problem,
   SKIPPABLE_FS_CODES,
 } from '../core/errors.ts';
-import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import type { ResultPaths } from '../core/path.ts';
-import { createTooLargeError, NOT_UTF8_MESSAGE, readFileBufferWithLimit } from '../core/read.ts';
+import { createTooLargeError, NOT_UTF8_MESSAGE } from '../core/read.ts';
+import type { Rewritten } from '../core/rewrite.ts';
+import { rewriteEntry } from '../core/rewrite.ts';
 import type { ScanOutcome } from '../core/scan.ts';
 import { resolveScanScope, scan } from '../core/scan.ts';
 import {
@@ -100,6 +101,7 @@ type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
   totalMatches: number;
   filesScanned: number;
   skippedBinary?: number;
+  skippedTooLarge?: number;
   skippedInaccessible?: number;
   resultsTruncated?: boolean;
   diff?: string;
@@ -280,16 +282,10 @@ interface ReplaceContext {
   dryRun: boolean;
   replacement: string;
   matcher: ReplacementMatcher;
-  maxFileSize: number;
   signal: AbortSignal | undefined;
   fs: GuardedFileSystem;
+  transport: 'stdio' | 'http' | undefined;
   singleFile: boolean;
-}
-
-interface ReplacementPlan {
-  matchCount: number;
-  originalContent: string;
-  updatedContent: string;
 }
 
 /** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
@@ -300,41 +296,58 @@ interface Patch {
 type EntryOutcome =
   | ({ kind: 'changed'; path: string; matches: number } & Patch)
   | { kind: 'binary' }
+  | { kind: 'tooLarge' }
   | { kind: 'failed'; path: string; error: unknown };
 
 /** What scan holds until the walk ends: a failure's error never reaches it. */
 type ScannedOutcome = Exclude<EntryOutcome, { kind: 'failed' }> & { index: number };
 
-/** `onChanged` receives the plan, whose contents the outcome does not carry, and says if its diff was refused. */
+/** `onChanged` receives the rewrite, whose contents the outcome does not carry, and says if its diff was refused. */
 async function processEntry(
   entryPath: string,
   ctx: ReplaceContext,
-  onChanged: (plan: ReplacementPlan) => Patch,
+  onChanged: (done: Rewritten<number>) => Patch,
 ): Promise<EntryOutcome | undefined> {
-  const { dryRun, signal } = ctx;
+  const { dryRun, signal, matcher, replacement } = ctx;
   // Discovery/read failures on a walked file are counted as inaccessible; a
   // failed write is the caller's edit not landing, so it is always reported.
   const write = { started: false };
 
   try {
-    // Lock the read→write per file so a concurrent writer is not lost; a dry
-    // run never writes and skips the lock.
-    const plan = dryRun
-      ? await readReplacementPlan(entryPath, ctx)
-      : await ctx.fs.lockForWrite(entryPath, async () => {
-          const planned = await readReplacementPlan(entryPath, ctx);
-          if (planned !== undefined && planned !== 'binary') {
-            write.started = true;
-            await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
-          }
-          return planned;
-        });
-    if (plan === undefined) return undefined;
-    if (plan === 'binary') return { kind: 'binary' };
+    // The Rewrite locks the read→write per file so a concurrent writer is not
+    // lost; a dry run never writes and skips the lock.
+    const done = await rewriteEntry(
+      { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
+      async (bytes) => {
+        if (!matcher.testBuffer(bytes)) return undefined;
+        const { content, matchCount } = await matcher.replace(
+          bytes.toString('utf-8'),
+          replacement,
+          signal,
+        );
+        if (matchCount === 0) return undefined;
+        // The write is the Rewrite's next step: from here a failure is the
+        // caller's edit not landing.
+        write.started = true;
+        return { content, result: matchCount, write: true };
+      },
+    );
+    if (done === undefined) return undefined;
+    if (done.kind !== 'text') {
+      // A named file is the whole request: refuse it, don't skip it.
+      if (ctx.singleFile) {
+        throw done.kind === 'tooLarge'
+          ? createTooLargeError(done.size, getMaxTextFileSize(), entryPath)
+          : new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, entryPath);
+      }
+      // Only bytes that decode to UTF-8 losslessly survive the string round
+      // trip, so an undecodable file is skipped as a binary one is.
+      return done.kind === 'tooLarge' ? { kind: 'tooLarge' } : { kind: 'binary' };
+    }
 
     // Reached only after the write succeeds (or in dryRun, where there is no
     // write): a failed write must not count the file as changed.
-    return { kind: 'changed', path: entryPath, matches: plan.matchCount, ...onChanged(plan) };
+    return { kind: 'changed', path: entryPath, matches: done.result, ...onChanged(done) };
   } catch (error) {
     // A timeout/cancel aborts the whole scan, not just this file: scan reports
     // the run as stoppedReason 'timeout' and counts nothing for it.
@@ -350,38 +363,6 @@ async function processEntry(
     }
     return { kind: 'failed', path: entryPath, error };
   }
-}
-
-async function readReplacementPlan(
-  validPath: string,
-  ctx: ReplaceContext,
-): Promise<ReplacementPlan | 'binary' | undefined> {
-  const { matcher, replacement, maxFileSize, signal } = ctx;
-  await using fileHandle = await ctx.fs.open(validPath);
-  const stats = await fileHandle.stat();
-  if (stats.size > maxFileSize) {
-    throw createTooLargeError(stats.size, maxFileSize, validPath);
-  }
-
-  const buffer = await readFileBufferWithLimit(fileHandle, maxFileSize, validPath, signal);
-  if (!matcher.testBuffer(buffer)) return undefined;
-  // Only bytes that decode to UTF-8 losslessly survive the string round trip;
-  // anything else would be written back with U+FFFD in place of every bad byte.
-  // NUL is valid UTF-8 but marks a binary file, as it does for `read`.
-  if (!isUtf8(buffer) || buffer.includes(0)) {
-    if (ctx.singleFile) {
-      throw new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, validPath);
-    }
-    return 'binary';
-  }
-
-  const originalContent = buffer.toString('utf-8');
-  const { content: updatedContent, matchCount } = await matcher.replace(
-    originalContent,
-    replacement,
-    signal,
-  );
-  return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
 /** Kept patches by walk index at or above the prefix, and which walk indices are done. */
@@ -427,7 +408,7 @@ function patchWithinBudget(
   budget: DiffBudget,
   index: number,
   header: string,
-  plan: ReplacementPlan,
+  done: Rewritten<number>,
 ): Patch {
   // First-fit over the settled walk-order prefix is final, and later patches
   // only add to what the final pass uses before this index. A lower patch
@@ -436,7 +417,7 @@ function patchWithinBudget(
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
   if (remaining === 0) return { diffTruncated: true };
-  const patch = unifiedPatch(header, plan.originalContent, plan.updatedContent);
+  const patch = unifiedPatch(header, done.before, done.after);
   if (patch === undefined || patch.length > remaining) return { diffTruncated: true };
   budget.stored.set(index, patch);
   return {};
@@ -449,6 +430,7 @@ interface ReplaceSummary {
   filesChanged: number;
   failedFiles: number;
   skippedBinary: number;
+  skippedTooLarge: number;
   failures: Failure[];
   changedFiles: { index: number; path: string; matches: number }[];
   changedFilesTruncated: boolean;
@@ -463,6 +445,7 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
     filesChanged: 0,
     failedFiles: 0,
     skippedBinary: 0,
+    skippedTooLarge: 0,
     failures: [],
     changedFiles: [],
     changedFilesTruncated: false,
@@ -518,6 +501,7 @@ function buildSearchAndReplaceStructuredResult(
     totalMatches: summary.totalMatches,
     filesScanned: outcome.scanned,
     ...(summary.skippedBinary ? { skippedBinary: summary.skippedBinary } : {}),
+    ...(summary.skippedTooLarge ? { skippedTooLarge: summary.skippedTooLarge } : {}),
     ...(outcome.skippedInaccessible ? { skippedInaccessible: outcome.skippedInaccessible } : {}),
     // Failures are capped at MAX_FAILURES independently of the changed-file
     // cap, so either cap can leave `results` shorter than `summary.total`.
@@ -537,7 +521,6 @@ async function handleSearchAndReplace(
   structured: SearchAndReplaceOutput;
   link?: ContentBlock;
 }> {
-  const maxFileSize = getMaxTextFileSize();
   // No signal: a deadline that already fired still yields a timeout result.
   const scope = await resolveScanScope(args.path, ctx.fs, { allowFile: true });
 
@@ -546,8 +529,8 @@ async function handleSearchAndReplace(
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
   // The first changed file in walk order is the one the resource_link points
-  // at; keep what was written so the link needs no read-back.
-  let primary: { index: number; path: string; content: string } | undefined;
+  // at; keep its report so the link needs no read-back.
+  let primary: { index: number; report: Rewritten<number>['report'] } | undefined;
   // Relative to the root, not to the walked directory: `a.ts` from a run over
   // `src` would name `<root>/a.ts` when passed back.
   const paths = ctx.fs.pathGuard.resultPaths(scope.root);
@@ -568,9 +551,9 @@ async function handleSearchAndReplace(
       dryRun: args.dryRun,
       replacement: args.replacement,
       matcher,
-      maxFileSize,
       signal: ctx.signal,
       fs: ctx.fs,
+      transport: ctx.transport,
       singleFile: scope.explicitFile !== undefined,
     };
 
@@ -601,12 +584,12 @@ async function handleSearchAndReplace(
         },
       },
       async (entry) => {
-        const o = await processEntry(entry.path, context, (plan) => {
+        const o = await processEntry(entry.path, context, (done) => {
           if (primary === undefined || entry.index < primary.index) {
-            primary = { index: entry.index, path: entry.path, content: plan.updatedContent };
+            primary = { index: entry.index, report: done.report };
           }
           return includeDiff
-            ? patchWithinBudget(budget, entry.index, paths.show(entry.path), plan)
+            ? patchWithinBudget(budget, entry.index, paths.show(entry.path), done)
             : {};
         });
         if (o === undefined) return undefined;
@@ -636,6 +619,9 @@ async function handleSearchAndReplace(
       case 'binary':
         summary.skippedBinary++;
         break;
+      case 'tooLarge':
+        summary.skippedTooLarge++;
+        break;
       case 'changed':
         summary.totalMatches += o.matches;
         summary.filesChanged++;
@@ -655,25 +641,8 @@ async function handleSearchAndReplace(
 
   const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args);
 
-  let primaryModified: string | undefined;
-  if (primary && !args.dryRun) {
-    try {
-      primaryModified = (
-        await ctx.fs.stat(primary.path, { signal: ctx.signal })
-      ).stats.mtime.toISOString();
-    } catch {
-      /* result metadata only; the write already succeeded */
-    }
-  }
-  const link = primary
-    ? buildWrittenFileMeta({
-        validPath: primary.path,
-        content: primary.content,
-        dryRun: args.dryRun,
-        lastModified: primaryModified,
-        transport: ctx.transport,
-      }).resourceLink
-    : undefined;
+  // Each written file was stat'd right after its write, inside its lock.
+  const link = primary?.report().resourceLink;
   return link ? { structured, link } : { structured };
 }
 
@@ -706,6 +675,9 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '') +
       (structured.skippedBinary
         ? ` \u00b7 ${String(structured.skippedBinary)} binary skipped`
+        : '') +
+      (structured.skippedTooLarge
+        ? ` \u00b7 ${String(structured.skippedTooLarge)} too large skipped`
         : '') +
       (structured.skippedInaccessible
         ? ` \u00b7 ${String(structured.skippedInaccessible)} inaccessible skipped`
@@ -750,6 +722,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
               stop !== undefined ||
               structured.summary.failed > 0 ||
               Boolean(structured.skippedBinary) ||
+              Boolean(structured.skippedTooLarge) ||
               Boolean(structured.skippedInaccessible),
           })
         : undefined;

@@ -28,11 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Latin-1 file that `read`, `edit` and `replace_text` refuse. A file
   whose first 512 bytes are text is still searched, its later bad bytes
   read lossily.
+- **`replace_text` counts a binary file in `skippedBinary` whether or not
+  the text appears in it.** Before, it counted one only when the search
+  text matched its bytes, and in regex mode a binary file over 4 MiB failed
+  with `TOO_LARGE`. A binary file you name now fails with `INVALID_INPUT`
+  even when nothing in it matches.
+- **`replace_text` counts a file over the text size limit in
+  `skippedTooLarge`, as `search_text` does.** Before, each one was a
+  `TOO_LARGE` failure row, and a run with nothing else to change reported
+  an error. A file you name still fails with `TOO_LARGE`.
 
 ### Fixed
 
 - **`edit` with `dryRun` reports the file's own modified time.** Before,
   `modified` was the time of the preview, although nothing was written.
+- **`replace_text` stats each file right after it writes it.** Before, it
+  stat'd only the first changed file, after the whole scan, so its link's
+  `lastModified` could be a later writer's.
 - **`read` over stdio no longer offers a link that `resources/read`
   refuses.** Before, a slice of a text file just under the 10 MiB file size
   limit came back with a `resourceUri` and a `resource_link` that failed with

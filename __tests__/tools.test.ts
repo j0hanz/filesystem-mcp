@@ -3223,21 +3223,48 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
-  it('replace_text failure rows name same-named files by their full relative paths', async () => {
+  it('replace_text counts walked files over the text size limit in skippedTooLarge', async () => {
     const limit = 1024 * 1024;
     await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
       const dir = join(tmpDir, 'size_cap_rows');
-      await writeTestFile(dir, 'a/big.txt', 'FIND\n' + 'x'.repeat(limit));
-      await writeTestFile(dir, 'b/big.txt', 'FIND\n' + 'x'.repeat(limit));
+      const a = await writeTestFile(dir, 'a/big.txt', 'FIND\n' + 'x'.repeat(limit));
+      const b = await writeTestFile(dir, 'b/big.txt', 'FIND\n' + 'x'.repeat(limit));
       const swept = await harness.client.callTool({
         name: 'replace_text',
         arguments: { path: dir, searchPattern: 'FIND', replacement: 'FOUND' },
       });
-      assert.strictEqual(swept.isError, true);
-      const text = firstTextBlock(swept).text ?? '';
-      assert.match(text, /a\/big\.txt: TOO_LARGE File exceeds size limit/);
-      assert.match(text, /b\/big\.txt: TOO_LARGE File exceeds size limit/);
+      assert.notStrictEqual(swept.isError, true);
+      const meta = swept._meta as { summary: { failed: number }; skippedTooLarge?: number };
+      assert.strictEqual(meta.skippedTooLarge, 2);
+      assert.strictEqual(meta.summary.failed, 0);
+      assert.match(firstTextBlock(swept).text ?? '', /2 too large skipped/);
+      assert.ok((await readFile(a, 'utf-8')).startsWith('FIND\n'));
+      assert.ok((await readFile(b, 'utf-8')).startsWith('FIND\n'));
     });
+  });
+
+  it('replace_text counts a binary file without a match', async () => {
+    const dir = join(tmpDir, 'binrep_nomatch');
+    await writeTestFile(dir, 'text.txt', 'foo\n');
+    await writeFile(join(dir, 'blob.bin'), Buffer.from([0x01, 0x00, 0x02]));
+    const swept = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'foo', replacement: 'bar' },
+    });
+    assert.strictEqual((swept._meta as { skippedBinary?: number }).skippedBinary, 1);
+  });
+
+  it('replace_text refuses a named binary file without a match', async () => {
+    const blob = join(tmpDir, 'binrep_named/blob.bin');
+    await mkdir(dirname(blob), { recursive: true });
+    await writeFile(blob, Buffer.from([0x01, 0x00, 0x02]));
+    const single = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: blob, searchPattern: 'zzz', replacement: 'bar' },
+    });
+    assert.strictEqual(single.isError, true);
+    const r = single._meta as { results: { error?: { code: string } }[] };
+    assert.strictEqual(r.results[0]?.error?.code, 'INVALID_INPUT');
   });
 
   // Decoding these as UTF-8 and writing the result back swaps every invalid
