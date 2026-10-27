@@ -17,6 +17,7 @@ import {
   MAX_TOOL_INPUT_ELEMENTS,
 } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
+import { keepFirstResults } from '../src/tools/find-files.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import { ProgressSession } from '../src/tools/progress.ts';
 import {
@@ -3581,6 +3582,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     } finally {
       await chmod(locked, 0o755);
     }
+  });
+
+  it('find_files keeps the first results in walk order past its cap', () => {
+    const over = keepFirstResults(
+      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0 },
+      2,
+    );
+    assert.deepStrictEqual(over, { results: ['a', 'b'], stoppedReason: 'maxResults' });
+    const timedOut = keepFirstResults(
+      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0, stoppedReason: 'timeout' },
+      2,
+    );
+    assert.strictEqual(timedOut.stoppedReason, 'timeout');
+    const exact = keepFirstResults({ results: ['a', 'b'], scanned: 2, skippedInaccessible: 0 }, 2);
+    assert.deepStrictEqual(exact, { results: ['a', 'b'] });
   });
 
   it('find_files filters by pattern', async () => {

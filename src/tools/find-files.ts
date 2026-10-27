@@ -5,7 +5,7 @@ import * as z from 'zod/v4';
 import type { StoppedReason } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import { resolveScanScope, scan } from '../core/scan.ts';
+import { resolveScanScope, scan, type ScanOutcome } from '../core/scan.ts';
 import {
   CursorSchema,
   IncludeHidden,
@@ -66,6 +66,21 @@ interface SearchFilesPageMetadata {
   stoppedReason?: StoppedReason;
 }
 
+/**
+ * Concurrent admission can overrun the cap: keep the first `cap` results in
+ * walk order, and say a drop stopped the scan unless it already stopped.
+ */
+export function keepFirstResults<R>(
+  outcome: ScanOutcome<R>,
+  cap: number,
+): { results: readonly R[]; stoppedReason?: StoppedReason } {
+  const { results, stoppedReason } = outcome;
+  if (results.length > cap) {
+    return { results: results.slice(0, cap), stoppedReason: stoppedReason ?? 'maxResults' };
+  }
+  return { results, ...(stoppedReason ? { stoppedReason } : {}) };
+}
+
 export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesOutput>({
   name: 'find_files',
   title: 'Find Files',
@@ -95,7 +110,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
       pageSize: args.maxResults,
       produce: async () => {
         const scope = await resolveScanScope(requestedBasePath, ctx.fs, { allowFile: false });
-        const outcome = await scan(
+        const scanned = await scan(
           scope,
           {
             pathGuard: ctx.fs.pathGuard,
@@ -111,11 +126,12 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           },
           (entry) => Promise.resolve(entry.path),
         );
+        const { results, stoppedReason } = keepFirstResults(scanned, MAX_SEARCH_RESULTS);
         // Sorted after the scan, on the kept results.
         const found =
           args.sortBy === 'name'
-            ? outcome.results.toSorted((x, y) => basename(x).localeCompare(basename(y)))
-            : outcome.results.toSorted((x, y) => x.localeCompare(y));
+            ? results.toSorted((x, y) => basename(x).localeCompare(basename(y)))
+            : results.toSorted((x, y) => x.localeCompare(y));
         // Relative to the root, not to scope.root: `a.ts` from a search of
         // `src` would name `<root>/a.ts` when passed back.
         const paths = ctx.fs.pathGuard.resultPaths(scope.root);
@@ -125,11 +141,11 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             root: paths.root,
             matched: found.length,
             filesScanned: found.length,
-            truncated: outcome.stoppedReason !== undefined,
-            skippedInaccessible: outcome.skippedInaccessible,
-            ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
+            truncated: stoppedReason !== undefined,
+            skippedInaccessible: scanned.skippedInaccessible,
+            ...(stoppedReason ? { stoppedReason } : {}),
           },
-          truncated: outcome.stoppedReason !== undefined,
+          truncated: stoppedReason !== undefined,
         };
       },
       // The whole result, root included: its paths are relative to that root.
