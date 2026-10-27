@@ -39,6 +39,8 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
   let dryRunFile: string;
   let imageFile: string;
   let mediumFile: string;
+  let nearLimitFile: string;
+  let appendFile: string;
 
   before(async () => {
     root = await createTestRoot();
@@ -58,6 +60,8 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     dryRunFile = join(root, 'dry-run.txt');
     imageFile = join(root, 'large.png');
     mediumFile = join(root, 'medium.txt');
+    nearLimitFile = join(root, 'near-limit.txt');
+    appendFile = join(root, 'append.txt');
     await Promise.all([
       writeFile(longLines, `NEEDLE${'x'.repeat(3 * MIB - 6)}\n`.repeat(2)),
       writeFile(escapedLine, `NEEDLE${'"'.repeat(3 * MIB - 6)}\n`),
@@ -79,6 +83,9 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
         Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(8 * MIB)]),
       ),
       writeFile(mediumFile, `${'x'.repeat(99)}\n`.repeat(40_000)),
+      // Under the 10 MiB file size limit, over the stdio Message limit.
+      writeFile(nearLimitFile, `${'x'.repeat(99)}\n`.repeat(103_000).slice(0, 10_300_000)),
+      writeFile(appendFile, 'x'.repeat(2 * MIB)),
     ]);
     harness = await createStdioClient(root, { FS_ROOT_BOUNDARY: root });
   });
@@ -423,6 +430,30 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.strictEqual(firstTextBlock(result).text, `${'x'.repeat(99)}\n`.repeat(40_000));
     assert.ok(jsonByteBound(result) > MAX_OUTBOUND_RESULT_BYTES, 'the exact measure decided');
     assert.ok(Buffer.byteLength(JSON.stringify(result), 'utf8') < MAX_OUTBOUND_RESULT_BYTES);
+  });
+
+  it('read of a slice links nothing stdio would refuse', async () => {
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: nearLimitFile, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
+  it('create append over stdio links a 2 MiB text file', async () => {
+    const result = await harness.client.callTool(
+      {
+        name: 'create',
+        arguments: { files: [{ path: appendFile, content: 'x\n', append: true }] },
+      },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(result.content.some((block) => block.type === 'resource_link'));
   });
 
   it('preserves oversized tool and resource results over HTTP', async () => {

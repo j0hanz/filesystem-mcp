@@ -748,20 +748,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
     });
 
-    it('a binary written file at the base64 edge gets no stdio link', () => {
-      const path = join(tmpDir, 'edge.bin');
-      const link = (size: number) =>
-        writtenFileLinks(path, 'application/octet-stream', size, false, undefined, 'stdio', {
-          content: '',
-          kind: 'binary',
-        });
-      assert.strictEqual(
-        link(3 * Math.floor(MAX_OUTBOUND_RESULT_BYTES / 4)).resourceUri,
-        undefined,
-      );
-      assert.ok(link(3 * Math.floor((MAX_OUTBOUND_RESULT_BYTES - 64 * KIB) / 4) - 3).resourceUri);
-    });
-
     it('written file links stop at the encoded stdio read size on stdio only', () => {
       const validPath = join(tmpDir, 'stdio-links.txt');
       const meta = (content: string, transport?: 'stdio' | 'http') =>
@@ -779,13 +765,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.ok(meta(quotes).resourceUri);
     });
 
-    it('written file links without content assume the worst escape on stdio', () => {
+    it('written file links without content use the raw size on stdio', () => {
       const path = join(tmpDir, 'stdio-links.txt');
-      assert.strictEqual(
-        writtenFileLinks(path, 'text/plain', 2 * MIB, false, undefined, 'stdio').resourceUri,
-        undefined,
-      );
-      assert.ok(writtenFileLinks(path, 'text/plain', MIB, false, undefined, 'stdio').resourceUri);
+      const link = (size: number) =>
+        writtenFileLinks(path, 'text/plain', size, false, undefined, 'stdio').resourceUri;
+      assert.ok(link(MAX_OUTBOUND_RESULT_BYTES));
+      assert.strictEqual(link(MAX_OUTBOUND_RESULT_BYTES + 1), undefined);
     });
   });
 

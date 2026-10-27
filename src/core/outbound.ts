@@ -1,6 +1,8 @@
 import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import { ErrorCode, FsError } from './errors.ts';
+import { buildFileResourceUri } from './file-uri.ts';
+import type { FileKind } from './mime.ts';
 import { MIB } from './util.ts';
 
 const KIB = 1024;
@@ -95,6 +97,37 @@ export function readResultFloor(size: number, binary: boolean): number {
  */
 export function bytesOverMessageLimit(transport: Transport, value: unknown): number | undefined {
   return transport === 'stdio' ? jsonBytesOver(value, MAX_OUTBOUND_RESULT_BYTES) : undefined;
+}
+
+/** A file a tool may offer as a link, as far as the caller knows it. */
+export interface LinkCandidate {
+  readonly validPath: string;
+  readonly mimeType: string;
+  readonly size: number;
+  readonly kind: FileKind;
+  /** Only when the caller wrote it; a read slice is not the file. */
+  readonly content?: string | undefined;
+}
+
+/**
+ * Whether stdio's resources/read would serve `file`, so a link to it is one
+ * the client can follow. Written text is measured as the read encodes it;
+ * otherwise the rule is the read's own size pre-check. HTTP always serves.
+ */
+export function canLinkFile(transport: Transport, file: LinkCandidate): boolean {
+  if (transport !== 'stdio') return true;
+  // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
+  if (file.kind !== 'text') return readResultFloor(file.size, true) <= MAX_OUTBOUND_RESULT_BYTES;
+  if (file.content === undefined) {
+    // shortcut: size-only text links skip escaping and the envelope, so wrapRead can still refuse > ~5.1 MB of quotes/backslashes or a file a few hundred bytes under the limit; measure the file if clients hit it (ADR-006)
+    return readResultFloor(file.size, false) <= MAX_OUTBOUND_RESULT_BYTES;
+  }
+  const result = {
+    contents: [
+      { uri: buildFileResourceUri(file.validPath), mimeType: file.mimeType, text: file.content },
+    ],
+  };
+  return jsonBytesOver(result, MAX_OUTBOUND_RESULT_BYTES) === undefined;
 }
 
 /** A tool result's refusal; `remedy` replaces TOO_LARGE's default advice. */

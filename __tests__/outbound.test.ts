@@ -1,11 +1,15 @@
 import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import {
+  base64EncodedBytes,
   bytesOverMessageLimit,
+  canLinkFile,
   jsonByteBound,
   jsonBytesOver,
   MAX_OUTBOUND_RESULT_BYTES,
@@ -13,7 +17,9 @@ import {
   refuseResourceRead,
   refuseToolResult,
 } from '../src/core/outbound.ts';
+import { MIB } from '../src/core/util.ts';
 
+const KIB = 1024;
 const MAX = MAX_OUTBOUND_RESULT_BYTES;
 
 describe('encoded result size bound', () => {
@@ -110,5 +116,38 @@ describe('Message limit', () => {
       suggestion: 'Read smaller slices/pages with tools, or connect over HTTP.',
     });
     assert.doesNotMatch(refuseResourceRead(5).message, /at least/);
+  });
+});
+
+describe('canLinkFile', () => {
+  const validPath = join(tmpdir(), 'link.txt');
+  const text = (size: number, content?: string) =>
+    ({ validPath, mimeType: 'text/plain', size, kind: 'text', content }) as const;
+
+  it('canLinkFile always links on http and unset transport', () => {
+    assert.ok(canLinkFile('http', text(100 * MIB)));
+    assert.ok(canLinkFile(undefined, text(100 * MIB)));
+  });
+
+  it('size-only text links up to the limit', () => {
+    assert.ok(canLinkFile('stdio', text(MAX)));
+    assert.ok(!canLinkFile('stdio', text(MAX + 1)));
+  });
+
+  it('binary links up to the exact base64 limit', () => {
+    const binary = (size: number) =>
+      ({ validPath, mimeType: 'application/octet-stream', size, kind: 'binary' }) as const;
+    assert.strictEqual(base64EncodedBytes(3 * (MAX / 4)), MAX);
+    assert.ok(canLinkFile('stdio', binary(3 * (MAX / 4))));
+    assert.ok(!canLinkFile('stdio', binary(3 * (MAX / 4) + 1)));
+  });
+
+  it('written text is measured exactly', () => {
+    const measured = (content: string) => canLinkFile('stdio', text(content.length, content));
+    // Escapes to about 12 MiB, though 6 MiB on disk.
+    assert.ok(!measured('"'.repeat(6 * MIB)));
+    assert.ok(measured('x'.repeat(MAX - 64 * KIB)));
+    // The URI and MIME fields push an exact-limit file over.
+    assert.ok(!measured('x'.repeat(MAX)));
   });
 });
