@@ -913,7 +913,8 @@ describe('globEntries characterization', () => {
         maxDepth: 1,
         onDirectory: (dir) => reported.add(relative(root, dir).replaceAll('\\', '/')),
       });
-      assert.deepStrictEqual([...reported].sort(), ['deep', 'deep/1']);
+      // deep/1 sits at the bound: the walk yields none of its contents.
+      assert.deepStrictEqual([...reported].sort(), ['deep']);
     } finally {
       await cleanupTestRoot(root);
     }

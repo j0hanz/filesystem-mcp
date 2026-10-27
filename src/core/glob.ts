@@ -656,8 +656,10 @@ function createWalkFilter(
       // Stop descent one level past the depth bound. Pruning a directory *at*
       // the bound would drop it where fs.glob treats it as top-level, so prune
       // its children instead; processDirentMatch drops that extra level.
-      if (maxDepth !== undefined && isDir && posixRel.split('/').length - 1 > maxDepth) return true;
-      if (isDir && onDirectory) {
+      const depth = posixRel.split('/').length - 1;
+      if (maxDepth !== undefined && isDir && depth > maxDepth) return true;
+      // A directory at the bound is listed but not read: none of its contents are wanted.
+      if (isDir && onDirectory && (maxDepth === undefined || depth < maxDepth)) {
         const absolute = absoluteOf(match);
         if (!reportedDirs.has(absolute)) {
           reportedDirs.add(absolute);

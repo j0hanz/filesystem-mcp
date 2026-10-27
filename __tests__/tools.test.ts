@@ -2671,7 +2671,33 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       };
       assert.strictEqual(meta.skippedInaccessible, 1);
       assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
-      assert.match(JSON.stringify(result.content), /1 inaccessible file/);
+      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('list does not probe a directory at the depth bound', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'list_bound');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: dir, maxDepth: 1 },
+      });
+      const meta = result._meta as {
+        entries?: { relativePath: string }[];
+        skippedInaccessible?: number;
+      };
+      assert.strictEqual(meta.skippedInaccessible ?? 0, 0);
+      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
+      assert.doesNotMatch(JSON.stringify(result.content), /may be incomplete/);
     } finally {
       await chmod(locked, 0o755);
     }
@@ -3483,7 +3509,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       });
       const meta = result._meta as { results?: { path: string }[]; skippedInaccessible?: number };
       assert.strictEqual(meta.skippedInaccessible, 1);
-      assert.match(JSON.stringify(result.content), /1 inaccessible file/);
+      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
       assert.deepStrictEqual(
         meta.results?.map((r) => basename(r.path)),
         ['a.ts'],
