@@ -11,9 +11,7 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
-  isSkippableErrno,
   rethrowIfAborted,
-  SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
@@ -189,6 +187,9 @@ export async function resolveAllowedDirectoriesState(
   return [...new Set(entries.flatMap((entry) => entry.spellings))];
 }
 
+/** How a walked entry rules: usable, hidden by the denylist, or out of reach. */
+export type EntryVerdict = 'ok' | 'sensitive' | 'inaccessible';
+
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
  * later syscall, so a symlink swapped in between could redirect it. Reads and
@@ -340,26 +341,41 @@ export class PathGuard {
   }
 
   /**
-   * True when a walked entry is inside the allowed directories and not sensitive,
-   * on both its requested and resolved paths. Every entry is realpath-resolved: a
-   * symlinked ancestor pointing outside the sandbox would otherwise pass the
-   * lexical check (fs.glob follows symlinks and yields external entries as
-   * non-symlink dirents). Escapes and sensitive targets throw ACCESS_DENIED and
-   * skippable errors filter the entry; anything else is fatal. The accepted
-   * TOCTOU window is documented on this class.
+   * Rules on a walked entry without throwing for the expected cases. Every entry
+   * is realpath-resolved: a symlinked ancestor pointing outside the sandbox would
+   * otherwise pass the lexical check (fs.glob follows symlinks and yields
+   * external entries as non-symlink dirents). 'sensitive' means the denylist
+   * matched the requested or resolved path; 'inaccessible' covers escapes and
+   * every other error on the entry (EBUSY, EMFILE, races). Only an abort and an
+   * uninitialized guard throw. The accepted TOCTOU window is documented on
+   * this class.
    */
-  async isEntryAccessible(entryPath: string): Promise<boolean> {
-    try {
-      const { requestedPath, resolvedPath } = await this.validateExistingPathDetailed(entryPath);
-      return !this.isSensitive(requestedPath) && !this.isSensitive(resolvedPath);
-    } catch (error) {
-      if (isFsError(error)) {
-        if (SKIPPABLE_FS_CODES.has(error.code)) return false;
-        throw error;
-      }
-      if (isSkippableErrno(error)) return false;
-      throw error;
+  async entryVerdict(entryPath: string): Promise<EntryVerdict> {
+    if (this.isSensitive(entryPath) || this.isSensitive(normalizePath(entryPath))) {
+      return 'sensitive';
     }
+    try {
+      await this.validateExistingPathDetailed(entryPath);
+      return 'ok';
+    } catch (error) {
+      rethrowIfAborted(error);
+      // A server bug, not an entry the scan can skip.
+      if (!this.allowedDirectoriesState) throw error;
+      if (isFsError(error) && error.code === ErrorCode.ACCESS_DENIED) {
+        // The denylist and the out-of-root check share this code; the real path tells them apart.
+        try {
+          return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
+        } catch {
+          return 'inaccessible';
+        }
+      }
+      return 'inaccessible';
+    }
+  }
+
+  /** True when a walked entry is inside the allowed directories and not sensitive. */
+  async isEntryAccessible(entryPath: string): Promise<boolean> {
+    return (await this.entryVerdict(entryPath)) === 'ok';
   }
 
   async validateExistingPath(requestedPath: string): Promise<string> {

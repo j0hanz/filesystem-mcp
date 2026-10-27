@@ -31,6 +31,18 @@ moving a directory back. A relocation must keep every entry's protection: no
 entry may leave or enter the sensitive-file policy because its path changed.
 _Avoid_: transfer (when undo is meant too), rename (when the entries move)
 
+## Scans
+
+**Scan**:
+A walk of a directory scope on a client's behalf that rules on every entry it
+finds: usable, sensitive, inaccessible, binary, undecodable or too large. A
+sensitive entry is passed over without a trace; every other entry it cannot
+use, including a directory it could not read, is counted, so a scan with holes
+never reads as complete. A scan does not follow a symlinked file, and it stops
+by one rule shared by every tool that scans.
+_Avoid_: walk (the raw traversal, which relocation and undo also use), search
+(one tool's use of a scan), sweep
+
 ## Undo
 
 **Capture**:

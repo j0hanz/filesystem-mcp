@@ -10,6 +10,7 @@ import {
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
+  makeGuard,
   trySymlink,
 } from './helpers.ts';
 
@@ -866,6 +867,54 @@ describe('globEntries characterization', () => {
         'a.txt',
         'sub/.f.txt',
       ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  for (const includeHidden of [false, true]) {
+    it(`onDirectory reports each descended dir once, whatever the pattern (includeHidden: ${String(includeHidden)})`, async () => {
+      const root = await createTestRoot();
+      try {
+        await mkdir(join(root, 'a', 'b'), { recursive: true });
+        await mkdir(join(root, 'c'));
+        await writeFile(join(root, 'a', 'b', 'f.ts'), 'x');
+        await writeFile(join(root, 'c', 'h.txt'), 'x');
+        const reported: string[] = [];
+        const files = await walk({
+          cwd: root,
+          pattern: '*.ts',
+          baseNameMatch: true,
+          includeHidden,
+          onDirectory: (dir) => reported.push(dir),
+        });
+        assert.deepStrictEqual(files, ['a/b/f.ts']);
+        assert.strictEqual(new Set(reported).size, reported.length);
+        assert.deepStrictEqual(reported.sort(), ['a', 'a/b', 'c'].map((d) => join(root, d)).sort());
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
+  it('onDirectory skips pruned dirs', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['node_modules/x/y.ts', 'vault.key/k.txt', 'deep/1/2/z.ts']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const reported = new Set<string>();
+      await walk({
+        cwd: root,
+        pattern: '**/*',
+        skipIgnored: true,
+        pathGuard: await makeGuard([root]),
+        maxDepth: 1,
+        onDirectory: (dir) => reported.add(relative(root, dir).replaceAll('\\', '/')),
+      });
+      // deep/1 sits at the bound: the walk yields none of its contents.
+      assert.deepStrictEqual([...reported].sort(), ['deep']);
     } finally {
       await cleanupTestRoot(root);
     }

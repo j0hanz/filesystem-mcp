@@ -1,13 +1,11 @@
-import { basename, dirname } from 'node:path';
-
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
-import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
-import { ErrorCode, FsError, isFsError } from './errors.ts';
+import type { StoppedReason } from './concurrency.ts';
 import { GuardedFileSystem } from './fs.ts';
-import { globEntries } from './glob.ts';
 import type { PathGuard } from './path.ts';
+import type { ScanScope } from './scan.ts';
+import { scan } from './scan.ts';
 import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
@@ -291,12 +289,6 @@ export interface SearchContentOptions {
   skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
-  /**
-   * Search exactly this file (absolute, already guard-validated) instead of
-   * walking `directory` with `filePattern`. Set when the caller named a file:
-   * its name must not be interpreted as a glob.
-   */
-  explicitFile?: string;
   /** Lines of context to carry either side of each match; 0 (default) carries none. */
   context?: number;
   signal?: AbortSignal;
@@ -315,27 +307,21 @@ export interface SearchContentOutcome {
     filesScanned: number;
     filesMatched: number;
     truncated: boolean;
-    /** Files the guard rejected or that could not be stat'd. */
+    /** Entries and directories the scan could not read. */
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
     /** Files skipped because they contain a NUL byte (binary). */
     skippedBinary: number;
-    /**
-     * `StoppedReason` narrowed to the stops these scans can produce: both
-     * resolve the stop through `resolveStopReason` (concurrency.ts) — never
-     * `maxFiles`, which belongs to `replace_text`'s per-file cap.
-     */
-    stoppedReason?: 'maxResults' | 'timeout';
+    stoppedReason?: StoppedReason;
   };
 }
 
 type FileScan =
-  | { kind: 'sensitive' }
-  | { kind: 'inaccessible' }
   | { kind: 'tooLarge' }
   | { kind: 'binary' }
-  | { kind: 'scanned'; matches: SearchResult[] };
+  /** `cut`: the signal stopped this file's lines short, so scan cannot see the timeout. */
+  | { kind: 'scanned'; matches: SearchResult[]; cut?: boolean };
 
 interface ScanContext {
   fs: GuardedFileSystem;
@@ -352,7 +338,8 @@ interface ScanContext {
 
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
   let buffer: Buffer;
-  try {
+  // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
+  {
     // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
     // re-checks the descriptor's real path (H4), so these bytes are the
     // validated file's, not whatever the name points at by now.
@@ -381,15 +368,6 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
       }
       buffer = buffer.subarray(0, filled);
     }
-  } catch (error) {
-    if (scanCtx.signal?.aborted) throw error;
-    if (
-      scanCtx.fs.pathGuard.isSensitive(entryPath) ||
-      (isFsError(error) && error.message.startsWith('Sensitive file'))
-    ) {
-      return { kind: 'sensitive' };
-    }
-    return { kind: 'inaccessible' };
   }
 
   // A NUL byte marks a binary file, as it does for `read` and `grep -I`.
@@ -417,7 +395,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // literal match never hands a line to RE2.
   const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
-  const tick = createYielder(scanCtx.signal);
+  const yielder = createYielder(scanCtx.signal);
+  let cut = false;
+  const tick = async (): Promise<boolean> => (cut ||= await yielder());
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
@@ -445,14 +425,15 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
             }
           : {}),
       });
-      if (matches.length >= scanCtx.maxResults) break;
+      // One past the cap, so searchContent can tell a file was cut by it.
+      if (matches.length > scanCtx.maxResults) break;
     }
   }
-  return { kind: 'scanned', matches };
+  return { kind: 'scanned', matches, cut };
 }
 
 export async function searchContent(
-  directory: string,
+  scope: ScanScope,
   pattern: string,
   options: SearchContentOptions,
   pathGuard: PathGuard,
@@ -479,30 +460,13 @@ export async function searchContent(
     const maxResults = options.maxResults ?? 100;
     const maxFileSize = getMaxTextFileSize();
     const context = options.context ?? 0;
-    const ceiling = pathGuard.allowedRootContaining(directory);
-
-    const entries = options.explicitFile
-      ? [{ path: options.explicitFile }]
-      : globEntries({
-          cwd: directory,
-          pattern: options.filePattern ?? '**/*',
-          // Same rule as replace_text, so a search with the same glob previews the
-          // files a replace would touch: a slash-free glob matches at any depth.
-          baseNameMatch: true,
-          includeHidden: Boolean(options.includeHidden),
-          skipIgnored: Boolean(options.skipIgnored),
-          pathGuard,
-          ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
-          ...(options.signal ? { signal: options.signal } : {}),
-          ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
-          suppressErrors: true,
-        });
-
     let filesScanned = 0;
     let filesMatched = 0;
     let matchingLines = 0;
     let skippedTooLarge = 0;
     let skippedBinary = 0;
+    let trimmed = false;
+    let cut = false;
     const scanCtx: ScanContext = {
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
@@ -516,34 +480,28 @@ export async function searchContent(
       source,
       context,
     };
-    const perFile = new Map<number, FileScan>();
-    let dispatched = 0;
-    let collected = 0;
-    const stopped = await processEntriesConcurrently(entries, {
-      signal: options.signal,
-      concurrency: PARALLEL_CONCURRENCY,
-      shouldStop: () => collected >= maxResults,
-      onEntry: () => {
-        dispatched++;
+    const outcome = await scan<FileScan>(
+      scope,
+      {
+        pathGuard,
+        pattern: options.filePattern ?? '**/*',
+        // Same rule as replace_text, so a search with the same glob previews the
+        // files a replace would touch: a slash-free glob matches at any depth.
+        baseNameMatch: true,
+        includeHidden: Boolean(options.includeHidden),
+        includeIgnored: !options.skipIgnored,
+        onlyFiles: true,
+        ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+        concurrency: PARALLEL_CONCURRENCY,
+        cap: maxResults,
+        weigh: (s) => (s.kind === 'scanned' ? s.matches.length : 0),
+        ...(options.signal ? { signal: options.signal } : {}),
       },
-      runEntry: async (entryPath) => {
-        const index = dispatched - 1;
-        const scan = await scanFile(entryPath, scanCtx);
-        perFile.set(index, scan);
-        if (scan.kind === 'scanned') collected += scan.matches.length;
-      },
-    });
+      (entry) => scanFile(entry.path, scanCtx),
+    );
 
-    let skippedInaccessible = 0;
-    for (let i = 0; i < dispatched; i++) {
-      const scan = perFile.get(i);
-      if (!scan) continue;
-      switch (scan.kind) {
-        case 'sensitive':
-          break;
-        case 'inaccessible':
-          skippedInaccessible++;
-          break;
+    for (const file of outcome.results) {
+      switch (file.kind) {
         case 'tooLarge':
           skippedTooLarge++;
           break;
@@ -553,23 +511,27 @@ export async function searchContent(
           break;
         case 'scanned':
           filesScanned++;
-          if (scan.matches.length > 0) filesMatched++;
-          for (const match of scan.matches) {
-            if (matches.length >= maxResults) break;
+          if (file.matches.length > 0) filesMatched++;
+          if (file.cut) cut = true;
+          for (const match of file.matches) {
+            if (matches.length >= maxResults) {
+              trimmed = true;
+              break;
+            }
             matches.push(match);
             matchingLines++;
           }
           break;
       }
     }
-
-    const stoppedReason = resolveStopReason(
-      matches.length >= maxResults,
-      stopped === 'timeout' || Boolean(options.signal?.aborted),
-    );
+    const { skippedInaccessible } = outcome;
+    // scan stops on a refused entry only; matches cut here are the cap too. Abort beats it.
+    const stoppedReason =
+      outcome.stoppedReason ??
+      (cut ? ('timeout' as const) : trimmed ? ('maxResults' as const) : undefined);
 
     return {
-      basePath: directory,
+      basePath: scope.root,
       matches,
       summary: {
         matchingLines,
@@ -595,137 +557,4 @@ function canPrefilter(source: string, buffer: Buffer): boolean {
   if (INLINE_FLAGS_RE.test(source)) return false;
   if (source.includes('$') && buffer.includes(CR)) return false;
   return true;
-}
-
-export async function searchFiles(
-  directory: string,
-  pattern: string,
-  options: {
-    maxResults?: number;
-    includeHidden?: boolean;
-    sortBy?: 'name' | 'path';
-    skipIgnored?: boolean;
-    maxDepth?: number;
-    signal?: AbortSignal;
-  },
-  pathGuard: PathGuard,
-): Promise<{
-  basePath: string;
-  results: { path: string }[];
-  summary: {
-    matched: number;
-    filesScanned: number;
-    truncated: boolean;
-    skippedInaccessible: number;
-    /** Narrowed like SearchContentOutcome's — scans never `maxFiles`. */
-    stoppedReason?: 'maxResults' | 'timeout';
-  };
-}> {
-  const maxResults = options.maxResults ?? 100;
-  const ceiling = pathGuard.allowedRootContaining(directory);
-  const entries = globEntries({
-    cwd: directory,
-    pattern,
-    baseNameMatch: true,
-    includeHidden: Boolean(options.includeHidden),
-    skipIgnored: Boolean(options.skipIgnored),
-    pathGuard,
-    ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
-    ...(options.signal ? { signal: options.signal } : {}),
-    ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
-    suppressErrors: true,
-  });
-  const results: { path: string }[] = [];
-  let filesScanned = 0;
-  let skippedInaccessible = 0;
-  const perFile = new Map<number, { path: string } | 'inaccessible' | 'sensitive'>();
-  let dispatched = 0;
-  let collected = 0;
-  const stopped = await processEntriesConcurrently(entries, {
-    signal: options.signal,
-    concurrency: PARALLEL_CONCURRENCY,
-    shouldStop: () => collected >= maxResults,
-    onEntry: () => {
-      dispatched++;
-    },
-    runEntry: async (entryPath) => {
-      const index = dispatched - 1;
-      try {
-        await pathGuard.validateExistingPath(entryPath);
-        perFile.set(index, { path: entryPath });
-        collected++;
-      } catch (error) {
-        if (
-          pathGuard.isSensitive(entryPath) ||
-          (isFsError(error) && error.message.startsWith('Sensitive file'))
-        ) {
-          perFile.set(index, 'sensitive');
-        } else {
-          perFile.set(index, 'inaccessible');
-        }
-      }
-    },
-  });
-
-  for (let i = 0; i < dispatched; i++) {
-    const item = perFile.get(i);
-    if (!item || item === 'sensitive') continue;
-    if (item === 'inaccessible') {
-      skippedInaccessible++;
-      continue;
-    }
-    if (results.length >= maxResults) break;
-    filesScanned++;
-    results.push(item);
-  }
-
-  // Sorting — only name / path are supported; size / modified were removed
-  // (the glob never collected stats, so they were always undefined).
-  if (options.sortBy === 'name') {
-    results.sort((a, b) => basename(a.path).localeCompare(basename(b.path)));
-  } else {
-    results.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  // Same precedence as above: the result cap wins over a same-iteration abort.
-  const stoppedReason = resolveStopReason(
-    results.length >= maxResults,
-    stopped === 'timeout' || Boolean(options.signal?.aborted),
-  );
-
-  return {
-    basePath: directory,
-    results,
-    summary: {
-      matched: results.length,
-      filesScanned,
-      truncated: stoppedReason !== undefined,
-      skippedInaccessible,
-      ...(stoppedReason ? { stoppedReason } : {}),
-    },
-  };
-}
-
-/** Explicit files bypass glob filtering; their parent is the directory walked. */
-export async function resolveSearchScope(
-  path: string | undefined,
-  fs: GuardedFileSystem,
-  signal?: AbortSignal,
-): Promise<{ basePath: string; explicitFile?: string }> {
-  const requested = fs.pathGuard.resolvePathOrRoot(path);
-  // One resolution, one stat: validateExistingDirectory would redo both.
-  const { stats, validPath: resolved } = await fs.stat(requested, { signal });
-  if (!stats.isFile()) {
-    if (!stats.isDirectory()) {
-      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
-    }
-    return { basePath: resolved };
-  }
-  return {
-    basePath: dirname(resolved),
-    // The name is NOT turned into a glob: `[slug].tsx` would read as a
-    // character class. searchContent scans exactly this file instead, and
-    // hidden/ignored filtering is moot for a file the caller named.
-    explicitFile: resolved,
-  };
 }

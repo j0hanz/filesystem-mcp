@@ -149,7 +149,9 @@ export function pageTrailer(p: {
   if (p.stoppedReason !== undefined) lines.push(stoppedEarlyLine(p.stoppedReason));
   const skipped = [
     p.skippedTooLarge ? `${formatCount(p.skippedTooLarge, 'file')} over the text size limit` : '',
-    p.skippedInaccessible ? formatCount(p.skippedInaccessible, 'inaccessible file') : '',
+    p.skippedInaccessible
+      ? formatCount(p.skippedInaccessible, 'inaccessible entry', 'inaccessible entries')
+      : '',
   ].filter(Boolean);
   if (skipped.length > 0) {
     lines.push(`// skipped ${skipped.join(', ')}; results may be incomplete.`);

@@ -32,7 +32,7 @@ import {
 } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
-import { searchContent, searchFiles } from '../src/core/search.ts';
+import { searchContent } from '../src/core/search.ts';
 import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -824,42 +824,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   });
 
   describe('Search & Glob (TC-FUNC-039–046)', () => {
-    it('TC-FUNC-039: searchFiles with pattern matching filters files', async () => {
-      await writeTestFile(tmpDir, 'search_dir/moduleA.ts', 'export const a = 1;');
-      await writeTestFile(tmpDir, 'search_dir/moduleB.ts', 'export const b = 2;');
-      await writeTestFile(tmpDir, 'search_dir/notes.txt', 'some notes');
-      await writeTestFile(tmpDir, 'search_dir/sub/moduleC.ts', 'export const c = 3;');
-      await writeTestFile(tmpDir, 'search_dir/sub/readme.txt', 'readme doc');
-
-      const searchDir = join(tmpDir, 'search_dir');
-
-      const tsResults = await searchFiles(searchDir, '**/*.ts', {}, ctx.pathGuard);
-      assert.strictEqual(tsResults.results.length, 3);
-      assert.ok(tsResults.results.every((r) => r.path.endsWith('.ts')));
-
-      const txtResults = await searchFiles(searchDir, '**/*.txt', {}, ctx.pathGuard);
-      assert.strictEqual(txtResults.results.length, 2);
-      assert.ok(txtResults.results.every((r) => r.path.endsWith('.txt')));
-    });
-
-    it("TC-FUNC-039b: searchFiles sortBy 'name' orders by basename, not full path", async () => {
-      await writeTestFile(tmpDir, 'sort_dir/zzz/alpha.ts', '// a');
-      await writeTestFile(tmpDir, 'sort_dir/aaa/omega.ts', '// o');
-
-      const sortDir = join(tmpDir, 'sort_dir');
-      const byName = await searchFiles(sortDir, '**/*.ts', { sortBy: 'name' }, ctx.pathGuard);
-      assert.deepStrictEqual(
-        byName.results.map((r) => basename(r.path)),
-        ['alpha.ts', 'omega.ts'],
-      );
-
-      const byPath = await searchFiles(sortDir, '**/*.ts', {}, ctx.pathGuard);
-      assert.deepStrictEqual(
-        byPath.results.map((r) => basename(r.path)),
-        ['omega.ts', 'alpha.ts'],
-      );
-    });
-
     it('TC-FUNC-040: searchContent matches literal patterns across files', async () => {
       const searchContentDir = join(tmpDir, 'search_content_dir');
       await writeTestFile(
@@ -875,7 +839,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
 
       const outcome = await searchContent(
-        searchContentDir,
+        { root: searchContentDir },
         'TARGET_LITERAL_STRING',
         { isRegex: false },
         ctx.pathGuard,
@@ -896,12 +860,17 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       await writeFile(join(dir, 'latin1.txt'), Buffer.from('caf\xe9 NEEDLE\n', 'latin1'));
 
-      const outcome = await searchContent(dir, 'NEEDLE;$', { isRegex: true }, ctx.pathGuard);
+      const outcome = await searchContent(
+        { root: dir },
+        'NEEDLE;$',
+        { isRegex: true },
+        ctx.pathGuard,
+      );
       assert.strictEqual(outcome.matches.length, 1);
       assert.strictEqual(basename(outcome.matches[0]?.file ?? ''), 'crlf.txt');
       assert.strictEqual(outcome.matches[0]?.content, 'NEEDLE;');
 
-      const all = await searchContent(dir, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      const all = await searchContent({ root: dir }, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
       assert.deepStrictEqual(all.matches.map((m) => basename(m.file)).sort(), [
         'crlf.txt',
         'latin1.txt',
@@ -915,12 +884,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         await fs.mkdir(join(dir, `d${String(i)}`, 'inner'), { recursive: true });
       const signal = AbortSignal.abort(new Error('deadline'));
 
-      const files = await searchFiles(dir, '**/*.nomatch', { signal }, ctx.pathGuard);
-      assert.strictEqual(files.results.length, 0);
-      assert.strictEqual(files.summary.stoppedReason, 'timeout');
-      assert.strictEqual(files.summary.truncated, true);
-
-      const content = await searchContent(dir, 'NEEDLE', { isRegex: false, signal }, ctx.pathGuard);
+      const content = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: false, signal },
+        ctx.pathGuard,
+      );
       assert.strictEqual(content.matches.length, 0);
       assert.strictEqual(content.summary.stoppedReason, 'timeout');
     });
@@ -1063,9 +1032,9 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
         try {
           searched = await searchContent(
-            root,
+            { root, explicitFile: victim },
             'TOP_SECRET',
-            { explicitFile: victim },
+            {},
             ctx.pathGuard,
           );
         } catch {
@@ -1127,9 +1096,9 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
         try {
           searched = await searchContent(
-            root,
+            { root, explicitFile: victim },
             'TOP_SECRET',
-            { explicitFile: victim },
+            {},
             ctx.pathGuard,
           );
         } catch {
@@ -1419,7 +1388,7 @@ describe('GuardedFileSystem.countEntries', () => {
     },
   );
 
-  it('propagates an unexpected error from a symlinked entry', async (t) => {
+  it('skips a symlinked entry whose check fails, as the scan does', async (t) => {
     const dir = join(root, 'links');
     await writeTestFile(dir, 'a.txt', 'a');
     await writeTestFile(dir, 'b.txt', 'b');
@@ -1441,7 +1410,8 @@ describe('GuardedFileSystem.countEntries', () => {
         errno: -5,
         syscall: 'realpath',
       });
-      await assert.rejects(fs.countEntries(dir));
+      // An odd error reads as inaccessible (entryVerdict), so the link is not counted.
+      assert.strictEqual(await fs.countEntries(dir), 2);
 
       // A dangling link is skipped, as list skips it.
       injected = Object.assign(new Error('ENOENT: no such file or directory'), {
@@ -1704,17 +1674,17 @@ describe('GuardedFileSystem.countEntries', () => {
     )
       return;
     const guard = ctx.pathGuard;
-    const validate = guard.validateExistingPathDetailed.bind(guard);
+    const accessible = guard.isEntryAccessible.bind(guard);
     // No read is pending here: the link's accessibility check throws EIO, which the count keeps.
-    guard.validateExistingPathDetailed = async (requestedPath: string) => {
-      if (requestedPath.endsWith('link.txt')) {
+    guard.isEntryAccessible = async (entryPath: string) => {
+      if (entryPath.endsWith('link.txt')) {
         throw Object.assign(new Error('EIO: i/o error'), {
           code: 'EIO',
           errno: -5,
           syscall: 'realpath',
         });
       }
-      return validate(requestedPath);
+      return accessible(entryPath);
     };
     const originalOpendir = fsPromises.opendir.bind(fsPromises);
     // The real Dir is returned, but its close closes it and then rejects.
@@ -1733,7 +1703,7 @@ describe('GuardedFileSystem.countEntries', () => {
     } finally {
       t.mock.restoreAll();
       syncBuiltinESMExports();
-      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      Reflect.deleteProperty(guard, 'isEntryAccessible');
     }
   });
 

@@ -1,16 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { processInParallel, resolveStopReason } from '../src/core/concurrency.ts';
-
-describe('resolveStopReason', () => {
-  it('the result cap wins over an abort on the same iteration', async () => {
-    assert.strictEqual(resolveStopReason(true, true), 'maxResults');
-    assert.strictEqual(resolveStopReason(true, false), 'maxResults');
-    assert.strictEqual(resolveStopReason(false, true), 'timeout');
-    assert.strictEqual(resolveStopReason(false, false), undefined);
-  });
-});
+import { processInParallel } from '../src/core/concurrency.ts';
 
 describe('Concurrency Tests', () => {
   it('TC-CONC-001: an abort after every item ran still returns the results', async () => {

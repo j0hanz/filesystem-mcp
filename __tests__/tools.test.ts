@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setImmediate as setImmediatePromise, setTimeout as sleep } from 'node:timers/promises';
 
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
@@ -13,11 +15,15 @@ import { normalizePath } from '../src/core/path-utils.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
   getMaxTextFileSize,
+  MAX_LIST_ENTRIES,
   MAX_SEARCH_RESULTS,
   MAX_TOOL_INPUT_ELEMENTS,
 } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
+import { keepFirstResults } from '../src/tools/find-files.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
+import { listPageMetadata } from '../src/tools/list.ts';
+import { ProgressSession } from '../src/tools/progress.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
@@ -2607,7 +2613,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
   });
 
-  it('TC-FUNC-063a: list does not return a successful partial result after abort', async (t) => {
+  it('TC-FUNC-063a: list returns a partial result after a timeout', async (t) => {
     t.mock.method(AbortSignal, 'timeout', () =>
       AbortSignal.abort(new DOMException('test timeout', 'TimeoutError')),
     );
@@ -2616,8 +2622,132 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: tmpDir, includeIgnored: true },
     });
 
-    assert.strictEqual(result.isError, true);
-    assert.strictEqual(result.structuredContent, undefined);
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+    assert.match(firstTextBlock(result).text ?? '', /scan stopped early: hit the time limit/);
+  });
+
+  it('list past its entry cap reports maxResults in its metadata', () => {
+    const collected = {
+      entries: [],
+      totalEntries: MAX_LIST_ENTRIES + 1,
+      totalFiles: MAX_LIST_ENTRIES + 1,
+      totalDirectories: 0,
+      skippedInaccessible: 0,
+    };
+    assert.strictEqual(listPageMetadata('root', collected).stoppedReason, 'maxResults');
+    const timedOut = { ...collected, stoppedReason: 'timeout' as const };
+    assert.strictEqual(listPageMetadata('root', timedOut).stoppedReason, 'timeout');
+    const exact = { ...collected, totalEntries: MAX_LIST_ENTRIES };
+    assert.strictEqual(listPageMetadata('root', exact).stoppedReason, undefined);
+  });
+
+  it('list reports a deadline that fires during a size stat', async (t) => {
+    const dir = join(tmpDir, 'list_timeout_stat');
+    await writeTestFile(dir, 'a.txt', 'x');
+    const controller = new AbortController();
+    t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realStat = GuardedFileSystem.prototype.stat;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'stat',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realStat>) {
+        if (!a[0].endsWith('a.txt')) return realStat.apply(this, a);
+        // Fire once list's abort race is armed, as a real stat would.
+        await setImmediatePromise();
+        const timeout = new DOMException('test timeout', 'TimeoutError');
+        controller.abort(timeout);
+        throw timeout;
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, includeSizes: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+  });
+
+  it('a timed-out list externalizes a partial tree', async (t) => {
+    const dir = join(tmpDir, 'list_timeout_partial');
+    for (let i = 0; i < 20; i++) await writeTestFile(dir, `f${String(i)}.txt`, 'x');
+    const controller = new AbortController();
+    t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+    // A pre-aborted walk collects nothing, so the deadline fires on the third tick.
+    let ticks = 0;
+    t.mock.method(ProgressSession.prototype, 'set', () => {
+      if (++ticks === 3) controller.abort(new DOMException('test timeout', 'TimeoutError'));
+    });
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, maxEntries: 2 },
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    const meta = result._meta as { resourceUri?: string; stoppedReason?: string };
+    assert.strictEqual(meta.stoppedReason, 'timeout');
+    assert.ok(meta.resourceUri, 'a partial first page still carries the full-tree URI');
+    const resource = await harness.client.readResource({ uri: meta.resourceUri });
+    const first = resource.contents[0];
+    const tree = JSON.parse(first && 'text' in first ? first.text : '{}') as {
+      stoppedReason?: string;
+      truncated?: boolean;
+    };
+    assert.strictEqual(tree.stoppedReason, 'timeout');
+    assert.strictEqual(tree.truncated, true);
+  });
+
+  it('list counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'list_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: dir, maxDepth: 3 },
+      });
+      const meta = result._meta as {
+        entries?: { relativePath: string }[];
+        skippedInaccessible?: number;
+      };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
+      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('list does not probe a directory at the depth bound', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'list_bound');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: dir, maxDepth: 1 },
+      });
+      const meta = result._meta as {
+        entries?: { relativePath: string }[];
+        skippedInaccessible?: number;
+      };
+      assert.strictEqual(meta.skippedInaccessible ?? 0, 0);
+      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
+      assert.doesNotMatch(JSON.stringify(result.content), /may be incomplete/);
+    } finally {
+      await chmod(locked, 0o755);
+    }
   });
 
   it('TC-LOG-001: Tool execution logs to stderr', async (t) => {
@@ -3122,6 +3252,391 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
   });
 
+  it('replace_text counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX permissions as non-root');
+    }
+    const dir = join(tmpDir, 'replace_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'needle');
+    await writeTestFile(dir, 'locked/x.ts', 'needle');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+      });
+      const meta = result._meta as { skippedInaccessible?: number; summary: { failed: number } };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.strictEqual(meta.summary.failed, 0);
+      const text = firstTextBlock(result).text ?? '';
+      assert.match(text, /1 inaccessible skipped/u);
+      assert.doesNotMatch(text, /no files were searched/u);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('replace_text counts an EACCES file instead of failing it', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX permissions as non-root');
+    }
+    const dir = join(tmpDir, 'replace_eacces');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    const b = await writeTestFile(dir, 'b.txt', 'needle');
+    await chmod(b, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+      });
+      const meta = result._meta as { skippedInaccessible?: number; summary: { failed: number } };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.strictEqual(meta.summary.failed, 0);
+    } finally {
+      await chmod(b, 0o644);
+    }
+  });
+
+  it('replace_text results and diff follow walk order', async (t) => {
+    const dir = join(tmpDir, 'replace_walk_order');
+    for (let i = 0; i < 12; i++) {
+      await writeTestFile(dir, `a${String(i).padStart(2, '0')}.txt`, 'needle\n');
+    }
+    // The walk follows the directory's own order, which only NTFS sorts.
+    const first = (await readdir(dir))[0] ?? '';
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    let opened = 0;
+    let releaseFirst!: () => void;
+    const othersOpened = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        if (basename(dirname(a[0])) === 'replace_walk_order') {
+          // Three others: fewer than the smallest pool (4) and scan window (8),
+          // which hold later files back until the first one settles.
+          if (++opened === 4) releaseFirst();
+          // The walk's first file finishes last.
+          if (basename(a[0]) === first) await othersOpened;
+        }
+        return realOpen.apply(this, a);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { results: { path: string }[]; diff?: string };
+    assert.strictEqual(meta.results[0]?.path, `replace_walk_order/${first}`);
+    assert.strictEqual(
+      /^\+\+\+ ([^\t\n]+)/mu.exec(meta.diff ?? '')?.[1],
+      `replace_walk_order/${first}`,
+    );
+  });
+
+  it('replace_text interleaves changed and failure results in walk order', async (t) => {
+    const dir = join(tmpDir, 'replace_mixed_walk_order');
+    await writeTestFile(dir, 'a.txt', 'needle\n');
+    await writeTestFile(dir, 'b.txt', 'needle\n');
+    const order = await readdir(dir);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        // By name: the guard lower-cases a Windows drive letter, so a joined path never matches.
+        if (basename(dirname(a[0])) === 'replace_mixed_walk_order' && basename(a[0]) === order[0]) {
+          throw new FsError(ErrorCode.TOO_LARGE, 'File exceeds size limit', a[0]);
+        }
+        return realOpen.apply(this, a);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as {
+      results: { path: string; value?: { matches: number }; error?: { code: string } }[];
+    };
+    assert.deepStrictEqual(
+      meta.results.map((r) => r.path),
+      order.map((name) => `replace_mixed_walk_order/${name}`),
+    );
+    assert.strictEqual(meta.results[0]?.error?.code, 'TOO_LARGE');
+    assert.strictEqual(meta.results[1]?.value?.matches, 1);
+  });
+
+  it('replace_text keeps the walk-first failure rows and holds no error past its entry', async (t) => {
+    const dir = join(tmpDir, 'replace_failures');
+    const count = 25;
+    for (let i = 0; i < count; i++) {
+      await writeTestFile(dir, `f${String(i).padStart(2, '0')}.txt`, 'needle\n');
+    }
+    // The walk follows the directory's own order, which only NTFS sorts.
+    const order = (await readdir(dir)).map((name) => `replace_failures/${name}`);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    let opened = 0;
+    let releaseFirst!: () => void;
+    const othersOpened = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        if (basename(dirname(a[0])) !== 'replace_failures') return realOpen.apply(this, a);
+        // Three others: fewer than the smallest pool (4), so the walk's first file fails last.
+        if (++opened === 4) releaseFirst();
+        if (`replace_failures/${basename(a[0])}` === order[0]) await othersOpened;
+        throw new FsError(ErrorCode.TOO_LARGE, 'File exceeds size limit', a[0]);
+      },
+    );
+    // Whatever scan keeps until the walk ends goes through its results Map.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realSet = Map.prototype.set;
+    let heldErrors = 0;
+    t.mock.method(
+      Map.prototype,
+      'set',
+      function (this: Map<unknown, unknown>, k: unknown, v: unknown) {
+        if (typeof v === 'object' && v !== null && 'kind' in v && 'error' in v) heldErrors++;
+        return realSet.call(this, k, v);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    t.mock.restoreAll();
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as {
+      results: { path: string; error?: { code: string } }[];
+      summary: { total: number; succeeded: number; failed: number };
+      resultsTruncated?: boolean;
+    };
+    assert.deepStrictEqual(
+      meta.results.map((r) => r.path),
+      order.slice(0, 20),
+    );
+    assert.ok(meta.results.every((r) => r.error?.code === 'TOO_LARGE'));
+    assert.deepStrictEqual(meta.summary, { total: count, succeeded: 0, failed: count });
+    assert.strictEqual(meta.resultsTruncated, true);
+    assert.strictEqual(heldErrors, 0);
+  });
+
+  it('replace_text maxFiles ignores skipped entries', async () => {
+    const dir = join(tmpDir, 'replace_max_files');
+    await writeTestFile(dir, '.env', 'needle');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: dir,
+        searchPattern: 'needle',
+        replacement: 'pin',
+        dryRun: true,
+        includeHidden: true,
+        maxFiles: 2,
+      },
+    });
+    const meta = result._meta as { summary: { succeeded: number }; stoppedReason?: string };
+    assert.strictEqual(meta.summary.succeeded, 2);
+    assert.strictEqual(meta.stoppedReason, undefined);
+  });
+
+  it('replace_text maxFiles frees the slot of an EACCES file', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX permissions as non-root');
+    }
+    const dir = join(tmpDir, 'replace_max_files_eacces');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    // The walk follows readdir order: lock whichever file it visits first.
+    const [lockedName = '', readableName = ''] = await readdir(dir);
+    const locked = join(dir, lockedName);
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', maxFiles: 1 },
+      });
+      const meta = result._meta as { skippedInaccessible?: number; stoppedReason?: string };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.strictEqual(meta.stoppedReason, undefined);
+      assert.strictEqual(await readFile(join(dir, readableName), 'utf-8'), 'pin');
+    } finally {
+      await chmod(locked, 0o644);
+    }
+  });
+
+  it('replace_text marks a diff cut by its budget', async () => {
+    const dir = join(tmpDir, 'replace_diff_budget');
+    // Each patch is just over 12 KiB, so the two together exceed the 20 KiB budget.
+    const body = Array.from({ length: 300 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    await writeTestFile(dir, 'a.txt', body);
+    await writeTestFile(dir, 'b.txt', body);
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    // The walk's first file keeps its diff; only NTFS sorts that to a.txt.
+    const first = (await readdir(dir))[0];
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      [`replace_diff_budget/${first ?? ''}`],
+    );
+  });
+
+  it('replace_text diff budget does not depend on completion order', async (t) => {
+    // Patches of about 12 KiB, 12 KiB and 1 KiB in walk order: the second
+    // never fits beside the first, and the third always does.
+    const big = Array.from({ length: 300 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    const setup = async (name: string): Promise<string[]> => {
+      const dir = join(tmpDir, name);
+      for (const file of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(dir, file, 'x');
+      // The walk follows readdir order, which only NTFS sorts.
+      const order = await readdir(dir);
+      await writeTestFile(dir, order[0] ?? '', big);
+      await writeTestFile(dir, order[1] ?? '', big);
+      await writeTestFile(dir, order[2] ?? '', 'needle\n');
+      return order;
+    };
+    const walkFirst = await setup('replace_budget_walk_first');
+    const smallFirst = await setup('replace_budget_small_first');
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        const run = basename(dirname(a[0]));
+        const name = basename(a[0]);
+        // One run finishes in walk order, the other finishes the small third file first.
+        if (run === 'replace_budget_walk_first' && name === walkFirst[2]) await sleep(100);
+        if (run === 'replace_budget_small_first' && name !== smallFirst[2]) await sleep(100);
+        return realOpen.apply(this, a);
+      },
+    );
+    for (const [name, order] of [
+      ['replace_budget_walk_first', walkFirst],
+      ['replace_budget_small_first', smallFirst],
+    ] as const) {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: join(tmpDir, name),
+          searchPattern: 'needle',
+          replacement: 'pin',
+          dryRun: true,
+        },
+      });
+      const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+      assert.strictEqual(meta.diffTruncated, true, name);
+      assert.deepStrictEqual(
+        [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+        [`${name}/${order[0] ?? ''}`, `${name}/${order[2] ?? ''}`],
+        name,
+      );
+    }
+  });
+
+  it('replace_text keeps a patch a slower lower patch would leave room for', async (t) => {
+    // Walk-order patches of about 10, 15 and 8 KiB: first-fit keeps the first
+    // and third. Finishing the second, then the third, then the first must
+    // not refuse the third against the second, which the first later displaces.
+    const lines = (n: number): string =>
+      Array.from({ length: n }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    const dir = join(tmpDir, 'replace_budget_displaced');
+    for (const file of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(dir, file, 'x');
+    // The walk follows readdir order, which only NTFS sorts.
+    const order = await readdir(dir);
+    await writeTestFile(dir, order[0] ?? '', lines(250));
+    await writeTestFile(dir, order[1] ?? '', lines(375));
+    await writeTestFile(dir, order[2] ?? '', lines(200));
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        const name = basename(a[0]);
+        if (name === order[0]) await sleep(200);
+        if (name === order[2]) await sleep(100);
+        return realOpen.apply(this, a);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      [`replace_budget_displaced/${order[0] ?? ''}`, `replace_budget_displaced/${order[2] ?? ''}`],
+    );
+  });
+
+  it('replace_text keeps the walk-first diffs that fit and skips the rest', async () => {
+    const dir = join(tmpDir, 'replace_diff_prefix');
+    // Each patch is about 5.6 KiB: three fit the 20 KiB budget, a fourth does not.
+    const body = Array.from({ length: 130 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']) {
+      await writeTestFile(dir, name, body);
+    }
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    // fs.glob walks in readdir order.
+    const walked = (await readdir(dir)).slice(0, 3).map((name) => `replace_diff_prefix/${name}`);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      walked,
+    );
+  });
+
+  it('replace_text drops a diff over the whole budget and keeps a small one', async () => {
+    const dir = join(tmpDir, 'replace_diff_huge');
+    // About 30 KiB of patch alone, past the 20 KiB budget.
+    const huge = Array.from({ length: 700 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    await writeTestFile(dir, 'huge.txt', huge);
+    await writeTestFile(dir, 'small.txt', 'needle\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      ['replace_diff_huge/small.txt'],
+    );
+  });
+
+  it('replace_text on a named file past maxResults replaces every match and does not stop', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxResults: 2 },
+    });
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.totalMatches, 5);
+    assert.strictEqual(meta.stoppedReason, undefined);
+    assert.doesNotMatch(firstTextBlock(result).text ?? '', /scan stopped early/u);
+  });
+
   it('edit, patch and diff refuse a non-UTF-8 file and leave its bytes intact', async () => {
     const dir = join(tmpDir, 'nonutf8');
     await mkdir(dir, { recursive: true });
@@ -3271,6 +3786,83 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     const sc = result._meta as { results?: { path: string }[] };
     assert.ok(sc.results?.some((r) => r.path.endsWith('findme.txt')));
+  });
+
+  it('find_files counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'find_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern: '**/*.ts' },
+      });
+      const meta = result._meta as { results?: { path: string }[]; skippedInaccessible?: number };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
+      assert.deepStrictEqual(
+        meta.results?.map((r) => basename(r.path)),
+        ['a.ts'],
+      );
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('find_files keeps the first results in walk order past its cap', () => {
+    const over = keepFirstResults(
+      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0 },
+      2,
+    );
+    assert.deepStrictEqual(over, { results: ['a', 'b'], stoppedReason: 'maxResults' });
+    const timedOut = keepFirstResults(
+      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0, stoppedReason: 'timeout' },
+      2,
+    );
+    assert.strictEqual(timedOut.stoppedReason, 'timeout');
+    const exact = keepFirstResults({ results: ['a', 'b'], scanned: 2, skippedInaccessible: 0 }, 2);
+    assert.deepStrictEqual(exact, { results: ['a', 'b'] });
+  });
+
+  it('find_files filters by pattern', async () => {
+    const dir = join(tmpDir, 'find_filter');
+    await writeTestFile(dir, 'moduleA.ts', 'x');
+    await writeTestFile(dir, 'notes.txt', 'x');
+    await writeTestFile(dir, 'sub/moduleC.ts', 'x');
+    await writeTestFile(dir, 'sub/readme.txt', 'x');
+    const find = async (pattern: string) => {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern },
+      });
+      return (result._meta as { results: { path: string }[] }).results;
+    };
+    const ts = await find('**/*.ts');
+    assert.strictEqual(ts.length, 2);
+    assert.ok(ts.every((r) => r.path.endsWith('.ts')));
+    const txt = await find('**/*.txt');
+    assert.strictEqual(txt.length, 2);
+    assert.ok(txt.every((r) => r.path.endsWith('.txt')));
+  });
+
+  it("find_files sortBy 'name' orders by basename, not full path", async () => {
+    const dir = join(tmpDir, 'find_sort');
+    await writeTestFile(dir, 'zzz/alpha.ts', '// a');
+    await writeTestFile(dir, 'aaa/omega.ts', '// o');
+    const names = async (sortBy?: 'name') => {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern: '**/*.ts', ...(sortBy ? { sortBy } : {}) },
+      });
+      return (result._meta as { results: { path: string }[] }).results.map((r) => basename(r.path));
+    };
+    assert.deepStrictEqual(await names('name'), ['alpha.ts', 'omega.ts']);
+    assert.deepStrictEqual(await names(), ['omega.ts', 'alpha.ts']);
   });
 
   it('find_files pages are stable and reject cursor pattern replay', async () => {
@@ -3761,6 +4353,46 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('search_text counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'search_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'needle');
+    await writeTestFile(dir, 'locked/x.ts', 'needle');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: dir, searchPattern: 'needle' },
+      });
+      const meta = result._meta as { skippedInaccessible?: number };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('search_text on a named unreadable file fails the call', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'search_named_locked');
+    const file = join(dir, 'b.txt');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    await chmod(file, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: file, searchPattern: 'needle' },
+      });
+      assert.strictEqual(result.isError, true);
+    } finally {
+      await chmod(file, 0o644);
+    }
+  });
+
   it('search_text: anchors, word boundaries and CRLF behave per line (prefilter must not change them)', async () => {
     const dir = join(tmpDir, 'prefilter_semantics');
     await writeTestFile(tmpDir, 'prefilter_semantics/lf.txt', 'x\nimport a\n  import b\nfoo$bar\n');
@@ -3834,8 +4466,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
       }
       const guard = await makeGuard([root]);
-      const a = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
-      const b = await searchContent(root, 'CAP_HIT', { maxResults: 7 }, guard);
+      const a = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
+      const b = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
       const key = (r: typeof a) => r.matches.map((m) => `${basename(m.file)}:${m.line}`);
       assert.deepStrictEqual(key(a), key(b));
       assert.strictEqual(a.matches.length, 7);
@@ -3857,7 +4489,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
       );
       const guard = await makeGuard([root]);
-      const r = await searchContent(root, 'CAP_ONE', { maxResults: 5 }, guard);
+      const r = await searchContent({ root }, 'CAP_ONE', { maxResults: 5 }, guard);
       assert.strictEqual(r.matches.length, 5);
       assert.strictEqual(r.summary.matchingLines, 5);
       assert.strictEqual(r.summary.filesMatched, 1);
@@ -4496,7 +5128,7 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
 
       const outcome = await searchContent(
-        dir,
+        { root: dir },
         'NEEDLE',
         { isRegex: true },
         pair.serverCtx.pathGuard,
@@ -4505,12 +5137,17 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
 
       // The wasm module is still alive for a second search in the same process.
-      const again = await searchContent(dir, 'NEEDLE', { isRegex: true }, pair.serverCtx.pathGuard);
+      const again = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: true },
+        pair.serverCtx.pathGuard,
+      );
       assert.strictEqual(again.matches.length, 1);
 
       // A literal is matched natively, so the long line holds no hazard and is searched.
       const literal = await searchContent(
-        dir,
+        { root: dir },
         'NEEDLE',
         { isRegex: false },
         pair.serverCtx.pathGuard,
@@ -4527,7 +5164,7 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       await writeTestFile(dir, 'line.txt', 'needle\n'.repeat(200_000));
       const controller = new AbortController();
       const search = searchContent(
-        dir,
+        { root: dir },
         'needle',
         { isRegex: false, maxResults: 100_000, signal: controller.signal },
         pair.serverCtx.pathGuard,
@@ -4561,7 +5198,10 @@ describe('High-severity bug-hunt regressions (tools)', () => {
             caseSensitive: true,
           },
         });
-        assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+        const meta = result._meta as { stoppedReason?: string; summary: { failed: number } };
+        assert.strictEqual(meta.stoppedReason, 'timeout');
+        assert.strictEqual(meta.summary.failed, 0);
+        assert.notStrictEqual(result.isError, true);
         assert.strictEqual(await readFile(file, 'utf-8'), original);
       },
     );
@@ -4597,7 +5237,10 @@ describe('High-severity bug-hunt regressions (tools)', () => {
           const text = (result.content as { type: string; text: string }[])
             .map((c) => c.text)
             .join('\n');
-          assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+          const meta = result._meta as { stoppedReason?: string; summary: { failed: number } };
+          assert.strictEqual(meta.stoppedReason, 'timeout');
+          assert.strictEqual(meta.summary.failed, 0);
+          assert.notStrictEqual(result.isError, true);
           let written = 0;
           for (const n of names) {
             if ((await readFile(join(dir, n), 'utf-8')) === 'foobar\n') written++;

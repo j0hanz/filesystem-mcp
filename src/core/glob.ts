@@ -449,6 +449,14 @@ export interface GlobEntriesOptions {
   pathGuard?: Pick<PathGuard, 'isSensitive'>;
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
+  /**
+   * Called once with the absolute path of each directory the walk descends into
+   * (a directory at the `maxDepth` bound included: it is read, only its children
+   * are pruned). Never for `cwd`, nor for a pruned directory. fs.glob turns a
+   * failed readdir into an empty list, so this is how a caller learns which
+   * directories to probe.
+   */
+  onDirectory?: (absolutePath: string) => void;
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
@@ -587,7 +595,10 @@ function createWalkFilter(
   maxDepth: number | undefined,
   signal: AbortSignal | undefined,
   pathGuard: Pick<PathGuard, 'isSensitive'> | undefined,
+  onDirectory: ((absolutePath: string) => void) | undefined,
 ): WalkFilter {
+  // fs.glob asks once per pattern variant, so a directory is asked about repeatedly.
+  const reportedDirs = new Set<string>();
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
   // name also exists in the process cwd. Resolving against `cwd` names the
@@ -645,8 +656,17 @@ function createWalkFilter(
       // Stop descent one level past the depth bound. Pruning a directory *at*
       // the bound would drop it where fs.glob treats it as top-level, so prune
       // its children instead; processDirentMatch drops that extra level.
-      if (maxDepth === undefined || !isDir) return false;
-      return posixRel.split('/').length - 1 > maxDepth;
+      const depth = posixRel.split('/').length - 1;
+      if (maxDepth !== undefined && isDir && depth > maxDepth) return true;
+      // A directory at the bound is listed but not read: none of its contents are wanted.
+      if (isDir && onDirectory && (maxDepth === undefined || depth < maxDepth)) {
+        const absolute = absoluteOf(match);
+        if (!reportedDirs.has(absolute)) {
+          reportedDirs.add(absolute);
+          onDirectory(absolute);
+        }
+      }
+      return false;
     },
     isExcluded: (match) => {
       const posixRel = relativeOf(match);
@@ -683,19 +703,14 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     maxDepth,
     signal,
     options.pathGuard,
+    options.onDirectory,
   );
 
-  let iterable: AsyncIterable<GlobDirentLike>;
-  try {
-    iterable = fsGlob([...patterns], {
-      cwd,
-      exclude: filter.prune,
-      withFileTypes: true,
-    }) as AsyncIterable<GlobDirentLike>;
-  } catch (error) {
-    if (suppressErrors) return;
-    throw error;
-  }
+  const iterable = fsGlob([...patterns], {
+    cwd,
+    exclude: filter.prune,
+    withFileTypes: true,
+  }) as AsyncIterable<GlobDirentLike>;
 
   try {
     for await (const match of iterable) {

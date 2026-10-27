@@ -1,8 +1,10 @@
 import * as z from 'zod/v4';
 
+import type { StoppedReason } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { ResultPaths } from '../core/path.ts';
+import { resolveScanScope } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -14,7 +16,7 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import { resolveSearchScope, searchContent } from '../core/search.ts';
+import { searchContent } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
 import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
@@ -72,7 +74,7 @@ interface SearchOutput {
   skippedTooLarge?: number;
   skippedBinary?: number;
   truncated?: boolean;
-  stoppedReason?: 'maxResults' | 'timeout';
+  stoppedReason?: StoppedReason;
   resourceUri?: string;
   nextCursor?: string;
 }
@@ -205,14 +207,13 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         cursor: args.cursor,
         pageSize: args.maxResults,
         produce: async () => {
-          const { basePath, explicitFile } = await resolveSearchScope(
-            args.path,
-            ctx.fs,
-            ctx.signal,
-          );
+          const scope = await resolveScanScope(args.path, ctx.fs, {
+            signal: ctx.signal,
+            allowFile: true,
+          });
 
           const result = await searchContent(
-            basePath,
+            scope,
             args.searchPattern,
             {
               includeHidden: args.includeHidden,
@@ -222,16 +223,15 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
               maxResults: MAX_SEARCH_RESULTS,
               skipIgnored: !args.includeIgnored,
               context: args.context,
-              ...(explicitFile !== undefined ? { explicitFile } : {}),
               ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
               signal: ctx.signal,
             },
             ctx.fs.pathGuard,
           );
 
-          // Relative to the root, not to basePath: `a.ts` from a search of
+          // Relative to the root, not to scope.root: `a.ts` from a search of
           // `src` would name `<root>/a.ts` when passed back.
-          const paths = ctx.fs.pathGuard.resultPaths(basePath);
+          const paths = ctx.fs.pathGuard.resultPaths(scope.root);
           return {
             items: buildSortedPayloads(result, paths),
             metadata: { ...result.summary, root: paths.root },
