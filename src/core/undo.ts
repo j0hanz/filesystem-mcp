@@ -750,14 +750,13 @@ export class UndoPreview {
     const guard = this.#fs.pathGuard;
     const keys = await Promise.all(
       paths.map((path, i) =>
-        (i === 0
-          ? guard.validatePathForWrite(path)
-          : guard.validatePathForDelete(path).catch(() => guard.validatePathForWrite(path))
-        ).catch((error: unknown) => {
-          if (!this.#touched(path)) throw error;
-          this.#assertAllowed(path);
-          return path;
-        }),
+        (i === 0 ? guard.validatePathForWrite(path) : guard.entryLockKey(path)).catch(
+          (error: unknown) => {
+            if (!this.#touched(path)) throw error;
+            this.#assertAllowed(path);
+            return path;
+          },
+        ),
       ),
     );
     // Sorted and deduped, as lockPairForWrite takes them: no deadlock, no re-entry.

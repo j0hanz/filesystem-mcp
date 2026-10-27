@@ -45,6 +45,26 @@ import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
 /** Links followed, or respelling rounds run, before a path is refused (Linux ELOOP's 40). */
 const MAX_SYMLINK_HOPS = 40;
 
+/** What a move, copy or rename does: see `PathGuard.resolveTransferDestination`. */
+export type TransferKind = 'distinct' | 'respelling' | 'self';
+
+/**
+ * A write target that already exists is realpathed to its on-disk spelling,
+ * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
+ * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
+ * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only that way;
+ * otherwise the resolved target unchanged. Parent segments are not re-spelled.
+ */
+function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
+  const requestedName = basename(requestedPath);
+  const resolvedName = basename(resolvedTarget);
+  if (requestedName === resolvedName) return resolvedTarget;
+  return unicodeMatchKey(requestedName) === unicodeMatchKey(resolvedName)
+    ? join(dirname(resolvedTarget), requestedName)
+    : resolvedTarget;
+}
+
 export interface ValidatedPathDetails {
   requestedPath: string;
   resolvedPath: string;
@@ -1169,6 +1189,53 @@ export class PathGuard {
     }
     this.assertNotSensitiveFile(realTarget, requestedPath);
     return realTarget;
+  }
+
+  /**
+   * Where a move, copy or rename of `source` to `destination` acts, and what
+   * kind of transfer it is. `source.entry` is what the operation moves (a link
+   * is the link) and `source.landing` where it lands (a link's target, or the
+   * entry itself when that cannot be named); the caller derives both, since a
+   * copy moves its landing and a move verifies it through a descriptor.
+   *
+   * A destination naming the source's own entry in another case or Unicode
+   * spelling is a respelling of that entry, acted on under the requested
+   * name: of the link itself when the source is a link, which the landing
+   * resolved to its target. A destination landing on the source, in either
+   * direction (a link onto its target, or onto a separate link to it), is a
+   * self-move: acting on it would replace that file with the link, or the
+   * link with its target. Throws as `validatePathForWrite` does.
+   */
+  async resolveTransferDestination(
+    destination: string,
+    source: { readonly entry: string; readonly landing: string },
+  ): Promise<{ readonly destination: string; readonly kind: TransferKind }> {
+    let landing = await this.validatePathForWrite(destination);
+    const entry = await this.validatePathForDelete(destination).catch(() => undefined);
+    const sameEntry = entry !== undefined && isSamePath(entry, source.entry);
+    if (sameEntry) landing = respellSpellingOnlyTarget(destination, source.entry);
+    const resolvedSource = resolve(source.landing);
+    const resolvedDest = resolve(landing);
+    const isSelf = sameEntry
+      ? resolvedDest === resolve(source.entry)
+      : resolvedSource === resolvedDest;
+    // Only a destination naming the source's own entry is renamed in place:
+    // onto a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
+    const kind: TransferKind = isSelf
+      ? 'self'
+      : sameEntry || isSamePath(resolvedSource, resolvedDest)
+        ? 'respelling'
+        : 'distinct';
+    return { destination: landing, kind };
+  }
+
+  /**
+   * The lock key of a path an operation moves away: its entry, so a link is
+   * locked as the link, not its target. A path whose entry cannot be named (a
+   * dry-run intermediate whose parent is gone) is keyed by its landing.
+   */
+  async entryLockKey(path: string): Promise<string> {
+    return this.validatePathForDelete(path).catch(() => this.validatePathForWrite(path));
   }
 
   async recomputeAllowedDirectories(): Promise<void> {

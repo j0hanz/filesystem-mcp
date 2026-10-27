@@ -19,12 +19,8 @@ import { destExists } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
-import {
-  isPathInsideDirectory,
-  isSamePath,
-  respellSpellingOnlyTarget,
-  unicodeMatchKey,
-} from '../core/path-utils.ts';
+import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
+import type { TransferKind } from '../core/path.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
@@ -110,35 +106,24 @@ async function planTransfer(
   let realSource: string;
   let opSource: string;
   let validDest: string;
+  let kind: TransferKind;
   let isDirectory: boolean;
   try {
     const source = await validateTransferSource(op, pair.source, fs, signal);
     ({ realSource, opSource, isDirectory } = source);
-    validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
+    ({ destination: validDest, kind } = await fs.pathGuard.resolveTransferDestination(
+      pair.destination,
+      { entry: opSource, landing: realSource },
+    ));
   } catch (error) {
     return { status: 'fail', failure: pairFailure(pair, error) };
   }
 
   // Comparisons run on the resolved source; only the fs call in phase 2 uses
-  // opSource. validatePathForWrite resolves the destination through a symlink
-  // too, so both sides of every check must be resolved to match.
+  // opSource. The destination is resolved through a symlink too, so both
+  // sides of every check must be resolved to match.
   const resolvedSource = resolve(realSource);
-  let resolvedDest = resolve(validDest);
-
-  // The entry the destination names, without following a final link. When it
-  // is the source's own entry in another case or Unicode spelling, this is a
-  // rename of that entry, re-spelled with the requested basename: of the link
-  // itself when the source is a link, which validatePathForWrite resolved to
-  // its target. Onto its target, in any spelling, a link is a self-move: a
-  // rename would replace that file with the link.
-  const destEntry = await fs.pathGuard
-    .validatePathForDelete(pair.destination)
-    .catch(() => undefined);
-  const sameEntry = destEntry !== undefined && isSamePath(destEntry, opSource);
-  if (sameEntry) {
-    validDest = respellSpellingOnlyTarget(pair.destination, opSource);
-    resolvedDest = resolve(validDest);
-  }
+  const resolvedDest = resolve(validDest);
 
   // On the final destination spelling: a re-spelled directory moves its
   // entries in or out of a spelling-specific allow or deny rule.
@@ -150,15 +135,12 @@ async function planTransfer(
     }
   }
 
-  const isSelf = sameEntry ? resolvedDest === resolve(opSource) : resolvedSource === resolvedDest;
-  // Only a destination naming the source's own entry is renamed in place:
-  // onto a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
-  const isSpellingOnlyRename = !isSelf && (sameEntry || isSamePath(resolvedSource, resolvedDest));
+  const isSpellingOnlyRename = kind === 'respelling';
 
   // A copy onto a case-only or Unicode-only variant of its own source is the
   // same file, so it is a no-op; the same rename is real work for move and
   // proceeds.
-  if (isSelf || (isSpellingOnlyRename && op === 'copy')) {
+  if (kind === 'self' || (isSpellingOnlyRename && op === 'copy')) {
     return { status: 'noop' };
   }
 

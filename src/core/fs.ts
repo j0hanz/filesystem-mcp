@@ -19,7 +19,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -35,7 +35,7 @@ import {
 import { detectMimeFromContent, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { isSamePath, normalizePath, respellSpellingOnlyTarget } from './path-utils.ts';
+import { isSamePath, normalizePath } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -179,13 +179,9 @@ export class GuardedFileSystem {
    */
   async lockPairForWrite<T>(a: string, b: string, fn: () => Promise<T>): Promise<T> {
     // `a` is where a rename lands (resolved like the move tool's destination);
-    // `b` is the entry being moved, kept as itself so a symlink is locked as
-    // the link, not its target. A `b` whose parent is gone (a dry-run
-    // intermediate) falls back to write validation.
+    // `b` is the entry being moved.
     const keyA = await this.pathGuard.validatePathForWrite(a);
-    const keyB = await this.pathGuard
-      .validatePathForDelete(b)
-      .catch(() => this.pathGuard.validatePathForWrite(b));
+    const keyB = await this.pathGuard.entryLockKey(b);
     if (keyA === keyB) return runExclusive(keyA, fn);
     const [first, second] = keyA < keyB ? [keyA, keyB] : [keyB, keyA];
     return runExclusive(first, () => runExclusive(second, fn));
@@ -302,27 +298,15 @@ export class GuardedFileSystem {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
-    let validNew = await this.pathGuard.validatePathForWrite(newPath);
-    // A new path naming the old entry itself, in another case or Unicode
-    // spelling, renames that entry. Probed without following a final link:
-    // validatePathForWrite resolved a link to its target, and renaming onto
-    // that would replace the target with the link.
-    const sameEntry = await this.pathGuard.validatePathForDelete(newPath).then(
-      (entry) => isSamePath(entry, validOld),
-      () => false,
-    );
-    if (sameEntry) validNew = respellSpellingOnlyTarget(newPath, validOld);
     // Where the old path lands: a link's target. A link whose target cannot be
     // named stands for itself, as a dangling source does in the move tool.
     const oldLanding = await this.pathGuard.validateExistingPath(oldPath).catch(() => validOld);
-    // A new path landing on the old one (a link onto its own target, or onto
-    // a separate link to it) is a self-move: renaming would replace the target
-    // with the link, or the link with its target.
-    const isSelf = sameEntry
-      ? resolve(validNew) === resolve(validOld)
-      : resolve(oldLanding) === resolve(validNew);
-    if (isSelf) return;
-    const spellingOnly = sameEntry || isSamePath(oldLanding, validNew);
+    const { destination: validNew, kind } = await this.pathGuard.resolveTransferDestination(
+      newPath,
+      { entry: validOld, landing: oldLanding },
+    );
+    if (kind === 'self') return;
+    const spellingOnly = kind === 'respelling';
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;

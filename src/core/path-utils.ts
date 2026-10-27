@@ -1,15 +1,5 @@
 import { homedir, platform } from 'node:os';
-import {
-  basename,
-  delimiter,
-  dirname,
-  join,
-  parse,
-  relative,
-  resolve,
-  sep,
-  win32,
-} from 'node:path';
+import { delimiter, join, parse, relative, resolve, sep, win32 } from 'node:path';
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
@@ -232,23 +222,6 @@ export function escapeNonAscii(name: string): string {
     /[^\x20-\x7e]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`,
   );
-}
-
-/**
- * A write target that already exists is realpathed to its on-disk spelling,
- * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
- * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
- * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
- * re-spelled with the requested basename when the two differ only that way;
- * otherwise the resolved target unchanged. Parent segments are not re-spelled.
- */
-export function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
-  const requestedName = basename(requestedPath);
-  const resolvedName = basename(resolvedTarget);
-  if (requestedName === resolvedName) return resolvedTarget;
-  return unicodeMatchKey(requestedName) === unicodeMatchKey(resolvedName)
-    ? join(dirname(resolvedTarget), requestedName)
-    : resolvedTarget;
 }
 
 export function normalizeAllowedDirectory(dir: string): string {

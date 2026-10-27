@@ -44,30 +44,32 @@ it reaches `rename`), so tool behavior is unchanged.
 
 ### Task 1: self-move in `rename`
 
-- [ ] Add to `__tests__/unicode-paths.test.ts` (`through the tools`):
-      `rename onto a separate link to the source changes nothing` (F = `NBSP_NAME`,
-      L = `ASCII_NAME` linking to F) and `rename of a link onto its own target
-changes nothing`. Run; both fail.
-- [ ] In `GuardedFileSystem.rename`, derive the old path's landing and return
+- [x] Add two tests to `__tests__/unicode-paths.test.ts` (`through the tools`):
+      "rename onto a separate link to the source changes nothing" (F is
+      `NBSP_NAME`, L is `ASCII_NAME` linking to F) and "rename of a link onto
+      its own target changes nothing". Run; both fail.
+- [x] In `GuardedFileSystem.rename`, derive the old path's landing and return
       before any capture or `fsRename` when the move tool's `isSelf` rule holds.
-- [ ] Run the two tests and `undo.test.ts`; commit
-      `fix(fs): treat a rename that lands on its source as a self-move`.
+- [x] Run the two tests and `undo.test.ts`; commit "fix(fs): treat a rename
+      that lands on its source as a self-move".
 
 ### Task 2: `PathGuard.resolveTransferDestination`
 
-- [ ] Add the method and `TransferKind` to `src/core/path.ts`; move
+- [x] Add the method and `TransferKind` to `src/core/path.ts`; move
       `respellSpellingOnlyTarget` in as a module-private function.
-- [ ] Port TC-PH-009/010/011/014 from `path-helpers.test.ts` to PathGuard tests
-      over a temp root (`unicode-paths.test.ts`, `PathGuard` block), keeping the ids.
-- [ ] Switch `move.ts` `planTransfer` and `fs.ts` `rename` to it.
+- [x] Port TC-PH-009/010/011/014 from `path-helpers.test.ts` to PathGuard tests
+      over a temp root (`unicode-paths.test.ts`, `PathGuard` block), keeping
+      the ids, plus a link-onto-its-target self-move case.
+- [x] Switch `move.ts` `planTransfer` and `fs.ts` `rename` to it.
 
 ### Task 3: `PathGuard.entryLockKey`
 
-- [ ] Add the method; tests: a link is keyed as the link, a path whose parent
+- [x] Add the method; test: a link is keyed as the link, a path whose parent
       is missing falls back to its landing.
-- [ ] Switch `fs.ts` `lockPairForWrite` and `undo.ts` `#locked` to it.
+- [x] Switch `fs.ts` `lockPairForWrite` and `undo.ts` `#locked` to it.
 
 ### Task 4: verify
 
-- [ ] `npm run check`; commit `refactor(path): give the transfer destination
-rule one home in PathGuard`.
+- [x] `npm run check` on Windows; the affected test files on Linux (WSL).
+- [x] Commit "refactor(path): give the transfer destination rule one home in
+      PathGuard".
