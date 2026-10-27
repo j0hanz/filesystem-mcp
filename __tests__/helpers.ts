@@ -83,10 +83,15 @@ export async function waitFor(condition: () => boolean, timeoutMs = 3000): Promi
   }
 }
 
-/** Resolve when `client` receives notifications/resources/updated for `uri`. Replaces any handler registered for the method. */
+/**
+ * Run `trigger` and resolve when `client` receives notifications/resources/updated for `uri`.
+ * The handler is registered before `trigger` runs, so an update that lands before it settles
+ * still counts. Replaces any handler registered for the method.
+ */
 export async function waitForResourceUpdate(
   client: Client,
   uri: string,
+  trigger: () => Promise<unknown>,
   timeoutMs = 5000,
 ): Promise<void> {
   const started = Date.now();
@@ -97,6 +102,7 @@ export async function waitForResourceUpdate(
     if (got === uri) arrived = true;
     else others.push(got);
   });
+  await trigger();
   await waitFor(() => arrived, timeoutMs);
   assert.ok(
     arrived,

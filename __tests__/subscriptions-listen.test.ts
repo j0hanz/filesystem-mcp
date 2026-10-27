@@ -114,8 +114,7 @@ describe('HTTP watcher fan-out and listen admission', () => {
 
     const subscription = await client.listen({ resourceSubscriptions: [validUri] });
     try {
-      await writeFile(filePath, 'changed');
-      await waitForResourceUpdate(client, validUri);
+      await waitForResourceUpdate(client, validUri, () => writeFile(filePath, 'changed'));
     } finally {
       await subscription.close();
     }
@@ -346,8 +345,7 @@ describe('HTTP recursive directory watch', () => {
     subscription = await client.listen({ resourceSubscriptions: [dirUri] });
 
     const childPath = join(tmpDir, 'child.txt');
-    await writeFile(childPath, 'new child');
-    await waitForResourceUpdate(client, dirUri);
+    await waitForResourceUpdate(client, dirUri, () => writeFile(childPath, 'new child'));
   });
 });
 
@@ -488,8 +486,7 @@ describe('HTTP duplicate listen does not consume capacity', () => {
     // Establish the watcher for `uri` first and prove it is live through a
     // delivered notification.
     sub = await client.listen({ resourceSubscriptions: [uri] });
-    await writeFile(filePath, 'first-change');
-    await waitForResourceUpdate(client, uri);
+    await waitForResourceUpdate(client, uri, () => writeFile(filePath, 'first-change'));
 
     // `uri` now occupies exactly one slot. Fill every remaining slot with real
     // files and include `uri` again in the same batch. The already-watched URI
@@ -542,8 +539,7 @@ describe('HTTP re-listen after full release', () => {
     await setTimeout(100);
 
     sub = await client.listen({ resourceSubscriptions: [uri] });
-    await writeFile(filePath, 'changed-after-relisten');
-    await waitForResourceUpdate(client, uri);
+    await waitForResourceUpdate(client, uri, () => writeFile(filePath, 'changed-after-relisten'));
   });
 });
 

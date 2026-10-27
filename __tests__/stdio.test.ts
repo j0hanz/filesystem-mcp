@@ -103,9 +103,8 @@ describe('Stdio Transport (real subprocess)', () => {
     const uri = buildFileResourceUri(filePath);
 
     subscriptions.push(await harness.client.listen({ resourceSubscriptions: [uri] }));
-    await writeFile(filePath, 'changed');
 
-    await waitForResourceUpdate(harness.client, uri);
+    await waitForResourceUpdate(harness.client, uri, () => writeFile(filePath, 'changed'));
   });
 
   it('STDIO-004: re-listening on one URI registers one watcher callback, not one per listen', async () => {

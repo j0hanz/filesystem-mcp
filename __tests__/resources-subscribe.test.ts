@@ -41,8 +41,7 @@ describe('Resource subscriptions round-trip', () => {
     await pair.client.subscribeResource({ uri });
 
     // Trigger file modification
-    await writeFile(filePath, 'changed');
-    await waitForResourceUpdate(pair.client, uri);
+    await waitForResourceUpdate(pair.client, uri, () => writeFile(filePath, 'changed'));
 
     // Unsubscribe, then prove the silence with a fresh local handler (the
     // helper call above replaced any handler registered for the method).
@@ -59,6 +58,30 @@ describe('Resource subscriptions round-trip', () => {
     await waitFor(() => received !== undefined, 300);
 
     assert.strictEqual(received, undefined, 'Should not receive notification after unsubscribe');
+  });
+
+  it('waitForResourceUpdate counts an update that lands before its trigger settles', async () => {
+    const filePath = await writeTestFile(tmpDir, 'early.txt', 'initial');
+    const uri = buildFileResourceUri(filePath);
+    await pair.client.subscribeResource({ uri });
+    try {
+      // The update is sent 50 ms after the write; this trigger settles at 150 ms.
+      await waitForResourceUpdate(pair.client, uri, async () => {
+        await writeFile(filePath, 'changed');
+        await setTimeout(150);
+      });
+    } finally {
+      await pair.client.unsubscribeResource({ uri });
+    }
+  });
+
+  it('waitForResourceUpdate rejects with the trigger error at once', async () => {
+    const started = performance.now();
+    await assert.rejects(
+      waitForResourceUpdate(pair.client, 'file:///never', () => Promise.reject(new Error('boom'))),
+      { message: 'boom' },
+    );
+    assert.ok(performance.now() - started < 1000, 'must not wait out the timeout');
   });
 
   it('a repeated subscribe is one subscription: one notification, released by one unsubscribe', async () => {
