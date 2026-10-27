@@ -2,9 +2,11 @@ import { opendir, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { StoppedReason } from './concurrency.ts';
-import { ErrorCode, FsError, isSkippableErrno } from './errors.ts';
+import { withAbort } from './concurrency.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, isSkippableErrno } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
+import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
@@ -116,10 +118,20 @@ export async function scan<R>(
 
   const probes: string[] = [scope.root];
   const probe = async (dir: string): Promise<void> => {
-    if (await probeDirectory(dir, pathGuard)) skippedInaccessible++;
+    try {
+      if (await probeDirectory(dir, pathGuard, signal)) skippedInaccessible++;
+    } catch (error) {
+      if (!signal?.aborted) throw error;
+      cut = true;
+    }
   };
   const drainProbes = async (): Promise<void> => {
     for (let dir = probes.shift(); dir !== undefined; dir = probes.shift()) {
+      // No probe starts once the signal has aborted, the root's included.
+      if (signal?.aborted) {
+        cut = true;
+        return;
+      }
       const target = dir;
       await run(() => probe(target));
     }
@@ -245,12 +257,35 @@ export async function scan<R>(
  * True when `dir` counts as skipped: fs.glob reads an unreadable directory as
  * empty, so opening it is how the Scan learns it skipped one. A sensitive
  * directory, under either spelling, is never counted: the count would reveal it.
+ * The open races the signal, so a stalled mount ends the probe at the deadline;
+ * an abort rejects.
  */
-export async function probeDirectory(dir: string, pathGuard: PathGuard): Promise<boolean> {
+export async function probeDirectory(
+  dir: string,
+  pathGuard: PathGuard,
+  signal?: AbortSignal,
+): Promise<boolean> {
   try {
-    await (await opendir(dir)).close();
+    signal?.throwIfAborted();
+    const opening = opendir(dir);
+    const handle = await withAbort(opening, signal).catch((error: unknown) => {
+      // A handle that arrives after the race was lost is closed, not leaked.
+      void opening
+        .then(
+          (late) => late.close(),
+          () => undefined,
+        )
+        .catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to release directory probe of ${dir} after abort: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      throw error;
+    });
+    await handle.close();
     return false;
   } catch (error) {
+    if (signal?.aborted) throw error;
     if (!isSkippableErrno(error) || pathGuard.isSensitive(dir)) return false;
     try {
       return !pathGuard.isSensitive(await realpath(dir));

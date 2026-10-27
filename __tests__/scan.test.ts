@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, realpath } from 'node:fs/promises';
+import type { Dir } from 'node:fs';
+import fsPromises, { chmod, mkdir, realpath } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
@@ -317,6 +319,30 @@ describe('scan', () => {
     const out = await scan({ root }, base({ signal: AbortSignal.abort() }), byPath);
     assert.deepEqual(out.results, []);
     assert.equal(out.stoppedReason, 'timeout');
+  });
+
+  it('pre-aborted scan probes nothing', async () => {
+    const out = await scan(
+      { root: join(root, 'gone') },
+      base({ signal: AbortSignal.abort() }),
+      byPath,
+    );
+    assert.equal(out.stoppedReason, 'timeout');
+    assert.equal(out.skippedInaccessible, 0);
+  });
+
+  it('a stalled probe ends at the deadline', { timeout: 5000 }, async (t) => {
+    await files('a.txt', 'sub/b.txt');
+    // A hung mount: the directory open never settles, so only the signal can end the probe.
+    t.mock.method(fsPromises, 'opendir', () => new Promise<Dir>(() => {}));
+    syncBuiltinESMExports();
+    try {
+      const out = await scan({ root }, base({ signal: AbortSignal.timeout(200) }), byPath);
+      assert.equal(out.stoppedReason, 'timeout');
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
   });
 
   it('named file errors fail the call', async () => {
