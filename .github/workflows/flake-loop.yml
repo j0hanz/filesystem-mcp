@@ -1,0 +1,41 @@
+# Scratch only (issue #131): never merge this file.
+name: Flake loop
+on:
+  push:
+    branches: ['scratch/flake-loop-131-*']
+permissions:
+  contents: read
+jobs:
+  loop:
+    name: Loop (${{ matrix.os }}${{ matrix.node && format(', node {0}', matrix.node) || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            node: ''
+          - os: ubuntu-latest
+            node: '26'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          node-version-file: ${{ !matrix.node && '.nvmrc' || '' }}
+          cache: npm
+      - run: npm ci
+      - name: Run both files 25 times
+        shell: bash
+        run: |
+          fail=0
+          for i in $(seq 1 25); do
+            if ! node --test --test-timeout=60000 __tests__/resources-subscribe.test.ts __tests__/subscriptions-listen.test.ts > "run-$i.log" 2>&1; then
+              fail=$((fail + 1))
+              echo "::error::run $i failed"
+              grep -E '✖|AssertionError|no notifications' "run-$i.log" | head -20
+            fi
+          done
+          echo "failed $fail of 25"
+          test "$fail" -eq 0
