@@ -3338,6 +3338,39 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('replace_text interleaves changed and failure results in walk order', async (t) => {
+    const dir = join(tmpDir, 'replace_mixed_walk_order');
+    await writeTestFile(dir, 'a.txt', 'needle\n');
+    await writeTestFile(dir, 'b.txt', 'needle\n');
+    const order = await readdir(dir);
+    const failedPath = join(dir, order[0] ?? '');
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        if (a[0] === failedPath) {
+          throw new FsError(ErrorCode.TOO_LARGE, 'File exceeds size limit', a[0]);
+        }
+        return realOpen.apply(this, a);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as {
+      results: { path: string; value?: { matches: number }; error?: { code: string } }[];
+    };
+    assert.deepStrictEqual(
+      meta.results.map((r) => r.path),
+      order.map((name) => `replace_mixed_walk_order/${name}`),
+    );
+    assert.strictEqual(meta.results[0]?.error?.code, 'TOO_LARGE');
+    assert.strictEqual(meta.results[1]?.value?.matches, 1);
+  });
+
   it('replace_text keeps the walk-first failure rows and holds no error past its entry', async (t) => {
     const dir = join(tmpDir, 'replace_failures');
     const count = 25;

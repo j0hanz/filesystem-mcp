@@ -113,6 +113,7 @@ const MAX_CHANGED_FILES = 100;
 const MAX_DIFF_SIZE = 20 * 1024; // 20KB limit for diff output
 
 interface Failure {
+  index: number;
   path: string;
   error: Problem;
 }
@@ -130,10 +131,15 @@ function keepFailure(rows: FailureRow[], row: FailureRow): void {
   if (rows.length > MAX_FAILURES) rows.pop();
 }
 
-function recordChangedFile(summary: ReplaceSummary, filePath: string, matches: number): void {
+function recordChangedFile(
+  summary: ReplaceSummary,
+  index: number,
+  filePath: string,
+  matches: number,
+): void {
   const relativePath = summary.paths.show(filePath);
   if (summary.changedFiles.length < MAX_CHANGED_FILES) {
-    summary.changedFiles.push({ path: relativePath, matches });
+    summary.changedFiles.push({ index, path: relativePath, matches });
     return;
   }
   summary.changedFilesTruncated = true;
@@ -297,7 +303,7 @@ type EntryOutcome =
   | { kind: 'failed'; path: string; error: unknown };
 
 /** What scan holds until the walk ends: a failure's error never reaches it. */
-type ScannedOutcome = Exclude<EntryOutcome, { kind: 'failed' }>;
+type ScannedOutcome = Exclude<EntryOutcome, { kind: 'failed' }> & { index: number };
 
 /** `onChanged` receives the plan, whose contents the outcome does not carry, and says if its diff was refused. */
 async function processEntry(
@@ -444,7 +450,7 @@ interface ReplaceSummary {
   failedFiles: number;
   skippedBinary: number;
   failures: Failure[];
-  changedFiles: { path: string; matches: number }[];
+  changedFiles: { index: number; path: string; matches: number }[];
   changedFilesTruncated: boolean;
   diff: string;
   diffTruncated: boolean;
@@ -488,9 +494,17 @@ function buildSearchAndReplaceStructuredResult(
   args: SearchAndReplaceArgs,
 ): SearchAndReplaceOutput {
   const results = [
-    ...summary.changedFiles.map((f) => ({ path: f.path, value: { matches: f.matches } })),
-    ...summary.failures.map((f) => ({ path: f.path, error: f.error })),
-  ];
+    ...summary.changedFiles.map((f) => ({
+      index: f.index,
+      result: { path: f.path, value: { matches: f.matches } },
+    })),
+    ...summary.failures.map((f) => ({
+      index: f.index,
+      result: { path: f.path, error: f.error },
+    })),
+  ]
+    .sort((a, b) => a.index - b.index)
+    .map(({ result }) => result);
   return {
     root: summary.paths.root,
     results,
@@ -595,7 +609,8 @@ async function handleSearchAndReplace(
             ? patchWithinBudget(budget, entry.index, paths.show(entry.path), plan)
             : {};
         });
-        if (o?.kind !== 'failed') return o;
+        if (o === undefined) return undefined;
+        if (o.kind !== 'failed') return { ...o, index: entry.index };
         failedFiles++;
         keepFailure(failureRows, { index: entry.index, path: o.path, error: o.error });
         return undefined;
@@ -612,6 +627,7 @@ async function handleSearchAndReplace(
   summary.diffTruncated = budget.truncated;
   summary.failedFiles = failedFiles;
   summary.failures = failureRows.map((f) => ({
+    index: f.index,
     path: paths.show(f.path),
     error: Problem.fromUnknown(f.error, ErrorCode.UNKNOWN, f.path),
   }));
@@ -623,7 +639,7 @@ async function handleSearchAndReplace(
       case 'changed':
         summary.totalMatches += o.matches;
         summary.filesChanged++;
-        recordChangedFile(summary, o.path, o.matches);
+        recordChangedFile(summary, o.index, o.path, o.matches);
         if (o.diffTruncated) summary.diffTruncated = true;
         break;
     }
