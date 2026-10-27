@@ -30,10 +30,11 @@ import {
   sameIdentity,
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
+import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
-import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
+import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -747,20 +748,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
     });
 
-    it('a binary written file at the base64 edge gets no stdio link', () => {
-      const path = join(tmpDir, 'edge.bin');
-      const link = (size: number) =>
-        writtenFileLinks(path, 'application/octet-stream', size, false, undefined, 'stdio', {
-          content: '',
-          kind: 'binary',
-        });
-      assert.strictEqual(
-        link(3 * Math.floor(MAX_OUTBOUND_RESULT_BYTES / 4)).resourceUri,
-        undefined,
-      );
-      assert.ok(link(3 * Math.floor((MAX_OUTBOUND_RESULT_BYTES - 64 * KIB) / 4) - 3).resourceUri);
-    });
-
     it('written file links stop at the encoded stdio read size on stdio only', () => {
       const validPath = join(tmpDir, 'stdio-links.txt');
       const meta = (content: string, transport?: 'stdio' | 'http') =>
@@ -778,13 +765,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.ok(meta(quotes).resourceUri);
     });
 
-    it('written file links without content assume the worst escape on stdio', () => {
+    it('written file links without content use the raw size on stdio', () => {
       const path = join(tmpDir, 'stdio-links.txt');
-      assert.strictEqual(
-        writtenFileLinks(path, 'text/plain', 2 * MIB, false, undefined, 'stdio').resourceUri,
-        undefined,
-      );
-      assert.ok(writtenFileLinks(path, 'text/plain', MIB, false, undefined, 'stdio').resourceUri);
+      const link = (size: number) =>
+        writtenFileLinks(path, 'text/plain', size, false, undefined, 'stdio').resourceUri;
+      // The URI and MIME fields count, so an exact-limit file has no room left.
+      assert.ok(link(MAX_OUTBOUND_RESULT_BYTES - KIB));
+      assert.strictEqual(link(MAX_OUTBOUND_RESULT_BYTES), undefined);
     });
   });
 

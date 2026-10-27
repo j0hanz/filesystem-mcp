@@ -28,16 +28,12 @@ import {
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
 import { Logger, voidSend } from './core/observability.ts';
+import { bytesOverMessageLimit, readFloorOver, refuseResourceRead } from './core/outbound.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
 import { entryReadResult } from './core/store.ts';
-import {
-  base64EncodedBytes,
-  getMaxTextFileSize,
-  jsonBytesOver,
-  MAX_OUTBOUND_RESULT_BYTES,
-} from './core/util.ts';
+import { getMaxTextFileSize } from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -227,21 +223,21 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       await options.pathGuard.validateExistingPath(rawPath);
       const fs = new GuardedFileSystem(options.pathGuard);
-      const stdio = options.transport === 'stdio';
-      if (stdio) {
+      if (options.transport === 'stdio') {
         // Text encodes to at least its own bytes and base64 to 4/3 of them,
         // so a file over the limit is refused before it is read. One past the
         // file size limit is left to readRaw, whose refusal names that limit:
         // HTTP would not serve it either.
         const { stats } = await fs.stat(rawPath, { signal: ctx.mcpReq.signal });
-        if (stats.size > MAX_OUTBOUND_RESULT_BYTES && stats.size <= getMaxTextFileSize()) {
-          throw tooLargeForStdio(stats.size, true);
+        const floor = readFloorOver(options.transport, stats.size, false);
+        if (floor !== undefined && stats.size <= getMaxTextFileSize()) {
+          throw refuseResourceRead(floor, true);
         }
       }
       const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
-      if (stdio && readResult.isBinary) {
-        const base64Bytes = base64EncodedBytes(readResult.content.length);
-        if (base64Bytes > MAX_OUTBOUND_RESULT_BYTES) throw tooLargeForStdio(base64Bytes, true);
+      if (readResult.isBinary) {
+        const floor = readFloorOver(options.transport, readResult.content.length, true);
+        if (floor !== undefined) throw refuseResourceRead(floor, true);
       }
 
       return {
@@ -437,28 +433,13 @@ function fsErrorToProtocolError(error: FsError): ProtocolError {
   });
 }
 
-/**
- * The refusal for a result stdio's fixed-size reader cannot carry. `atLeast`
- * when `bytes` is a lower bound known before the result was encoded.
- */
-function tooLargeForStdio(bytes: number, atLeast = false): ProtocolError {
-  const suggestion = 'Read smaller slices/pages with tools, or connect over HTTP.';
-  return new ProtocolError(
-    ProtocolErrorCode.InvalidParams,
-    `Resource result too large to return (${atLeast ? 'at least ' : ''}${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${suggestion}`,
-    { code: ErrorCode.TOO_LARGE, suggestion },
-  );
-}
-
 function wrapRead(contract: ResourceContract, transport: ResourceRegistrationOptions['transport']) {
   return async (uri: URL, variables: Record<string, string | string[]>, ctx: ServerContext) => {
     try {
       const result = await contract.read(uri, variables, ctx);
-      if (transport === 'stdio') {
-        // Cache/file bytes exclude outer JSON escaping and binary base64.
-        const encodedBytes = jsonBytesOver(result, MAX_OUTBOUND_RESULT_BYTES);
-        if (encodedBytes !== undefined) throw tooLargeForStdio(encodedBytes);
-      }
+      // Cache/file bytes exclude outer JSON escaping and binary base64.
+      const encodedBytes = bytesOverMessageLimit(transport, result);
+      if (encodedBytes !== undefined) throw refuseResourceRead(encodedBytes);
       return result;
     } catch (error) {
       // The SDK brands ProtocolError with `static [Symbol.hasInstance]`, so this

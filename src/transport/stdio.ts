@@ -13,12 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 import { formatUnknownErrorMessage, normalizeUnknownError } from '../core/errors.ts';
 import { Logger, voidSend } from '../core/observability.ts';
+import { MAX_OUTBOUND_RESULT_BYTES, MAX_STDIO_REQUEST_ID_BYTES } from '../core/outbound.ts';
 import type { ServerOptions } from '../core/path.ts';
-import {
-  getMaxInboundMessageBytes,
-  MAX_OUTBOUND_RESULT_BYTES,
-  MAX_STDIO_REQUEST_ID_BYTES,
-} from '../core/util.ts';
+import { getMaxInboundMessageBytes } from '../core/util.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createRuntimeState, createServer } from '../server.ts';
 import type { RuntimeConfig } from './shared.ts';

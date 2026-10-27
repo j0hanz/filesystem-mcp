@@ -13,6 +13,7 @@ import {
   type FileKind,
   isKnownBinaryExtension,
 } from '../core/mime.ts';
+import { base64EncodedBytes, canLinkFile, type Transport } from '../core/outbound.ts';
 import {
   BINARY_FILE_MESSAGE,
   isBinaryRefusal,
@@ -27,7 +28,6 @@ import {
   validateReadRange,
 } from '../core/schema.ts';
 import {
-  base64EncodedBytes,
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
@@ -237,7 +237,7 @@ async function collectFileBudget(
 
 function buildPerPathReadValue(
   result: ReadFileResult,
-  options: { includeHash?: boolean; requestedPath: string },
+  options: { includeHash?: boolean; requestedPath: string; transport: Transport },
 ): PerPathReadValue {
   const mimeInfo = detectMimeFromContent(result.path, result.content);
   const continuation =
@@ -246,7 +246,16 @@ function buildPerPathReadValue(
       : undefined;
   const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
-  const canLink = result.fileSize === undefined || result.fileSize <= getMaxTextFileSize();
+  // A slice is not the file, so the link rule gets its size, not its content.
+  const canLink =
+    (result.fileSize === undefined || result.fileSize <= getMaxTextFileSize()) &&
+    canLinkFile(options.transport, {
+      uri: buildFileResourceUri(result.path),
+      mimeType: mimeInfo.mimeType,
+      size: result.fileSize ?? Buffer.byteLength(result.content, 'utf8'),
+      // resources/read picks base64 by this kind, so an svg slice is held to that rule.
+      kind: mimeInfo.kind,
+    });
 
   return {
     content: result.content,
@@ -310,6 +319,8 @@ async function readBinaryResource(
     mimeType,
     kind,
     size,
+    // Not gated by canLinkFile: the embedded block needs it, and a blob too
+    // large for stdio makes refuseOversized refuse the whole result anyway.
     resourceUri: buildFileResourceUri(raw.validPath),
     modified: raw.modified,
     blobData: raw.content.toString('base64'),
@@ -334,12 +345,19 @@ async function readOnePath(
     if (mime.kind === 'image' || mime.kind === 'audio') {
       const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
       if (raw.isBinary) {
+        const size = raw.content.length;
+        const canLink = canLinkFile(ctx.transport, {
+          uri: buildFileResourceUri(raw.validPath),
+          mimeType: raw.mimeType,
+          size,
+          kind: mime.kind,
+        });
         return {
           content: `[binary ${mime.kind} content: ${String(raw.content.length)} bytes; returned as a ${mime.kind} content block]`,
           mimeType: raw.mimeType,
           kind: mime.kind,
-          size: raw.content.length,
-          resourceUri: buildFileResourceUri(raw.validPath),
+          size,
+          ...(canLink ? { resourceUri: buildFileResourceUri(raw.validPath) } : {}),
           modified: raw.modified,
           mediaData: raw.content.toString('base64'),
           ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
@@ -375,6 +393,7 @@ async function readOnePath(
     // `result.path` is the real path — on Windows that is a backslash-doubling
     // JSON string that also spells out the server root.
     requestedPath: filePath,
+    transport: ctx.transport,
   });
 }
 

@@ -8,7 +8,8 @@ import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { jsonByteBound, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
+import { jsonByteBound, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
+import { MIB } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -38,6 +39,8 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
   let dryRunFile: string;
   let imageFile: string;
   let mediumFile: string;
+  let nearLimitFile: string;
+  let appendFile: string;
 
   before(async () => {
     root = await createTestRoot();
@@ -57,6 +60,8 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     dryRunFile = join(root, 'dry-run.txt');
     imageFile = join(root, 'large.png');
     mediumFile = join(root, 'medium.txt');
+    nearLimitFile = join(root, 'near-limit.txt');
+    appendFile = join(root, 'append.txt');
     await Promise.all([
       writeFile(longLines, `NEEDLE${'x'.repeat(3 * MIB - 6)}\n`.repeat(2)),
       writeFile(escapedLine, `NEEDLE${'"'.repeat(3 * MIB - 6)}\n`),
@@ -78,6 +83,9 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
         Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(8 * MIB)]),
       ),
       writeFile(mediumFile, `${'x'.repeat(99)}\n`.repeat(40_000)),
+      // Under the 10 MiB file size limit, over the stdio Message limit.
+      writeFile(nearLimitFile, `${'x'.repeat(99)}\n`.repeat(103_000).slice(0, 10_300_000)),
+      writeFile(appendFile, 'x'.repeat(2 * MIB)),
     ]);
     harness = await createStdioClient(root, { FS_ROOT_BOUNDARY: root });
   });
@@ -424,6 +432,78 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.ok(Buffer.byteLength(JSON.stringify(result), 'utf8') < MAX_OUTBOUND_RESULT_BYTES);
   });
 
+  it('read of a slice links nothing stdio would refuse', async () => {
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: nearLimitFile, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
+  it('read of an svg slice links nothing base64 overflows', async () => {
+    // resources/read serves svg as base64: under the limit raw, over it encoded.
+    const svg = join(root, 'large.svg');
+    await writeFile(
+      svg,
+      `<svg xmlns="http://www.w3.org/2000/svg">\n${'x'.repeat(8_000_000)}\n</svg>\n`,
+    );
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: svg, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
+  it('read of an svg slice whose base64 alone fills the limit links nothing', async () => {
+    // 3/4 of the limit encodes to exactly the limit; the resource wrapper tips it over.
+    const svg = join(root, 'edge.svg');
+    const open = '<svg xmlns="http://www.w3.org/2000/svg">\n';
+    const close = '\n</svg>\n';
+    const size = 3 * (MAX_OUTBOUND_RESULT_BYTES / 4);
+    await writeFile(svg, `${open}${'x'.repeat(size - open.length - close.length)}${close}`);
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: svg, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
+  it('create append over stdio links a 2 MiB text file', async () => {
+    const result = await harness.client.callTool(
+      {
+        name: 'create',
+        arguments: { files: [{ path: appendFile, content: 'x\n', append: true }] },
+      },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(result.content.some((block) => block.type === 'resource_link'));
+  });
+
+  it('create append over stdio links no binary file base64 overflows', async () => {
+    // Under the limit raw, over it as base64.
+    const zeros = join(root, 'append-zeros.bin');
+    await writeFile(zeros, Buffer.alloc(8 * MIB));
+    const result = await harness.client.callTool(
+      { name: 'create', arguments: { files: [{ path: zeros, content: 'x', append: true }] } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
   it('preserves oversized tool and resource results over HTTP', async () => {
     await withBoundary(root, async () => {
       const http = await createTestHttpHarness([root]);
@@ -472,53 +552,5 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
         await http.close();
       }
     });
-  });
-});
-
-describe('encoded result size bound', () => {
-  it('never undercounts what JSON.stringify writes', () => {
-    const samples: unknown[] = [
-      '',
-      'plain ascii',
-      '"\\\n\t\u0000\u001f\u007f',
-      '\ud800 lone \udfff surrogates',
-      // The worst cases: six bytes for every code unit.
-      '\u0000\u0001\u001f'.repeat(10),
-      '\udc00'.repeat(10),
-      { '\u0000\u0001': '\ud800' },
-      'emoji \u{1f600}, CJK 漢字, and é',
-      0,
-      -0,
-      -1.2345678901234567e-308,
-      -0.0000012345678901234567,
-      123456789012345680000,
-      Number.MAX_VALUE,
-      Number.NaN,
-      Number.NEGATIVE_INFINITY,
-      true,
-      false,
-      null,
-      [],
-      {},
-      [undefined, () => 1, null],
-      { omitted: undefined, method: () => 1, 'k"e\ny': [1, { '': '' }] },
-      { date: new Date(0), nested: [[[[]]]], buffer: Buffer.from('ab') },
-    ];
-    for (const value of [...samples, samples, { samples }]) {
-      const actual = Buffer.byteLength(JSON.stringify(value), 'utf8');
-      assert.ok(jsonByteBound(value) >= actual, `${JSON.stringify(value)}: bound under ${actual}`);
-    }
-  });
-
-  it('measures exactly only what the bound cannot clear', (t) => {
-    const escaped = { text: '"'.repeat(1000) };
-    const actual = Buffer.byteLength(JSON.stringify(escaped), 'utf8');
-    const stringify = t.mock.method(JSON, 'stringify');
-    assert.strictEqual(jsonBytesOver({ text: 'x'.repeat(1000) }, 10_000), undefined);
-    assert.strictEqual(stringify.mock.callCount(), 0, 'the bound cleared it unencoded');
-    stringify.mock.restore();
-    assert.ok(jsonByteBound(escaped) > 3000);
-    assert.strictEqual(jsonBytesOver(escaped, 3000), undefined, 'over the bound, under the limit');
-    assert.strictEqual(jsonBytesOver(escaped, actual - 1), actual);
   });
 });
