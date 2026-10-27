@@ -1,7 +1,7 @@
 # ADR-005: One Scan rule for every tool that walks a scope
 
-**Status**: proposed, 2026-10-27
-**Deciders**: j0hanz, in the architecture review of the walked-entry policy
+**Status**: accepted, 2026-10-27
+**Deciders**: j0hanz, in the architecture review of the walked-entry policy; merged as [#142](https://github.com/j0hanz/filesystem-mcp/pull/142)
 
 ## Context
 
