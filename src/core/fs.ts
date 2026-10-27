@@ -679,8 +679,19 @@ export class GuardedFileSystem {
     };
   }
 
-  async open(filePath: string): Promise<FileHandle> {
-    return this.#openVerified(await this.pathGuard.validateExistingPath(filePath), filePath);
+  /** `requestedPath` names the client's spelling in errors; `signal` abandons a stalled open. */
+  async open(
+    filePath: string,
+    options?: {
+      readonly signal?: AbortSignal | undefined;
+      readonly requestedPath?: string | undefined;
+    },
+  ): Promise<FileHandle> {
+    return this.#openVerified(
+      await this.pathGuard.validateExistingPath(filePath),
+      options?.requestedPath ?? filePath,
+      options?.signal,
+    );
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real

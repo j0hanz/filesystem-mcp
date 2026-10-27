@@ -64,6 +64,8 @@ export async function readText(
   fs: GuardedFileSystem,
   path: string,
   signal?: AbortSignal,
+  /** The client's spelling of `path`, for errors. */
+  requestedPath?: string,
 ): Promise<TextVerdict> {
   const maxFileSize = getMaxTextFileSize();
   let bytes: Buffer;
@@ -71,8 +73,9 @@ export async function readText(
   {
     // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
     // re-checks the descriptor's real path (H4), so these bytes are the
-    // validated file's, not whatever the name points at by now.
-    await using handle = await fs.open(path);
+    // validated file's, not whatever the name points at by now. The signal
+    // lets a stalled open (FIFO swapped in, hung mount) be abandoned.
+    await using handle = await fs.open(path, { signal, requestedPath });
     stats = await handle.stat();
     const { size } = stats;
     if (size > maxFileSize) return { kind: 'tooLarge', size };
@@ -120,7 +123,7 @@ export async function readNamedText(
   const signal = options?.signal;
   const { stats, validPath } = await fs.stat(filePath, { signal });
   assertFileStats(filePath, stats);
-  const verdict = await readText(fs, validPath, signal);
+  const verdict = await readText(fs, validPath, signal, filePath);
   switch (verdict.kind) {
     case 'text':
       return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };

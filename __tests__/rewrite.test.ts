@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chmod, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { setImmediate as nextTurn } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
@@ -53,17 +53,34 @@ describe('Rewrite', () => {
 
   it('real run waits for the write lock', async () => {
     const { release, held } = holdLock();
-    let settled = false;
-    const running = rewriteFile({ fs, path, dryRun: false, tool: 'edit' }, upper).finally(() => {
-      settled = true;
+    const events: string[] = [];
+    const running = rewriteFile({ fs, path, dryRun: false, tool: 'edit' }, (c) => {
+      events.push('transform');
+      return upper(c);
     });
-    await nextTurn();
-    assert.equal(settled, false);
+    await sleep(50);
+    assert.equal(await readFile(path, 'utf8'), 'hello\n');
+    events.push('release');
     release();
     await held;
     const done = await running;
+    assert.deepEqual(events, ['release', 'transform']);
     assert.equal(done.written, true);
     assert.equal(await readFile(path, 'utf8'), 'HELLO\n');
+  });
+
+  it('the open and the post-write stat get the signal and the client path', async (t) => {
+    const signal = new AbortController().signal;
+    const open = t.mock.method(fs, 'open');
+    const statMock = t.mock.method(fs, 'stat');
+    await rewriteFile({ fs, path, dryRun: false, signal, tool: 'edit' }, upper);
+    assert.deepEqual(open.mock.calls[0]?.arguments[1], { signal, requestedPath: path });
+    const postWrite = statMock.mock.calls.at(-1)?.arguments[1] as { signal?: AbortSignal };
+    assert.equal(postWrite?.signal, signal);
+  });
+
+  it('an aborted signal abandons the open', async () => {
+    await assert.rejects(fs.open(path, { signal: AbortSignal.abort() }), { name: 'AbortError' });
   });
 
   it('real run reports the written file', async () => {

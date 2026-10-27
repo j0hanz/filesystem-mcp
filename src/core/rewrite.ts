@@ -106,7 +106,7 @@ async function apply<T>(
   if (written) {
     await fs.writeFile(request.path, change.content, { signal });
     const writtenAt = new Date();
-    modified = modifiedAfterWrite(await statAfterWrite(fs, validPath), writtenAt);
+    modified = modifiedAfterWrite(await statAfterWrite(fs, validPath, signal), writtenAt);
   }
   const after = change.content;
   return {
@@ -141,9 +141,11 @@ export function modifiedAfterWrite(stats: Stats | undefined, writtenAt: Date): s
 export async function statAfterWrite(
   fs: GuardedFileSystem,
   validPath: string,
+  signal?: AbortSignal,
 ): Promise<Stats | undefined> {
   try {
-    return (await fs.stat(validPath)).stats;
+    // An aborted stat falls back to the write time; the write has landed.
+    return (await fs.stat(validPath, { signal })).stats;
   } catch {
     return undefined;
   }
