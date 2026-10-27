@@ -226,7 +226,7 @@ interface LivePool {
 
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
-  unavailable: string | undefined;
+  #unavailable: string | undefined;
   #bytes = 0;
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
@@ -243,9 +243,9 @@ export class UndoCapture {
     this.#pool.bytes += n;
   }
 
-  /** True once abandoned; a method so callers re-read it after an await. */
-  isAbandoned(): boolean {
-    return this.unavailable !== undefined;
+  /** The abandon reason once this capture is unavailable, else undefined; the undo suffix reports it. */
+  unavailableReason(): string | undefined {
+    return this.#unavailable;
   }
 
   /** Return this capture's charge to the shared pool; call when the call ends. */
@@ -261,7 +261,7 @@ export class UndoCapture {
    * write record's `push` draws the reservation down instead of charging twice.
    */
   reserve(n: number): boolean {
-    if (this.unavailable !== undefined) return false;
+    if (this.#unavailable !== undefined) return false;
     const cost = n + RECORD_OVERHEAD_BYTES;
     // The budget is shared: every live capture's charge counts.
     if (this.#pool.bytes + cost > this.maxBytes) {
@@ -275,8 +275,8 @@ export class UndoCapture {
 
   /** The call stays runnable but not undoable; first reason wins, records are dropped. */
   abandon(reason: string): void {
-    if (this.unavailable !== undefined) return;
-    this.unavailable = reason;
+    if (this.#unavailable !== undefined) return;
+    this.#unavailable = reason;
     this.records.length = 0;
     // Dropped records free their bytes now. Reservations stay charged until
     // release(): a read reserved before the abandon may still be in flight.
@@ -285,7 +285,7 @@ export class UndoCapture {
   }
 
   push(...records: UndoRecord[]): void {
-    if (this.unavailable !== undefined) return;
+    if (this.#unavailable !== undefined) return;
     for (const record of records) {
       const cost = recordWeight(record);
       const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
@@ -362,7 +362,7 @@ export async function snapshotTree(
   fs: GuardedFileSystem,
   validPath: string,
 ): Promise<void> {
-  if (capture.unavailable !== undefined) return;
+  if (capture.unavailableReason() !== undefined) return;
   try {
     const stats = await unlessMissing(fsLstat(validPath, { bigint: true }));
     // ENOENT on the root (the `force` case): nothing will be deleted.
@@ -403,7 +403,7 @@ export async function snapshotTree(
       const children = await fsReaddir(validPath);
       for (const name of children) {
         await snapshotTree(capture, fs, join(validPath, name));
-        if (capture.isAbandoned()) return;
+        if (capture.unavailableReason() !== undefined) return;
       }
       capture.push({
         op: 'mkdir',

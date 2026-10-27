@@ -53,7 +53,7 @@ Failure modes a user can hit; each is pinned to the task that owns it.
    `capture &&` half must survive the deletion. → Task 2 Step 4 runs the
    disabled-undo and read-only suites.
 4. A budget-exhausted capture: reason strings verbatim (`too large to keep
-   for undo`, `too many changes to keep for undo`). → Task 1's sweep keeps the
+for undo`, `too many changes to keep for undo`). → Task 1's sweep keeps the
    string-equality asserts; Task 2 Step 4 re-runs them.
 5. A respelling-only rename (the destination IS the source): no destination
    snapshot even on a live capture. → Task 2 Step 4 runs
@@ -73,12 +73,14 @@ Branch `refactor/capture-availability-owner`, two commits: `docs(plan)` (Task
 ### Task 1: `unavailableReason()` and the pin
 
 **Files:**
+
 - Modify: `src/core/undo.ts` (class `UndoCapture`, after `isAbandoned()` at
   :247)
 - Test: `__tests__/undo.test.ts` (new test after the cp test at :304; 15
   assert sites swept)
 
 **Interfaces:**
+
 - Produces: `UndoCapture.unavailableReason(): string | undefined`, the
   abandon reason when the capture is unavailable, else `undefined`. Task 2 and
   the 15 test reads rely on this exact name and return type.
@@ -144,12 +146,14 @@ Expected: PASS, all tests.
 ### Task 2: fs.ts stops reading capture state; the field goes private
 
 **Files:**
+
 - Modify: `src/core/fs.ts:288, 292, 319, 339, 373, 424, 466, 524, 584`
 - Modify: `src/core/undo.ts` (field `:229`, `isAbandoned` `:247`, `reserve`
   `:264`, `abandon` `:278-279`, `push` `:288`, `snapshotTree` `:365`)
 - Modify: `src/tools/define.ts:329-331`
 
 **Interfaces:**
+
 - Consumes: `unavailableReason()` (Task 1).
 - Produces: `#unavailable` field and `private isAbandoned()`; nothing
   outside `undo.ts` may read capture availability after this task.
