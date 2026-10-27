@@ -1388,7 +1388,7 @@ describe('GuardedFileSystem.countEntries', () => {
     },
   );
 
-  it('propagates an unexpected error from a symlinked entry', async (t) => {
+  it('skips a symlinked entry whose check fails, as the scan does', async (t) => {
     const dir = join(root, 'links');
     await writeTestFile(dir, 'a.txt', 'a');
     await writeTestFile(dir, 'b.txt', 'b');
@@ -1410,7 +1410,8 @@ describe('GuardedFileSystem.countEntries', () => {
         errno: -5,
         syscall: 'realpath',
       });
-      await assert.rejects(fs.countEntries(dir));
+      // An odd error reads as inaccessible (entryVerdict), so the link is not counted.
+      assert.strictEqual(await fs.countEntries(dir), 2);
 
       // A dangling link is skipped, as list skips it.
       injected = Object.assign(new Error('ENOENT: no such file or directory'), {
@@ -1673,17 +1674,17 @@ describe('GuardedFileSystem.countEntries', () => {
     )
       return;
     const guard = ctx.pathGuard;
-    const validate = guard.validateExistingPathDetailed.bind(guard);
+    const accessible = guard.isEntryAccessible.bind(guard);
     // No read is pending here: the link's accessibility check throws EIO, which the count keeps.
-    guard.validateExistingPathDetailed = async (requestedPath: string) => {
-      if (requestedPath.endsWith('link.txt')) {
+    guard.isEntryAccessible = async (entryPath: string) => {
+      if (entryPath.endsWith('link.txt')) {
         throw Object.assign(new Error('EIO: i/o error'), {
           code: 'EIO',
           errno: -5,
           syscall: 'realpath',
         });
       }
-      return validate(requestedPath);
+      return accessible(entryPath);
     };
     const originalOpendir = fsPromises.opendir.bind(fsPromises);
     // The real Dir is returned, but its close closes it and then rejects.
@@ -1702,7 +1703,7 @@ describe('GuardedFileSystem.countEntries', () => {
     } finally {
       t.mock.restoreAll();
       syncBuiltinESMExports();
-      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      Reflect.deleteProperty(guard, 'isEntryAccessible');
     }
   });
 

@@ -136,6 +136,7 @@ export async function scan<R>(
     try {
       const verdict = await pathGuard.entryVerdict(path);
       await previous;
+      if (fatal !== undefined) return false;
       if (verdict === 'sensitive') return false;
       if (verdict === 'inaccessible') {
         skippedInaccessible++;

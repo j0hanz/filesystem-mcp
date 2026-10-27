@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import type { PathGuard } from '../src/core/path.ts';
+import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
@@ -80,6 +80,20 @@ describe('PathGuard.entryVerdict', () => {
       assert.equal(await guard.entryVerdict(join(root, row.entry)), row.expected);
     });
   }
+
+  it('entryVerdict odd error is inaccessible', async (t) => {
+    t.mock.method(guard, 'validateExistingPathDetailed', () =>
+      Promise.reject(Object.assign(new Error('resource busy'), { code: 'EBUSY' })),
+    );
+    assert.equal(await guard.entryVerdict(join(root, 'a.txt')), 'inaccessible');
+  });
+
+  it('entryVerdict rethrows an abort and an uninitialized guard', async (t) => {
+    await assert.rejects(new PathGuard().entryVerdict(join(root, 'a.txt')), /not initialized/);
+    const abort = new DOMException('stop', 'AbortError');
+    t.mock.method(guard, 'validateExistingPathDetailed', () => Promise.reject(abort));
+    await assert.rejects(guard.entryVerdict(join(root, 'a.txt')), (error) => error === abort);
+  });
 
   it('isEntryAccessible is true only for ok', async () => {
     assert.equal(await guard.isEntryAccessible(join(root, 'a.txt')), true);

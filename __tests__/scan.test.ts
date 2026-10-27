@@ -153,6 +153,48 @@ describe('scan', () => {
     assert.equal(out.skippedInaccessible, 1);
   });
 
+  it('odd verdict error counts the entry', async (t) => {
+    await files('a.txt', 'b.txt', 'c.txt');
+    const detailed = guard.validateExistingPathDetailed.bind(guard);
+    t.mock.method(guard, 'validateExistingPathDetailed', async (path: string) => {
+      if (path.endsWith('b.txt')) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      return detailed(path);
+    });
+    const out = await scan({ root }, base(), byPath);
+    assert.deepEqual(rel(out.results), ['a.txt', 'c.txt']);
+    assert.equal(out.skippedInaccessible, 1);
+  });
+
+  it('no entry starts after a fatal error', async (t) => {
+    await files('a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt');
+    const verdict = guard.entryVerdict.bind(guard);
+    let first = true;
+    // Every entry but the first is admitted after the first one's onScanned threw.
+    t.mock.method(guard, 'entryVerdict', async (path: string) => {
+      if (first) first = false;
+      else await sleep(30);
+      return verdict(path);
+    });
+    const ran: string[] = [];
+    const boom = new Error('boom');
+    await assert.rejects(
+      scan(
+        { root },
+        base({
+          onScanned: () => {
+            throw boom;
+          },
+        }),
+        async (entry) => {
+          ran.push(entry.path);
+          return entry.path;
+        },
+      ),
+      (error: unknown) => error === boom,
+    );
+    assert.equal(ran.length, 1);
+  });
+
   it('results come back in walk order', async () => {
     await files(...Array.from({ length: 8 }, (_, i) => `f${i}.txt`));
     const slow = await scan({ root }, base(), async (entry) => {

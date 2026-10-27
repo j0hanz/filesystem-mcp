@@ -11,9 +11,7 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
-  isSkippableErrno,
   rethrowIfAborted,
-  SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
@@ -348,8 +346,9 @@ export class PathGuard {
    * otherwise pass the lexical check (fs.glob follows symlinks and yields
    * external entries as non-symlink dirents). 'sensitive' means the denylist
    * matched the requested or resolved path; 'inaccessible' covers escapes and
-   * skippable errors. Anything else is fatal. The accepted TOCTOU window is
-   * documented on this class.
+   * every other error on the entry (EBUSY, EMFILE, races). Only an abort and an
+   * uninitialized guard throw. The accepted TOCTOU window is documented on
+   * this class.
    */
   async entryVerdict(entryPath: string): Promise<EntryVerdict> {
     if (this.isSensitive(entryPath) || this.isSensitive(normalizePath(entryPath))) {
@@ -359,20 +358,18 @@ export class PathGuard {
       await this.validateExistingPathDetailed(entryPath);
       return 'ok';
     } catch (error) {
-      if (isFsError(error)) {
-        if (error.code === ErrorCode.ACCESS_DENIED) {
-          // The denylist and the out-of-root check share this code; the real path tells them apart.
-          try {
-            return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
-          } catch {
-            return 'inaccessible';
-          }
+      rethrowIfAborted(error);
+      // A server bug, not an entry the scan can skip.
+      if (!this.allowedDirectoriesState) throw error;
+      if (isFsError(error) && error.code === ErrorCode.ACCESS_DENIED) {
+        // The denylist and the out-of-root check share this code; the real path tells them apart.
+        try {
+          return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
+        } catch {
+          return 'inaccessible';
         }
-        if (SKIPPABLE_FS_CODES.has(error.code)) return 'inaccessible';
-        throw error;
       }
-      if (isSkippableErrno(error)) return 'inaccessible';
-      throw error;
+      return 'inaccessible';
     }
   }
 
