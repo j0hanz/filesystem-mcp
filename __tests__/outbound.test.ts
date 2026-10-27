@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import {
   base64EncodedBytes,
   bytesOverMessageLimit,
@@ -13,7 +14,7 @@ import {
   jsonByteBound,
   jsonBytesOver,
   MAX_OUTBOUND_RESULT_BYTES,
-  readResultFloor,
+  readFloorOver,
   refuseResourceRead,
   refuseToolResult,
 } from '../src/core/outbound.ts';
@@ -89,10 +90,13 @@ describe('Message limit', () => {
     assert.strictEqual(bytesOverMessageLimit('stdio', { t: 'x'.repeat(MAX - 7) }), MAX + 1);
   });
 
-  it('readResultFloor', () => {
-    assert.strictEqual(readResultFloor(MAX, false), MAX);
-    assert.strictEqual(readResultFloor(3, true), 4);
-    assert.strictEqual(readResultFloor(4, true), 8);
+  it('readFloorOver', () => {
+    assert.strictEqual(readFloorOver('stdio', MAX, false), undefined);
+    assert.strictEqual(readFloorOver('stdio', MAX + 1, false), MAX + 1);
+    assert.strictEqual(readFloorOver('stdio', 3 * (MAX / 4), true), undefined);
+    assert.strictEqual(readFloorOver('stdio', 3 * (MAX / 4) + 1, true), MAX + 4);
+    assert.strictEqual(readFloorOver('http', 100 * MIB, true), undefined);
+    assert.strictEqual(readFloorOver(undefined, 100 * MIB, false), undefined);
   });
 
   it('refuseToolResult text', () => {
@@ -120,9 +124,9 @@ describe('Message limit', () => {
 });
 
 describe('canLinkFile', () => {
-  const validPath = join(tmpdir(), 'link.txt');
+  const uri = buildFileResourceUri(join(tmpdir(), 'link.txt'));
   const text = (size: number, content?: string) =>
-    ({ validPath, mimeType: 'text/plain', size, kind: 'text', content }) as const;
+    ({ uri, mimeType: 'text/plain', size, kind: 'text', content }) as const;
 
   it('canLinkFile always links on http and unset transport', () => {
     assert.ok(canLinkFile('http', text(100 * MIB)));
@@ -136,7 +140,7 @@ describe('canLinkFile', () => {
 
   it('binary links up to the exact base64 limit', () => {
     const binary = (size: number) =>
-      ({ validPath, mimeType: 'application/octet-stream', size, kind: 'binary' }) as const;
+      ({ uri, mimeType: 'application/octet-stream', size, kind: 'binary' }) as const;
     assert.strictEqual(base64EncodedBytes(3 * (MAX / 4)), MAX);
     assert.ok(canLinkFile('stdio', binary(3 * (MAX / 4))));
     assert.ok(!canLinkFile('stdio', binary(3 * (MAX / 4) + 1)));

@@ -1,7 +1,6 @@
 import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { buildFileResourceUri } from './file-uri.ts';
 import type { FileKind } from './mime.ts';
 import { MIB } from './util.ts';
 
@@ -87,8 +86,21 @@ export type Transport = 'stdio' | 'http' | undefined;
  * The least a file of `size` bytes costs in a resources/read result: text
  * encodes to at least its own bytes, and binary comes back base64.
  */
-export function readResultFloor(size: number, binary: boolean): number {
+function readResultFloor(size: number, binary: boolean): number {
   return binary ? base64EncodedBytes(size) : size;
+}
+
+/**
+ * That floor for a file of `size` bytes when it is already over the Message
+ * limit on `transport`, else `undefined`: a read refused before it is encoded.
+ */
+export function readFloorOver(
+  transport: Transport,
+  size: number,
+  binary: boolean,
+): number | undefined {
+  const floor = readResultFloor(size, binary);
+  return transport === 'stdio' && floor > MAX_OUTBOUND_RESULT_BYTES ? floor : undefined;
 }
 
 /**
@@ -101,7 +113,8 @@ export function bytesOverMessageLimit(transport: Transport, value: unknown): num
 
 /** A file a tool may offer as a link, as far as the caller knows it. */
 export interface LinkCandidate {
-  readonly validPath: string;
+  /** The file resource URI the link would name; it counts toward the read. */
+  readonly uri: string;
   readonly mimeType: string;
   readonly size: number;
   readonly kind: FileKind;
@@ -117,15 +130,13 @@ export interface LinkCandidate {
 export function canLinkFile(transport: Transport, file: LinkCandidate): boolean {
   if (transport !== 'stdio') return true;
   // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
-  if (file.kind !== 'text') return readResultFloor(file.size, true) <= MAX_OUTBOUND_RESULT_BYTES;
+  if (file.kind !== 'text') return readFloorOver(transport, file.size, true) === undefined;
   if (file.content === undefined) {
     // shortcut: size-only text links skip escaping and the envelope, so wrapRead can still refuse > ~5.1 MB of quotes/backslashes or a file a few hundred bytes under the limit; measure the file if clients hit it (ADR-006)
-    return readResultFloor(file.size, false) <= MAX_OUTBOUND_RESULT_BYTES;
+    return readFloorOver(transport, file.size, false) === undefined;
   }
   const result = {
-    contents: [
-      { uri: buildFileResourceUri(file.validPath), mimeType: file.mimeType, text: file.content },
-    ],
+    contents: [{ uri: file.uri, mimeType: file.mimeType, text: file.content }],
   };
   return jsonBytesOver(result, MAX_OUTBOUND_RESULT_BYTES) === undefined;
 }

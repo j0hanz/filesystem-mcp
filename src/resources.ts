@@ -28,12 +28,7 @@ import {
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
 import { Logger, voidSend } from './core/observability.ts';
-import {
-  bytesOverMessageLimit,
-  MAX_OUTBOUND_RESULT_BYTES,
-  readResultFloor,
-  refuseResourceRead,
-} from './core/outbound.ts';
+import { bytesOverMessageLimit, readFloorOver, refuseResourceRead } from './core/outbound.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
@@ -228,24 +223,21 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       await options.pathGuard.validateExistingPath(rawPath);
       const fs = new GuardedFileSystem(options.pathGuard);
-      const stdio = options.transport === 'stdio';
-      if (stdio) {
+      if (options.transport === 'stdio') {
         // Text encodes to at least its own bytes and base64 to 4/3 of them,
         // so a file over the limit is refused before it is read. One past the
         // file size limit is left to readRaw, whose refusal names that limit:
         // HTTP would not serve it either.
         const { stats } = await fs.stat(rawPath, { signal: ctx.mcpReq.signal });
-        if (
-          readResultFloor(stats.size, false) > MAX_OUTBOUND_RESULT_BYTES &&
-          stats.size <= getMaxTextFileSize()
-        ) {
-          throw refuseResourceRead(stats.size, true);
+        const floor = readFloorOver(options.transport, stats.size, false);
+        if (floor !== undefined && stats.size <= getMaxTextFileSize()) {
+          throw refuseResourceRead(floor, true);
         }
       }
       const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
-      if (stdio && readResult.isBinary) {
-        const base64Bytes = readResultFloor(readResult.content.length, true);
-        if (base64Bytes > MAX_OUTBOUND_RESULT_BYTES) throw refuseResourceRead(base64Bytes, true);
+      if (readResult.isBinary) {
+        const floor = readFloorOver(options.transport, readResult.content.length, true);
+        if (floor !== undefined) throw refuseResourceRead(floor, true);
       }
 
       return {

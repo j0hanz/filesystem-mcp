@@ -127,7 +127,7 @@ export function writtenFileLinks(
     size === undefined ||
     size > getMaxTextFileSize() ||
     !canLinkFile(transport, {
-      validPath,
+      uri: buildFileResourceUri(validPath),
       mimeType,
       size,
       kind: file?.kind ?? 'text',

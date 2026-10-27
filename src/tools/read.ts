@@ -250,7 +250,7 @@ function buildPerPathReadValue(
   const canLink =
     (result.fileSize === undefined || result.fileSize <= getMaxTextFileSize()) &&
     canLinkFile(options.transport, {
-      validPath: result.path,
+      uri: buildFileResourceUri(result.path),
       mimeType: mimeInfo.mimeType,
       size: result.fileSize ?? Buffer.byteLength(result.content, 'utf8'),
       // resources/read picks base64 by this kind, so an svg slice is held to that rule.
@@ -347,7 +347,7 @@ async function readOnePath(
       if (raw.isBinary) {
         const size = raw.content.length;
         const canLink = canLinkFile(ctx.transport, {
-          validPath: raw.validPath,
+          uri: buildFileResourceUri(raw.validPath),
           mimeType: raw.mimeType,
           size,
           kind: mime.kind,
