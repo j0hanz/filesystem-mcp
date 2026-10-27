@@ -689,6 +689,16 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
     });
 
+    it('rename of a missing path onto itself still fails', async () => {
+      await assert.rejects(
+        new GuardedFileSystem(await makeGuard([root])).rename(
+          join(root, 'missing.txt'),
+          join(root, 'missing.txt'),
+        ),
+        { code: 'ENOENT' },
+      );
+    });
+
     it('rename of a link onto its own target changes nothing', async (t) => {
       await writeFile(join(root, 'target.txt'), 'target');
       if (

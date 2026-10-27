@@ -305,7 +305,12 @@ export class GuardedFileSystem {
       newPath,
       { entry: validOld, landing: oldLanding },
     );
-    if (kind === 'self') return;
+    // A self-move changes nothing, but a missing source still fails as the
+    // rename would; lstat, so a dangling link counts as present.
+    if (kind === 'self') {
+      await fsLstat(validOld);
+      return;
+    }
     const spellingOnly = kind === 'respelling';
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
