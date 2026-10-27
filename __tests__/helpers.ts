@@ -114,13 +114,15 @@ export async function waitForResourceUpdate(
 /**
  * Assert each notification (`performance.now()` stamps, in order) came in its own debounce round.
  * Rounds are always at least the 50 ms watcher debounce apart, and macOS FSEvents can split one
- * write into two of them; a duplicated sink instead fires twice inside one round.
+ * write into two of them; a duplicated sink instead fires twice inside one round, under 1 ms
+ * apart. The stamps are taken on the client, where a stall can pull two rounds closer, so the
+ * floor sits well below the debounce.
  */
 export function assertOneNotificationPerRound(arrivalsMs: readonly number[], what: string): void {
   assert.ok(arrivalsMs.length > 0, `${what}: no notification arrived`);
   const gaps = arrivalsMs.slice(1).map((at, i) => at - (arrivalsMs[i] ?? at));
   assert.ok(
-    gaps.every((gap) => gap >= 25),
+    gaps.every((gap) => gap >= 10),
     `${what}: notifications ${gaps.map((gap) => gap.toFixed(1)).join(', ')} ms apart, two in one debounce round`,
   );
 }

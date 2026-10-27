@@ -24,6 +24,7 @@ describe('assertOneNotificationPerRound', () => {
   it('accepts one notification, and two rounds a debounce apart', () => {
     assertOneNotificationPerRound([10], 'one');
     assertOneNotificationPerRound([10, 70], 'macOS split round');
+    assertOneNotificationPerRound([10, 30], 'two rounds pulled together by a client stall');
   });
 
   it('rejects two notifications in one round, and none at all', () => {
