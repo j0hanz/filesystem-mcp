@@ -32,7 +32,7 @@ import {
 } from '../core/input-required.ts';
 import { Logger, sanitizeLogField } from '../core/observability.ts';
 import type { LoggingLevel } from '../core/observability.ts';
-import { jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/outbound.ts';
+import { bytesOverMessageLimit, refuseToolResult } from '../core/outbound.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
@@ -451,10 +451,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
    * metadata and escaping included; the ceiling leaves room for the envelope.
    */
   private refuseOversized(result: RunResult<O>, response: CallToolResult): void {
-    if (this.toolCtx.transport !== 'stdio') return;
     const dryRun = (this.parsedArgs as { dryRun?: unknown }).dryRun === true;
     if (!this.def.readOnlyHint && !dryRun) return;
-    const encodedBytes = jsonBytesOver(response, MAX_OUTBOUND_RESULT_BYTES);
+    const encodedBytes = bytesOverMessageLimit(this.toolCtx.transport, response);
     if (encodedBytes === undefined) return;
     // The client never receives the link or cursor these back, so they would
     // only push live entries out of the stores' caps.
@@ -467,13 +466,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         : 'Reduce the requested output or connect over HTTP.');
     // The remedy stands in for TOO_LARGE's default head/tail advice, which
     // fits neither media nor a dry run.
-    throw new FsError(
-      ErrorCode.TOO_LARGE,
-      `${this.def.name} result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit).`,
-      undefined,
-      undefined,
-      remedy,
-    );
+    throw refuseToolResult(this.def.name, encodedBytes, remedy);
   }
 
   async execute(): Promise<CallToolResult | InputRequiredResult> {

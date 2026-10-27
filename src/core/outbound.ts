@@ -1,3 +1,6 @@
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+
+import { ErrorCode, FsError } from './errors.ts';
 import { MIB } from './util.ts';
 
 const KIB = 1024;
@@ -73,4 +76,47 @@ export function jsonBytesOver(value: unknown, limit: number): number | undefined
   if (jsonByteBound(value) <= limit) return undefined;
   const bytes = Buffer.byteLength(JSON.stringify(value), 'utf8');
   return bytes > limit ? bytes : undefined;
+}
+
+/** The transport a result leaves on; unset is the in-memory pair. */
+export type Transport = 'stdio' | 'http' | undefined;
+
+/**
+ * The least a file of `size` bytes costs in a resources/read result: text
+ * encodes to at least its own bytes, and binary comes back base64.
+ */
+export function readResultFloor(size: number, binary: boolean): number {
+  return binary ? base64EncodedBytes(size) : size;
+}
+
+/**
+ * `value`'s JSON-encoded size when it is over the Message limit on
+ * `transport`, else `undefined`. Only stdio has one (ADR-003).
+ */
+export function bytesOverMessageLimit(transport: Transport, value: unknown): number | undefined {
+  return transport === 'stdio' ? jsonBytesOver(value, MAX_OUTBOUND_RESULT_BYTES) : undefined;
+}
+
+/** A tool result's refusal; `remedy` replaces TOO_LARGE's default advice. */
+export function refuseToolResult(toolName: string, bytes: number, remedy: string): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `${toolName} result too large to return (${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit).`,
+    undefined,
+    undefined,
+    remedy,
+  );
+}
+
+/**
+ * The refusal for a resource result stdio's fixed-size reader cannot carry.
+ * `atLeast` when `bytes` is a lower bound known before the result was encoded.
+ */
+export function refuseResourceRead(bytes: number, atLeast = false): ProtocolError {
+  const suggestion = 'Read smaller slices/pages with tools, or connect over HTTP.';
+  return new ProtocolError(
+    ProtocolErrorCode.InvalidParams,
+    `Resource result too large to return (${atLeast ? 'at least ' : ''}${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${suggestion}`,
+    { code: ErrorCode.TOO_LARGE, suggestion },
+  );
 }
