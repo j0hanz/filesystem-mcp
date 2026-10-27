@@ -253,7 +253,8 @@ function buildPerPathReadValue(
       validPath: result.path,
       mimeType: mimeInfo.mimeType,
       size: result.fileSize ?? Buffer.byteLength(result.content, 'utf8'),
-      kind: 'text',
+      // resources/read picks base64 by this kind, so an svg slice is held to that rule.
+      kind: mimeInfo.kind,
     });
 
   return {

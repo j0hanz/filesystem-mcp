@@ -444,6 +444,24 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.ok(!result.content.some((block) => block.type === 'resource_link'));
   });
 
+  it('read of an svg slice links nothing base64 overflows', async () => {
+    // resources/read serves svg as base64: under the limit raw, over it encoded.
+    const svg = join(root, 'large.svg');
+    await writeFile(
+      svg,
+      `<svg xmlns="http://www.w3.org/2000/svg">\n${'x'.repeat(8_000_000)}\n</svg>\n`,
+    );
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: svg, head: 1 } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    const metadata = result._meta as { results: { value?: { resourceUri?: string } }[] };
+    assert.ok(metadata.results[0]?.value);
+    assert.strictEqual(metadata.results[0].value.resourceUri, undefined);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
   it('create append over stdio links a 2 MiB text file', async () => {
     const result = await harness.client.callTool(
       {

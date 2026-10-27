@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`read` over stdio no longer offers a link that `resources/read`
   refuses.** Before, a slice of a text file just under the 10 MiB file size
   limit came back with a `resourceUri` and a `resource_link` that failed with
-  `TOO_LARGE`.
+  `TOO_LARGE`. The same held for a slice of an SVG over about 7.3 MiB, which
+  `resources/read` returns as base64.
 - **`find_files`, `search_text`, `replace_text` and `list` count the entries
   and directories they could not read in `skippedInaccessible`.** Before, an
   unreadable folder looked empty and `list` skipped such entries without a
