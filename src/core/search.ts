@@ -318,7 +318,10 @@ export interface SearchContentOutcome {
 }
 
 type FileScan =
-  { kind: 'tooLarge' } | { kind: 'binary' } | { kind: 'scanned'; matches: SearchResult[] };
+  | { kind: 'tooLarge' }
+  | { kind: 'binary' }
+  /** `cut`: the signal stopped this file's lines short, so scan cannot see the timeout. */
+  | { kind: 'scanned'; matches: SearchResult[]; cut?: boolean };
 
 interface ScanContext {
   fs: GuardedFileSystem;
@@ -392,7 +395,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // literal match never hands a line to RE2.
   const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
-  const tick = createYielder(scanCtx.signal);
+  const yielder = createYielder(scanCtx.signal);
+  let cut = false;
+  const tick = async (): Promise<boolean> => (cut ||= await yielder());
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
@@ -424,7 +429,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
       if (matches.length > scanCtx.maxResults) break;
     }
   }
-  return { kind: 'scanned', matches };
+  return { kind: 'scanned', matches, cut };
 }
 
 export async function searchContent(
@@ -461,6 +466,7 @@ export async function searchContent(
     let skippedTooLarge = 0;
     let skippedBinary = 0;
     let trimmed = false;
+    let cut = false;
     const scanCtx: ScanContext = {
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
@@ -506,6 +512,7 @@ export async function searchContent(
         case 'scanned':
           filesScanned++;
           if (file.matches.length > 0) filesMatched++;
+          if (file.cut) cut = true;
           for (const match of file.matches) {
             if (matches.length >= maxResults) {
               trimmed = true;
@@ -519,7 +526,9 @@ export async function searchContent(
     }
     const { skippedInaccessible } = outcome;
     // scan stops on a refused entry only; matches cut here are the cap too. Abort beats it.
-    const stoppedReason = outcome.stoppedReason ?? (trimmed ? ('maxResults' as const) : undefined);
+    const stoppedReason =
+      outcome.stoppedReason ??
+      (cut ? ('timeout' as const) : trimmed ? ('maxResults' as const) : undefined);
 
     return {
       basePath: scope.root,

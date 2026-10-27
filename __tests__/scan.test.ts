@@ -285,6 +285,32 @@ describe('scan', () => {
     assert.equal(out.skippedInaccessible, 0);
   });
 
+  it('abort after the last entry finished is not a timeout', async () => {
+    await files('a.txt', 'b.txt', 'c.txt');
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const out = await scan({ root }, base({ signal }), async (entry) => {
+      if (entry.index === 2) {
+        // Long enough for the walk to finish first.
+        await sleep(30);
+        controller.abort();
+      }
+      return entry.path;
+    });
+    assert.equal(out.results.length, 3);
+    assert.equal(out.stoppedReason, undefined);
+    const late = new AbortController();
+    const named = await scan(
+      { root, explicitFile: join(root, 'a.txt') },
+      base({ signal: late.signal }),
+      async (entry) => {
+        late.abort();
+        return entry.path;
+      },
+    );
+    assert.equal(named.stoppedReason, undefined);
+  });
+
   it('pre-aborted signal resolves as timeout', async () => {
     await files('a.txt');
     const out = await scan({ root }, base({ signal: AbortSignal.abort() }), byPath);

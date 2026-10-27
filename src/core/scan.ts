@@ -78,7 +78,8 @@ export interface ScanOutcome<R> {
  * The one Scan every walking tool runs: walk the scope, rule on each entry
  * (sensitive is dropped, inaccessible counted, ok handed to `onEntry`), probe
  * each directory the walk reads, and say why it stopped early. The signal
- * wins over the caps, and an abort resolves as `'timeout'`, never rejects.
+ * wins over the caps, and an abort that cut work short resolves as `'timeout'`,
+ * never rejects.
  */
 export async function scan<R>(
   scope: ScanScope,
@@ -99,6 +100,8 @@ export async function scan<R>(
   let started = 0;
   let capped: 'maxResults' | 'maxFiles' | undefined;
   let fatal: { error: unknown } | undefined;
+  // The signal stopped work that had not finished: only then is it a 'timeout'.
+  let cut = false;
 
   const pending = new Set<Promise<void>>();
   const run = async (task: () => Promise<void>): Promise<void> => {
@@ -142,7 +145,10 @@ export async function scan<R>(
         skippedInaccessible++;
         return false;
       }
-      if (signal?.aborted) return false;
+      if (signal?.aborted) {
+        cut = true;
+        return false;
+      }
       if (cap !== undefined && total >= cap) {
         capped ??= 'maxResults';
         return false;
@@ -171,7 +177,8 @@ export async function scan<R>(
       result = await onEntry({ path, type, index });
     } catch {
       // An abort is the stop, not this entry's failure.
-      if (!signal?.aborted) skippedInaccessible++;
+      if (signal?.aborted) cut = true;
+      else skippedInaccessible++;
       return;
     }
     scanned++;
@@ -205,7 +212,11 @@ export async function scan<R>(
   try {
     await drainProbes();
     for await (const { path, dirent } of entries) {
-      if (signal?.aborted || capped !== undefined || fatal !== undefined) break;
+      if (signal?.aborted) {
+        cut = true;
+        break;
+      }
+      if (capped !== undefined || fatal !== undefined) break;
       await drainProbes();
       const at = index++;
       const previous = admissions;
@@ -215,17 +226,19 @@ export async function scan<R>(
       });
       await run(() => visit(path, resolveEntryType(dirent), at, previous, release));
     }
-    if (!signal?.aborted && capped === undefined) await drainProbes();
+    if (signal?.aborted) cut ||= probes.length > 0;
+    else if (capped === undefined) await drainProbes();
   } catch (error) {
     // A walk the signal cut short throws its reason (see globEntries): that is
     // the timeout below, not a failed walk.
-    if (!signal?.aborted) walkError = error;
+    if (signal?.aborted) cut = true;
+    else walkError = error;
   }
   await Promise.allSettled([...pending]);
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
-  const stoppedReason: StoppedReason | undefined = signal?.aborted ? 'timeout' : capped;
+  const stoppedReason: StoppedReason | undefined = cut ? 'timeout' : capped;
   return {
     results: [...results.entries()].sort(([a], [b]) => a - b).map(([, result]) => result),
     scanned,
@@ -262,6 +275,5 @@ async function scanNamedFile<R>(
     results: result === undefined ? [] : [result],
     scanned: 1,
     skippedInaccessible: 0,
-    ...(signal?.aborted ? { stoppedReason: 'timeout' as const } : {}),
   };
 }
