@@ -61,3 +61,10 @@ an entry replaced while the prompt was open is asked about again, once, and an
 entry that vanished needs no approval.
 _Avoid_: prompt, elicitation (the protocol mechanism), access grant (widening
 the allowed roots is a different question)
+
+## Transport
+
+**Message limit**:
+What one stdio response can carry, after JSON encoding; a link the server
+offers over stdio must name a file that fits it.
+_Avoid_: outbound budget, size cap (that is `FS_MAX_FILE_SIZE`)
