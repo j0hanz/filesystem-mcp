@@ -838,7 +838,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.ok(outcome.matches.every((m) => m.content.includes('TARGET_LITERAL_STRING')));
     });
 
-    it('searchContent skips binary files, keeps Latin-1 text, and strips CR', async () => {
+    it("searchContent skips binary files by read's rule and strips CR", async () => {
       const dir = join(tmpDir, 'search_binary_dir');
       await writeTestFile(dir, 'crlf.txt', 'NEEDLE;\r\nnext\r\n');
       await writeFile(
@@ -857,12 +857,40 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(basename(outcome.matches[0]?.file ?? ''), 'crlf.txt');
       assert.strictEqual(outcome.matches[0]?.content, 'NEEDLE;');
 
+      // latin1.txt fails read's sample check inside its first 512 bytes.
       const all = await searchContent({ root: dir }, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
-      assert.deepStrictEqual(all.matches.map((m) => basename(m.file)).sort(), [
-        'crlf.txt',
-        'latin1.txt',
-      ]);
-      assert.strictEqual(all.summary.skippedBinary, 1);
+      assert.deepStrictEqual(
+        all.matches.map((m) => basename(m.file)),
+        ['crlf.txt'],
+      );
+      assert.strictEqual(all.summary.skippedBinary, 2);
+    });
+
+    it('searchContent searches bytes past the probe lossily', async () => {
+      const dir = join(tmpDir, 'search_past_probe_dir');
+      const lead = Buffer.alloc(600, 'a');
+      await fs.mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, 'late-latin1.txt'),
+        Buffer.concat([lead, Buffer.from('\nNEEDLE caf'), Buffer.from([0xe9, 0x0a])]),
+      );
+      await writeFile(
+        join(dir, 'late-nul.txt'),
+        Buffer.concat([lead, Buffer.from('\nNEEDLE'), Buffer.from([0, 0x0a])]),
+      );
+      await writeFile(join(dir, 'image.png'), 'NEEDLE\n');
+
+      const outcome = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: false },
+        ctx.pathGuard,
+      );
+      assert.deepStrictEqual(
+        outcome.matches.map((m) => basename(m.file)),
+        ['late-latin1.txt'],
+      );
+      assert.strictEqual(outcome.summary.skippedBinary, 2);
     });
 
     it('an aborted search over a tree with no match reports timeout, not a complete scan', async () => {

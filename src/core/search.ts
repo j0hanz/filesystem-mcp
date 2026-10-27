@@ -5,8 +5,8 @@ import type { StoppedReason } from './concurrency.ts';
 import { GuardedFileSystem } from './fs.ts';
 import type { PathGuard } from './path.ts';
 import type { ScanScope } from './scan.ts';
-import { scan } from './scan.ts';
-import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
+import { readText, scan } from './scan.ts';
+import { escapeRegExp, MIB, PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
  * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
@@ -57,9 +57,6 @@ export function createYielder(signal: AbortSignal | undefined): () => Promise<bo
  * aborts the module. 4 MiB leaves room for the copy and the pattern set.
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
-
-/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
-const READ_CHUNK_BYTES = 512 * 1024;
 
 /** One line's matches: how many, and where the first starts (UTF-16 units). */
 interface LineHit {
@@ -311,7 +308,7 @@ export interface SearchContentOutcome {
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
-    /** Files skipped because they contain a NUL byte (binary). */
+    /** Files skipped because read calls them binary, or a NUL byte follows their leading bytes. */
     skippedBinary: number;
     stoppedReason?: StoppedReason;
   };
@@ -326,7 +323,6 @@ type FileScan =
 interface ScanContext {
   fs: GuardedFileSystem;
   signal: AbortSignal | undefined;
-  maxFileSize: number;
   maxResults: number;
   regex: Regex;
   prefilter: Regex;
@@ -337,43 +333,14 @@ interface ScanContext {
 }
 
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
-  let buffer: Buffer;
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  {
-    // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
-    // re-checks the descriptor's real path (H4), so these bytes are the
-    // validated file's, not whatever the name points at by now.
-    await using handle = await scanCtx.fs.open(entryPath);
-    const { size } = await handle.stat();
-    if (size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
-    // Read the size fstat reported: handle.readFile would fstat again and then
-    // read once more to find EOF, two extra round trips on every file a walk
-    // touches. A file that grows meanwhile is searched as it was at the fstat.
-    // A size of 0 is also what procfs and other virtual files report while
-    // holding text, so those still read to EOF.
-    if (size === 0) {
-      buffer = await handle.readFile({ signal: scanCtx.signal });
-      if (buffer.length > scanCtx.maxFileSize) return { kind: 'tooLarge' };
-    } else {
-      buffer = Buffer.allocUnsafe(size);
-      let filled = 0;
-      while (filled < size) {
-        // In readFile's own chunks, with its check of the signal before each,
-        // so a deadline on a slow filesystem lands as soon as it did there.
-        scanCtx.signal?.throwIfAborted();
-        const length = Math.min(size - filled, READ_CHUNK_BYTES);
-        const { bytesRead } = await handle.read(buffer, filled, length, filled);
-        if (bytesRead === 0) break;
-        filled += bytesRead;
-      }
-      buffer = buffer.subarray(0, filled);
-    }
-  }
-
-  // A NUL byte marks a binary file, as it does for `read` and `grep -I`.
-  // Non-UTF-8 text is still searched: a lossy decode only affects the
-  // bytes a pattern could not have matched anyway.
-  if (buffer.includes(0)) return { kind: 'binary' };
+  const verdict = await readText(scanCtx.fs, entryPath, scanCtx.signal);
+  if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return { kind: verdict.kind };
+  const buffer = verdict.bytes;
+  // A NUL byte past the leading bytes still marks a binary file, as it does
+  // for `grep -I`. Other non-UTF-8 text is still searched: a lossy decode
+  // only affects the bytes a pattern could not have matched anyway.
+  if (verdict.kind === 'undecodable' && buffer.includes(0)) return { kind: 'binary' };
 
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
   if (literal && !literal.mayMatch(buffer)) return { kind: 'scanned', matches: [] };
@@ -458,7 +425,6 @@ export async function searchContent(
     });
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
-    const maxFileSize = getMaxTextFileSize();
     const context = options.context ?? 0;
     let filesScanned = 0;
     let filesMatched = 0;
@@ -470,7 +436,6 @@ export async function searchContent(
     const scanCtx: ScanContext = {
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
-      maxFileSize,
       maxResults,
       regex,
       prefilter,

@@ -14,6 +14,8 @@ const LONG_S = String.fromCodePoint(0x017f); // RE2 folds it onto s
 const DOTTED_I = String.fromCodePoint(0x0130); // RE2 does not fold it onto i
 const EMOJI = String.fromCodePoint(0x1f600);
 const REPLACEMENT = String.fromCodePoint(0xfffd);
+// search_text reads a bad byte lossily only past read's 512-byte binary probe.
+const PAST_PROBE = Buffer.from(`${'x'.repeat(600)}\n`);
 
 // A literal needle is matched natively instead of through RE2. Every case runs
 // both ways — as a literal, and as the same text escaped into a regex, which
@@ -31,13 +33,18 @@ const CASES: { name: string; content: string | Buffer; needle: string; hits: num
   { name: 'overlapping occurrences', content: 'aaaa aa\naAaA\n', needle: 'aa', hits: 2 },
   {
     name: 'invalid UTF-8',
-    content: Buffer.concat([Buffer.from('ab'), Buffer.from([0xff]), Buffer.from('cd needle\n')]),
+    content: Buffer.concat([
+      PAST_PROBE,
+      Buffer.from('ab'),
+      Buffer.from([0xff]),
+      Buffer.from('cd needle\n'),
+    ]),
     needle: 'needle',
     hits: 1,
   },
   {
     name: 'a needle holding U+FFFD',
-    content: Buffer.concat([Buffer.from('b'), Buffer.from([0xff]), Buffer.from('c\n')]),
+    content: Buffer.concat([PAST_PROBE, Buffer.from('b'), Buffer.from([0xff]), Buffer.from('c\n')]),
     needle: `b${REPLACEMENT}c`,
     hits: 1,
   },

@@ -1,3 +1,5 @@
+import { isUtf8 } from 'node:buffer';
+import type { Stats } from 'node:fs';
 import { opendir, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -6,10 +8,16 @@ import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
+import { MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
+import { binaryKind } from './read.ts';
+import { getMaxTextFileSize } from './util.ts';
+
+/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
+const READ_CHUNK_BYTES = 512 * 1024;
 
 export interface ScanScope {
   readonly root: string;
@@ -39,6 +47,65 @@ export async function resolveScanScope(
   // character class. The scan visits exactly this file instead, and
   // hidden/ignored filtering is moot for a file the caller named.
   return { root: dirname(resolved), explicitFile: resolved };
+}
+
+export type TextVerdict =
+  | { readonly kind: 'text'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'undecodable'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | { readonly kind: 'tooLarge'; readonly size: number };
+
+/**
+ * The one content verdict (ADR-005): guarded open, size, read's binary rule on
+ * the leading bytes, then strict UTF-8 on the rest. Never decodes; a caller
+ * that searches lossily decodes an `undecodable` file's bytes itself.
+ */
+export async function readText(
+  fs: GuardedFileSystem,
+  path: string,
+  signal?: AbortSignal,
+): Promise<TextVerdict> {
+  const maxFileSize = getMaxTextFileSize();
+  let bytes: Buffer;
+  let stats: Stats;
+  {
+    // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
+    // re-checks the descriptor's real path (H4), so these bytes are the
+    // validated file's, not whatever the name points at by now.
+    await using handle = await fs.open(path);
+    stats = await handle.stat();
+    const { size } = stats;
+    if (size > maxFileSize) return { kind: 'tooLarge', size };
+    // Read the size fstat reported: handle.readFile would fstat again and then
+    // read once more to find EOF, two extra round trips on every file a walk
+    // touches. A file that grows meanwhile is read as it was at the fstat.
+    // A size of 0 is also what procfs and other virtual files report while
+    // holding text, so those still read to EOF.
+    if (size === 0) {
+      bytes = await handle.readFile({ signal });
+      if (bytes.length > maxFileSize) return { kind: 'tooLarge', size: bytes.length };
+    } else {
+      bytes = Buffer.allocUnsafe(size);
+      let filled = 0;
+      while (filled < size) {
+        // In readFile's own chunks, with its check of the signal before each,
+        // so a deadline on a slow filesystem lands as soon as it did there.
+        signal?.throwIfAborted();
+        const length = Math.min(size - filled, READ_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(bytes, filled, length, filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      bytes = bytes.subarray(0, filled);
+    }
+  }
+  // The probe is a slice of the bytes already read: no extra syscall.
+  const binary = binaryKind(path, bytes.subarray(0, MIME_SAMPLE_SIZE));
+  if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
+  // The probe samples only the leading bytes. A caller that writes the text
+  // back must refuse any byte the decode would replace with U+FFFD.
+  if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
+  return { kind: 'text', bytes, stats };
 }
 
 export interface ScanEntry {

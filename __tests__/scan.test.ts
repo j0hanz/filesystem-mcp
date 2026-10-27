@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Dir } from 'node:fs';
-import fsPromises, { chmod, mkdir, realpath } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -12,12 +12,14 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
-import { probeDirectory, resolveScanScope, scan } from '../src/core/scan.ts';
+import { probeDirectory, readText, resolveScanScope, scan } from '../src/core/scan.ts';
+import { MIB } from '../src/core/util.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -564,5 +566,75 @@ describe('scan', () => {
       explicitFile: file,
     });
     assert.deepEqual(await resolveScanScope(empty, fs, { allowFile: false }), { root: empty });
+  });
+});
+
+describe('readText', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const put = async (name: string, bytes: Buffer | string): Promise<string> => {
+    const path = join(root, name);
+    await writeFile(path, bytes);
+    return path;
+  };
+  const pastProbe = (tail: number[]): Buffer =>
+    Buffer.concat([Buffer.alloc(600, 'a'), Buffer.from(tail)]);
+
+  it('readText text verdict carries bytes and stats', async () => {
+    const path = await put('a.txt', 'héllo\n');
+    const verdict = await readText(fs, path);
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.deepEqual(verdict.bytes, Buffer.from('héllo\n'));
+    assert.equal(verdict.stats.size, 7);
+  });
+
+  it('readText binary by extension', async () => {
+    assert.deepEqual(await readText(fs, await put('a.png', 'plain text')), {
+      kind: 'binary',
+      utf16: false,
+    });
+  });
+
+  it('readText binary by sample', async () => {
+    const path = await put('b.txt', Buffer.from([0x61, 0x62, 0x63, 0, 0x64]));
+    assert.deepEqual(await readText(fs, path), { kind: 'binary', utf16: false });
+  });
+
+  it('readText UTF-16 BOM', async () => {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')]);
+    assert.deepEqual(await readText(fs, await put('c.txt', bytes)), {
+      kind: 'binary',
+      utf16: true,
+    });
+  });
+
+  it('readText undecodable past the probe', async () => {
+    const latin1 = await readText(fs, await put('d.txt', pastProbe([0xe9])));
+    assert.equal(latin1.kind, 'undecodable');
+    const nul = await readText(fs, await put('e.txt', pastProbe([0])));
+    assert.equal(nul.kind, 'undecodable');
+  });
+
+  it('readText too large', async () => {
+    const path = await put('big.txt', Buffer.alloc(MIB + 1, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.deepEqual(await readText(fs, path), { kind: 'tooLarge', size: MIB + 1 });
+    });
+  });
+
+  it('readText pre-aborted signal rejects', async () => {
+    const path = await put('f.txt', 'text');
+    await assert.rejects(readText(fs, path, AbortSignal.abort()));
   });
 });

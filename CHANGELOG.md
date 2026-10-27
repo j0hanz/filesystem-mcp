@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary file got no link in the last 64 KiB under the limit.
 - **`list` returns what it found when it times out.** Before, it failed with
   `TIMEOUT`.
+- **`search_text` skips every file `read` calls binary.** Before, it
+  skipped only a file with a NUL byte, so it searched a PDF or a short
+  Latin-1 file that `read`, `edit` and `replace_text` refuse. A file
+  whose first 512 bytes are text is still searched, its later bad bytes
+  read lossily.
 
 ### Fixed
 
