@@ -456,6 +456,18 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.ok(result.content.some((block) => block.type === 'resource_link'));
   });
 
+  it('create append over stdio links no binary file base64 overflows', async () => {
+    // Under the limit raw, over it as base64.
+    const zeros = join(root, 'append-zeros.bin');
+    await writeFile(zeros, Buffer.alloc(8 * MIB));
+    const result = await harness.client.callTool(
+      { name: 'create', arguments: { files: [{ path: zeros, content: 'x', append: true }] } },
+      { timeout: 5000 },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(!result.content.some((block) => block.type === 'resource_link'));
+  });
+
   it('preserves oversized tool and resource results over HTTP', async () => {
     await withBoundary(root, async () => {
       const http = await createTestHttpHarness([root]);

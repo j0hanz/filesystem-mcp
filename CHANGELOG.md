@@ -18,11 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Write tools over stdio link every file stdio can read back.** Before,
+  `create` with `append` linked only text files under about 1.7 MB, and a
+  binary file got no link in the last 64 KiB under the limit.
 - **`list` returns what it found when it times out.** Before, it failed with
   `TIMEOUT`.
 
 ### Fixed
 
+- **`read` over stdio no longer offers a link that `resources/read`
+  refuses.** Before, a slice of a text file just under the 10 MiB file size
+  limit came back with a `resourceUri` and a `resource_link` that failed with
+  `TOO_LARGE`.
 - **`find_files`, `search_text`, `replace_text` and `list` count the entries
   and directories they could not read in `skippedInaccessible`.** Before, an
   unreadable folder looked empty and `list` skipped such entries without a

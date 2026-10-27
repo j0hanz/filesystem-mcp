@@ -362,6 +362,7 @@ async function createOne(
         false,
         stats?.mtime.toISOString(),
         ctx.transport,
+        { kind },
       ),
     };
     created = (stats?.birthtime ?? EPOCH).toISOString();
