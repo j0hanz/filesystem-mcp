@@ -6,6 +6,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
+import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   ErrorCode,
   FsError,
@@ -16,29 +17,13 @@ import {
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import type { FileType, GuardedFileSystem } from '../core/fs.ts';
-import {
-  confirmKey,
-  type PendingDeleteIdentity,
-  pendingRoundTrip,
-  type PendingState,
-  readPendingVerdict,
-} from '../core/input-required.ts';
+import { type FileType, type GuardedFileSystem, identityOf, sameIdentity } from '../core/fs.ts';
 import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
-
-/**
- * One path over time: a replacement made after the plan has a later birth
- * time, so number fields are exact enough here (undo needs bigint ones).
- */
-const sameIdentity = (
-  a: { dev: number; ino: number; birthtimeMs: number },
-  b: { dev: number; ino: number; birthtimeMs: number },
-): boolean => a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 const DeleteInputSchema = z.strictObject({
   paths: z
@@ -187,8 +172,12 @@ async function finalizeDeletion(
   // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
   // cross-platform signal — dev/ino can read 0 on some non-POSIX drivers — so
   // combine all three rather than trusting dev/ino alone.
-  const identityChanged = !sameIdentity(plan.firstStats.stats, currentStats.stats);
-  if (plan.itemType !== 'other' && (currentItemType !== plan.itemType || identityChanged)) {
+  // sameIdentity also compares the item type.
+  const identityChanged = !sameIdentity(
+    identityOf(plan.firstStats.stats),
+    identityOf(currentStats.stats),
+  );
+  if (plan.itemType !== 'other' && identityChanged) {
     return {
       failure: {
         path: plan.validPath,
@@ -214,46 +203,30 @@ async function finalizeDeletion(
 
 /**
  * Execute one planned path on the retry round. A pending path deletes only on
- * an accepted `confirm: true`; decline, cancel, or a missing key report
- * `CANCELLED` for that path (R3 proceed, R4/R5 cancelled). A non-pending path
- * deletes directly (R14: non-pending items proceed alongside accepted ones).
+ * an accepted choice; decline, cancel, a missing key, or an entry replaced
+ * again after the re-prompt report `CANCELLED` for that path (R3 proceed,
+ * R4/R5 cancelled). A non-pending path deletes directly (R14: non-pending
+ * items proceed alongside accepted ones).
  */
 async function executePlan(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
-  pendingSorted: readonly string[],
-  confirmationState: PendingState | undefined,
+  ctx: Pick<ToolCtx, 'fs' | 'log'>,
+  confirmed: Confirmed,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
-  if (plan.pending) {
-    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validPath, 'delete');
-    if (verdict === 'skipped') {
-      return { skipped: true as const, path: plan.validPath };
-    }
-    if (verdict !== 'accepted') {
-      return {
-        failure: {
-          path: plan.validPath,
-          error: Problem.cancelled(`Delete cancelled: confirmation was ${verdict.refused}`, {
-            path: plan.validPath,
-          }),
-        },
-      };
-    }
-    const identity = confirmationState?.deleteIdentities?.find(
-      (entry) => entry.path === plan.validPath,
-    );
-    if (identity?.itemType !== plan.itemType || !sameIdentity(identity, plan.firstStats.stats)) {
-      return {
-        failure: {
-          path: plan.validPath,
-          error: Problem.invalidInput(
-            'Delete failed: item identity changed or is missing from the confirmation.',
-            { path: plan.validPath },
-          ),
-        },
-      };
-    }
+  const verdict = confirmed.verdict(plan.validPath);
+  if (verdict === 'skipped') return { skipped: true as const, path: plan.validPath };
+  if (verdict !== 'proceed') {
+    const message =
+      verdict === 'changed'
+        ? `Delete cancelled: "${plan.validPath}" was replaced again while the prompt was open.`
+        : `Delete cancelled: confirmation was ${verdict.refused}`;
+    return {
+      failure: {
+        path: plan.validPath,
+        error: Problem.cancelled(message, { path: plan.validPath }),
+      },
+    };
   }
   return finalizeDeletion(plan, args, ctx);
 }
@@ -278,10 +251,6 @@ async function handleDelete(
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
   let plans: { plan: DeletePlan; index: number }[] = [];
-  const confirmationState = ctx.requestState?.<PendingState>();
-  const previouslyPendingPaths = new Set(
-    confirmationState?.op === 'delete' ? confirmationState.paths : [],
-  );
   const seenTargets = new Set<string>();
   const duplicates = new Set<number>();
   for (const { index, value: r } of planned.results) {
@@ -296,12 +265,7 @@ async function handleDelete(
     }
     seenTargets.add(target);
     if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else {
-      // Emptying a directory while its prompt is open must not discard the
-      // answer. Keep that path pending so the verified retry still honors skip.
-      r.plan.pending ||= previouslyPendingPaths.has(r.plan.validPath);
-      plans.push({ plan: r.plan, index });
-    }
+    else plans.push({ plan: r.plan, index });
   }
   // planPath returns its failures; a slot it never filled falls to the fallback below.
 
@@ -333,45 +297,26 @@ async function handleDelete(
     plans = plans.filter(({ index }) => !nested.has(index));
   }
 
-  // Pending set: recursive + non-empty directories, sorted and de-duplicated.
-  // `buildInputRequired` seals exactly this set into the requestState, and the
-  // retried round recomputes it from the same args so a swapped retry (accept
-  // for X, retry with Y) is rejected — the codec only proves the state was not
-  // tampered, not that it matches the current request (R9).
-  const pendingSorted = [
-    ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
-  ].sort();
-
-  // With no actionable plans, preserve per-path NOT_FOUND / ignoreIfNotExists
-  // results. Otherwise even an empty pending set must be checked before an
-  // unrelated non-pending batch entry can mutate.
-  if (pendingSorted.length > 0 || (confirmationState?.op === 'delete' && plans.length > 0)) {
-    // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
-    // even the non-pending items in the same call); a retry whose verified
-    // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
-    const round = await pendingRoundTrip(ctx, {
-      op: 'delete',
-      pending: pendingSorted,
-      deleteIdentities: plans
-        .filter(({ plan }) => plan.pending)
-        .map(({ plan }): PendingDeleteIdentity => {
-          const { dev, ino, birthtimeMs } = plan.firstStats.stats;
-          return { path: plan.validPath, itemType: plan.itemType, dev, ino, birthtimeMs };
-        }),
-      buildInputs: (ps) =>
-        ps.map((p, i) => ({
-          key: confirmKey(i),
-          message: `Delete "${p}" and all its contents?`,
-          choices: ['delete', 'skip'],
-        })),
-    });
-    if (round !== undefined) return round;
-  }
+  // Recursive non-empty directories need the client's approval. While one is
+  // due, the round returns input_required atomically (R14: nothing deleted
+  // yet, not even the non-pending items in the same call).
+  const confirmed = await confirm(
+    ctx,
+    'delete',
+    'delete',
+    plans.map(({ plan }) => ({
+      path: plan.validPath,
+      identity: identityOf(plan.firstStats.stats),
+      required: plan.pending,
+      message: `Delete "${plan.validPath}" and all its contents?`,
+    })),
+  );
+  if (isInputRequiredResult(confirmed)) return confirmed;
 
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    ({ plan }) => executePlan(plan, args, ctx, pendingSorted, confirmationState),
+    ({ plan }) => executePlan(plan, args, ctx, confirmed),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );

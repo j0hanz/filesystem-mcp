@@ -111,7 +111,8 @@ describe('Confirmation gaps', () => {
             ],
           },
         });
-        assert.strictEqual(prompts(), 1);
+        // One round, one prompt per pending entry: no re-prompt.
+        assert.strictEqual(prompts(), 2);
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(await readFile(destA, 'utf8'), 'A');
         assert.strictEqual(await readFile(destB, 'utf8'), 'B');
@@ -174,7 +175,8 @@ describe('Confirmation gaps', () => {
             ],
           },
         });
-        assert.strictEqual(prompts(), 1);
+        // One round, one prompt per pending entry: no re-prompt.
+        assert.strictEqual(prompts(), 2);
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(await readFile(a, 'utf8'), 'newA');
         assert.strictEqual(await readFile(b, 'utf8'), 'newB');
@@ -199,7 +201,8 @@ describe('Confirmation gaps', () => {
             ignoreIfNotExists: true,
           },
         });
-        assert.strictEqual(prompts(), 1);
+        // One round, one prompt per pending entry: no re-prompt.
+        assert.strictEqual(prompts(), 2);
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(await exists(join(root, 'other')), false);
         assert.strictEqual(await readFile(join(root, 'moved', 'child.txt'), 'utf8'), 'original');

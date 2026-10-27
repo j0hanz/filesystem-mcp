@@ -8,7 +8,6 @@ import {
   cleanupTestRoot,
   createElicitationClientPair,
   createTestRoot,
-  firstTextBlock,
   trySymlink,
   withBoundary,
   writeTestFile,
@@ -99,13 +98,15 @@ describe('Mutation regressions', () => {
             let prompts = 0;
             pair = await createElicitationClientPair([root], async () => {
               prompts++;
-              await rename(dir, original);
-              if (replacement === 'file') {
-                await writeTestFile(root, 'target', 'replacement');
-              } else {
-                await mkdir(dir);
-                if (replacement === 'nonempty directory') {
-                  await writeTestFile(root, 'target/child.txt', 'replacement');
+              if (prompts === 1) {
+                await rename(dir, original);
+                if (replacement === 'file') {
+                  await writeTestFile(root, 'target', 'replacement');
+                } else {
+                  await mkdir(dir);
+                  if (replacement === 'nonempty directory') {
+                    await writeTestFile(root, 'target/child.txt', 'replacement');
+                  }
                 }
               }
               return { action: 'accept', content: { choice } };
@@ -114,7 +115,8 @@ describe('Mutation regressions', () => {
               name: 'delete',
               arguments: { paths: batch ? [unrelated, dir] : [dir], recursive: true },
             });
-            assert.strictEqual(prompts, 1);
+            // The replacement is asked about again; the answer then applies to it.
+            assert.strictEqual(prompts, 2);
             const meta = result._meta as {
               results: {
                 path: string;
@@ -123,24 +125,19 @@ describe('Mutation regressions', () => {
               }[];
               summary: { total: number; succeeded: number; failed: number };
             };
-            const failed = choice === 'delete' ? 1 : 0;
             assert.deepStrictEqual(meta.summary, {
               total: batch ? 2 : 1,
-              succeeded: (batch ? 2 : 1) - failed,
-              failed,
+              succeeded: batch ? 2 : 1,
+              failed: 0,
             });
+            assert.notStrictEqual(result.isError, true);
             const target = meta.results.find((entry) => entry.path === normalizePath(dir));
             assert.ok(target);
-            if (choice === 'delete') {
-              assert.strictEqual(target.error?.code, 'INVALID_INPUT');
-              assert.match(target.error.message, /identity/);
-              if (!batch) assert.strictEqual(result.isError, true);
-            } else {
-              assert.deepStrictEqual(target.value, { deleted: false });
-              assert.notStrictEqual(result.isError, true);
-            }
+            assert.deepStrictEqual(target.value, { deleted: choice === 'delete' });
             assert.strictEqual(await readFile(join(original, 'child.txt'), 'utf8'), 'original');
-            if (replacement === 'file') {
+            if (choice === 'delete') {
+              await assert.rejects(access(dir), { code: 'ENOENT' });
+            } else if (replacement === 'file') {
               assert.strictEqual(await readFile(dir, 'utf8'), 'replacement');
             } else if (replacement === 'nonempty directory') {
               assert.strictEqual(await readFile(join(dir, 'child.txt'), 'utf8'), 'replacement');
@@ -159,7 +156,7 @@ describe('Mutation regressions', () => {
   }
 
   for (const change of ['remove pending directory', 'add pending directory']) {
-    it(`delete fails closed before unrelated mutations when confirmation paths change: ${change}`, async () => {
+    it(`delete re-plans when confirmation paths change: ${change}`, async () => {
       const root = await createTestRoot();
       let pair: Awaited<ReturnType<typeof createElicitationClientPair>> | undefined;
       try {
@@ -168,9 +165,13 @@ describe('Mutation regressions', () => {
         await writeTestFile(root, 'target/child.txt', 'original');
         await mkdir(other);
         const unrelated = await writeTestFile(root, 'unrelated.txt', 'unrelated');
+        let prompts = 0;
         pair = await createElicitationClientPair([root], async () => {
-          if (change === 'remove pending directory') await rename(dir, join(root, 'original'));
-          else await writeTestFile(root, 'other/child.txt', 'new pending');
+          prompts++;
+          if (prompts === 1) {
+            if (change === 'remove pending directory') await rename(dir, join(root, 'original'));
+            else await writeTestFile(root, 'other/child.txt', 'new pending');
+          }
           return { action: 'accept', content: { choice: 'delete' } };
         });
         const result = await pair.client.callTool({
@@ -181,12 +182,20 @@ describe('Mutation regressions', () => {
             ignoreIfNotExists: true,
           },
         });
-        assert.strictEqual(result.isError, true, JSON.stringify(result));
-        assert.match(JSON.stringify(result), /confirmation does not match/);
-        assert.strictEqual(await readFile(unrelated, 'utf8'), 'unrelated');
-        await access(other);
-        const original = change === 'remove pending directory' ? join(root, 'original') : dir;
-        assert.strictEqual(await readFile(join(original, 'child.txt'), 'utf8'), 'original');
+        assert.notStrictEqual(result.isError, true, JSON.stringify(result));
+        await assert.rejects(access(other), { code: 'ENOENT' });
+        await assert.rejects(access(unrelated), { code: 'ENOENT' });
+        if (change === 'remove pending directory') {
+          assert.strictEqual(prompts, 1);
+          assert.strictEqual(
+            await readFile(join(root, 'original', 'child.txt'), 'utf8'),
+            'original',
+          );
+        } else {
+          // One prompt per pending entry: target, then target and other re-prompted together.
+          assert.strictEqual(prompts, 3);
+          await assert.rejects(access(dir), { code: 'ENOENT' });
+        }
       } finally {
         await pair?.close();
         await cleanupTestRoot(root);
@@ -235,7 +244,7 @@ describe('Mutation regressions', () => {
     }
   }
 
-  it('delete keeps a symlink that replaced a confirmed directory during confirmation', async (t) => {
+  it('delete asks again about a symlink that replaced a confirmed directory and removes only the link', async (t) => {
     const root = await createTestRoot();
     try {
       const d1 = join(root, 'd1');
@@ -258,24 +267,24 @@ describe('Mutation regressions', () => {
           await rename(staged, d2);
         },
       );
-      assert.strictEqual(prompts, 2);
+      // Two prompts for d1 and d2, then both again: the swapped d2 re-prompts the set.
+      assert.strictEqual(prompts, 4);
       assert.notStrictEqual(result.isError, true, JSON.stringify(result));
-      assert.deepStrictEqual(meta.summary, { total: 2, succeeded: 1, failed: 1 });
+      assert.deepStrictEqual(meta.summary, { total: 2, succeeded: 2, failed: 0 });
       assert.deepStrictEqual(meta.results[0], {
         path: normalizePath(d1),
         value: { deleted: true },
       });
-      assert.strictEqual(meta.results[1]?.error?.code, 'INVALID_INPUT');
-      assert.match(meta.results[1]?.error?.message ?? '', /identity/);
+      assert.deepStrictEqual(meta.results[1]?.value, { deleted: true });
       await assert.rejects(access(d1), { code: 'ENOENT' });
-      assert.strictEqual((await lstat(d2)).isSymbolicLink(), true);
+      await assert.rejects(lstat(d2), { code: 'ENOENT' });
       assert.strictEqual(await readFile(join(root, 'kept', 'x'), 'utf8'), 'link target');
     } finally {
       await cleanupTestRoot(root);
     }
   });
 
-  it('delete still rejects a retry whose confirmed directory matches no request entry', async (t) => {
+  it('delete re-plans a retry whose confirmed directory matches no request entry', async (t) => {
     const root = await createTestRoot();
     try {
       await writeTestFile(root, 'real/d2/x', 'confirmed');
@@ -295,14 +304,12 @@ describe('Mutation regressions', () => {
           await symlink(join(root, 'other'), link, 'junction');
         },
       );
+      // The confirmed directory left the plan; the file the path now names
+      // needs no confirmation, exactly as on a fresh call.
       assert.strictEqual(prompts, 1);
-      assert.strictEqual(result.isError, true, JSON.stringify(result));
-      assert.match(
-        firstTextBlock(result).text ?? '',
-        /delete: confirmation does not match the requested paths/,
-      );
+      assert.notStrictEqual(result.isError, true, JSON.stringify(result));
       assert.strictEqual(await readFile(join(root, 'real', 'd2', 'x'), 'utf8'), 'confirmed');
-      assert.strictEqual(await readFile(join(root, 'other', 'd2'), 'utf8'), 'never confirmed');
+      await assert.rejects(access(join(root, 'other', 'd2')), { code: 'ENOENT' });
     } finally {
       await cleanupTestRoot(root);
     }

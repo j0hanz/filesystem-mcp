@@ -6,6 +6,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
+import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   ErrorCode,
   FsError,
@@ -15,10 +16,9 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import { destExists } from '../core/fs.ts';
+import { destExists, destIdentity, type EntryIdentity } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import type { TransferKind } from '../core/path.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
@@ -80,6 +80,8 @@ interface TransferPlan {
    * true for a copy, which treats such a target as a self-copy and skips.
    */
   isSpellingOnlyRename: boolean;
+  /** The landing at the destination when planned; undefined when absent or a respelling. */
+  destIdentity: EntryIdentity | undefined;
   /** Whether the destination existed when planned (drives the TOCTOU guard). */
   destExistedOriginally: boolean;
   /** Destination exists and is not a self or spelling-only target → needs overwrite confirmation. */
@@ -158,7 +160,8 @@ async function planTransfer(
     };
   }
 
-  const destExistedOriginally = !isSpellingOnlyRename && (await destExists(fs, validDest, op));
+  const landing = isSpellingOnlyRename ? undefined : await destIdentity(fs, validDest, op);
+  const destExistedOriginally = landing !== undefined;
   const pending = destExistedOriginally && !overwrite;
 
   return {
@@ -169,6 +172,7 @@ async function planTransfer(
       resolvedSource,
       validDest,
       isSpellingOnlyRename,
+      destIdentity: landing,
       destExistedOriginally,
       pending,
     },
@@ -185,21 +189,19 @@ async function planTransfer(
 async function executeTransfer(
   op: PairOp,
   plan: TransferPlan,
-  ctx: Pick<ToolCtx, 'fs' | 'signal' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
-  pendingSorted: readonly string[],
+  ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+  confirmed: Confirmed,
 ): Promise<TransferExecResult> {
-  if (plan.pending) {
-    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validDest, 'overwrite');
-    if (verdict === 'skipped') {
-      return { skipped: plan.pair.destination };
-    }
-    if (verdict !== 'accepted') {
-      throw new FsError(
-        ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${verdict.refused}`,
-        plan.pair.destination,
-      );
-    }
+  const verdict = confirmed.verdict(plan.validDest);
+  if (verdict === 'skipped') return { skipped: plan.pair.destination };
+  if (verdict !== 'proceed') {
+    throw new FsError(
+      ErrorCode.CANCELLED,
+      verdict === 'changed'
+        ? `${VERB[op]} cancelled: destination "${plan.pair.destination}" was replaced again while the prompt was open.`
+        : `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${verdict.refused}`,
+      plan.pair.destination,
+    );
   }
 
   // TOCTOU check before any mutation: a destination that did not exist when
@@ -361,28 +363,30 @@ async function runTransfers(
     );
   }
 
-  const pendingSorted = safe
-    .filter((p) => p.pending)
-    .map((p) => p.validDest)
-    .sort();
-  if (pendingSorted.length > 0) {
-    // Round 1 returns input_required; a retry whose verified state does not
-    // bind this overwrite set throws (R9) via `pendingRoundTrip`.
-    const round = await pendingRoundTrip(ctx, {
-      op,
-      pending: pendingSorted,
-      buildInputs: (dests) =>
-        dests.map((dest, i) => ({
-          key: confirmKey(i),
-          message:
-            op === 'move'
-              ? `"${dest}" already exists. Overwrite it?`
-              : `Destination "${dest}" already exists. Overwrite it?`,
-          choices: ['overwrite', 'skip'],
-        })),
-    });
-    if (round !== undefined) return round;
-  }
+  // Round 1 returns input_required while an overwrite needs approval (R14).
+  const confirmed = await confirm(
+    ctx,
+    op,
+    'overwrite',
+    overwrite
+      ? []
+      : safe.flatMap((plan) =>
+          plan.destIdentity === undefined
+            ? []
+            : [
+                {
+                  path: plan.validDest,
+                  identity: plan.destIdentity,
+                  required: plan.pending,
+                  message:
+                    op === 'move'
+                      ? `"${plan.validDest}" already exists. Overwrite it?`
+                      : `Destination "${plan.validDest}" already exists. Overwrite it?`,
+                },
+              ],
+        ),
+  );
+  if (isInputRequiredResult(confirmed)) return confirmed;
 
   const total = safe.length;
   let completed = 0;
@@ -394,7 +398,7 @@ async function runTransfers(
     safe,
     async (readyPlan) => {
       try {
-        return await executeTransfer(op, readyPlan, ctx, pendingSorted);
+        return await executeTransfer(op, readyPlan, ctx, confirmed);
       } finally {
         tick();
       }

@@ -30,19 +30,15 @@ import { randomBytes } from 'node:crypto';
 import * as z from 'zod/v4';
 
 import { ErrorCode, FsError } from './errors.ts';
-import type { FileType } from './fs.ts';
+import type { EntryIdentity } from './fs.ts';
 import { Logger } from './observability.ts';
 
 /** The destructive operation a pending confirmation authorizes. */
 type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 
-/** The original filesystem object covered by a recursive-delete confirmation. */
-export interface PendingDeleteIdentity {
+/** The entry a confirmation round showed the client for one sealed path. */
+interface SealedIdentity extends EntryIdentity {
   readonly path: string;
-  readonly itemType: FileType;
-  readonly dev: number;
-  readonly ino: number;
-  readonly birthtimeMs: number;
 }
 
 /**
@@ -54,8 +50,16 @@ export interface PendingDeleteIdentity {
 export interface PendingState {
   readonly op: PendingOp;
   readonly paths: readonly string[];
-  /** Original objects, preserved on reissue; legacy tokens without these cannot authorize delete. */
-  readonly deleteIdentities?: readonly PendingDeleteIdentity[];
+  /**
+   * The entries the round showed, one per path; a Confirmation state without
+   * them is treated as no state (see `confirmation.ts`).
+   */
+  readonly identities?: readonly SealedIdentity[];
+  /**
+   * Set on the state of a round minted because a sealed entry was swapped or a
+   * new one appeared. Sealed like `reissued`, so the re-prompt happens once.
+   */
+  readonly reprompted?: true;
   /**
    * Set on the state of a round minted because the previous round's answer
    * was dropped by the SDK (`droppedInputResponseKeys`). Sealed in the HMAC
@@ -190,7 +194,8 @@ export async function buildInputRequired(
     {
       op: pending.op,
       paths: [...pending.paths].sort(),
-      ...(pending.deleteIdentities ? { deleteIdentities: pending.deleteIdentities } : {}),
+      ...(pending.identities ? { identities: pending.identities } : {}),
+      ...(pending.reprompted ? { reprompted: true as const } : {}),
       ...(pending.reissued ? { reissued: true as const } : {}),
     },
     ctx,
@@ -199,24 +204,21 @@ export async function buildInputRequired(
 }
 
 /**
- * The shared read-state → `buildInputRequired` → mismatch-throw flow used by
- * every destructive-confirmation handler (delete, move, grant). No verified
- * state, OR a verified state belonging to a different `op` (e.g. a chained
- * call's grant round already resolved and this is now that same call's own
- * delete/move confirmation round), mints a fresh `input_required` for this
- * op. A retry whose verified state matches this op but not the pending path
- * set throws `FsError(INVALID_INPUT)` (R9) — uniformly surfaced as an
- * `isError` tool result by the handler's catch. Returns `undefined` on a
- * matching same-op retry so the caller proceeds.
+ * The read-state → `buildInputRequired` → mismatch-throw flow of the access
+ * grant (`define.ts` `precheckGrant`); delete, move, copy and create confirm
+ * through `confirmation.ts`. No verified state, OR a verified state belonging
+ * to a different `op`, mints a fresh `input_required` for this op. A retry
+ * whose verified state matches this op but not the pending path set throws
+ * `FsError(INVALID_INPUT)` (R9) — uniformly surfaced as an `isError` tool
+ * result by the handler's catch. Returns `undefined` on a matching same-op
+ * retry so the caller proceeds.
  *
- * One home for the R9 binding check means a future fix cannot miss two of three
- * sites. The caller passes the round's `PendingCtx` and supplies `buildInputs`
- * so only the prompt text varies.
+ * The caller passes the round's `PendingCtx` and supplies `buildInputs` so only
+ * the prompt text varies.
  */
 interface PendingRoundTripOpts {
   readonly op: PendingOp;
   readonly pending: readonly string[];
-  readonly deleteIdentities?: readonly PendingDeleteIdentity[];
   readonly buildInputs: (pending: readonly string[]) => readonly PendingInput[];
 }
 
@@ -255,7 +257,7 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
  * client has none: proceed and let the SDK decide, exactly as before this check
  * existed.
  */
-function assertCanElicit(op: PendingOp, capabilities: ClientCapabilities | undefined): void {
+export function assertCanElicit(op: PendingOp, capabilities: ClientCapabilities | undefined): void {
   if (capabilities === undefined) return;
   const elicitation = capabilities.elicitation;
   if (
@@ -282,11 +284,7 @@ export async function pendingRoundTrip(
   if (state?.op !== opts.op) {
     assertCanElicit(opts.op, ctx.clientCapabilities);
     return buildInputRequired(
-      {
-        op: opts.op,
-        paths: opts.pending,
-        ...(opts.deleteIdentities ? { deleteIdentities: opts.deleteIdentities } : {}),
-      },
+      { op: opts.op, paths: opts.pending },
       opts.buildInputs(opts.pending),
       ctx.serverCtx,
     );
@@ -393,23 +391,6 @@ export function describeRefusal(
   if (view.action === 'decline') return 'declined by the user';
   if (view.action === 'cancel') return 'dismissed by the user';
   return 'answered without a valid choice';
-}
-
-/**
- * How the caller answered one item of a sorted pending set: `'accepted'` for
- * `acceptChoice`, `'skipped'` for skip, otherwise the refusal's wording.
- */
-export function readPendingVerdict(
-  ctx: Pick<PendingCtx, 'inputResponses' | 'droppedInputResponseKeys'>,
-  pendingSorted: readonly string[],
-  item: string,
-  acceptChoice: string,
-): 'accepted' | 'skipped' | { refused: string } {
-  const key = confirmKey(pendingSorted.indexOf(item));
-  const choice = readAcceptedChoice(ctx.inputResponses, key);
-  if (choice === acceptChoice) return 'accepted';
-  if (choice === 'skip') return 'skipped';
-  return { refused: describeRefusal(ctx, key) };
 }
 
 /**
