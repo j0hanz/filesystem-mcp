@@ -31,7 +31,7 @@ jobs:
         run: |
           fail=0
           for i in $(seq 1 25); do
-            if ! node --test --test-timeout=60000 __tests__/resources-subscribe.test.ts __tests__/subscriptions-listen.test.ts > "run-$i.log" 2>&1; then
+            if ! node --test --test-timeout=60000 __tests__/resources-subscribe.test.ts __tests__/subscriptions-listen.test.ts __tests__/stdio.test.ts > "run-$i.log" 2>&1; then
               fail=$((fail + 1))
               echo "::error::run $i failed"
               grep -E '✖|AssertionError|no notifications' "run-$i.log" | head -20
