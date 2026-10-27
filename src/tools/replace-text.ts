@@ -320,16 +320,13 @@ async function processEntry(
       { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
       async (bytes) => {
         if (!matcher.testBuffer(bytes)) return undefined;
-        const { content, matchCount } = await matcher.replace(
-          bytes.toString('utf-8'),
-          replacement,
-          signal,
-        );
+        const before = bytes.toString('utf-8');
+        const { content, matchCount } = await matcher.replace(before, replacement, signal);
         if (matchCount === 0) return undefined;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;
-        return { content, result: matchCount, write: true };
+        return { content, result: matchCount, write: true, before };
       },
     );
     if (done === undefined) return undefined;

@@ -25,6 +25,8 @@ export interface Change<T> {
   readonly content: string;
   readonly result: T;
   readonly write: boolean;
+  /** The decoded current content, when the transform already decoded the bytes. */
+  readonly before?: string;
 }
 
 type WrittenFileReport = WrittenFileMeta & {
@@ -77,7 +79,8 @@ export function rewriteEntry<T>(
     if (verdict.kind !== 'text') return { kind: verdict.kind };
     const change = await transform(verdict.bytes);
     if (change === undefined) return undefined;
-    const before = verdict.bytes.toString('utf8');
+    // A changed file up to the text cap: decode it once, not once per side.
+    const before = change.before ?? verdict.bytes.toString('utf8');
     return apply(request, request.path, before, verdict.stats, change);
   });
 }
