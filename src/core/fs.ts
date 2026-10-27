@@ -35,7 +35,7 @@ import {
 import { detectMimeFromContent, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { isSamePath, normalizePath } from './path-utils.ts';
+import { isSamePath, normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -48,7 +48,7 @@ import {
   readFileWithStats,
   readProbe,
 } from './read.ts';
-import { identityOf, plannedMkdirChain, saveOld, snapshotTree } from './undo.ts';
+import { identityOf as fileIdentityOf, plannedMkdirChain, saveOld, snapshotTree } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
@@ -338,7 +338,10 @@ export class GuardedFileSystem {
     // the tree under `to` before recording it.
     if (this.#capture) {
       if (saved) this.#capture.push({ op: 'write', path: validNew, ...saved, expect: null });
-      const identity = await fsLstat(validNew, { bigint: true }).then(identityOf, () => undefined);
+      const identity = await fsLstat(validNew, { bigint: true }).then(
+        fileIdentityOf,
+        () => undefined,
+      );
       if (identity !== undefined) {
         this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
       } else {
@@ -597,7 +600,7 @@ export class GuardedFileSystem {
       op: 'mkdir',
       path: validPath,
       mode: before && Number(before.mode) & 0o777,
-      was: before && identityOf(before),
+      was: before && fileIdentityOf(before),
     });
   }
 
@@ -848,27 +851,72 @@ export class GuardedFileSystem {
   }
 }
 
+/** What an approval round pins an entry to: a swapped entry differs in at least one field. */
+export interface EntryIdentity {
+  readonly itemType: FileType;
+  readonly dev: number;
+  readonly ino: number;
+  readonly birthtimeMs: number;
+}
+
+export function identityOf(stats: Stats): EntryIdentity {
+  return {
+    itemType: resolveEntryType(stats),
+    dev: stats.dev,
+    ino: stats.ino,
+    birthtimeMs: stats.birthtimeMs,
+  };
+}
+
+export function sameIdentity(a: EntryIdentity, b: EntryIdentity): boolean {
+  return (
+    a.itemType === b.itemType &&
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.birthtimeMs === b.birthtimeMs
+  );
+}
+
+/** Stands for a destination whose stat was refused: present, but not nameable. */
+export const UNKNOWN_IDENTITY: EntryIdentity = {
+  itemType: 'other',
+  dev: 0,
+  ino: 0,
+  birthtimeMs: 0,
+};
+
 /**
- * Returns whether `path` exists, treating "not found" as absent. Any other stat
- * failure is logged and counts as present, so a destination whose stat is refused
- * is confirmed before it is overwritten, never written over as if absent. Used for
- * TOCTOU re-checks between plan and execute phases.
+ * Returns the identity of what `path` resolves to, or `undefined` when absent
+ * ("not found" counts as absent). Any other stat failure is logged and yields
+ * `UNKNOWN_IDENTITY`, so a destination whose stat is refused is confirmed before
+ * it is overwritten, never written over as if absent.
+ */
+export async function destIdentity(
+  fs: Pick<GuardedFileSystem, 'stat'>,
+  path: string,
+  label: string,
+): Promise<EntryIdentity | undefined> {
+  try {
+    return identityOf((await fs.stat(path)).stats);
+  } catch (err) {
+    // A path under a regular file cannot exist, so it is absent, not refused.
+    const underFile =
+      (isFsError(err) && err.code === ErrorCode.NOT_DIRECTORY) ||
+      (isNodeError(err) && err.code === 'ENOTDIR');
+    if (isMissing(err) || underFile) return undefined;
+    Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
+    return UNKNOWN_IDENTITY;
+  }
+}
+
+/**
+ * Returns whether `path` exists, treating "not found" as absent. Used for TOCTOU
+ * re-checks between plan and execute phases; see `destIdentity` for refused stats.
  */
 export async function destExists(
   fs: Pick<GuardedFileSystem, 'stat'>,
   path: string,
   label: string,
 ): Promise<boolean> {
-  try {
-    await fs.stat(path);
-    return true;
-  } catch (err) {
-    // A path under a regular file cannot exist, so it is absent, not refused.
-    const underFile =
-      (isFsError(err) && err.code === ErrorCode.NOT_DIRECTORY) ||
-      (isNodeError(err) && err.code === 'ENOTDIR');
-    if (isMissing(err) || underFile) return false;
-    Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
-    return true;
-  }
+  return (await destIdentity(fs, path, label)) !== undefined;
 }
