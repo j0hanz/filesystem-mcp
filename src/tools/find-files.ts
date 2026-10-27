@@ -1,7 +1,11 @@
+import { basename } from 'node:path';
+
 import * as z from 'zod/v4';
 
+import type { StoppedReason } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
+import { resolveScanScope, scan } from '../core/scan.ts';
 import {
   CursorSchema,
   IncludeHidden,
@@ -11,10 +15,9 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import { searchFiles } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
+import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { defineTool } from './define.ts';
 
 // ---------------------------------------------------------------------------
@@ -49,15 +52,19 @@ interface SearchFilesOutput {
   totalMatches?: number;
   filesScanned?: number;
   skippedInaccessible?: number;
-  stoppedReason?: 'maxResults' | 'timeout';
+  stoppedReason?: StoppedReason;
   resourceUri?: string;
   nextCursor?: string;
 }
 
-/** The engine's own summary plus its root is the page metadata; nothing is copied out of it. */
-type SearchFilesPageMetadata = Awaited<ReturnType<typeof searchFiles>>['summary'] & {
+interface SearchFilesPageMetadata {
   readonly root: string;
-};
+  matched: number;
+  filesScanned: number;
+  truncated: boolean;
+  skippedInaccessible: number;
+  stoppedReason?: StoppedReason;
+}
 
 export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesOutput>({
   name: 'find_files',
@@ -87,23 +94,42 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
       cursor: args.cursor,
       pageSize: args.maxResults,
       produce: async () => {
-        const basePath = await ctx.fs.pathGuard.validateExistingDirectory(requestedBasePath);
-        const searchOptions: Parameters<typeof searchFiles>[2] = {
-          maxResults: MAX_SEARCH_RESULTS,
-          includeHidden: args.includeHidden,
-          sortBy: args.sortBy,
-          skipIgnored: !args.includeIgnored,
-          ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-          signal: ctx.signal,
-        };
-        const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
-        // Relative to the root, not to basePath: `a.ts` from a search of
+        const scope = await resolveScanScope(requestedBasePath, ctx.fs, { allowFile: false });
+        const outcome = await scan(
+          scope,
+          {
+            pathGuard: ctx.fs.pathGuard,
+            pattern: args.pattern,
+            baseNameMatch: true,
+            includeHidden: args.includeHidden,
+            includeIgnored: args.includeIgnored,
+            onlyFiles: true,
+            ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+            concurrency: PARALLEL_CONCURRENCY,
+            cap: MAX_SEARCH_RESULTS,
+            signal: ctx.signal,
+          },
+          (entry) => Promise.resolve(entry.path),
+        );
+        // Sorted after the scan, on the kept results.
+        const found =
+          args.sortBy === 'name'
+            ? outcome.results.toSorted((x, y) => basename(x).localeCompare(basename(y)))
+            : outcome.results.toSorted((x, y) => x.localeCompare(y));
+        // Relative to the root, not to scope.root: `a.ts` from a search of
         // `src` would name `<root>/a.ts` when passed back.
-        const paths = ctx.fs.pathGuard.resultPaths(result.basePath);
+        const paths = ctx.fs.pathGuard.resultPaths(scope.root);
         return {
-          items: result.results.map((r) => ({ path: paths.show(r.path) })),
-          metadata: { root: paths.root, ...result.summary },
-          truncated: result.summary.truncated,
+          items: found.map((path) => ({ path: paths.show(path) })),
+          metadata: {
+            root: paths.root,
+            matched: found.length,
+            filesScanned: found.length,
+            truncated: outcome.stoppedReason !== undefined,
+            skippedInaccessible: outcome.skippedInaccessible,
+            ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
+          },
+          truncated: outcome.stoppedReason !== undefined,
         };
       },
       // The whole result, root included: its paths are relative to that root.

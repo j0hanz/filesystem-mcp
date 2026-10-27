@@ -32,7 +32,7 @@ import {
 } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
-import { searchContent, searchFiles } from '../src/core/search.ts';
+import { searchContent } from '../src/core/search.ts';
 import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -824,42 +824,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   });
 
   describe('Search & Glob (TC-FUNC-039–046)', () => {
-    it('TC-FUNC-039: searchFiles with pattern matching filters files', async () => {
-      await writeTestFile(tmpDir, 'search_dir/moduleA.ts', 'export const a = 1;');
-      await writeTestFile(tmpDir, 'search_dir/moduleB.ts', 'export const b = 2;');
-      await writeTestFile(tmpDir, 'search_dir/notes.txt', 'some notes');
-      await writeTestFile(tmpDir, 'search_dir/sub/moduleC.ts', 'export const c = 3;');
-      await writeTestFile(tmpDir, 'search_dir/sub/readme.txt', 'readme doc');
-
-      const searchDir = join(tmpDir, 'search_dir');
-
-      const tsResults = await searchFiles(searchDir, '**/*.ts', {}, ctx.pathGuard);
-      assert.strictEqual(tsResults.results.length, 3);
-      assert.ok(tsResults.results.every((r) => r.path.endsWith('.ts')));
-
-      const txtResults = await searchFiles(searchDir, '**/*.txt', {}, ctx.pathGuard);
-      assert.strictEqual(txtResults.results.length, 2);
-      assert.ok(txtResults.results.every((r) => r.path.endsWith('.txt')));
-    });
-
-    it("TC-FUNC-039b: searchFiles sortBy 'name' orders by basename, not full path", async () => {
-      await writeTestFile(tmpDir, 'sort_dir/zzz/alpha.ts', '// a');
-      await writeTestFile(tmpDir, 'sort_dir/aaa/omega.ts', '// o');
-
-      const sortDir = join(tmpDir, 'sort_dir');
-      const byName = await searchFiles(sortDir, '**/*.ts', { sortBy: 'name' }, ctx.pathGuard);
-      assert.deepStrictEqual(
-        byName.results.map((r) => basename(r.path)),
-        ['alpha.ts', 'omega.ts'],
-      );
-
-      const byPath = await searchFiles(sortDir, '**/*.ts', {}, ctx.pathGuard);
-      assert.deepStrictEqual(
-        byPath.results.map((r) => basename(r.path)),
-        ['omega.ts', 'alpha.ts'],
-      );
-    });
-
     it('TC-FUNC-040: searchContent matches literal patterns across files', async () => {
       const searchContentDir = join(tmpDir, 'search_content_dir');
       await writeTestFile(
@@ -914,11 +878,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       for (let i = 0; i < 20; i++)
         await fs.mkdir(join(dir, `d${String(i)}`, 'inner'), { recursive: true });
       const signal = AbortSignal.abort(new Error('deadline'));
-
-      const files = await searchFiles(dir, '**/*.nomatch', { signal }, ctx.pathGuard);
-      assert.strictEqual(files.results.length, 0);
-      assert.strictEqual(files.summary.stoppedReason, 'timeout');
-      assert.strictEqual(files.summary.truncated, true);
 
       const content = await searchContent(dir, 'NEEDLE', { isRegex: false, signal }, ctx.pathGuard);
       assert.strictEqual(content.matches.length, 0);

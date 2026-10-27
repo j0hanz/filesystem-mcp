@@ -3273,6 +3273,68 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(sc.results?.some((r) => r.path.endsWith('findme.txt')));
   });
 
+  it('find_files counts an unreadable directory', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX directory permissions as non-root');
+    }
+    const dir = join(tmpDir, 'find_locked');
+    const locked = join(dir, 'locked');
+    await writeTestFile(dir, 'a.ts', 'x');
+    await writeTestFile(dir, 'locked/x.ts', 'x');
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern: '**/*.ts' },
+      });
+      const meta = result._meta as { results?: { path: string }[]; skippedInaccessible?: number };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.match(JSON.stringify(result.content), /1 inaccessible file/);
+      assert.deepStrictEqual(
+        meta.results?.map((r) => basename(r.path)),
+        ['a.ts'],
+      );
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
+  it('find_files filters by pattern', async () => {
+    const dir = join(tmpDir, 'find_filter');
+    await writeTestFile(dir, 'moduleA.ts', 'x');
+    await writeTestFile(dir, 'notes.txt', 'x');
+    await writeTestFile(dir, 'sub/moduleC.ts', 'x');
+    await writeTestFile(dir, 'sub/readme.txt', 'x');
+    const find = async (pattern: string) => {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern },
+      });
+      return (result._meta as { results: { path: string }[] }).results;
+    };
+    const ts = await find('**/*.ts');
+    assert.strictEqual(ts.length, 2);
+    assert.ok(ts.every((r) => r.path.endsWith('.ts')));
+    const txt = await find('**/*.txt');
+    assert.strictEqual(txt.length, 2);
+    assert.ok(txt.every((r) => r.path.endsWith('.txt')));
+  });
+
+  it("find_files sortBy 'name' orders by basename, not full path", async () => {
+    const dir = join(tmpDir, 'find_sort');
+    await writeTestFile(dir, 'zzz/alpha.ts', '// a');
+    await writeTestFile(dir, 'aaa/omega.ts', '// o');
+    const names = async (sortBy?: 'name') => {
+      const result = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: dir, pattern: '**/*.ts', ...(sortBy ? { sortBy } : {}) },
+      });
+      return (result._meta as { results: { path: string }[] }).results.map((r) => basename(r.path));
+    };
+    assert.deepStrictEqual(await names('name'), ['alpha.ts', 'omega.ts']);
+    assert.deepStrictEqual(await names(), ['omega.ts', 'alpha.ts']);
+  });
+
   it('find_files pages are stable and reject cursor pattern replay', async () => {
     const dir = join(tmpDir, 'find_pages');
     await mkdir(dir, { recursive: true });
