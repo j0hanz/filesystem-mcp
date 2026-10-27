@@ -117,14 +117,17 @@ interface Failure {
   error: Problem;
 }
 
-/** Counts every failure; keeps the first MAX_FAILURES of them for the result. */
-function recordFailure(summary: ReplaceSummary, entryPath: string, error: unknown): void {
-  summary.failedFiles++;
-  if (summary.failures.length >= MAX_FAILURES) return;
-  summary.failures.push({
-    path: summary.paths.show(entryPath),
-    error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
-  });
+interface FailureRow {
+  index: number;
+  path: string;
+  error: unknown;
+}
+
+/** Keeps the MAX_FAILURES failures first in walk order, sorted by index. */
+function keepFailure(rows: FailureRow[], row: FailureRow): void {
+  rows.push(row);
+  rows.sort((a, b) => a.index - b.index);
+  if (rows.length > MAX_FAILURES) rows.pop();
 }
 
 function recordChangedFile(summary: ReplaceSummary, filePath: string, matches: number): void {
@@ -292,6 +295,9 @@ type EntryOutcome =
   | ({ kind: 'changed'; path: string; matches: number } & Patch)
   | { kind: 'binary' }
   | { kind: 'failed'; path: string; error: unknown };
+
+/** What scan holds until the walk ends: a failure's error never reaches it. */
+type ScannedOutcome = Exclude<EntryOutcome, { kind: 'failed' }>;
 
 /** `onChanged` receives the plan, whose contents the outcome does not carry, and says if its diff was refused. */
 async function processEntry(
@@ -478,7 +484,7 @@ function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatche
 
 function buildSearchAndReplaceStructuredResult(
   summary: ReplaceSummary,
-  outcome: ScanOutcome<EntryOutcome>,
+  outcome: ScanOutcome<ScannedOutcome>,
   args: SearchAndReplaceArgs,
 ): SearchAndReplaceOutput {
   const results = [
@@ -539,7 +545,10 @@ async function handleSearchAndReplace(
     folded: '',
     truncated: false,
   };
-  let outcome: ScanOutcome<EntryOutcome>;
+  // Failures stay here, not in scan's results: only MAX_FAILURES rows are ever held.
+  const failureRows: FailureRow[] = [];
+  let failedFiles = 0;
+  let outcome: ScanOutcome<ScannedOutcome>;
   try {
     const context: ReplaceContext = {
       dryRun: args.dryRun,
@@ -553,7 +562,7 @@ async function handleSearchAndReplace(
 
     // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
     // gitignore filtering — it is always processed as the one file named.
-    outcome = await scan<EntryOutcome>(
+    outcome = await scan<ScannedOutcome>(
       scope,
       {
         pathGuard: ctx.fs.pathGuard,
@@ -577,15 +586,20 @@ async function handleSearchAndReplace(
           settle(budget, index);
         },
       },
-      (entry) =>
-        processEntry(entry.path, context, (plan) => {
+      async (entry) => {
+        const o = await processEntry(entry.path, context, (plan) => {
           if (primary === undefined || entry.index < primary.index) {
             primary = { index: entry.index, path: entry.path, content: plan.updatedContent };
           }
           return includeDiff
             ? patchWithinBudget(budget, entry.index, paths.show(entry.path), plan)
             : {};
-        }),
+        });
+        if (o?.kind !== 'failed') return o;
+        failedFiles++;
+        keepFailure(failureRows, { index: entry.index, path: o.path, error: o.error });
+        return undefined;
+      },
     );
   } finally {
     matcher.dispose();
@@ -596,13 +610,15 @@ async function handleSearchAndReplace(
   const summary = createReplaceSummary(paths);
   summary.diff = budget.folded;
   summary.diffTruncated = budget.truncated;
+  summary.failedFiles = failedFiles;
+  summary.failures = failureRows.map((f) => ({
+    path: paths.show(f.path),
+    error: Problem.fromUnknown(f.error, ErrorCode.UNKNOWN, f.path),
+  }));
   for (const o of outcome.results) {
     switch (o.kind) {
       case 'binary':
         summary.skippedBinary++;
-        break;
-      case 'failed':
-        recordFailure(summary, o.path, o.error);
         break;
       case 'changed':
         summary.totalMatches += o.matches;

@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setImmediate as setImmediatePromise, setTimeout as sleep } from 'node:timers/promises';
 
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
@@ -3335,6 +3336,65 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       /^\+\+\+ ([^\t\n]+)/mu.exec(meta.diff ?? '')?.[1],
       `replace_walk_order/${first}`,
     );
+  });
+
+  it('replace_text keeps the walk-first failure rows and holds no error past its entry', async (t) => {
+    const dir = join(tmpDir, 'replace_failures');
+    const count = 25;
+    for (let i = 0; i < count; i++) {
+      await writeTestFile(dir, `f${String(i).padStart(2, '0')}.txt`, 'needle\n');
+    }
+    // The walk follows the directory's own order, which only NTFS sorts.
+    const order = (await readdir(dir)).map((name) => `replace_failures/${name}`);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    let opened = 0;
+    let releaseFirst!: () => void;
+    const othersOpened = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        if (basename(dirname(a[0])) !== 'replace_failures') return realOpen.apply(this, a);
+        // Three others: fewer than the smallest pool (4), so the walk's first file fails last.
+        if (++opened === 4) releaseFirst();
+        if (`replace_failures/${basename(a[0])}` === order[0]) await othersOpened;
+        throw new FsError(ErrorCode.TOO_LARGE, 'File exceeds size limit', a[0]);
+      },
+    );
+    // Whatever scan keeps until the walk ends goes through its results Map.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realSet = Map.prototype.set;
+    let heldErrors = 0;
+    t.mock.method(
+      Map.prototype,
+      'set',
+      function (this: Map<unknown, unknown>, k: unknown, v: unknown) {
+        if (typeof v === 'object' && v !== null && 'kind' in v && 'error' in v) heldErrors++;
+        return realSet.call(this, k, v);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    t.mock.restoreAll();
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as {
+      results: { path: string; error?: { code: string } }[];
+      summary: { total: number; succeeded: number; failed: number };
+      resultsTruncated?: boolean;
+    };
+    assert.deepStrictEqual(
+      meta.results.map((r) => r.path),
+      order.slice(0, 20),
+    );
+    assert.ok(meta.results.every((r) => r.error?.code === 'TOO_LARGE'));
+    assert.deepStrictEqual(meta.summary, { total: count, succeeded: 0, failed: count });
+    assert.strictEqual(meta.resultsTruncated, true);
+    assert.strictEqual(heldErrors, 0);
   });
 
   it('replace_text maxFiles ignores skipped entries', async () => {
