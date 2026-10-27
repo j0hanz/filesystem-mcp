@@ -25,6 +25,12 @@ A move or rename whose destination lands on its own source, in either
 direction (a link onto its target, or onto a link to it); it changes nothing.
 _Avoid_: no-op move, same-path move
 
+**Relocation**:
+A move or copy that gives a directory's entries new paths, including undo
+moving a directory back. A relocation must keep every entry's protection: no
+entry may leave or enter the sensitive-file policy because its path changed.
+_Avoid_: transfer (when undo is meant too), rename (when the entries move)
+
 ## Undo
 
 **Capture**:

@@ -318,6 +318,28 @@ export class PathGuard {
   }
 
   /**
+   * True when relocating a directory from `from` to `to` keeps every entry's
+   * sensitive-file status. Path rules (`secrets/**`) follow the path, not the
+   * file, so an entry may neither leave nor enter the protected set; name rules
+   * match on both sides and need no help. `names` are paths relative to the
+   * directory; `requestedFrom` is the spelling the client asked for, which
+   * counts as protected too. A failed walk rejects, so callers fail closed.
+   */
+  async relocationKeepsProtection(
+    names: AsyncIterable<string> | Iterable<string>,
+    { from, requestedFrom }: { from: string; requestedFrom?: string },
+    to: string,
+  ): Promise<boolean> {
+    for await (const name of names) {
+      const before =
+        this.isSensitive(join(from, name)) ||
+        (requestedFrom !== undefined && this.isSensitive(join(requestedFrom, name)));
+      if (before !== this.isSensitive(join(to, name))) return false;
+    }
+    return true;
+  }
+
+  /**
    * True when a walked entry is inside the allowed directories and not sensitive,
    * on both its requested and resolved paths. Every entry is realpath-resolved: a
    * symlinked ancestor pointing outside the sandbox would otherwise pass the

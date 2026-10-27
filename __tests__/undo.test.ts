@@ -1111,6 +1111,37 @@ describe('restoreEntry', () => {
     }
   });
 
+  it('refuses to move a folder back when an entry added since would enter protection', async () => {
+    const policyCtx = await withEnv({ FS_DENYLIST: '**/Guarded/blocked.txt' }, () =>
+      createTestServer([tmpDir]),
+    );
+    try {
+      const guarded = join(tmpDir, 'Guarded');
+      const open = join(tmpDir, 'Open');
+      await mkdir(guarded, { recursive: true });
+      await writeFile(join(guarded, 'f.txt'), 'kept');
+      const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
+      await new GuardedFileSystem(policyCtx.pathGuard, cap).rename(guarded, open);
+      const moved = { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
+      await writeFile(join(open, 'blocked.txt'), 'added after the move');
+
+      const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
+      const preview = new UndoPreview(policyFs);
+      for (const options of [{ dryRun: true, preview }, { dryRun: false }]) {
+        const { results } = await restoreEntry(moved, policyFs, options);
+        assert.deepStrictEqual(
+          results.map((result) => ('error' in result ? result.error.code : 'restored')),
+          ['ACCESS_DENIED'],
+          `dryRun=${String(options.dryRun)}`,
+        );
+      }
+      await lstat(join(open, 'blocked.txt'));
+    } finally {
+      policyCtx.disposeRuntimeState();
+      await policyCtx.mcp.close();
+    }
+  });
+
   it('an aborted restore returns every unprocessed record and touches nothing', async () => {
     const file = join(tmpDir, 'abort-restore.txt');
     await writeFile(file, 'v1');
