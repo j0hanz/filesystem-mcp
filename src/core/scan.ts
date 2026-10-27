@@ -8,7 +8,7 @@ import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
 import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
-import { resolveEntryType } from './path-utils.ts';
+import { normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 
 export interface ScanScope {
@@ -102,6 +102,14 @@ export async function scan<R>(
   const results = new Map<number, R>();
   let scanned = 0;
   let skippedInaccessible = 0;
+  // A directory can fail both its probe and its verdict: count each path once.
+  const counted = new Set<string>();
+  const countInaccessible = (path: string): void => {
+    const key = normalizePath(path);
+    if (counted.has(key)) return;
+    counted.add(key);
+    skippedInaccessible++;
+  };
   let total = 0;
   let started = 0;
   let capped: 'maxResults' | 'maxFiles' | undefined;
@@ -123,7 +131,7 @@ export async function scan<R>(
   const probes: string[] = [scope.root];
   const probe = async (dir: string): Promise<void> => {
     try {
-      if (await probeDirectory(dir, pathGuard, signal)) skippedInaccessible++;
+      if (await probeDirectory(dir, pathGuard, signal)) countInaccessible(dir);
     } catch (error) {
       if (!signal?.aborted) throw error;
       cut = true;
@@ -170,7 +178,7 @@ export async function scan<R>(
       // A count after a fatal error is moot: the scan rethrows it.
       if (verdict === 'sensitive') return undefined;
       if (verdict === 'inaccessible') {
-        skippedInaccessible++;
+        countInaccessible(path);
         return undefined;
       }
       // Backpressure: the entries below hold pool slots and were admitted
@@ -242,7 +250,7 @@ export async function scan<R>(
         // An abort is the stop, not this entry's failure.
         if (signal?.aborted) cut = true;
         else {
-          skippedInaccessible++;
+          countInaccessible(path);
           // Counted as inaccessible, it frees its maxEntries slot.
           started--;
         }

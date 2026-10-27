@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { Dir } from 'node:fs';
 import fsPromises, { chmod, mkdir, realpath } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -444,6 +444,30 @@ describe('scan', () => {
     syncBuiltinESMExports();
     try {
       const out = await scan({ root }, base(), byPath);
+      assert.equal(out.skippedInaccessible, 1);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a directory that fails its probe and its verdict is counted once', async (t) => {
+    await files('a.txt', 'd/b.txt');
+    const busy = (): Error => Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+    const isD = (path: string): boolean => path.endsWith(`${sep}d`);
+    const realOpendir = fsPromises.opendir;
+    t.mock.method(fsPromises, 'opendir', (path: string) =>
+      isD(path) ? Promise.reject(busy()) : realOpendir(path),
+    );
+    syncBuiltinESMExports();
+    const detailed = guard.validateExistingPathDetailed.bind(guard);
+    t.mock.method(guard, 'validateExistingPathDetailed', async (path: string) => {
+      if (isD(path)) throw busy();
+      return detailed(path);
+    });
+    try {
+      const out = await scan({ root }, base({ onlyFiles: false }), byPath);
+      assert.ok(!rel(out.results).includes('d'));
       assert.equal(out.skippedInaccessible, 1);
     } finally {
       t.mock.restoreAll();
