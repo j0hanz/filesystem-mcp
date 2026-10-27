@@ -1,10 +1,7 @@
-import { dirname } from 'node:path';
-
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import type { StoppedReason } from './concurrency.ts';
-import { ErrorCode, FsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import type { PathGuard } from './path.ts';
 import type { ScanScope } from './scan.ts';
@@ -292,12 +289,6 @@ export interface SearchContentOptions {
   skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
-  /**
-   * Search exactly this file (absolute, already guard-validated) instead of
-   * walking `directory` with `filePattern`. Set when the caller named a file:
-   * its name must not be interpreted as a glob.
-   */
-  explicitFile?: string;
   /** Lines of context to carry either side of each match; 0 (default) carries none. */
   context?: number;
   signal?: AbortSignal;
@@ -439,7 +430,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 export async function searchContent(
   scope: ScanScope,
   pattern: string,
-  options: Omit<SearchContentOptions, 'explicitFile'>,
+  options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
   const source = options.isRegex ? pattern || '' : escapeRegExp(pattern || '');
@@ -551,28 +542,4 @@ function canPrefilter(source: string, buffer: Buffer): boolean {
   if (INLINE_FLAGS_RE.test(source)) return false;
   if (source.includes('$') && buffer.includes(CR)) return false;
   return true;
-}
-
-/** Explicit files bypass glob filtering; their parent is the directory walked. */
-export async function resolveSearchScope(
-  path: string | undefined,
-  fs: GuardedFileSystem,
-  signal?: AbortSignal,
-): Promise<{ basePath: string; explicitFile?: string }> {
-  const requested = fs.pathGuard.resolvePathOrRoot(path);
-  // One resolution, one stat: validateExistingDirectory would redo both.
-  const { stats, validPath: resolved } = await fs.stat(requested, { signal });
-  if (!stats.isFile()) {
-    if (!stats.isDirectory()) {
-      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
-    }
-    return { basePath: resolved };
-  }
-  return {
-    basePath: dirname(resolved),
-    // The name is NOT turned into a glob: `[slug].tsx` would read as a
-    // character class. searchContent scans exactly this file instead, and
-    // hidden/ignored filtering is moot for a file the caller named.
-    explicitFile: resolved,
-  };
 }

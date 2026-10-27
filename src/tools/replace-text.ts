@@ -5,15 +5,22 @@ import { Buffer, isUtf8 } from 'node:buffer';
 import * as z from 'zod/v4';
 
 import type { StoppedReason } from '../core/concurrency.ts';
-import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { unifiedPatch } from '../core/diff.ts';
-import { ErrorCode, FsError, isFsError, isSkippableErrno, Problem } from '../core/errors.ts';
+import {
+  ErrorCode,
+  FsError,
+  isFsError,
+  isSkippableErrno,
+  Problem,
+  SKIPPABLE_FS_CODES,
+} from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
-import { globEntries } from '../core/glob.ts';
 import type { ResultPaths } from '../core/path.ts';
 import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
+import type { ScanOutcome } from '../core/scan.ts';
+import { resolveScanScope, scan } from '../core/scan.ts';
 import {
   defaultFalseBoolean,
   IncludeHidden,
@@ -31,7 +38,6 @@ import {
   execMatches,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
-  resolveSearchScope,
 } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
@@ -94,6 +100,7 @@ type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
   totalMatches: number;
   filesScanned: number;
   skippedBinary?: number;
+  skippedInaccessible?: number;
   resultsTruncated?: boolean;
   diff?: string;
   diffTruncated?: boolean;
@@ -121,13 +128,10 @@ function recordFailure(summary: ReplaceSummary, entryPath: string, error: unknow
   });
 }
 
-function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, filePath: string): void {
+function recordChangedFile(summary: ReplaceSummary, filePath: string, matches: number): void {
   const relativePath = summary.paths.show(filePath);
-  // The first changed file is the one the resource_link points at; keep what
-  // was written so the link needs no read-back.
-  summary.primary ??= { path: filePath, content: plan.updatedContent };
   if (summary.changedFiles.length < MAX_CHANGED_FILES) {
-    summary.changedFiles.push({ path: relativePath, matches: plan.matchCount });
+    summary.changedFiles.push({ path: relativePath, matches });
     return;
   }
   summary.changedFilesTruncated = true;
@@ -271,7 +275,6 @@ interface ReplaceContext {
   matcher: ReplacementMatcher;
   maxFileSize: number;
   signal: AbortSignal | undefined;
-  summary: ReplaceSummary;
   fs: GuardedFileSystem;
   singleFile: boolean;
 }
@@ -282,10 +285,20 @@ interface ReplacementPlan {
   updatedContent: string;
 }
 
-async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
-  const { dryRun, returnDiff, signal, summary } = ctx;
-  // Discovery/read failures on a walked file are skipped silently; a failed
-  // write is the caller's edit not landing, so it is always reported.
+type EntryOutcome =
+  | { kind: 'changed'; path: string; matches: number; diff?: { original: string; updated: string } }
+  | { kind: 'binary' }
+  | { kind: 'failed'; path: string; error: unknown };
+
+/** `onChanged` receives the rewritten content, which the outcome does not carry. */
+async function processEntry(
+  entryPath: string,
+  ctx: ReplaceContext,
+  onChanged: (content: string) => void,
+): Promise<EntryOutcome | undefined> {
+  const { dryRun, returnDiff, signal } = ctx;
+  // Discovery/read failures on a walked file are counted as inaccessible; a
+  // failed write is the caller's edit not landing, so it is always reported.
   const write = { started: false };
 
   try {
@@ -295,54 +308,47 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {
           const planned = await readReplacementPlan(entryPath, ctx);
-          if (planned) {
+          if (planned !== undefined && planned !== 'binary') {
             write.started = true;
             await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
           }
           return planned;
         });
-    if (!plan) {
-      return;
-    }
+    if (plan === undefined) return undefined;
+    if (plan === 'binary') return { kind: 'binary' };
 
-    // Bookkeep only after the write succeeds (or in dryRun, where there is no
+    // Reached only after the write succeeds (or in dryRun, where there is no
     // write): a failed write must not count the file as changed.
-    summary.totalMatches += plan.matchCount;
-    summary.filesChanged++;
-
-    recordChangedFile(summary, plan, entryPath);
-
-    maybeAppendPatchDiff(summary, {
-      filePath: entryPath,
-      originalContent: plan.originalContent,
-      updatedContent: plan.updatedContent,
-      includeDiff: dryRun || returnDiff,
-    });
+    onChanged(plan.updatedContent);
+    return {
+      kind: 'changed',
+      path: entryPath,
+      matches: plan.matchCount,
+      ...(dryRun || returnDiff
+        ? { diff: { original: plan.originalContent, updated: plan.updatedContent } }
+        : {}),
+    };
   } catch (error) {
-    // A timeout/cancel aborts the whole scan, not just this file: don't record
-    // it as a per-file failure. processEntriesConcurrently reports the run as
-    // stoppedReason 'timeout' instead.
-    if (signal?.aborted) return;
+    // A timeout/cancel aborts the whole scan, not just this file: scan reports
+    // the run as stoppedReason 'timeout' and counts nothing for it.
+    if (signal?.aborted) throw error;
+    // Rethrown, scan counts the walked file as inaccessible. A named file's
+    // failure is the whole request, so it stays a failure row.
     if (
       !ctx.singleFile &&
       !write.started &&
-      ((isFsError(error) &&
-        (error.code === ErrorCode.ACCESS_DENIED ||
-          error.code === ErrorCode.NOT_FOUND ||
-          error.code === ErrorCode.SYMLINK_NOT_ALLOWED)) ||
-        isSkippableErrno(error))
+      ((isFsError(error) && SKIPPABLE_FS_CODES.has(error.code)) || isSkippableErrno(error))
     ) {
-      summary.processedFiles--;
-      return;
+      throw error;
     }
-    recordFailure(summary, entryPath, error);
+    return { kind: 'failed', path: entryPath, error };
   }
 }
 
 async function readReplacementPlan(
   validPath: string,
   ctx: ReplaceContext,
-): Promise<ReplacementPlan | undefined> {
+): Promise<ReplacementPlan | 'binary' | undefined> {
   const { matcher, replacement, maxFileSize, signal } = ctx;
   await using fileHandle = await ctx.fs.open(validPath);
   const stats = await fileHandle.stat();
@@ -359,8 +365,7 @@ async function readReplacementPlan(
     if (ctx.singleFile) {
       throw new FsError(ErrorCode.INVALID_INPUT, 'Binary or non-UTF-8 file detected.', validPath);
     }
-    ctx.summary.skippedBinary++;
-    return undefined;
+    return 'binary';
   }
 
   const originalContent = buffer.toString('utf-8');
@@ -378,11 +383,8 @@ function maybeAppendPatchDiff(
     filePath: string;
     originalContent: string;
     updatedContent: string;
-    includeDiff: boolean;
   },
 ): void {
-  if (!params.includeDiff) return;
-
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
   if (summary.diff.length >= MAX_DIFF_SIZE) {
@@ -408,16 +410,12 @@ interface ReplaceSummary {
   totalMatches: number;
   filesChanged: number;
   failedFiles: number;
-  processedFiles: number;
   skippedBinary: number;
   failures: Failure[];
   changedFiles: { path: string; matches: number }[];
   changedFilesTruncated: boolean;
-  /** First file changed, as written. */
-  primary?: { path: string; content: string };
   diff: string;
   diffTruncated: boolean;
-  stoppedReason?: StoppedReason;
 }
 
 function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
@@ -426,7 +424,6 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
     totalMatches: 0,
     filesChanged: 0,
     failedFiles: 0,
-    processedFiles: 0,
     skippedBinary: 0,
     failures: [],
     changedFiles: [],
@@ -455,6 +452,7 @@ function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatche
 
 function buildSearchAndReplaceStructuredResult(
   summary: ReplaceSummary,
+  outcome: ScanOutcome<EntryOutcome>,
   args: SearchAndReplaceArgs,
 ): SearchAndReplaceOutput {
   const results = [
@@ -472,8 +470,9 @@ function buildSearchAndReplaceStructuredResult(
       failed: summary.failedFiles,
     },
     totalMatches: summary.totalMatches,
-    filesScanned: summary.processedFiles,
+    filesScanned: outcome.scanned,
     ...(summary.skippedBinary ? { skippedBinary: summary.skippedBinary } : {}),
+    ...(outcome.skippedInaccessible ? { skippedInaccessible: outcome.skippedInaccessible } : {}),
     // Failures are capped at MAX_FAILURES independently of the changed-file
     // cap, so either cap can leave `results` shorter than `summary.total`.
     ...(summary.changedFilesTruncated || summary.failures.length < summary.failedFiles
@@ -481,7 +480,7 @@ function buildSearchAndReplaceStructuredResult(
       : {}),
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
-    ...(summary.stoppedReason ? { stoppedReason: summary.stoppedReason } : {}),
+    ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
   };
 }
 
@@ -493,37 +492,17 @@ async function handleSearchAndReplace(
   link?: ContentBlock;
 }> {
   const maxFileSize = getMaxTextFileSize();
-  const { basePath: root, explicitFile: singleFile } = await resolveSearchScope(args.path, ctx.fs);
-  const effectivePattern = args.pattern ?? '**/*';
-  const ceiling = ctx.fs.pathGuard.allowedRootContaining(root);
-
-  // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
-  // gitignore filtering — it should always be processed as the one file named.
-  const entries: AsyncIterable<{ path: string }> | Iterable<{ path: string }> = singleFile
-    ? [{ path: singleFile }]
-    : globEntries({
-        cwd: root,
-        pattern: effectivePattern,
-        includeHidden: args.includeHidden,
-        skipIgnored: !args.includeIgnored,
-        pathGuard: ctx.fs.pathGuard,
-        ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
-        signal: ctx.signal,
-        baseNameMatch: true,
-        onlyFiles: true,
-        suppressErrors: true,
-        ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-      });
-
-  // Relative to the root, not to the walked directory: `a.ts` from a run over
-  // `src` would name `<root>/a.ts` when passed back.
-  const summary = createReplaceSummary(ctx.fs.pathGuard.resultPaths(root));
+  // No signal: a deadline that already fired still yields a timeout result.
+  const scope = await resolveScanScope(args.path, ctx.fs, { allowFile: true });
 
   // The matcher may own a compiled RE2 pattern, whose wasm memory re2-wasm
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
-  let stoppedReason: StoppedReason | undefined;
+  // The first changed file in walk order is the one the resource_link points
+  // at; keep what was written so the link needs no read-back.
+  let primary: { index: number; path: string; content: string } | undefined;
+  let outcome: ScanOutcome<EntryOutcome>;
   try {
     const context: ReplaceContext = {
       dryRun: args.dryRun,
@@ -532,37 +511,68 @@ async function handleSearchAndReplace(
       matcher,
       maxFileSize,
       signal: ctx.signal,
-      summary,
       fs: ctx.fs,
-      singleFile: singleFile !== undefined,
+      singleFile: scope.explicitFile !== undefined,
     };
 
-    stoppedReason = await processEntriesConcurrently(entries, {
-      signal: ctx.signal,
-      concurrency: REPLACE_CONCURRENCY,
-      ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
-      shouldStop: () => summary.totalMatches >= args.maxResults,
-      onEntry: () => {
-        summary.processedFiles++;
-        ctx.onProgress({ current: summary.processedFiles });
+    // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
+    // gitignore filtering — it is always processed as the one file named.
+    outcome = await scan<EntryOutcome>(
+      scope,
+      {
+        pathGuard: ctx.fs.pathGuard,
+        pattern: args.pattern ?? '**/*',
+        baseNameMatch: true,
+        includeHidden: args.includeHidden,
+        includeIgnored: args.includeIgnored,
+        onlyFiles: true,
+        ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+        concurrency: REPLACE_CONCURRENCY,
+        cap: args.maxResults,
+        weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
+        ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
+        signal: ctx.signal,
+        onScanned: (n) => {
+          ctx.onProgress({ current: n });
+        },
       },
-      onError: (entryPath, err) => {
-        recordFailure(summary, entryPath, err);
-      },
-      runEntry: (entryPath) => processEntry(entryPath, context),
-    });
+      (entry) =>
+        processEntry(entry.path, context, (content) => {
+          if (primary === undefined || entry.index < primary.index) {
+            primary = { index: entry.index, path: entry.path, content };
+          }
+        }),
+    );
   } finally {
     matcher.dispose();
   }
-  if (stoppedReason !== undefined) summary.stoppedReason = stoppedReason;
-  // A single file that aborts mid-scan throws inside processEntry (caught and
-  // swallowed as a timeout) and leaves the dispatch loop with no more entries,
-  // so processEntriesConcurrently returns undefined; surface the timeout here so
-  // the result is not reported as a clean "0 matches". search_text's engine
-  // checks the signal directly, so only replace needs this fallback.
-  else if (ctx.signal.aborted) summary.stoppedReason = 'timeout';
+  ctx.onProgress({ current: outcome.scanned });
 
-  ctx.onProgress({ current: summary.processedFiles });
+  // Relative to the root, not to the walked directory: `a.ts` from a run over
+  // `src` would name `<root>/a.ts` when passed back.
+  const summary = createReplaceSummary(ctx.fs.pathGuard.resultPaths(scope.root));
+  for (const o of outcome.results) {
+    switch (o.kind) {
+      case 'binary':
+        summary.skippedBinary++;
+        break;
+      case 'failed':
+        recordFailure(summary, o.path, o.error);
+        break;
+      case 'changed':
+        summary.totalMatches += o.matches;
+        summary.filesChanged++;
+        recordChangedFile(summary, o.path, o.matches);
+        if (o.diff) {
+          maybeAppendPatchDiff(summary, {
+            filePath: o.path,
+            originalContent: o.diff.original,
+            updatedContent: o.diff.updated,
+          });
+        }
+        break;
+    }
+  }
 
   if (!args.dryRun && summary.totalMatches > 0) {
     ctx.log(
@@ -572,22 +582,22 @@ async function handleSearchAndReplace(
     );
   }
 
-  const structured = buildSearchAndReplaceStructuredResult(summary, args);
+  const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args);
 
   let primaryModified: string | undefined;
-  if (summary.primary && !args.dryRun) {
+  if (primary && !args.dryRun) {
     try {
       primaryModified = (
-        await ctx.fs.stat(summary.primary.path, { signal: ctx.signal })
+        await ctx.fs.stat(primary.path, { signal: ctx.signal })
       ).stats.mtime.toISOString();
     } catch {
       /* result metadata only; the write already succeeded */
     }
   }
-  const link = summary.primary
+  const link = primary
     ? buildWrittenFileMeta({
-        validPath: summary.primary.path,
-        content: summary.primary.content,
+        validPath: primary.path,
+        content: primary.content,
         dryRun: args.dryRun,
         lastModified: primaryModified,
         transport: ctx.transport,
@@ -625,6 +635,9 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '') +
       (structured.skippedBinary
         ? ` \u00b7 ${String(structured.skippedBinary)} binary skipped`
+        : '') +
+      (structured.skippedInaccessible
+        ? ` \u00b7 ${String(structured.skippedInaccessible)} inaccessible skipped`
         : '');
     // The structured half ships under `_meta`, which clients do not show the
     // model, so the stop state and the diff preview must ride the text.
@@ -660,12 +673,13 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
         ? zeroMatchHint({
             ...args,
             filesScanned: structured.filesScanned,
-            // A failed file, or a binary one the needle did hit, explains the
-            // zero better than a guess about the pattern.
+            // A failed, unreadable, or binary file the needle did hit explains
+            // the zero better than a guess about the pattern.
             incomplete:
               stop !== undefined ||
               structured.summary.failed > 0 ||
-              Boolean(structured.skippedBinary),
+              Boolean(structured.skippedBinary) ||
+              Boolean(structured.skippedInaccessible),
           })
         : undefined;
     if (hint) lines.push(hint);
