@@ -373,17 +373,25 @@ async function readReplacementPlan(
   return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
-/** Kept patch lengths by walk index, and which walk indices are done. */
+/** Kept patch lengths by walk index at or above the prefix, and which walk indices are done. */
 interface DiffBudget {
   stored: Map<number, number>;
   settled: Set<number>;
   /** Every walk index below this one is settled. */
   prefix: number;
+  /** What appendPatch's first-fit pass keeps of the patches below the prefix. */
+  folded: number;
 }
 
+/** Folds each patch the prefix passes into `folded`, in walk order, by appendPatch's rule. */
 function settle(budget: DiffBudget, index: number): void {
   budget.settled.add(index);
-  while (budget.settled.delete(budget.prefix)) budget.prefix++;
+  while (budget.settled.delete(budget.prefix)) {
+    const length = budget.stored.get(budget.prefix);
+    if (length !== undefined && budget.folded + length <= MAX_DIFF_SIZE) budget.folded += length;
+    budget.stored.delete(budget.prefix);
+    budget.prefix++;
+  }
 }
 
 /**
@@ -399,11 +407,7 @@ function patchWithinBudget(
   // First-fit over the settled walk-order prefix is final, and later patches
   // only add to what the final pass uses before this index. A lower patch
   // still running may displace a kept one, so the unsettled ones do not count.
-  let used = 0;
-  for (const [i, length] of [...budget.stored].sort(([a], [b]) => a - b)) {
-    if (i < budget.prefix && used + length <= MAX_DIFF_SIZE) used += length;
-  }
-  const remaining = MAX_DIFF_SIZE - used;
+  const remaining = MAX_DIFF_SIZE - budget.folded;
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
   if (remaining === 0) return { diffTruncated: true };
@@ -524,7 +528,7 @@ async function handleSearchAndReplace(
   // `src` would name `<root>/a.ts` when passed back.
   const paths = ctx.fs.pathGuard.resultPaths(scope.root);
   const includeDiff = args.dryRun || args.returnDiff;
-  const budget: DiffBudget = { stored: new Map(), settled: new Set(), prefix: 0 };
+  const budget: DiffBudget = { stored: new Map(), settled: new Set(), prefix: 0, folded: 0 };
   let outcome: ScanOutcome<EntryOutcome>;
   try {
     const context: ReplaceContext = {
@@ -553,6 +557,8 @@ async function handleSearchAndReplace(
         cap: args.maxResults,
         weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
+        // Bounds the patches held above an unsettled prefix.
+        ...(includeDiff ? { window: 2 * REPLACE_CONCURRENCY } : {}),
         signal: ctx.signal,
         onScanned: (n) => {
           ctx.onProgress({ current: n });

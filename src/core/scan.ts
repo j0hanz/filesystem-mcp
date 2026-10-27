@@ -67,6 +67,8 @@ export interface ScanOptions<R> {
   readonly onScanned?: (scanned: number) => void;
   /** Called once per walk index when it is done: onEntry settled, or it was never admitted. */
   readonly onSettled?: (index: number) => void;
+  /** Walk index i is admitted only once every index below `i - window` has settled. */
+  readonly window?: number;
 }
 
 export interface ScanOutcome<R> {
@@ -95,7 +97,7 @@ export async function scan<R>(
     return scanNamedFile(scope.explicitFile, options, onEntry);
   }
 
-  const { pathGuard, cap, maxEntries, onScanned } = options;
+  const { pathGuard, cap, maxEntries, onScanned, window } = options;
   const weigh = options.weigh ?? (() => 1);
   const results = new Map<number, R>();
   let scanned = 0;
@@ -145,9 +147,20 @@ export async function scan<R>(
   let admissions: Promise<void> = Promise.resolve();
   // Admitted entries whose onEntry has not settled: one may fail and free its slot.
   const inFlight = new Set<Promise<undefined>>();
+  // Every walk index below `prefix` has settled; `advanced` fires when it moves.
+  const settledAbove = new Set<number>();
+  let prefix = 0;
+  let advanced = Promise.withResolvers<undefined>();
+  const settle = (index: number): void => {
+    settledAbove.add(index);
+    while (settledAbove.delete(prefix)) prefix++;
+    advanced.resolve(undefined);
+    advanced = Promise.withResolvers();
+  };
   /** Resolves to the callback that frees the entry's inFlight slot, or undefined when refused. */
   const admit = async (
     path: string,
+    index: number,
     previous: Promise<void>,
     release: () => void,
   ): Promise<(() => void) | undefined> => {
@@ -159,6 +172,11 @@ export async function scan<R>(
       if (verdict === 'inaccessible') {
         skippedInaccessible++;
         return undefined;
+      }
+      // Backpressure: the entries below hold pool slots and were admitted
+      // first, so they progress; an abort wakes the wait and is refused below.
+      while (window !== undefined && prefix < index - window && !signal?.aborted) {
+        await withAbort(advanced.promise, signal).catch(() => undefined);
       }
       for (;;) {
         if (fatal !== undefined) return undefined;
@@ -203,6 +221,7 @@ export async function scan<R>(
     try {
       await visitAdmitted(path, type, index, previous, release);
     } finally {
+      if (window !== undefined) settle(index);
       options.onSettled?.(index);
     }
   };
@@ -214,7 +233,7 @@ export async function scan<R>(
     previous: Promise<void>,
     release: () => void,
   ): Promise<void> => {
-    const free = await admit(path, previous, release);
+    const free = await admit(path, index, previous, release);
     if (free === undefined) return;
     const done = await (async () => {
       try {

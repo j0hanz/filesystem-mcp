@@ -294,6 +294,57 @@ describe('scan', () => {
     assert.equal(out.stoppedReason, undefined);
   });
 
+  it('window holds admission until the prefix settles', async () => {
+    await files(...Array.from({ length: 6 }, (_, i) => `f${i}.txt`));
+    const gate = Promise.withResolvers<undefined>();
+    const started: number[] = [];
+    const running = scan({ root }, base({ window: 2 }), async (entry) => {
+      started.push(entry.index);
+      if (entry.index === 0) await gate.promise;
+      return entry.path;
+    });
+    await sleep(30);
+    assert.deepEqual(
+      started.filter((i) => i >= 3),
+      [],
+    );
+    gate.resolve(undefined);
+    const out = await running;
+    const all = await scan({ root }, base(), byPath);
+    assert.equal(out.results.length, 6);
+    assert.deepEqual(out.results, all.results);
+  });
+
+  it('window wait ends on abort', async () => {
+    await files(...Array.from({ length: 6 }, (_, i) => `f${i}.txt`));
+    const controller = new AbortController();
+    const { signal } = controller;
+    const started: number[] = [];
+    const settled: number[] = [];
+    const running = scan(
+      { root },
+      base({ window: 2, signal, onSettled: (i) => settled.push(i) }),
+      async (entry) => {
+        started.push(entry.index);
+        if (entry.index !== 0) return entry.path;
+        // Index 0 outlives the abort, so only the abort can wake the waiters.
+        return new Promise<never>((_, reject) => {
+          const fail = (): void => reject(signal.reason as Error);
+          signal.addEventListener('abort', () => setTimeout(fail, 50), { once: true });
+        });
+      },
+    );
+    await sleep(30);
+    controller.abort();
+    const out = await running;
+    assert.equal(out.stoppedReason, 'timeout');
+    assert.deepEqual(
+      started.filter((i) => i >= 3),
+      [],
+    );
+    assert.ok(settled.indexOf(3) < settled.indexOf(0), `settle order ${settled.join(',')}`);
+  });
+
   it('abort beats cap', async () => {
     await files('a.txt', 'b.txt', 'c.txt');
     const controller = new AbortController();
