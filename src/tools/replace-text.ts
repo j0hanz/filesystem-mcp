@@ -383,14 +383,19 @@ function patchWithinBudget(
   header: string,
   plan: ReplacementPlan,
 ): Patch {
-  // Budget first: a budget lower walk indexes already fill must not pay for a
-  // diff it will discard, and a diff past its deadline counts as truncated
-  // output, not a failed file.
-  let before = 0;
-  for (const [i, length] of stored) if (i < index) before += length;
-  if (before >= MAX_DIFF_SIZE) return { diffTruncated: true };
+  // The budget left after appendPatch's first-fit pass over the kept patches
+  // below this index. Lower entries still running can only shrink it, so a
+  // patch refused here could never be kept, whatever the completion order.
+  let used = 0;
+  for (const [i, length] of [...stored].sort(([a], [b]) => a - b)) {
+    if (i < index && used + length <= MAX_DIFF_SIZE) used += length;
+  }
+  const remaining = MAX_DIFF_SIZE - used;
+  // Budget first: a full budget must not pay for a diff it will discard, and a
+  // diff past its deadline counts as truncated output, not a failed file.
+  if (remaining === 0) return { diffTruncated: true };
   const patch = unifiedPatch(header, plan.originalContent, plan.updatedContent);
-  if (patch === undefined || patch.length > MAX_DIFF_SIZE) return { diffTruncated: true };
+  if (patch === undefined || patch.length > remaining) return { diffTruncated: true };
   stored.set(index, patch.length);
   return { patch };
 }

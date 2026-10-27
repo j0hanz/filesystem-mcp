@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { setImmediate as setImmediatePromise } from 'node:timers/promises';
+import { setImmediate as setImmediatePromise, setTimeout as sleep } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
@@ -3382,6 +3382,59 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
       [`replace_diff_budget/${first ?? ''}`],
     );
+  });
+
+  it('replace_text diff budget does not depend on completion order', async (t) => {
+    // Patches of about 12 KiB, 12 KiB and 1 KiB in walk order: the second
+    // never fits beside the first, and the third always does.
+    const big = Array.from({ length: 300 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    const setup = async (name: string): Promise<string[]> => {
+      const dir = join(tmpDir, name);
+      for (const file of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(dir, file, 'x');
+      // The walk follows readdir order, which only NTFS sorts.
+      const order = await readdir(dir);
+      await writeTestFile(dir, order[0] ?? '', big);
+      await writeTestFile(dir, order[1] ?? '', big);
+      await writeTestFile(dir, order[2] ?? '', 'needle\n');
+      return order;
+    };
+    const walkFirst = await setup('replace_budget_walk_first');
+    const smallFirst = await setup('replace_budget_small_first');
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        const run = basename(dirname(a[0]));
+        const name = basename(a[0]);
+        // One run finishes in walk order, the other finishes the small third file first.
+        if (run === 'replace_budget_walk_first' && name === walkFirst[2]) await sleep(100);
+        if (run === 'replace_budget_small_first' && name !== smallFirst[2]) await sleep(100);
+        return realOpen.apply(this, a);
+      },
+    );
+    for (const [name, order] of [
+      ['replace_budget_walk_first', walkFirst],
+      ['replace_budget_small_first', smallFirst],
+    ] as const) {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: join(tmpDir, name),
+          searchPattern: 'needle',
+          replacement: 'pin',
+          dryRun: true,
+        },
+      });
+      const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+      assert.strictEqual(meta.diffTruncated, true, name);
+      assert.deepStrictEqual(
+        [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+        [`${name}/${order[0] ?? ''}`, `${name}/${order[2] ?? ''}`],
+        name,
+      );
+    }
   });
 
   it('replace_text keeps the walk-first diffs that fit and skips the rest', async () => {
