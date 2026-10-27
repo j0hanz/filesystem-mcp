@@ -43,6 +43,14 @@ by one rule shared by every tool that scans.
 _Avoid_: walk (the raw traversal, which relocation and undo also use), search
 (one tool's use of a scan), sweep
 
+## Writes
+
+**Rewrite**:
+A call that replaces a text file's content with a transform of its current
+content (`edit`, `patch`, `replace_text`), under the file's write lock unless
+it is a dry run, which reads and reports but writes nothing.
+_Avoid_: edit (one tool), transaction, write (`create` also writes)
+
 ## Undo
 
 **Capture**:
