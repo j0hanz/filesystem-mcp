@@ -15,6 +15,7 @@ import { MAX_STDIO_REQUEST_ID_BYTES, MIB } from '../src/core/util.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
+  assertOneNotificationPerRound,
   cleanupTestRoot,
   createRawStdioServer,
   createStdioClient,
@@ -119,10 +120,14 @@ describe('Stdio Transport (real subprocess)', () => {
     const filePath = await writeTestFile(tmpDir, 'relisten.txt', 'initial');
     const uri = buildFileResourceUri(filePath);
     const streams = 2;
-    let count = 0;
+    // Arrival stamps per listen stream, keyed by the SDK's subscription id.
+    const arrivals = new Map<unknown, number[]>();
 
     harness.client.setNotificationHandler('notifications/resources/updated', (n) => {
-      if ((n.params as { uri: string }).uri === uri) count += 1;
+      const params = n.params as { uri: string; _meta?: Record<string, unknown> };
+      if (params.uri !== uri) return;
+      const stream = params._meta?.['io.modelcontextprotocol/subscriptionId'];
+      arrivals.set(stream, [...(arrivals.get(stream) ?? []), performance.now()]);
     });
 
     for (let i = 0; i < streams; i += 1) {
@@ -130,16 +135,19 @@ describe('Stdio Transport (real subprocess)', () => {
     }
 
     await writeFile(filePath, 'changed');
-    await waitFor(() => count >= streams, 5000);
+    await waitFor(() => arrivals.size >= streams, 5000);
     // Settle past the registry's 50ms debounce so a stacked second callback
     // would have landed by now.
-    await waitFor(() => count > streams, 500);
+    await setTimeout(200);
 
-    assert.strictEqual(
-      count,
-      streams,
-      'one change must yield one update per listen stream; more means a stacked notify callback',
-    );
+    assert.strictEqual(arrivals.size, streams, 'one update stream per listen');
+    // Count rounds per stream, not raw notifications: one write may span two.
+    for (const [stream, at] of arrivals) {
+      assertOneNotificationPerRound(
+        at,
+        `listen stream ${String(stream)}: two updates in one round means a stacked notify callback`,
+      );
+    }
   });
 
   it('STDIO-005: rejects a missing filesystem resource before acknowledging the listen', async () => {
