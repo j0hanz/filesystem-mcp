@@ -3454,6 +3454,43 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('replace_text keeps a patch a slower lower patch would leave room for', async (t) => {
+    // Walk-order patches of about 10, 15 and 8 KiB: first-fit keeps the first
+    // and third. Finishing the second, then the third, then the first must
+    // not refuse the third against the second, which the first later displaces.
+    const lines = (n: number): string =>
+      Array.from({ length: n }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    const dir = join(tmpDir, 'replace_budget_displaced');
+    for (const file of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(dir, file, 'x');
+    // The walk follows readdir order, which only NTFS sorts.
+    const order = await readdir(dir);
+    await writeTestFile(dir, order[0] ?? '', lines(250));
+    await writeTestFile(dir, order[1] ?? '', lines(375));
+    await writeTestFile(dir, order[2] ?? '', lines(200));
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+    const realOpen = GuardedFileSystem.prototype.open;
+    t.mock.method(
+      GuardedFileSystem.prototype,
+      'open',
+      async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
+        const name = basename(a[0]);
+        if (name === order[0]) await sleep(200);
+        if (name === order[2]) await sleep(100);
+        return realOpen.apply(this, a);
+      },
+    );
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      [`replace_budget_displaced/${order[0] ?? ''}`, `replace_budget_displaced/${order[2] ?? ''}`],
+    );
+  });
+
   it('replace_text keeps the walk-first diffs that fit and skips the rest', async () => {
     const dir = join(tmpDir, 'replace_diff_prefix');
     // Each patch is about 5.6 KiB: three fit the 20 KiB budget, a fourth does not.

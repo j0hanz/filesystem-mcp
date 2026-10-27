@@ -65,6 +65,8 @@ export interface ScanOptions<R> {
   readonly signal?: AbortSignal;
   /** Called after each onEntry resolves. */
   readonly onScanned?: (scanned: number) => void;
+  /** Called once per walk index when it is done: onEntry settled, or it was never admitted. */
+  readonly onSettled?: (index: number) => void;
 }
 
 export interface ScanOutcome<R> {
@@ -180,6 +182,20 @@ export async function scan<R>(
   };
 
   const visit = async (
+    path: string,
+    type: EntryType,
+    index: number,
+    previous: Promise<void>,
+    release: () => void,
+  ): Promise<void> => {
+    try {
+      await visitAdmitted(path, type, index, previous, release);
+    } finally {
+      options.onSettled?.(index);
+    }
+  };
+
+  const visitAdmitted = async (
     path: string,
     type: EntryType,
     index: number,

@@ -373,22 +373,35 @@ async function readReplacementPlan(
   return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
+/** Kept patch lengths by walk index, and which walk indices are done. */
+interface DiffBudget {
+  stored: Map<number, number>;
+  settled: Set<number>;
+  /** Every walk index below this one is settled. */
+  prefix: number;
+}
+
+function settle(budget: DiffBudget, index: number): void {
+  budget.settled.add(index);
+  while (budget.settled.delete(budget.prefix)) budget.prefix++;
+}
+
 /**
- * Diffs one file as it finishes, so no file's contents outlive it. `stored`
- * maps each walk index whose patch was kept to that patch's length.
+ * Diffs one file as it finishes, so no file's contents outlive it. A patch is
+ * refused only when appendPatch's first-fit pass would drop it in any order.
  */
 function patchWithinBudget(
-  stored: Map<number, number>,
+  budget: DiffBudget,
   index: number,
   header: string,
   plan: ReplacementPlan,
 ): Patch {
-  // The budget left after appendPatch's first-fit pass over the kept patches
-  // below this index. Lower entries still running can only shrink it, so a
-  // patch refused here could never be kept, whatever the completion order.
+  // First-fit over the settled walk-order prefix is final, and later patches
+  // only add to what the final pass uses before this index. A lower patch
+  // still running may displace a kept one, so the unsettled ones do not count.
   let used = 0;
-  for (const [i, length] of [...stored].sort(([a], [b]) => a - b)) {
-    if (i < index && used + length <= MAX_DIFF_SIZE) used += length;
+  for (const [i, length] of [...budget.stored].sort(([a], [b]) => a - b)) {
+    if (i < budget.prefix && used + length <= MAX_DIFF_SIZE) used += length;
   }
   const remaining = MAX_DIFF_SIZE - used;
   // Budget first: a full budget must not pay for a diff it will discard, and a
@@ -396,7 +409,7 @@ function patchWithinBudget(
   if (remaining === 0) return { diffTruncated: true };
   const patch = unifiedPatch(header, plan.originalContent, plan.updatedContent);
   if (patch === undefined || patch.length > remaining) return { diffTruncated: true };
-  stored.set(index, patch.length);
+  budget.stored.set(index, patch.length);
   return { patch };
 }
 
@@ -511,7 +524,7 @@ async function handleSearchAndReplace(
   // `src` would name `<root>/a.ts` when passed back.
   const paths = ctx.fs.pathGuard.resultPaths(scope.root);
   const includeDiff = args.dryRun || args.returnDiff;
-  const patchLengths = new Map<number, number>();
+  const budget: DiffBudget = { stored: new Map(), settled: new Set(), prefix: 0 };
   let outcome: ScanOutcome<EntryOutcome>;
   try {
     const context: ReplaceContext = {
@@ -544,6 +557,9 @@ async function handleSearchAndReplace(
         onScanned: (n) => {
           ctx.onProgress({ current: n });
         },
+        onSettled: (index) => {
+          settle(budget, index);
+        },
       },
       (entry) =>
         processEntry(entry.path, context, (plan) => {
@@ -551,7 +567,7 @@ async function handleSearchAndReplace(
             primary = { index: entry.index, path: entry.path, content: plan.updatedContent };
           }
           return includeDiff
-            ? patchWithinBudget(patchLengths, entry.index, paths.show(entry.path), plan)
+            ? patchWithinBudget(budget, entry.index, paths.show(entry.path), plan)
             : {};
         }),
     );
