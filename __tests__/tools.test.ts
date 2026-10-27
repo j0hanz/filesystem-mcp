@@ -3343,14 +3343,14 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeTestFile(dir, 'a.txt', 'needle\n');
     await writeTestFile(dir, 'b.txt', 'needle\n');
     const order = await readdir(dir);
-    const failedPath = join(dir, order[0] ?? '');
     // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
     const realOpen = GuardedFileSystem.prototype.open;
     t.mock.method(
       GuardedFileSystem.prototype,
       'open',
       async function (this: GuardedFileSystem, ...a: Parameters<typeof realOpen>) {
-        if (a[0] === failedPath) {
+        // By name: the guard lower-cases a Windows drive letter, so a joined path never matches.
+        if (basename(dirname(a[0])) === 'replace_mixed_walk_order' && basename(a[0]) === order[0]) {
           throw new FsError(ErrorCode.TOO_LARGE, 'File exceeds size limit', a[0]);
         }
         return realOpen.apply(this, a);
