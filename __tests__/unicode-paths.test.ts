@@ -94,6 +94,108 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       });
     });
 
+    /** A file source's views, as the move tool derives them. */
+    const sourceViews = async (path: string): Promise<{ entry: string; landing: string }> => ({
+      entry: await guard.validatePathForDelete(path),
+      landing: await guard.validateExistingPath(path),
+    });
+
+    it('TC-PH-009: a case-only destination is a respelling on a case-insensitive filesystem', async (t) => {
+      if (process.platform !== 'win32' && process.platform !== 'darwin') {
+        t.skip('case-only re-spelling only applies on a case-insensitive filesystem');
+        return;
+      }
+      await writeFile(join(root, 'foo.txt'), 'foo');
+      const resolved = await guard.resolveTransferDestination(
+        join(root, 'Foo.txt'),
+        await sourceViews(join(root, 'foo.txt')),
+      );
+      assert.deepStrictEqual(resolved, {
+        destination: guardPath(root, 'Foo.txt'),
+        kind: 'respelling',
+      });
+    });
+
+    it('TC-PH-010: an unrelated destination is distinct and keeps its name', async () => {
+      await writeFile(join(root, 'foo.txt'), 'foo');
+      const resolved = await guard.resolveTransferDestination(
+        join(root, 'bar.txt'),
+        await sourceViews(join(root, 'foo.txt')),
+      );
+      assert.deepStrictEqual(resolved, {
+        destination: guardPath(root, 'bar.txt'),
+        kind: 'distinct',
+      });
+    });
+
+    it('TC-PH-011: the source itself, spelled the same, is a self-move', async () => {
+      await writeFile(join(root, 'foo.txt'), 'foo');
+      const resolved = await guard.resolveTransferDestination(
+        join(root, 'foo.txt'),
+        await sourceViews(join(root, 'foo.txt')),
+      );
+      assert.deepStrictEqual(resolved, { destination: guardPath(root, 'foo.txt'), kind: 'self' });
+    });
+
+    it('TC-PH-014: a Unicode-only destination is a respelling under the requested name', async () => {
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const resolved = await guard.resolveTransferDestination(
+        join(root, ASCII_NAME),
+        await sourceViews(join(root, NBSP_NAME)),
+      );
+      assert.deepStrictEqual(resolved, {
+        destination: guardPath(root, ASCII_NAME),
+        kind: 'respelling',
+      });
+    });
+
+    it('a link onto its own target is a self-move', async (t) => {
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, 'lnk'),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      const resolved = await guard.resolveTransferDestination(
+        join(root, 'target.txt'),
+        await sourceViews(join(root, 'lnk')),
+      );
+      assert.strictEqual(resolved.kind, 'self');
+      // Onto itself, spelled the same, a link is a self-move too: its landing
+      // is the target, so only the entry comparison catches it.
+      assert.deepStrictEqual(
+        await guard.resolveTransferDestination(
+          join(root, 'lnk'),
+          await sourceViews(join(root, 'lnk')),
+        ),
+        { destination: guardPath(root, 'lnk'), kind: 'self' },
+      );
+    });
+
+    it('a lock key names a link as the link, and a path with no parent by its landing', async (t) => {
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, 'lnk'),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      assert.strictEqual(await guard.entryLockKey(join(root, 'lnk')), guardPath(root, 'lnk'));
+      assert.strictEqual(
+        await guard.entryLockKey(join(root, 'gone', 'x.txt')),
+        guardPath(root, 'gone', 'x.txt'),
+      );
+    });
+
     it('prefers the exact spelling when both are on disk', async () => {
       await writeFile(join(root, ASCII_NAME), 'space');
       await writeFile(join(root, NBSP_NAME), 'nbsp');
@@ -562,6 +664,60 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'target.txt']);
       assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
       assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+    });
+
+    it('rename onto a separate link to the source changes nothing', async (t) => {
+      // The link's name is a Unicode variant of the file's, so a respelling
+      // would rename the file over the link.
+      await writeFile(join(root, NBSP_NAME), 'target');
+      if (
+        !(await trySymlink(
+          join(root, NBSP_NAME),
+          join(root, ASCII_NAME),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      await new GuardedFileSystem(await makeGuard([root])).rename(
+        join(root, NBSP_NAME),
+        join(root, ASCII_NAME),
+      );
+      assert.strictEqual((await lstat(join(root, NBSP_NAME))).isSymbolicLink(), false);
+      assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'target');
+      assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
+    });
+
+    it('rename of a missing path onto itself still fails', async () => {
+      await assert.rejects(
+        new GuardedFileSystem(await makeGuard([root])).rename(
+          join(root, 'missing.txt'),
+          join(root, 'missing.txt'),
+        ),
+        { code: 'ENOENT' },
+      );
+    });
+
+    it('rename of a link onto its own target changes nothing', async (t) => {
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, 'lnk'),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      await new GuardedFileSystem(await makeGuard([root])).rename(
+        join(root, 'lnk'),
+        join(root, 'target.txt'),
+      );
+      assert.strictEqual((await lstat(join(root, 'target.txt'))).isSymbolicLink(), false);
+      assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+      assert.strictEqual((await lstat(join(root, 'lnk'))).isSymbolicLink(), true);
     });
 
     it('path completion lists a directory typed in another Unicode spelling', async (t) => {
