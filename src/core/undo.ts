@@ -439,6 +439,7 @@ async function assertTreeKeepsPolicy(
   try {
     keeps = await fs.pathGuard.relocationKeepsProtection(await listNames(), { from }, to);
   } catch (error) {
+    if (error instanceof FsError) throw error;
     cause = error;
   }
   if (!keeps) {
