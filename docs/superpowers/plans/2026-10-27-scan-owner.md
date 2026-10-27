@@ -33,15 +33,15 @@ verdict (`readText`: binary, undecodable, too large). PR 3 covers the input
 alignment (`maxDepth` base, `maxMatches`, the 20000 cap and the tool
 descriptions). Neither belongs in this PR.
 
-| Case                                            | Walked entry                         | Named file (`explicitFile`)            |
-| :---------------------------------------------- | :----------------------------------- | :------------------------------------- |
-| Sensitive (lexical or by realpath)              | dropped, never counted               | call fails (guard's error)             |
-| Out of root, missing, denied, PERMISSION_DENIED | `skippedInaccessible++`              | call fails                             |
-| Directory the walk descends into but can't read | `skippedInaccessible++`, once        | n/a                                    |
-| Scope root that can't be read                   | `skippedInaccessible++`              | n/a                                    |
-| `onEntry` throws (not an abort)                 | `skippedInaccessible++`              | call fails (rethrown)                  |
-| `onEntry` rejects while the signal is aborted   | not counted; the stop is `'timeout'` | resolves `{ results: [], 'timeout' }`  |
-| Symlinked file with `onlyFiles: true`           | not yielded (unchanged; now stated)  | followed (unchanged)                   |
+| Case                                            | Walked entry                         | Named file (`explicitFile`)           |
+| :---------------------------------------------- | :----------------------------------- | :------------------------------------ |
+| Sensitive (lexical or by realpath)              | dropped, never counted               | call fails (guard's error)            |
+| Out of root, missing, denied, PERMISSION_DENIED | `skippedInaccessible++`              | call fails                            |
+| Directory the walk descends into but can't read | `skippedInaccessible++`, once        | n/a                                   |
+| Scope root that can't be read                   | `skippedInaccessible++`              | n/a                                   |
+| `onEntry` throws (not an abort)                 | `skippedInaccessible++`              | call fails (rethrown)                 |
+| `onEntry` rejects while the signal is aborted   | not counted; the stop is `'timeout'` | resolves `{ results: [], 'timeout' }` |
+| Symlinked file with `onlyFiles: true`           | not yielded (unchanged; now stated)  | followed (unchanged)                  |
 
 **Stop rule:**
 
@@ -138,24 +138,24 @@ than a `TIMEOUT` error from `fs.stat`.
   - `isEntryAccessible(p)` stays as `(await this.entryVerdict(p)) === 'ok'`
 
 - [ ] **Step 1: Write the failing table test.** Use `makeGuard([root])`
-  from `__tests__/helpers.ts`. Run one `it` per row. Skip a symlink row when
-  the symlink cannot be created, as `trySymlink` does in `tools.test.ts`.
+      from `__tests__/helpers.ts`. Run one `it` per row. Skip a symlink row when
+      the symlink cannot be created, as `trySymlink` does in `tools.test.ts`.
 
-| Row                | Fixture                                         | Expected         |
-| :----------------- | :---------------------------------------------- | :--------------- |
-| `plain`            | `root/a.txt`                                    | `'ok'`           |
-| `env`              | `root/.env`                                     | `'sensitive'`    |
-| `uppercase-env`    | `root/.ENV` (lexical case fold)                 | `'sensitive'`    |
-| `link-to-env`      | `root/link` → `root/.env`                       | `'sensitive'`    |
-| `outside`          | `root/out` → a file in a second temp dir        | `'inaccessible'` |
-| `missing`          | `root/gone.txt` (never created)                 | `'inaccessible'` |
-| `dangling`         | `root/d` → `root/nowhere`                       | `'inaccessible'` |
-| `dangling-outside` | `root/x` → `<second temp dir>/missing`          | `'inaccessible'` |
+| Row                | Fixture                                  | Expected         |
+| :----------------- | :--------------------------------------- | :--------------- |
+| `plain`            | `root/a.txt`                             | `'ok'`           |
+| `env`              | `root/.env`                              | `'sensitive'`    |
+| `uppercase-env`    | `root/.ENV` (lexical case fold)          | `'sensitive'`    |
+| `link-to-env`      | `root/link` → `root/.env`                | `'sensitive'`    |
+| `outside`          | `root/out` → a file in a second temp dir | `'inaccessible'` |
+| `missing`          | `root/gone.txt` (never created)          | `'inaccessible'` |
+| `dangling`         | `root/d` → `root/nowhere`                | `'inaccessible'` |
+| `dangling-outside` | `root/x` → `<second temp dir>/missing`   | `'inaccessible'` |
 
-  Add one more test: `isEntryAccessible` returns `true` only for `plain`.
+Add one more test: `isEntryAccessible` returns `true` only for `plain`.
 
 - [ ] **Step 2: Run.** `npm test -- --test-name-pattern="entryVerdict"`.
-  Expected: FAIL, `entryVerdict is not a function`.
+      Expected: FAIL, `entryVerdict is not a function`.
 - [ ] **Step 3: Implement `entryVerdict`** next to `isEntryAccessible`.
   1. Return `'sensitive'` when `isSensitive` holds for the path as given or
      for its `normalizePath` form.
@@ -170,10 +170,10 @@ than a `TIMEOUT` error from `fs.stat`.
      `'inaccessible'`.
   5. Rethrow everything else, as `isEntryAccessible` does today.
 - [ ] **Step 4: Run.** The same command passes, and so does
-  `npm test -- --test-name-pattern="sensitive"`.
+      `npm test -- --test-name-pattern="sensitive"`.
 - [ ] **Step 5: Commit.**
-  `feat(path): rule on a walked entry without throwing`. Include
-  `GLOSSARY.md` and the ADR.
+      `feat(path): rule on a walked entry without throwing`. Include
+      `GLOSSARY.md` and the ADR.
 
 ### Task 2: `globEntries` reports the directories it descends into
 
@@ -216,15 +216,15 @@ than a `TIMEOUT` error from `fs.stat`.
       `node_modules`, `node_modules/x`, `vault.key` and `deep/1/2` are
       never reported.
 - [ ] **Step 2: Run.** `npm test -- --test-name-pattern="onDirectory"`.
-  Expected: FAIL.
+      Expected: FAIL.
 - [ ] **Step 3: Implement.** In `prune`, after every exclusion check has
-  passed for a directory match, call `onDirectory?.(absoluteOf(match))`
-  before returning `false`. Skip the call if the path is already in the
-  filter's reported set.
+      passed for a directory match, call `onDirectory?.(absoluteOf(match))`
+      before returning `false`. Skip the call if the path is already in the
+      filter's reported set.
 - [ ] **Step 4: Run.** The filtered run passes, and so does
-  `npm test -- --test-name-pattern="glob"`.
+      `npm test -- --test-name-pattern="glob"`.
 - [ ] **Step 5: Commit.**
-  `feat(glob): report each directory a walk descends into`
+      `feat(glob): report each directory a walk descends into`
 
 ### Task 3: `scan.ts`
 
@@ -287,11 +287,11 @@ export function scan<R>(
 ```
 
 - [ ] **Step 1: Write failing tests** in `scan.test.ts`. Use
-  `createTestRoot` and `makeGuard`. Every test starts from these options,
-  and states only what it overrides: `pattern: '**/*'`,
-  `baseNameMatch: false`, `includeHidden: true`, `includeIgnored: false`,
-  `onlyFiles: true`, `concurrency: 4`. `onEntry` returns `entry.path`
-  unless a test says otherwise. Assert on paths relative to the root.
+      `createTestRoot` and `makeGuard`. Every test starts from these options,
+      and states only what it overrides: `pattern: '**/*'`,
+      `baseNameMatch: false`, `includeHidden: true`, `includeIgnored: false`,
+      `onlyFiles: true`, `concurrency: 4`. `onEntry` returns `entry.path`
+      unless a test says otherwise. Assert on paths relative to the root.
   - `sensitive leaf is never counted`: given `a.txt` and `.env`, assert
     `results` is `[a.txt]` and `skippedInaccessible` is `0`.
   - `unreadable directory is counted once` (POSIX skip):
@@ -351,7 +351,7 @@ export function scan<R>(
     `NOT_DIRECTORY`. With `allowFile: true` it returns
     `{ root: dirname, explicitFile }`. A directory returns `{ root }`.
 - [ ] **Step 2: Run.** `npm test -- --test-name-pattern="scan"`. Expected:
-  FAIL, module not found.
+      FAIL, module not found.
 - [ ] **Step 3: Implement `scan.ts`.**
   - **Scope.** `resolveScanScope` is `resolveSearchScope`
     (`search.ts:709-731`), with these changes:
@@ -392,8 +392,8 @@ export function scan<R>(
   - **Stop rule.** Follow § Design.
   - Add the literal-prefix `shortcut:` comment from Review Focus item 5.
 - [ ] **Step 4: Run.** The filtered run passes. Then run the POSIX tests in
-  WSL with fixtures in `/tmp` and confirm that they ran and were not
-  skipped.
+      WSL with fixtures in `/tmp` and confirm that they ran and were not
+      skipped.
 - [ ] **Step 5: Commit.** `feat(core): give the Scan one owner`
 
 ### Task 4: `find_files` on `scan`
@@ -413,7 +413,7 @@ export function scan<R>(
   through `harness.client.callTool`, with the same assertions.
 - Modify: `__tests__/core-fs.test.ts:912-925`. Delete only the
   `searchFiles` half. The Task 3 test `pre-aborted signal resolves as
-  timeout` covers it. The `searchContent` half stays for Task 5.
+timeout` covers it. The `searchContent` half stays for Task 5.
 
 **Interfaces:**
 
@@ -431,16 +431,16 @@ export function scan<R>(
   - Sorting by name or by path happens after `scan`, on the kept results.
 
 - [ ] **Step 1: Write a failing wiring test** in `tools.test.ts`:
-  `find_files counts an unreadable directory` (POSIX skip). Fixture
-  `locked/x.ts` with `locked` at `0o000`, plus `a.ts`. Assert that
-  `_meta.skippedInaccessible === 1`, that the text matches
-  `/1 inaccessible file/`, and that the results are `[a.ts]`.
+      `find_files counts an unreadable directory` (POSIX skip). Fixture
+      `locked/x.ts` with `locked` at `0o000`, plus `a.ts`. Assert that
+      `_meta.skippedInaccessible === 1`, that the text matches
+      `/1 inaccessible file/`, and that the results are `[a.ts]`.
 - [ ] **Step 2: Run** it. Expected: FAIL, with `skippedInaccessible`
-  undefined.
+      undefined.
 - [ ] **Step 3: Implement** the move described above.
 - [ ] **Step 4: Run.** `npm test -- --test-name-pattern="find_files"` and
-  `npm test -- --test-name-pattern="sensitive files never surface"` both
-  pass, and so does `npm run check:static`.
+      `npm test -- --test-name-pattern="sensitive files never surface"` both
+      pass, and so does `npm run check:static`.
 - [ ] **Step 5: Commit.** `refactor(find_files): scan through the Scan owner`
 
 ### Task 5: `search_text` on `scan`
@@ -497,7 +497,7 @@ export function scan<R>(
 - [ ] **Step 2: Run** both. Expected: FAIL.
 - [ ] **Step 3: Implement** the changes listed above.
 - [ ] **Step 4: Run.** `npm test -- --test-name-pattern="search"` passes.
-  These existing tests must stay green:
+      These existing tests must stay green:
   - the cap test at `tools.test.ts:3830`;
   - the per-file cap test at `:3849`;
   - the engine-cut test at `:3988`;
@@ -618,6 +618,7 @@ type EntryOutcome =
   `isEntryAccessible` call, `fatalError` and the `throwIfAborted` at `:175`.
   `collect` returns `skippedInaccessible` and `stoppedReason` alongside the
   totals.
+
 - Modify: `src/tools/list.ts:285-400`.
   - `ListPageMetadata` gains `skippedInaccessible?: number` and
     `stoppedReason?: 'timeout'`.
@@ -646,6 +647,7 @@ type EntryOutcome =
 
   Delete the stale `structuredContent === undefined` assertion. This test
   depends on the scope being resolved without the signal.
+
 - Modify: `docs/client-guide.md:397-400` and `:412-417`.
   - Add `list` to the paragraph on scans that hit a limit.
   - Move `list` out of the `TIMEOUT`-error sentence and into the
@@ -685,11 +687,11 @@ type EntryOutcome =
       no entries, abort after a set number of `onProgress` ticks instead.
   - Edit TC-FUNC-063a as listed above.
 - [ ] **Step 2: Run.** `npm test -- --test-name-pattern="list"`. Expected:
-  FAIL on all three tests.
+      FAIL on all three tests.
 - [ ] **Step 3: Implement** the changes listed above, then write the docs and
-  CHANGELOG entries.
+      CHANGELOG entries.
 - [ ] **Step 4: Run.** `npm run check` passes. Then run
-  `git diff --stat main -- __tests__/contract.test.ts.snapshot`; it must
-  print nothing.
+      `git diff --stat main -- __tests__/contract.test.ts.snapshot`; it must
+      print nothing.
 - [ ] **Step 5: Commit.**
-  `refactor(list): scan through the Scan owner; return partial on timeout`
+      `refactor(list): scan through the Scan owner; return partial on timeout`
