@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`edit` with `dryRun` reports the file's own modified time.** Before,
+  `modified` was the time of the preview, although nothing was written.
 - **`read` over stdio no longer offers a link that `resources/read`
   refuses.** Before, a slice of a text file just under the 10 MiB file size
   limit came back with a `resourceUri` and a `resource_link` that failed with

@@ -2,7 +2,17 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setImmediate as setImmediatePromise, setTimeout as sleep } from 'node:timers/promises';
@@ -2155,6 +2165,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.match(firstTextBlock(result).text ?? '', /would duplicate or drop lines/u);
       assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\n');
     }
+  });
+
+  it("edit dryRun reports the file's own modified time", async () => {
+    const file = await writeTestFile(tmpDir, 'edit_dry_mtime.txt', 'alpha\n');
+    const old = new Date('2001-01-01T00:00:00Z');
+    await utimes(file, old, old);
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'alpha', newText: 'ALPHA' }], dryRun: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const value = (result._meta as { results: { value?: { modified?: string } }[] }).results[0]
+      ?.value;
+    assert.strictEqual(value?.modified, '2001-01-01T00:00:00.000Z');
   });
 
   it('patch dryRun advertises no resourceUri or resource_link for the unwritten file', async () => {

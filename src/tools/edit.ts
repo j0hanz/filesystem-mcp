@@ -6,10 +6,10 @@ import * as z from 'zod/v4';
 
 import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
-import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
+import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
-import { readNamedText } from '../core/scan.ts';
+import { rewriteFile } from '../core/rewrite.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -18,7 +18,7 @@ import {
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import { escapeRegExp } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, postWriteStat, runOverPaths } from './batch.ts';
+import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z.strictObject({
@@ -341,59 +341,47 @@ async function editOnce(
   options: { dryRun: boolean; ignoreWhitespace: boolean },
   ctx: ToolCtx,
 ): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
-  const { validPath, content } = await readNamedText(ctx.fs, filePath, {
-    signal: ctx.signal,
-  });
-  const editResult = applyEdits(content, edits, options.ignoreWhitespace);
+  const done = await rewriteFile(
+    {
+      fs: ctx.fs,
+      path: filePath,
+      dryRun: options.dryRun,
+      signal: ctx.signal,
+      transport: ctx.transport,
+      tool: 'edit',
+    },
+    (content) => {
+      const result = applyEdits(content, edits, options.ignoreWhitespace);
+      if (!options.dryRun && result.unmatchedEdits.length > 0) {
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `no match for oldText ${joinRoster(
+            result.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
+            ', ',
+          )}; it must match the file exactly`,
+          filePath,
+        );
+      }
+      return { content: result.content, result, write: result.appliedEdits > 0 };
+    },
+  );
+  const editResult = done.result;
   // One Myers pass serves both the dry-run preview and the line counts.
   const patch =
     editResult.appliedEdits > 0
-      ? unifiedPatch(basename(validPath), content, editResult.content)
+      ? unifiedPatch(basename(done.validPath), done.before, done.after)
       : undefined;
   if (patch !== undefined) Object.assign(editResult, diffStatsFromPatch(patch));
-
-  if (options.dryRun) {
-    if (patch !== undefined) editResult.diff = patch;
-  } else {
-    if (editResult.unmatchedEdits.length > 0) {
-      throw new FsError(
-        ErrorCode.INVALID_INPUT,
-        `no match for oldText ${joinRoster(
-          editResult.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
-          ', ',
-        )}; it must match the file exactly`,
-        filePath,
-      );
-    }
-
-    if (editResult.appliedEdits > 0) {
-      await ctx.fs.writeFile(filePath, editResult.content, {
-        signal: ctx.signal,
-      });
-      ctx.log(
-        'info',
-        `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
-        'edit',
-      );
-    }
+  if (options.dryRun && patch !== undefined) editResult.diff = patch;
+  if (done.written) {
+    ctx.log(
+      'info',
+      `edit: ${filePath} (${editResult.appliedEdits} edits, +${String(editResult.linesAdded ?? 0)}/-${String(editResult.linesRemoved ?? 0)})`,
+      'edit',
+    );
   }
 
-  // `modified` is read from a post-write stat and is advisory: under a concurrent
-  // writer it may reflect that writer's mtime while `size`/content below come from
-  // this edit's atomic write. The file content itself is always consistent. A dry
-  // run wrote nothing, so it reports the time of the preview.
-  let modified = new Date().toISOString();
-  if (!options.dryRun) {
-    modified = (await postWriteStat(ctx, validPath))?.mtime.toISOString() ?? modified;
-  }
-  const meta = buildWrittenFileMeta({
-    validPath,
-    content: editResult.content,
-    dryRun: options.dryRun,
-    lastModified: modified,
-    transport: ctx.transport,
-  });
-  const { resourceLink, ...fileMeta } = meta;
+  const { resourceLink, validPath, modified, ...fileMeta } = done.report();
   return {
     file: {
       path: validPath,
@@ -479,10 +467,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
       args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);
 
     const batch = await runOverPaths(items, ctx, ErrorCode.UNKNOWN, ({ path, edits }) =>
-      // A dry run never writes, so it needs no lock.
-      args.dryRun
-        ? editOnce(path, edits, args, ctx)
-        : ctx.fs.lockForWrite(path, () => editOnce(path, edits, args, ctx)),
+      editOnce(path, edits, args, ctx),
     );
 
     const perPathResults: PerPathResult<EditFileValue>[] = [];
