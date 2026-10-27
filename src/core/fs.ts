@@ -19,7 +19,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -311,10 +311,18 @@ export class GuardedFileSystem {
       (entry) => isSamePath(entry, validOld),
       () => false,
     );
-    const spellingOnly = sameEntry || validOld === validNew;
-    if (spellingOnly) {
-      validNew = respellSpellingOnlyTarget(newPath, sameEntry ? validOld : validNew);
-    }
+    if (sameEntry) validNew = respellSpellingOnlyTarget(newPath, validOld);
+    // Where the old path lands: a link's target. A link whose target cannot be
+    // named stands for itself, as a dangling source does in the move tool.
+    const oldLanding = await this.pathGuard.validateExistingPath(oldPath).catch(() => validOld);
+    // A new path landing on the old one (a link onto its own target, or onto
+    // a separate link to it) is a self-move: renaming would replace the target
+    // with the link, or the link with its target.
+    const isSelf = sameEntry
+      ? resolve(validNew) === resolve(validOld)
+      : resolve(oldLanding) === resolve(validNew);
+    if (isSelf) return;
+    const spellingOnly = sameEntry || isSamePath(oldLanding, validNew);
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;

@@ -564,6 +564,50 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
     });
 
+    it('rename onto a separate link to the source changes nothing', async (t) => {
+      // The link's name is a Unicode variant of the file's, so a respelling
+      // would rename the file over the link.
+      await writeFile(join(root, NBSP_NAME), 'target');
+      if (
+        !(await trySymlink(
+          join(root, NBSP_NAME),
+          join(root, ASCII_NAME),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      await new GuardedFileSystem(await makeGuard([root])).rename(
+        join(root, NBSP_NAME),
+        join(root, ASCII_NAME),
+      );
+      assert.strictEqual((await lstat(join(root, NBSP_NAME))).isSymbolicLink(), false);
+      assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'target');
+      assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
+    });
+
+    it('rename of a link onto its own target changes nothing', async (t) => {
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, 'lnk'),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      await new GuardedFileSystem(await makeGuard([root])).rename(
+        join(root, 'lnk'),
+        join(root, 'target.txt'),
+      );
+      assert.strictEqual((await lstat(join(root, 'target.txt'))).isSymbolicLink(), false);
+      assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+      assert.strictEqual((await lstat(join(root, 'lnk'))).isSymbolicLink(), true);
+    });
+
     it('path completion lists a directory typed in another Unicode spelling', async (t) => {
       if (!(await isNormalizationSensitive(root))) {
         t.skip('filesystem is normalization-insensitive');
