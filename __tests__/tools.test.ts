@@ -3330,6 +3330,45 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('replace_text keeps the walk-first diffs that fit and skips the rest', async () => {
+    const dir = join(tmpDir, 'replace_diff_prefix');
+    // Each patch is about 5.6 KiB: three fit the 20 KiB budget, a fourth does not.
+    const body = Array.from({ length: 130 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']) {
+      await writeTestFile(dir, name, body);
+    }
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    // fs.glob walks in readdir order.
+    const walked = (await readdir(dir)).slice(0, 3).map((name) => `replace_diff_prefix/${name}`);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      walked,
+    );
+  });
+
+  it('replace_text drops a diff over the whole budget and keeps a small one', async () => {
+    const dir = join(tmpDir, 'replace_diff_huge');
+    // About 30 KiB of patch alone, past the 20 KiB budget.
+    const huge = Array.from({ length: 700 }, (_, i) => `needle line ${String(i)} xxxxx`).join('\n');
+    await writeTestFile(dir, 'huge.txt', huge);
+    await writeTestFile(dir, 'small.txt', 'needle\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+    });
+    const meta = result._meta as { diff?: string; diffTruncated?: boolean };
+    assert.strictEqual(meta.diffTruncated, true);
+    assert.deepStrictEqual(
+      [...(meta.diff ?? '').matchAll(/^\+\+\+ ([^\t\n]+)/gmu)].map((m) => m[1]),
+      ['replace_diff_huge/small.txt'],
+    );
+  });
+
   it('replace_text on a named file past maxResults replaces every match and does not stop', async () => {
     const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
     const result = await harness.client.callTool({
