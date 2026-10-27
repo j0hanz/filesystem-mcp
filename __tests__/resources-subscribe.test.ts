@@ -208,7 +208,11 @@ describe('createServer disposal on connection close', () => {
     try {
       const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
       const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
-      await ctx.mcp.close();
+      // Connected, so closing runs the onclose hook that disposes owned state.
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+      await client.close();
       assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
     } finally {
       state.dispose();
