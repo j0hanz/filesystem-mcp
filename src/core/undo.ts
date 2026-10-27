@@ -424,8 +424,8 @@ export async function snapshotTree(
 
 /**
  * A directory may go back only if every entry keeps its sensitive-file status,
- * as the move tool requires: path rules (`secrets/**`) follow the path, so
- * something created under the moved directory since would leave protection.
+ * as the move tool requires (`PathGuard.relocationKeepsProtection`): something
+ * created under the moved directory since could leave or enter protection.
  * Fails closed when the tree cannot be fully listed.
  */
 async function assertTreeKeepsPolicy(
@@ -434,22 +434,20 @@ async function assertTreeKeepsPolicy(
   from: string,
   to: string,
 ): Promise<void> {
-  const refuse = (cause?: unknown): never => {
+  let keeps = false;
+  let cause: unknown;
+  try {
+    keeps = await fs.pathGuard.relocationKeepsProtection(await listNames(), { from }, to);
+  } catch (error) {
+    cause = error;
+  }
+  if (!keeps) {
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
       'Undo refused: the directory contains entries whose protection would change when moved back',
       to,
       cause,
     );
-  };
-  try {
-    const guard = fs.pathGuard;
-    for (const name of await listNames()) {
-      if (guard.isSensitive(join(from, name)) !== guard.isSensitive(join(to, name))) refuse();
-    }
-  } catch (error) {
-    if (error instanceof FsError) throw error;
-    refuse(error);
   }
 }
 

@@ -488,12 +488,10 @@ async function validateTransferSource(
 }
 
 /**
- * A directory transfer may proceed only when every entry keeps the same
- * sensitive-file status before and after relocation. Path-based rules
- * (`secrets/**`, `.aws/credentials`) follow the path, not the file, so refuse
- * any entry that would leave or enter the protected set. Walk the tree once
- * before any mutation and fail the pair closed if anything changes status.
- * Name-based rules need no help — they match after the move too.
+ * A directory transfer may proceed only when every entry keeps its
+ * sensitive-file status (`PathGuard.relocationKeepsProtection`). Walk the tree
+ * once before any mutation and fail the pair closed if anything changes status
+ * or the tree cannot be fully listed.
  */
 async function assertTreeHasNoProtectedEntries(
   op: PairOp,
@@ -503,40 +501,40 @@ async function assertTreeHasNoProtectedEntries(
   fs: ToolCtx['fs'],
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  const entries = globEntries({
-    cwd: realSource,
-    pattern: '**/*',
-    includeHidden: true,
-    skipIgnored: false,
-    onlyFiles: false,
-    ...(signal ? { signal } : {}),
-  });
-  try {
-    for await (const entry of entries) {
+  async function* names(): AsyncGenerator<string> {
+    for await (const entry of globEntries({
+      cwd: realSource,
+      pattern: '**/*',
+      includeHidden: true,
+      skipIgnored: false,
+      onlyFiles: false,
+      ...(signal ? { signal } : {}),
+    })) {
       signal?.throwIfAborted();
-      const entryRelativePath = relative(realSource, entry.path);
-      const requestedSourcePath = resolve(requestedSource, entryRelativePath);
-      const destinationPath = resolve(validDest, entryRelativePath);
-      const protectedBefore =
-        fs.pathGuard.isSensitive(entry.path) || fs.pathGuard.isSensitive(requestedSourcePath);
-      const protectedAfter = fs.pathGuard.isSensitive(destinationPath);
-      if (protectedBefore !== protectedAfter) {
-        throw new FsError(
-          ErrorCode.ACCESS_DENIED,
-          `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
-          requestedSource,
-        );
-      }
+      yield relative(realSource, entry.path);
     }
+  }
+  let keeps: boolean;
+  try {
+    keeps = await fs.pathGuard.relocationKeepsProtection(
+      names(),
+      { from: realSource, requestedFrom: requestedSource },
+      validDest,
+    );
   } catch (error) {
     rethrowIfAborted(error);
-    // The walk itself throws only raw fs errors; an FsError is the refusal above.
-    if (isFsError(error)) throw error;
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
       `${VERB[op]} refused: the directory could not be fully inspected for protected entries`,
       requestedSource,
       error,
+    );
+  }
+  if (!keeps) {
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
+      requestedSource,
     );
   }
 }
