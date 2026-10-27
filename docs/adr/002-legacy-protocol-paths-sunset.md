@@ -21,7 +21,11 @@ connection, each already commented as legacy-only but with no date attached:
 `seedRootsFromClient` in
 [`src/transport/stdio.ts`](../../src/transport/stdio.ts), wired only
 when `era === 'legacy'`, calls the deprecated `listRoots()` to push-seed
-allowed roots; the `resources/subscribe` / `resources/unsubscribe` request
+allowed roots (it is also the only caller of
+`PathGuard.applyGrant(dir, 'workspace')` in
+[`src/core/path.ts`](../../src/core/path.ts); the `'workspace'` kind, the
+`accessGrants` list and the `bases` filter in `recomputeAllowedDirectories`
+exist only to tell a declared root from an approved grant); the `resources/subscribe` / `resources/unsubscribe` request
 handlers in `registerResources`
 ([`src/resources.ts`](../../src/resources.ts)), registered only when `deps.era !== 'modern'`; and the deprecated
 `getClientCapabilities()` fallback in `toToolCtx`
@@ -116,3 +120,11 @@ project.
   number. Also, `src/tools/index.ts` no longer declares its own `era`
   field: its registrar deps extend `ToolDeps` in `src/tools/define.ts`,
   so the `era` removal there is one field, not two.
+- **Amended 2026-10-27:** the marker grep returns three more sites, in
+  `src/core/path.ts`. The `'workspace'` grant kind landed in b34b6310
+  (2026-10-14), after the last amendment, without the marker. Its only caller
+  is `seedRootsFromClient`. With workspace grants gone every grant is an
+  access grant, so the removal also deletes the `kind` parameter of
+  `applyGrant` and its branch, the `accessGrants` list, and the `bases`
+  filter in `recomputeAllowedDirectories`: every base is then a configured
+  root.

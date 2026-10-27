@@ -208,6 +208,7 @@ export class PathGuard {
    * the workspace roots a client declared. Relative paths never resolve
    * against these: one approval must not change what a relative path names,
    * neither in a later round of the same call nor in a later call.
+   * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
    */
   private accessGrants: string[] = [];
   /**
@@ -431,6 +432,7 @@ export class PathGuard {
    * `kind` says where the grant came from: `access` for a path the user
    * approved when a tool asked, `workspace` for a root the client declared.
    * Only a workspace root becomes a place relative paths resolve.
+   * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
    */
   async applyGrant(targetDir: string, kind: 'access' | 'workspace' = 'access'): Promise<boolean> {
     // Defense-in-depth: even a tampered/accepted grant cannot extend roots into
@@ -1220,6 +1222,7 @@ export class PathGuard {
     const combined = [...baseline, ...grantsToInclude];
     const spellings = await resolveRootSpellings(combined, signal);
     const nextState = [...new Set(spellings.flatMap((entry) => entry.spellings))];
+    // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
     // A configured root stays a base even when it was also granted.
     const accessGrants = this.accessGrants;
     const bases = spellings.filter(
