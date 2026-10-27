@@ -141,30 +141,39 @@ export async function scan<R>(
   // walk order: each entry awaits the previous entry's admission, so
   // `maxEntries` admits exactly the first usable entries a caller may mutate.
   let admissions: Promise<void> = Promise.resolve();
+  // Admitted entries whose onEntry has not settled: one may fail and free its slot.
+  const inFlight = new Set<Promise<unknown>>();
   const admit = async (path: string, previous: Promise<void>, release: () => void) => {
     try {
       const verdict = await pathGuard.entryVerdict(path);
       await previous;
-      if (fatal !== undefined) return false;
+      // A count after a fatal error is moot: the scan rethrows it.
       if (verdict === 'sensitive') return false;
       if (verdict === 'inaccessible') {
         skippedInaccessible++;
         return false;
       }
-      if (signal?.aborted) {
-        cut = true;
-        return false;
+      for (;;) {
+        if (fatal !== undefined) return false;
+        if (signal?.aborted) {
+          cut = true;
+          return false;
+        }
+        if (cap !== undefined && total >= cap) {
+          capped ??= 'maxResults';
+          return false;
+        }
+        if (maxEntries !== undefined && started >= maxEntries) {
+          if (inFlight.size > 0) {
+            await Promise.race(inFlight);
+            continue;
+          }
+          capped ??= 'maxFiles';
+          return false;
+        }
+        started++;
+        return true;
       }
-      if (cap !== undefined && total >= cap) {
-        capped ??= 'maxResults';
-        return false;
-      }
-      if (maxEntries !== undefined && started >= maxEntries) {
-        capped ??= 'maxFiles';
-        return false;
-      }
-      started++;
-      return true;
     } finally {
       release();
     }
@@ -178,15 +187,25 @@ export async function scan<R>(
     release: () => void,
   ): Promise<void> => {
     if (!(await admit(path, previous, release))) return;
-    let result: R | undefined;
-    try {
-      result = await onEntry({ path, type, index });
-    } catch {
-      // An abort is the stop, not this entry's failure.
-      if (signal?.aborted) cut = true;
-      else skippedInaccessible++;
-      return;
-    }
+    const settled = (async () => {
+      try {
+        return { result: await onEntry({ path, type, index }) };
+      } catch {
+        // An abort is the stop, not this entry's failure.
+        if (signal?.aborted) cut = true;
+        else {
+          skippedInaccessible++;
+          // Counted as inaccessible, it frees its maxEntries slot.
+          started--;
+        }
+        return undefined;
+      }
+    })();
+    inFlight.add(settled);
+    const done = await settled;
+    inFlight.delete(settled);
+    if (done === undefined) return;
+    const { result } = done;
     scanned++;
     onScanned?.(scanned);
     if (result !== undefined) {

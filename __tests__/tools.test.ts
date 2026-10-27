@@ -3310,6 +3310,31 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(meta.stoppedReason, undefined);
   });
 
+  it('replace_text maxFiles frees the slot of an EACCES file', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      return t.skip('needs POSIX permissions as non-root');
+    }
+    const dir = join(tmpDir, 'replace_max_files_eacces');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    // The walk follows readdir order: lock whichever file it visits first.
+    const [lockedName = '', readableName = ''] = await readdir(dir);
+    const locked = join(dir, lockedName);
+    await chmod(locked, 0o000);
+    try {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'needle', replacement: 'pin', maxFiles: 1 },
+      });
+      const meta = result._meta as { skippedInaccessible?: number; stoppedReason?: string };
+      assert.strictEqual(meta.skippedInaccessible, 1);
+      assert.strictEqual(meta.stoppedReason, undefined);
+      assert.strictEqual(await readFile(join(dir, readableName), 'utf-8'), 'pin');
+    } finally {
+      await chmod(locked, 0o644);
+    }
+  });
+
   it('replace_text marks a diff cut by its budget', async () => {
     const dir = join(tmpDir, 'replace_diff_budget');
     // Each patch is just over 12 KiB, so the two together exceed the 20 KiB budget.

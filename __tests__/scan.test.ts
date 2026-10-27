@@ -257,6 +257,22 @@ describe('scan', () => {
     assert.equal(out.stoppedReason, 'maxFiles');
   });
 
+  it('an entry that fails into inaccessible frees its maxEntries slot', async () => {
+    await files('a.txt', 'b.txt');
+    const all = await scan({ root }, base(), byPath);
+    const [first, second] = all.results;
+    const out = await scan({ root }, base({ maxEntries: 1 }), async (entry) => {
+      if (entry.path === first) {
+        await sleep(30);
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return entry.path;
+    });
+    assert.deepEqual(out.results, [second]);
+    assert.equal(out.skippedInaccessible, 1);
+    assert.equal(out.stoppedReason, undefined);
+  });
+
   it('abort beats cap', async () => {
     await files('a.txt', 'b.txt', 'c.txt');
     const controller = new AbortController();
