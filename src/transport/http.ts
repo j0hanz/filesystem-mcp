@@ -22,13 +22,10 @@ import type { Express, NextFunction, Request, Response } from 'express';
 
 import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
-import { PathGuard } from '../core/path.ts';
-import type { ServerOptions } from '../core/path.ts';
-import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { UndoJournal } from '../core/undo.ts';
+import type { PathGuard, ServerOptions } from '../core/path.ts';
 import { getMaxInboundMessageBytes, parseEnvInt, parseTrueEnvFlag } from '../core/util.ts';
-import { createWatcherRegistry, type WatcherRegistry } from '../core/watcher-registry.ts';
-import { createServer } from '../server.ts';
+import type { WatcherRegistry } from '../core/watcher-registry.ts';
+import { createRuntimeState, createServer } from '../server.ts';
 import {
   assertHttpBindingPolicy,
   assertHttpHostPolicy,
@@ -267,41 +264,32 @@ export async function startHttpServer(
     parseTrueEnvFlag(process.env['FS_ALLOW_UNRESTRICTED_HOSTS'], 'FS_ALLOW_UNRESTRICTED_HOSTS'),
   );
 
-  const sharedRegistry = createWatcherRegistry();
-  // One store for the whole endpoint, same lifetime and same one-credential
-  // trust argument as the shared guard below: a result a tool externalized in
-  // one POST must survive to the follow-up resources/read, and the modern leg
-  // builds a fresh McpServer per request so a per-request store would discard
-  // it immediately.
-  // Fires only from a tool call, which is long after `modernHandler` below is
-  // constructed, so reading it from the closure is safe.
-  const sharedStore = new ResourceStore(() => {
-    modernHandler.notify.resourcesChanged();
+  // One state for the whole endpoint. The modern leg builds a fresh McpServer
+  // per request, so per-request state would discard every accepted access
+  // grant the moment the request ended (re-prompting on each subsequent call
+  // and leaving the listen-watcher path validating against a stale allowed
+  // set), and would drop a result a tool externalized in one POST before the
+  // follow-up resources/read. Grant scope is therefore the endpoint, not the
+  // connection: with FS_API_KEY set every caller presents the same key (one
+  // auth context by construction), and without it the bind is loopback-only.
+  // Split into per-auth-context state if this ever serves more than one
+  // credential.
+  // The store callback fires only from a tool call, which is long after
+  // `modernHandler` below is constructed, so reading it from the closure is safe.
+  const state = createRuntimeState(options, {
+    onResourcesChanged: () => {
+      modernHandler.notify.resourcesChanged();
+    },
   });
-  const sharedPageStore = new PageSnapshotStore();
-  const sharedUndoJournal = new UndoJournal();
-  // One guard for the whole endpoint. The modern leg builds a fresh McpServer
-  // per request, so a per-instance guard would discard every accepted access
-  // grant the moment the request ended — re-prompting on each subsequent call
-  // and leaving the listen-watcher path validating against a stale allowed set.
-  // Grant scope is therefore the endpoint, not the connection: with FS_API_KEY set
-  // every caller presents the same key (one auth context by construction), and
-  // without it the bind is loopback-only. Split into per-auth-context guards if
-  // this ever serves more than one credential.
-  const sharedPathGuard = new PathGuard(options);
-  await sharedPathGuard.recomputeAllowedDirectories();
+  await state.pathGuard.recomputeAllowedDirectories();
 
   const maxRequestBodySize = getMaxInboundMessageBytes();
 
   const modernHandler: McpHttpHandler = createMcpHandler(
     async ({ era }) => {
       const c = await createServer(options, {
-        watcherRegistry: sharedRegistry,
+        state,
         notifier: modernHandler.notify,
-        pathGuard: sharedPathGuard,
-        resourceStore: sharedStore,
-        pageStore: sharedPageStore,
-        undoJournal: sharedUndoJournal,
         era,
         transport: 'http',
         cacheScope: apiKey ? 'private' : 'public',
@@ -336,8 +324,8 @@ export async function startHttpServer(
     apiKey,
     allowedHosts,
     modernNodeHandler,
-    sharedPathGuard,
-    sharedRegistry,
+    state.pathGuard,
+    state.watcherRegistry,
     modernHandler.notify,
   );
 
@@ -356,10 +344,7 @@ export async function startHttpServer(
   httpServer.on('error', onHttpServerError);
 
   const teardown = (): Promise<void> => {
-    sharedRegistry.destroy();
-    sharedPageStore.clear();
-    sharedUndoJournal.clear();
-    sharedStore.clear();
+    state.dispose();
     return modernHandler.close().catch((err: unknown) => {
       Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
     });

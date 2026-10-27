@@ -14,11 +14,13 @@ import { fileURLToPath } from 'node:url';
 import { formatUnknownErrorMessage, normalizeUnknownError } from '../core/errors.ts';
 import { Logger, voidSend } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
-import { PathGuard } from '../core/path.ts';
-import { getMaxInboundMessageBytes, MAX_STDIO_REQUEST_ID_BYTES } from '../core/util.ts';
-import { createWatcherRegistry } from '../core/watcher-registry.ts';
+import {
+  getMaxInboundMessageBytes,
+  MAX_OUTBOUND_RESULT_BYTES,
+  MAX_STDIO_REQUEST_ID_BYTES,
+} from '../core/util.ts';
 import type { FilesystemServerContext } from '../server.ts';
-import { createServer } from '../server.ts';
+import { createRuntimeState, createServer } from '../server.ts';
 import type { RuntimeConfig } from './shared.ts';
 import {
   jsonRpcError,
@@ -145,20 +147,28 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
 export function startServer(options: ServerOptions, _config?: RuntimeConfig): StdioServerHandle {
   let closed = false;
   let activeCtx: FilesystemServerContext | undefined;
-  const pathGuard = new PathGuard(options);
+  // One state for the connection, outliving any instance built for it. The
+  // store reads `activeCtx` when it fires, like `sink` below, so it never pins
+  // a disposed instance. The guard and the registry (shared with the resource
+  // contract so a `resources/subscribe` and a `subscriptions/listen` naming the
+  // same URI reuse one watcher) are also used outside the instance.
+  const runtime = createRuntimeState(options, {
+    onResourcesChanged: () => {
+      voidSend(activeCtx?.mcp.server.sendResourceListChanged(), '[Stdio] resource list_changed');
+    },
+    // A tool hands out no result-store link that this connection's resources/read refuses.
+    maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES,
+  });
+  const { pathGuard, watcherRegistry: registry } = runtime;
   let pathGuardReady: Promise<void> | undefined;
   const ensurePathGuard = (): Promise<void> => {
     pathGuardReady ??= pathGuard.recomputeAllowedDirectories();
     return pathGuardReady;
   };
-  // Shared with the resource contract so a `resources/subscribe` and a
-  // `subscriptions/listen` naming the same URI reuse one watcher.
-  const registry = createWatcherRegistry();
   const factory: McpServerFactory = async ({ era }) => {
     await ensurePathGuard();
     const c = await createServer(options, {
-      watcherRegistry: registry,
-      pathGuard,
+      state: runtime,
       era,
       transport: 'stdio',
     });
@@ -222,7 +232,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
     closed = true;
     for (const state of listens.values()) state.cancelled = true;
     listens.clear();
-    registry.destroy();
+    runtime.dispose();
     const ctx = activeCtx;
     activeCtx = undefined;
     // Both steps below are guarded separately, and for the same reason: this

@@ -3,13 +3,13 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
-import { createServer } from '../src/server.ts';
+import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   assertOneNotificationPerRound,
   cleanupTestRoot,
@@ -183,23 +183,45 @@ describe('Resource subscriptions round-trip', () => {
 describe('createServer disposal on connection close', () => {
   it('closing a connected client releases the leases it held', async () => {
     const root = await createTestRoot();
-    const registry = createWatcherRegistry();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
     try {
-      const ctx = await createServer({ cliAllowedDirs: [root] }, { watcherRegistry: registry });
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
       const client = new Client({ name: 'dispose-test', version: '1.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
 
       const uri = buildFileResourceUri(await writeTestFile(root, 'held.txt', 'x'));
       await client.subscribeResource({ uri });
-      assert.strictEqual(registry.hasWatcher(uri), true);
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), true);
 
       await client.close();
-      assert.strictEqual(registry.hasWatcher(uri), false);
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), false);
     } finally {
-      registry.destroy();
+      state.dispose();
       await cleanupTestRoot(root);
     }
+  });
+
+  it('injected state survives the instance closing', async () => {
+    const root = await createTestRoot();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
+    try {
+      const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
+      await ctx.mcp.close();
+      assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
+    } finally {
+      state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('createRuntimeState dispose clears the page store', () => {
+    const state = createRuntimeState({ cliAllowedDirs: [tmpdir()] });
+    const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
+    state.dispose();
+    state.dispose(); // idempotent
+    assert.throws(() => state.pageStore.read(pageId, 'q'));
   });
 });
 

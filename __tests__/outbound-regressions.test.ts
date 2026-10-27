@@ -8,9 +8,8 @@ import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { PageSnapshotStore } from '../src/core/store.ts';
 import { jsonByteBound, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
-import { createServer } from '../src/server.ts';
+import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   cleanupTestRoot,
   createStdioClient,
@@ -294,7 +293,11 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
   it('a refused first page takes back its page snapshot too', async () => {
     // In memory, so the test holds the store; the guard keys on the transport
     // value, not the wire. Record what each call's view creates.
-    const pageStore = new PageSnapshotStore();
+    const state = createRuntimeState(
+      { cliAllowedDirs: [root] },
+      { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES },
+    );
+    const { pageStore } = state;
     const created: { snapshotId: string; queryKey: string }[] = [];
     const forCall = pageStore.forCall.bind(pageStore);
     pageStore.forCall = () => {
@@ -310,7 +313,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     await withBoundary(root, async () => {
       const serverCtx = await createServer(
         { cliAllowedDirs: [root] },
-        { transport: 'stdio', pageStore },
+        { transport: 'stdio', state },
       );
       const client = new Client({ name: 'page-store-probe', version: '1.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -332,6 +335,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
       } finally {
         await client.close();
         await serverCtx.mcp.close();
+        state.dispose();
       }
     });
   });
