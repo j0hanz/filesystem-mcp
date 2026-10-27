@@ -32,7 +32,7 @@ describe('Data-loss guards', () => {
     if (root) await cleanupTestRoot(root);
   });
 
-  it('GUARD-001: a destination that appears during confirmation makes the whole move fail closed', async () => {
+  it('GUARD-001: a destination that appears during confirmation is asked about again', async () => {
     const srcA = await writeTestFile(root, 'g001/srcA.txt', 'A');
     const destA = await writeTestFile(root, 'g001/destA.txt', 'oldA');
     const srcB = await writeTestFile(root, 'g001/srcB.txt', 'B');
@@ -41,8 +41,8 @@ describe('Data-loss guards', () => {
     let calls = 0;
     const eh = await createElicitationClientPair([root], async () => {
       calls += 1;
-      // The second destination appears while the human is looking at the prompt.
-      await writeFile(destB, 'gap');
+      // The second destination appears while the human is looking at the first prompt.
+      if (calls === 1) await writeFile(destB, 'gap');
       return { action: 'accept' as const, content: { choice: 'overwrite' } };
     });
     try {
@@ -55,16 +55,11 @@ describe('Data-loss guards', () => {
           ],
         },
       });
-      assert.strictEqual(calls, 1, 'one confirmation round');
-      assert.strictEqual(result.isError, true, 'fails closed');
-      assert.match(
-        firstTextBlock(result).text ?? '',
-        /confirmation does not match the requested paths/,
-      );
-      assert.strictEqual(await readFile(destB, 'utf-8'), 'gap', 'destB is untouched');
-      assert.strictEqual(await readFile(destA, 'utf-8'), 'oldA', 'destA is untouched');
-      assert.strictEqual(await exists(srcA), true, 'srcA still exists');
-      assert.strictEqual(await exists(srcB), true, 'srcB still exists');
+      // One prompt per pending entry: destA, then destA and destB re-prompted together.
+      assert.strictEqual(calls, 3, 'asked once, then asked again about both');
+      assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+      assert.strictEqual(await readFile(destA, 'utf-8'), 'A');
+      assert.strictEqual(await readFile(destB, 'utf-8'), 'B');
     } finally {
       await eh.close();
     }

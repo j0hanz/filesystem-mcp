@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **`move`, `copy` and `create` ask again when a destination is replaced
+  while the overwrite prompt is open.** Before, the call overwrote whatever
+  now sat at the destination, not the file you were asked about. A second
+  replacement refuses that entry.
+- **`delete` asks again for a directory that was replaced while the prompt
+  was open.** Before, the call failed that entry.
+
+### Fixed
+
+- **A pending entry that disappears while the prompt is open no longer fails
+  the whole call.** In `move`, `copy`, `create` and `delete`, that entry gets
+  its own result and the rest proceeds.
+- **A destination or directory that becomes pending while the prompt is open
+  is asked about again.** Before, it failed the whole call.
+
 ## [2.11.0] - 2026-10-24
 
 A security release. On Linux, tools refuse a path swapped for a symlink

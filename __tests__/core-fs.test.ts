@@ -22,7 +22,14 @@ import { after, before, describe, it, mock } from 'node:test';
 
 import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
-import { destExists, GuardedFileSystem } from '../src/core/fs.ts';
+import {
+  destExists,
+  destIdentity,
+  GuardedFileSystem,
+  identityOf,
+  sameIdentity,
+  UNKNOWN_IDENTITY,
+} from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
@@ -1997,5 +2004,24 @@ describe('GuardedFileSystem.stat', () => {
   it('STAT-FD-010: destExists counts a path under a regular file as absent', async () => {
     const file = await writeTestFile(root, 'plain-file.txt', 'x');
     assert.strictEqual(await destExists(fs, join(file, 'child.txt'), 'test'), false);
+  });
+
+  it('STAT-FD-011: destIdentity names the landing of an existing file', async () => {
+    const file = await writeTestFile(root, 'identity-file.txt', 'x');
+    const found = await destIdentity(fs, file, 'test');
+    assert.deepStrictEqual(found, identityOf((await fs.stat(file)).stats));
+    assert.strictEqual(found?.itemType, 'file');
+  });
+
+  it('STAT-FD-012: destIdentity refused returns UNKNOWN_IDENTITY', async () => {
+    const refused = new FsError(ErrorCode.ACCESS_DENIED, 'refused', 'x');
+    const refusingFs = { stat: () => Promise.reject(refused) };
+    assert.deepStrictEqual(await destIdentity(refusingFs, 'x', 'test'), UNKNOWN_IDENTITY);
+  });
+
+  it('STAT-FD-013: sameIdentity compares itemType too', () => {
+    const a = { itemType: 'file', dev: 1, ino: 2, birthtimeMs: 3 } as const;
+    assert.strictEqual(sameIdentity(a, { ...a }), true);
+    assert.strictEqual(sameIdentity(a, { ...a, itemType: 'directory' }), false);
   });
 });

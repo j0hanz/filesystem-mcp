@@ -33,3 +33,13 @@ mutation until the result is returned; abandoned, with a reason, when undo
 becomes impossible or not worth the budget. A capture that is unavailable
 records nothing further, and the mutation still runs.
 _Avoid_: undo session, transaction, undo buffer
+
+## Approval
+
+**Confirmation**:
+The round in which the client approves deleting or overwriting the entries a
+call would destroy. An approval covers the exact entries the client was shown:
+an entry replaced while the prompt was open is asked about again, once, and an
+entry that vanished needs no approval.
+_Avoid_: prompt, elicitation (the protocol mechanism), access grant (widening
+the allowed roots is a different question)

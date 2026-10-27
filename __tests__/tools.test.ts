@@ -690,12 +690,14 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
-  it('TC-FUNC-009q: a file that appears during the confirmation gap is not overwritten', async () => {
+  it('TC-FUNC-009q: a file that appears during the confirmation gap is asked about again', async () => {
     const gapFile = join(tmpDir, 'create_gap_appears.txt');
+    let calls = 0;
     const eh = await createElicitationClientPair([tmpDir], async () => {
+      calls += 1;
       // Someone else writes the not-yet-existing entry while the human is
       // looking at the prompt for the other one.
-      await writeFile(gapFile, 'written during the gap\n');
+      if (calls === 1) await writeFile(gapFile, 'written during the gap\n');
       return { action: 'accept' as const, content: { choice: 'overwrite' } };
     });
     try {
@@ -709,9 +711,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           ],
         },
       });
-      assert.strictEqual(result.isError, true, 'fails closed');
-      assert.strictEqual(await readFile(gapFile, 'utf-8'), 'written during the gap\n');
-      assert.strictEqual(await readFile(existing, 'utf-8'), 'old\n', 'nothing written');
+      // One prompt per pending entry: existing, then existing and gapFile re-prompted together.
+      assert.strictEqual(calls, 3, 'asked once, then asked again about both');
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(await readFile(gapFile, 'utf-8'), 'clobber\n');
+      assert.strictEqual(await readFile(existing, 'utf-8'), 'new\n');
     } finally {
       await eh.close();
     }

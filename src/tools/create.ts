@@ -1,10 +1,12 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
+import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
+import { confirm, type ConfirmItem } from '../core/confirmation.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -13,8 +15,7 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import { destExists, type Stats } from '../core/fs.ts';
-import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
+import { destExists, destIdentity, type Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
@@ -144,15 +145,15 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // right now? Those need the user's word before anything is written (R14).
     // append never destroys, and overwrite: true is that word given up front.
     // A path that fails validation here is left for runOverPaths to report.
-    // A file that appears between rounds needs no re-stat before the write:
-    // the retry re-plans, and the grown pending set fails the R9 check.
+    // A file that appears between rounds is asked about again on the retry.
     const { results: planned } = await processInParallel(
       files,
       async (entry) => {
         if (entry.append || entry.overwrite) return undefined;
         try {
           const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
-          return (await destExists(ctx.fs, validPath, 'create')) ? validPath : undefined;
+          const identity = await destIdentity(ctx.fs, validPath, 'create');
+          return identity && { validPath, identity };
         } catch (error) {
           rethrowIfAborted(error);
           return undefined;
@@ -162,26 +163,21 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       ctx.signal,
     );
     const pendingByPath = new Map<string, string>();
+    const items = new Map<string, ConfirmItem>();
     for (const { index, value } of planned) {
       const requested = files[index]?.path;
-      if (value && requested) pendingByPath.set(requested, value);
-    }
-    const pendingSorted = [...new Set(pendingByPath.values())].sort();
-    if (pendingSorted.length > 0) {
-      // Round 1 returns input_required; a retry whose verified state does not
-      // bind this overwrite set throws (R9) via `pendingRoundTrip`.
-      const round = await pendingRoundTrip(ctx, {
-        op: 'create',
-        pending: pendingSorted,
-        buildInputs: (paths) =>
-          paths.map((target, i) => ({
-            key: confirmKey(i),
-            message: `"${target}" already exists. Overwrite it?`,
-            choices: ['overwrite', 'skip'],
-          })),
+      if (!value || !requested) continue;
+      pendingByPath.set(requested, value.validPath);
+      items.set(value.validPath, {
+        path: value.validPath,
+        identity: value.identity,
+        required: true,
+        message: `"${value.validPath}" already exists. Overwrite it?`,
       });
-      if (round !== undefined) return round;
     }
+    // Round 1 returns input_required while an overwrite needs approval (R14).
+    const confirmed = await confirm(ctx, 'create', 'overwrite', [...items.values()]);
+    if (isInputRequiredResult(confirmed)) return confirmed;
 
     // One counter across both batches: ProgressSession drops a value at or below its last one.
     const progressTotal = dirs.length + files.length;
@@ -206,12 +202,14 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
       const pendingPath = pendingByPath.get(path);
       if (pendingPath !== undefined) {
-        const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');
+        const verdict = confirmed.verdict(pendingPath);
         if (verdict === 'skipped') return { skipped: path };
-        if (verdict !== 'accepted') {
+        if (verdict !== 'proceed') {
           throw new FsError(
             ErrorCode.CANCELLED,
-            `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
+            verdict === 'changed'
+              ? `create cancelled: "${path}" was replaced again while the prompt was open.`
+              : `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
             path,
           );
         }
