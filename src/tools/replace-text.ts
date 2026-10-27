@@ -283,9 +283,8 @@ interface ReplacementPlan {
   updatedContent: string;
 }
 
-/** A file's patch, or why it has none in the diff. */
+/** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
 interface Patch {
-  patch?: string;
   diffTruncated?: true;
 }
 
@@ -294,7 +293,7 @@ type EntryOutcome =
   | { kind: 'binary' }
   | { kind: 'failed'; path: string; error: unknown };
 
-/** `onChanged` receives the plan, whose contents the outcome does not carry, and returns its patch. */
+/** `onChanged` receives the plan, whose contents the outcome does not carry, and says if its diff was refused. */
 async function processEntry(
   entryPath: string,
   ctx: ReplaceContext,
@@ -373,30 +372,44 @@ async function readReplacementPlan(
   return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
-/** Kept patch lengths by walk index at or above the prefix, and which walk indices are done. */
+/** Kept patches by walk index at or above the prefix, and which walk indices are done. */
 interface DiffBudget {
-  stored: Map<number, number>;
+  stored: Map<number, string>;
   settled: Set<number>;
   /** Every walk index below this one is settled. */
   prefix: number;
-  /** What appendPatch's first-fit pass keeps of the patches below the prefix. */
-  folded: number;
+  /** What the first-fit pass keeps of the patches below the prefix: the diff so far. */
+  folded: string;
+  /** A patch below the prefix did not fit. */
+  truncated: boolean;
 }
 
-/** Folds each patch the prefix passes into `folded`, in walk order, by appendPatch's rule. */
+/** Folds one patch into `folded` by first-fit, in walk order. */
+function fold(budget: DiffBudget, index: number): void {
+  const patch = budget.stored.get(index);
+  if (patch === undefined) return;
+  if (budget.folded.length + patch.length <= MAX_DIFF_SIZE) budget.folded += patch;
+  else budget.truncated = true;
+  budget.stored.delete(index);
+}
+
+/** Folds each patch the prefix passes into `folded`, in walk order. */
 function settle(budget: DiffBudget, index: number): void {
   budget.settled.add(index);
   while (budget.settled.delete(budget.prefix)) {
-    const length = budget.stored.get(budget.prefix);
-    if (length !== undefined && budget.folded + length <= MAX_DIFF_SIZE) budget.folded += length;
-    budget.stored.delete(budget.prefix);
+    fold(budget, budget.prefix);
     budget.prefix++;
   }
 }
 
+/** Folds what is still stored once the scan returns, in walk order. */
+function finishDiff(budget: DiffBudget): void {
+  for (const index of [...budget.stored.keys()].sort((a, b) => a - b)) fold(budget, index);
+}
+
 /**
  * Diffs one file as it finishes, so no file's contents outlive it. A patch is
- * refused only when appendPatch's first-fit pass would drop it in any order.
+ * refused only when the first-fit fold would drop it in any order.
  */
 function patchWithinBudget(
   budget: DiffBudget,
@@ -407,23 +420,14 @@ function patchWithinBudget(
   // First-fit over the settled walk-order prefix is final, and later patches
   // only add to what the final pass uses before this index. A lower patch
   // still running may displace a kept one, so the unsettled ones do not count.
-  const remaining = MAX_DIFF_SIZE - budget.folded;
+  const remaining = MAX_DIFF_SIZE - budget.folded.length;
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
   if (remaining === 0) return { diffTruncated: true };
   const patch = unifiedPatch(header, plan.originalContent, plan.updatedContent);
   if (patch === undefined || patch.length > remaining) return { diffTruncated: true };
-  budget.stored.set(index, patch.length);
-  return { patch };
-}
-
-/** Appends kept patches in walk order while they fit the budget. */
-function appendPatch(summary: ReplaceSummary, file: Patch): void {
-  if (file.patch !== undefined && summary.diff.length + file.patch.length <= MAX_DIFF_SIZE) {
-    summary.diff += file.patch;
-  } else if (file.patch !== undefined || file.diffTruncated) {
-    summary.diffTruncated = true;
-  }
+  budget.stored.set(index, patch);
+  return {};
 }
 
 interface ReplaceSummary {
@@ -528,7 +532,13 @@ async function handleSearchAndReplace(
   // `src` would name `<root>/a.ts` when passed back.
   const paths = ctx.fs.pathGuard.resultPaths(scope.root);
   const includeDiff = args.dryRun || args.returnDiff;
-  const budget: DiffBudget = { stored: new Map(), settled: new Set(), prefix: 0, folded: 0 };
+  const budget: DiffBudget = {
+    stored: new Map(),
+    settled: new Set(),
+    prefix: 0,
+    folded: '',
+    truncated: false,
+  };
   let outcome: ScanOutcome<EntryOutcome>;
   try {
     const context: ReplaceContext = {
@@ -582,7 +592,10 @@ async function handleSearchAndReplace(
   }
   ctx.onProgress({ current: outcome.scanned });
 
+  finishDiff(budget);
   const summary = createReplaceSummary(paths);
+  summary.diff = budget.folded;
+  summary.diffTruncated = budget.truncated;
   for (const o of outcome.results) {
     switch (o.kind) {
       case 'binary':
@@ -595,7 +608,7 @@ async function handleSearchAndReplace(
         summary.totalMatches += o.matches;
         summary.filesChanged++;
         recordChangedFile(summary, o.path, o.matches);
-        appendPatch(summary, o);
+        if (o.diffTruncated) summary.diffTruncated = true;
         break;
     }
   }
