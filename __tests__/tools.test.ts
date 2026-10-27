@@ -3247,6 +3247,18 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
+  it('replace_text on a named file past maxResults replaces every match and does not stop', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxResults: 2 },
+    });
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.totalMatches, 5);
+    assert.strictEqual(meta.stoppedReason, undefined);
+    assert.doesNotMatch(firstTextBlock(result).text ?? '', /scan stopped early/u);
+  });
+
   it('edit, patch and diff refuse a non-UTF-8 file and leave its bytes intact', async () => {
     const dir = join(tmpDir, 'nonutf8');
     await mkdir(dir, { recursive: true });

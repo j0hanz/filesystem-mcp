@@ -111,7 +111,6 @@ const MAX_FAILURES = 20;
 const REPLACE_CONCURRENCY = Math.min(PARALLEL_CONCURRENCY, 8);
 const MAX_CHANGED_FILES = 100;
 const MAX_DIFF_SIZE = 20 * 1024; // 20KB limit for diff output
-const DIFF_APPEND_BUFFER = 1024;
 
 interface Failure {
   path: string;
@@ -270,7 +269,6 @@ type SearchAndReplaceArgs = z.infer<typeof SearchAndReplaceInputSchema>;
 
 interface ReplaceContext {
   dryRun: boolean;
-  returnDiff: boolean;
   replacement: string;
   matcher: ReplacementMatcher;
   maxFileSize: number;
@@ -285,18 +283,24 @@ interface ReplacementPlan {
   updatedContent: string;
 }
 
+/** A file's patch, or why it has none in the diff. */
+interface Patch {
+  patch?: string;
+  diffTruncated?: true;
+}
+
 type EntryOutcome =
-  | { kind: 'changed'; path: string; matches: number; diff?: { original: string; updated: string } }
+  | ({ kind: 'changed'; path: string; matches: number } & Patch)
   | { kind: 'binary' }
   | { kind: 'failed'; path: string; error: unknown };
 
-/** `onChanged` receives the rewritten content, which the outcome does not carry. */
+/** `onChanged` receives the plan, whose contents the outcome does not carry, and returns its patch. */
 async function processEntry(
   entryPath: string,
   ctx: ReplaceContext,
-  onChanged: (content: string) => void,
+  onChanged: (plan: ReplacementPlan) => Patch,
 ): Promise<EntryOutcome | undefined> {
-  const { dryRun, returnDiff, signal } = ctx;
+  const { dryRun, signal } = ctx;
   // Discovery/read failures on a walked file are counted as inaccessible; a
   // failed write is the caller's edit not landing, so it is always reported.
   const write = { started: false };
@@ -319,15 +323,7 @@ async function processEntry(
 
     // Reached only after the write succeeds (or in dryRun, where there is no
     // write): a failed write must not count the file as changed.
-    onChanged(plan.updatedContent);
-    return {
-      kind: 'changed',
-      path: entryPath,
-      matches: plan.matchCount,
-      ...(dryRun || returnDiff
-        ? { diff: { original: plan.originalContent, updated: plan.updatedContent } }
-        : {}),
-    };
+    return { kind: 'changed', path: entryPath, matches: plan.matchCount, ...onChanged(plan) };
   } catch (error) {
     // A timeout/cancel aborts the whole scan, not just this file: scan reports
     // the run as stoppedReason 'timeout' and counts nothing for it.
@@ -377,31 +373,35 @@ async function readReplacementPlan(
   return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
-function maybeAppendPatchDiff(
-  summary: ReplaceSummary,
-  params: {
-    filePath: string;
-    originalContent: string;
-    updatedContent: string;
-  },
-): void {
-  // Budget first: a full budget must not pay for a diff it will discard, and a
-  // diff past its deadline counts as truncated output, not a failed file.
-  if (summary.diff.length >= MAX_DIFF_SIZE) {
+/**
+ * Diffs one file as it finishes, so no file's contents outlive it. `stored`
+ * maps each walk index whose patch was kept to that patch's length.
+ */
+function patchWithinBudget(
+  stored: Map<number, number>,
+  index: number,
+  header: string,
+  plan: ReplacementPlan,
+): Patch {
+  // Budget first: a budget lower walk indexes already fill must not pay for a
+  // diff it will discard, and a diff past its deadline counts as truncated
+  // output, not a failed file.
+  let before = 0;
+  for (const [i, length] of stored) if (i < index) before += length;
+  if (before >= MAX_DIFF_SIZE) return { diffTruncated: true };
+  const patch = unifiedPatch(header, plan.originalContent, plan.updatedContent);
+  if (patch === undefined || patch.length > MAX_DIFF_SIZE) return { diffTruncated: true };
+  stored.set(index, patch.length);
+  return { patch };
+}
+
+/** Appends kept patches in walk order while they fit the budget. */
+function appendPatch(summary: ReplaceSummary, file: Patch): void {
+  if (file.patch !== undefined && summary.diff.length + file.patch.length <= MAX_DIFF_SIZE) {
+    summary.diff += file.patch;
+  } else if (file.patch !== undefined || file.diffTruncated) {
     summary.diffTruncated = true;
-    return;
   }
-  const header = summary.paths.show(params.filePath);
-  const patch = unifiedPatch(header, params.originalContent, params.updatedContent);
-  if (patch === undefined) {
-    summary.diffTruncated = true;
-    return;
-  }
-  if (summary.diff.length + patch.length <= MAX_DIFF_SIZE + DIFF_APPEND_BUFFER) {
-    summary.diff += patch;
-    return;
-  }
-  summary.diffTruncated = true;
 }
 
 interface ReplaceSummary {
@@ -502,11 +502,15 @@ async function handleSearchAndReplace(
   // The first changed file in walk order is the one the resource_link points
   // at; keep what was written so the link needs no read-back.
   let primary: { index: number; path: string; content: string } | undefined;
+  // Relative to the root, not to the walked directory: `a.ts` from a run over
+  // `src` would name `<root>/a.ts` when passed back.
+  const paths = ctx.fs.pathGuard.resultPaths(scope.root);
+  const includeDiff = args.dryRun || args.returnDiff;
+  const patchLengths = new Map<number, number>();
   let outcome: ScanOutcome<EntryOutcome>;
   try {
     const context: ReplaceContext = {
       dryRun: args.dryRun,
-      returnDiff: args.returnDiff,
       replacement: args.replacement,
       matcher,
       maxFileSize,
@@ -537,10 +541,13 @@ async function handleSearchAndReplace(
         },
       },
       (entry) =>
-        processEntry(entry.path, context, (content) => {
+        processEntry(entry.path, context, (plan) => {
           if (primary === undefined || entry.index < primary.index) {
-            primary = { index: entry.index, path: entry.path, content };
+            primary = { index: entry.index, path: entry.path, content: plan.updatedContent };
           }
+          return includeDiff
+            ? patchWithinBudget(patchLengths, entry.index, paths.show(entry.path), plan)
+            : {};
         }),
     );
   } finally {
@@ -548,9 +555,7 @@ async function handleSearchAndReplace(
   }
   ctx.onProgress({ current: outcome.scanned });
 
-  // Relative to the root, not to the walked directory: `a.ts` from a run over
-  // `src` would name `<root>/a.ts` when passed back.
-  const summary = createReplaceSummary(ctx.fs.pathGuard.resultPaths(scope.root));
+  const summary = createReplaceSummary(paths);
   for (const o of outcome.results) {
     switch (o.kind) {
       case 'binary':
@@ -563,13 +568,7 @@ async function handleSearchAndReplace(
         summary.totalMatches += o.matches;
         summary.filesChanged++;
         recordChangedFile(summary, o.path, o.matches);
-        if (o.diff) {
-          maybeAppendPatchDiff(summary, {
-            filePath: o.path,
-            originalContent: o.diff.original,
-            updatedContent: o.diff.updated,
-          });
-        }
+        appendPatch(summary, o);
         break;
     }
   }

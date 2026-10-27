@@ -224,11 +224,7 @@ export async function scan<R>(
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
-  const stoppedReason: StoppedReason | undefined = signal?.aborted
-    ? 'timeout'
-    : cap !== undefined && total > cap
-      ? 'maxResults'
-      : capped;
+  const stoppedReason: StoppedReason | undefined = signal?.aborted ? 'timeout' : capped;
   return {
     results: [...results.entries()].sort(([a], [b]) => a - b).map(([, result]) => result),
     scanned,
@@ -261,17 +257,10 @@ async function scanNamedFile<R>(
     throw error;
   }
   options.onScanned?.(1);
-  const results = result === undefined ? [] : [result];
-  const weight = result === undefined ? 0 : (options.weigh?.(result) ?? 1);
-  const stoppedReason: StoppedReason | undefined = signal?.aborted
-    ? 'timeout'
-    : options.cap !== undefined && weight > options.cap
-      ? 'maxResults'
-      : undefined;
   return {
-    results,
+    results: result === undefined ? [] : [result],
     scanned: 1,
     skippedInaccessible: 0,
-    ...(stoppedReason ? { stoppedReason } : {}),
+    ...(signal?.aborted ? { stoppedReason: 'timeout' as const } : {}),
   };
 }

@@ -420,7 +420,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
             }
           : {}),
       });
-      // One past the cap, so a file with more matches than it weighs past it.
+      // One past the cap, so searchContent can tell a file was cut by it.
       if (matches.length > scanCtx.maxResults) break;
     }
   }
@@ -460,6 +460,7 @@ export async function searchContent(
     let matchingLines = 0;
     let skippedTooLarge = 0;
     let skippedBinary = 0;
+    let trimmed = false;
     const scanCtx: ScanContext = {
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
@@ -506,14 +507,19 @@ export async function searchContent(
           filesScanned++;
           if (file.matches.length > 0) filesMatched++;
           for (const match of file.matches) {
-            if (matches.length >= maxResults) break;
+            if (matches.length >= maxResults) {
+              trimmed = true;
+              break;
+            }
             matches.push(match);
             matchingLines++;
           }
           break;
       }
     }
-    const { skippedInaccessible, stoppedReason } = outcome;
+    const { skippedInaccessible } = outcome;
+    // scan stops on a refused entry only; matches cut here are the cap too. Abort beats it.
+    const stoppedReason = outcome.stoppedReason ?? (trimmed ? ('maxResults' as const) : undefined);
 
     return {
       basePath: scope.root,

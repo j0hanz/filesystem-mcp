@@ -182,10 +182,10 @@ describe('scan', () => {
     assert.equal(over.stoppedReason, 'maxResults');
   });
 
-  it('weight past the cap is truncation', async () => {
+  it('weight past the cap alone is not truncation', async () => {
     await files('a.txt');
     const out = await scan({ root }, base({ cap: 2, weigh: () => 3 }), byPath);
-    assert.equal(out.stoppedReason, 'maxResults');
+    assert.equal(out.stoppedReason, undefined);
   });
 
   it('skipped entries spend neither cap nor maxEntries', async () => {
