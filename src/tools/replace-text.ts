@@ -529,7 +529,13 @@ function buildSearchAndReplaceStructuredResult(
       : {}),
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
-    ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
+    // The scan names its cap `maxResults`; replace_text's argument is `maxMatches`.
+    ...(outcome.stoppedReason
+      ? {
+          stoppedReason:
+            outcome.stoppedReason === 'maxResults' ? 'maxMatches' : outcome.stoppedReason,
+        }
+      : {}),
   };
 }
 
@@ -724,7 +730,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
         );
       }
     } else if (stop !== undefined) {
-      // maxResults/maxFiles here are the caller's own caps, so raising one is
+      // maxMatches/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
       lines.push(
         `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,

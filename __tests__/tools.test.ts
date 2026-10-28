@@ -3873,9 +3873,27 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const replaceText = firstTextBlock(replace).text ?? '';
     assert.match(replaceText, /^\+ALPHA$/mu);
     assert.ok(
-      replaceText.includes('// scan stopped early: hit the maxResults limit;'),
+      replaceText.includes('// scan stopped early: hit the maxMatches limit;'),
       replaceText,
     );
+    assert.strictEqual((replace._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+  });
+
+  it('replace_text maxFiles stop keeps its reason', async () => {
+    const dir = join(tmpDir, 'replace_max_files_stop');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: dir,
+        searchPattern: 'needle',
+        replacement: 'pin',
+        dryRun: true,
+        maxFiles: 1,
+      },
+    });
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxFiles');
   });
 
   // RE2 reports offsets in code points; JS strings index in UTF-16 code units,

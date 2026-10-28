@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`replace_text` reports `stoppedReason: 'maxMatches'` when it hits its
+  match cap.** Before, it reported `'maxResults'`.
 - **Write tools over stdio link every file stdio can read back.** Before,
   `create` with `append` linked only text files under about 1.7 MB, and a
   binary file got no link in the last 64 KiB under the limit.
