@@ -53,7 +53,7 @@ the MiB label, and correcting the ADR-003 citation.
 - [ ] **Step 1: Write the failing tests** in `resources.test.ts`, reading `internal://instructions`:
   - `instructions name both TOO_LARGE limits`: the text matches `/TOO_LARGE: Over the file size limit, use read/` and `/Over the stdio message limit, .*connect over HTTP; media and binary files need HTTP\./`.
   - `instructions state limits in MiB`: the text matches `/max file size 10 MiB/` and `/stdio responses up to 9\.8 MiB once JSON-encoded \(HTTP has no such limit\)/`.
-  - `enforced_limits renders a fractional file size limit`: under `withEnv({ FS_MAX_FILE_SIZE: String(1.5 * MIB) }, …)`, `buildSectionsRecord(false).guidelines` matches `/max file size 1\.5 MiB/`. Call `buildSectionsRecord` directly: the resource may cache its text from before the env change.
+  - `enforced_limits renders a fractional file size limit`: under `withEnv({ FS_MAX_FILE_SIZE: String(1.5 * MIB) }, …)`, `buildSectionsRecord(false).constraints` matches `/max file size 1\.5 MiB/`. Call `buildSectionsRecord` directly: the resource may cache its text from before the env change.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
