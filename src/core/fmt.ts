@@ -66,7 +66,8 @@ export function formatByteSize(bytes: number, fine = false): string {
     value /= 1024;
     unit++;
   }
-  let rounded = unit === 0 || (value >= 10 && !fine) ? Math.round(value) : Math.round(value * 10) / 10;
+  let rounded =
+    unit === 0 || (value >= 10 && !fine) ? Math.round(value) : Math.round(value * 10) / 10;
   if (rounded >= 1024 && unit < SIZE_UNITS.length - 1) {
     rounded = 1;
     unit++;
