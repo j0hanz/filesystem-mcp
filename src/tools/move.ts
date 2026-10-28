@@ -555,7 +555,7 @@ async function assertTreeHasNoProtectedEntries(
 export async function performRenameWithFallback(
   validSource: string,
   validDest: string,
-  fsOps: Pick<GuardedFileSystem, 'rename' | 'cp' | 'rm'>,
+  fsOps: Pick<GuardedFileSystem, 'rename' | 'copyIntoPlace' | 'rm'>,
   originalSource: string,
 ): Promise<void> {
   try {
@@ -567,15 +567,12 @@ export async function performRenameWithFallback(
       throw error;
     }
 
-    // EXDEV: cross-device rename. Copy then remove, preserving symlinks and
-    // timestamps so link semantics survive the move.
+    // EXDEV: cross-device rename. Copy into place on the destination's device
+    // (see copyIntoPlace: a non-empty directory is never merged into, and a
+    // partial copy never reaches the destination); only then remove the source.
     let copied = false;
     try {
-      await fsOps.cp(validSource, validDest, {
-        recursive: true,
-        verbatimSymlinks: true,
-        preserveTimestamps: true,
-      });
+      await fsOps.copyIntoPlace(validSource, validDest);
       copied = true;
       await fsOps.rm(validSource, { recursive: true, force: true });
     } catch (copyOrRemoveError) {
