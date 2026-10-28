@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `skippedTooLarge`, as `search_text` does.** Before, each one was a
   `TOO_LARGE` failure row, and a run with nothing else to change reported
   an error. A file you name still fails with `TOO_LARGE`.
+- **`replace_text`'s match cap is `maxMatches`.** Before, it was `maxResults`,
+  which is a page size in every other tool.
+
+### Deprecated
+
+- **`replace_text`'s `maxResults`** is read as `maxMatches`. Use `maxMatches`;
+  `maxResults` is removed in the next release.
 
 ### Fixed
 

@@ -419,8 +419,9 @@ entries and directories it could not read.
   [Pagination](#pagination-and-cached-results)). `replace_text` stops at
   the same deadline too: in a live run the files it already rewrote stay
   rewritten, and the text names them. Run a wide replacement with
-  `dryRun: true` first. `maxResults` does not shorten a scan; a narrower
-  `path`, `pattern`, or `maxDepth` does.
+  `dryRun: true` first. `maxMatches` stops a run once that many matches are
+  replaced; it does not shorten the scan itself. A narrower `path`, `pattern`,
+  or `maxDepth` does.
 
 ## Confirmations
 
