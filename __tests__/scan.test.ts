@@ -250,11 +250,11 @@ describe('scan', () => {
 
   it('exact cap is not truncation', async () => {
     await files('a.txt', 'b.txt', 'c.txt');
-    const exact = await scan({ root }, base({ cap: 3 }), byPath);
+    const exact = await scan({ root }, base({ cap: 3, concurrency: 1 }), byPath);
     assert.equal(exact.results.length, 3);
     assert.equal(exact.stoppedReason, undefined);
     await files('d.txt');
-    const over = await scan({ root }, base({ cap: 3 }), byPath);
+    const over = await scan({ root }, base({ cap: 3, concurrency: 1 }), byPath);
     assert.equal(over.stoppedReason, 'maxResults');
   });
 
