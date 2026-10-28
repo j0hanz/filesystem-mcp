@@ -201,7 +201,11 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    // A late validation result is a plain string, so a stalled realpath needs no release.
+    const validPath = await withAbort(
+      this.pathGuard.validateExistingPath(filePath),
+      options?.signal,
+    );
     return { stats: await this.#statVerified(validPath, filePath, options?.signal), validPath };
   }
 
@@ -688,7 +692,8 @@ export class GuardedFileSystem {
     },
   ): Promise<FileHandle> {
     return this.#openVerified(
-      await this.pathGuard.validateExistingPath(filePath),
+      // A late validation result is a plain string, so a stalled realpath needs no release.
+      await withAbort(this.pathGuard.validateExistingPath(filePath), options?.signal),
       options?.requestedPath ?? filePath,
       options?.signal,
     );

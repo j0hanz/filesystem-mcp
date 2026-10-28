@@ -83,6 +83,20 @@ describe('Rewrite', () => {
     await assert.rejects(fs.open(path, { signal: AbortSignal.abort() }), { name: 'AbortError' });
   });
 
+  it('a stalled path check ends open and stat at the abort', { timeout: 2000 }, async (t) => {
+    // A hung mount stalls realpath before any descriptor exists.
+    t.mock.method(fs.pathGuard, 'validateExistingPath', () => new Promise<string>(() => {}));
+    for (const call of [
+      (signal: AbortSignal) => fs.open(path, { signal }),
+      (signal: AbortSignal) => fs.stat(path, { signal }),
+    ]) {
+      const controller = new AbortController();
+      const pending = call(controller.signal);
+      setTimeout(() => controller.abort(), 10);
+      await assert.rejects(pending, { name: 'AbortError' });
+    }
+  });
+
   it('real run reports the written file', async () => {
     const done = await rewriteFile({ fs, path, dryRun: false, tool: 'edit' }, upper);
     const report = done.report();

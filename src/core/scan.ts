@@ -75,42 +75,63 @@ export async function readText(
     // re-checks the descriptor's real path (H4), so these bytes are the
     // validated file's, not whatever the name points at by now. The signal
     // lets a stalled open (FIFO swapped in, hung mount) be abandoned.
-    await using handle = await fs.open(path, { signal, requestedPath });
-    stats = await handle.stat();
-    const { size } = stats;
-    if (size > maxFileSize) return { kind: 'tooLarge', size };
-    // Read the size fstat reported: handle.readFile would fstat again and then
-    // read once more to find EOF, two extra round trips on every file a walk
-    // touches. A file that grows meanwhile is read as it was at the fstat.
-    // A size of 0 is also what procfs and other virtual files report while
-    // holding text, so those still read to EOF.
-    if (size === 0) {
-      // Read to EOF in chunks, stopping once past the cap: such a file may never end.
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for (;;) {
-        signal?.throwIfAborted();
-        const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-        const { bytesRead } = await handle.read(chunk, 0, READ_CHUNK_BYTES, null);
-        if (bytesRead === 0) break;
-        total += bytesRead;
-        if (total > maxFileSize) return { kind: 'tooLarge', size: total };
-        chunks.push(chunk.subarray(0, bytesRead));
+    const handle = await fs.open(path, { signal, requestedPath });
+    // The fstat or read in flight, if any: the signal ends the wait for it, not the call.
+    let pending: Promise<unknown> | undefined;
+    const settled = async <T>(call: Promise<T>): Promise<T> => {
+      pending = call;
+      const result = await withAbort(call, signal);
+      pending = undefined;
+      return result;
+    };
+    try {
+      stats = await settled(handle.stat());
+      const { size } = stats;
+      if (size > maxFileSize) return { kind: 'tooLarge', size };
+      // Read the size fstat reported: handle.readFile would fstat again and then
+      // read once more to find EOF, two extra round trips on every file a walk
+      // touches. A file that grows meanwhile is read as it was at the fstat.
+      // A size of 0 is also what procfs and other virtual files report while
+      // holding text, so those still read to EOF.
+      if (size === 0) {
+        // Read to EOF in chunks, stopping once past the cap: such a file may never end.
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for (;;) {
+          signal?.throwIfAborted();
+          const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+          const { bytesRead } = await settled(handle.read(chunk, 0, READ_CHUNK_BYTES, null));
+          if (bytesRead === 0) break;
+          total += bytesRead;
+          if (total > maxFileSize) return { kind: 'tooLarge', size: total };
+          chunks.push(chunk.subarray(0, bytesRead));
+        }
+        bytes = Buffer.concat(chunks, total);
+      } else {
+        bytes = Buffer.allocUnsafe(size);
+        let filled = 0;
+        while (filled < size) {
+          // In readFile's own chunks, with its check of the signal before each,
+          // so a deadline on a slow filesystem lands as soon as it did there.
+          signal?.throwIfAborted();
+          const length = Math.min(size - filled, READ_CHUNK_BYTES);
+          const { bytesRead } = await settled(handle.read(bytes, filled, length, filled));
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        bytes = bytes.subarray(0, filled);
       }
-      bytes = Buffer.concat(chunks, total);
-    } else {
-      bytes = Buffer.allocUnsafe(size);
-      let filled = 0;
-      while (filled < size) {
-        // In readFile's own chunks, with its check of the signal before each,
-        // so a deadline on a slow filesystem lands as soon as it did there.
-        signal?.throwIfAborted();
-        const length = Math.min(size - filled, READ_CHUNK_BYTES);
-        const { bytesRead } = await handle.read(bytes, filled, length, filled);
-        if (bytesRead === 0) break;
-        filled += bytesRead;
-      }
-      bytes = bytes.subarray(0, filled);
+    } finally {
+      // A failed close must not replace the verdict or the refusal, so it is logged, not thrown.
+      const close = () =>
+        handle.close().catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close read descriptor for ${path}: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      // close() queues behind a call still in flight, so after an abort close once it settles.
+      if (pending) void pending.then(close, close);
+      else await close();
     }
   }
   // The probe is a slice of the bytes already read: no extra syscall.

@@ -660,6 +660,57 @@ describe('readText', () => {
     });
   });
 
+  for (const [stalls, reportedSize] of [
+    ['stat', undefined],
+    ['read', undefined],
+    ['read', 0],
+  ] as const) {
+    it(
+      `readText abandons a stalled ${stalls}${reportedSize === 0 ? ' of a size-0 file' : ''}`,
+      {
+        timeout: 2000,
+      },
+      async (t) => {
+        // A hung mount or FIFO: the call never returns until the test settles it.
+        let settle!: () => void;
+        const stalled = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        let closed = false;
+        const open = fs.open.bind(fs);
+        t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+          const handle = await open(...args);
+          const real = await handle.stat();
+          t.mock.method(handle, 'stat', () =>
+            stalls === 'stat'
+              ? stalled.then(() => real)
+              : Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
+          );
+          if (stalls === 'read') {
+            t.mock.method(handle, 'read', () =>
+              stalled.then(() => ({ bytesRead: 0, buffer: Buffer.alloc(0) })),
+            );
+          }
+          const close = handle.close.bind(handle);
+          t.mock.method(handle, 'close', async () => {
+            closed = true;
+            await close();
+          });
+          return handle;
+        });
+        const controller = new AbortController();
+        const pending = readText(fs, await put('stall.txt', 'text'), controller.signal);
+        setTimeout(() => controller.abort(), 10);
+        await assert.rejects(pending, { name: 'AbortError' });
+        // close() would queue behind the call in flight, so it waits for that call to settle.
+        assert.equal(closed, false);
+        settle();
+        await sleep(10);
+        assert.equal(closed, true);
+      },
+    );
+  }
+
   it('readText pre-aborted signal rejects', async () => {
     const path = await put('f.txt', 'text');
     await assert.rejects(readText(fs, path, AbortSignal.abort()));
