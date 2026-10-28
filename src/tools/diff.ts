@@ -5,6 +5,7 @@ import { createTwoFilesPatch } from 'diff';
 
 import { DIFF_TIMEOUT_MS, diffStatsFromPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
+import { readNamedText } from '../core/scan.ts';
 import { PositiveInt, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
@@ -39,8 +40,8 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
   run: async (args, ctx) => {
     const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
       await Promise.all([
-        ctx.fs.readEditableText(args.a, { signal: ctx.signal, tool: 'diff' }),
-        ctx.fs.readEditableText(args.b, { signal: ctx.signal, tool: 'diff' }),
+        readNamedText(ctx.fs, args.a, { signal: ctx.signal, tool: 'diff' }),
+        readNamedText(ctx.fs, args.b, { signal: ctx.signal, tool: 'diff' }),
       ]);
 
     // Synchronous Myers diff; `timeout` is the only thing that can stop it.

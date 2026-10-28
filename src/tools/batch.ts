@@ -1,5 +1,3 @@
-import type { Stats } from 'node:fs';
-
 import { processInParallel } from '../core/concurrency.ts';
 import { type ErrorCode, type PerPathResult, Problem } from '../core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -66,14 +64,4 @@ export function isTotalFailure(summary: {
   readonly failed: number;
 }): boolean {
   return summary.total > 0 && summary.failed === summary.total;
-}
-
-/** Post-write stat for advisory metadata: undefined when the stat fails
- * (concurrent delete, etc.), so callers fall back exactly as before. */
-export async function postWriteStat(ctx: ToolCtx, validPath: string): Promise<Stats | undefined> {
-  try {
-    return (await ctx.fs.stat(validPath)).stats;
-  } catch {
-    return undefined;
-  }
 }

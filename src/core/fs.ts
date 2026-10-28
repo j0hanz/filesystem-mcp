@@ -201,7 +201,11 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    // A late validation result is a plain string, so a stalled realpath needs no release.
+    const validPath = await withAbort(
+      this.pathGuard.validateExistingPath(filePath),
+      options?.signal,
+    );
     return { stats: await this.#statVerified(validPath, filePath, options?.signal), validPath };
   }
 
@@ -635,35 +639,6 @@ export class GuardedFileSystem {
     );
   }
 
-  async readEditableText(
-    filePath: string,
-    options?: { signal?: AbortSignal; tool?: string },
-  ): Promise<{ validPath: string; content: string; stats: Stats }> {
-    const { stats, validPath } = await this.stat(filePath, options);
-    const maxSize = getMaxTextFileSize();
-    if (stats.size > maxSize) {
-      // `tool` labels the TOO_LARGE message so the client sees which tool refused.
-      throw new FsError(
-        ErrorCode.TOO_LARGE,
-        `File too large for ${options?.tool ?? 'edit'} (${stats.size} bytes > ${maxSize} bytes)`,
-        filePath,
-        { size: stats.size, maxFileSize: maxSize },
-      );
-    }
-    const { content } = await readFileWithStats(
-      filePath,
-      validPath,
-      stats,
-      {
-        kind: 'full',
-        strictUtf8: true,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      },
-      () => this.#openVerified(validPath, filePath, options?.signal),
-    );
-    return { validPath, content, stats };
-  }
-
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },
@@ -708,8 +683,20 @@ export class GuardedFileSystem {
     };
   }
 
-  async open(filePath: string): Promise<FileHandle> {
-    return this.#openVerified(await this.pathGuard.validateExistingPath(filePath), filePath);
+  /** `requestedPath` names the client's spelling in errors; `signal` abandons a stalled open. */
+  async open(
+    filePath: string,
+    options?: {
+      readonly signal?: AbortSignal | undefined;
+      readonly requestedPath?: string | undefined;
+    },
+  ): Promise<FileHandle> {
+    return this.#openVerified(
+      // A late validation result is a plain string, so a stalled realpath needs no release.
+      await withAbort(this.pathGuard.validateExistingPath(filePath), options?.signal),
+      options?.requestedPath ?? filePath,
+      options?.signal,
+    );
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real

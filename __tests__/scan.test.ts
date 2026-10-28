@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Dir } from 'node:fs';
-import fsPromises, { chmod, mkdir, realpath } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -9,15 +9,24 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { toPosixPath } from '../src/core/path-utils.ts';
+import { normalizePath, toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
-import { probeDirectory, resolveScanScope, scan } from '../src/core/scan.ts';
+import {
+  probeDirectory,
+  readNamedText,
+  readText,
+  resolveScanScope,
+  scan,
+} from '../src/core/scan.ts';
+import { MIB } from '../src/core/util.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -564,5 +573,295 @@ describe('scan', () => {
       explicitFile: file,
     });
     assert.deepEqual(await resolveScanScope(empty, fs, { allowFile: false }), { root: empty });
+  });
+});
+
+describe('readText', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const put = async (name: string, bytes: Buffer | string): Promise<string> => {
+    const path = join(root, name);
+    await writeFile(path, bytes);
+    return path;
+  };
+  const pastProbe = (tail: number[]): Buffer =>
+    Buffer.concat([Buffer.alloc(600, 'a'), Buffer.from(tail)]);
+
+  it('readText text verdict carries bytes and stats', async () => {
+    const path = await put('a.txt', 'héllo\n');
+    const verdict = await readText(fs, path);
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.deepEqual(verdict.bytes, Buffer.from('héllo\n'));
+    assert.equal(verdict.stats.size, 7);
+  });
+
+  it('readText binary by extension', async () => {
+    assert.deepEqual(await readText(fs, await put('a.png', 'plain text')), {
+      kind: 'binary',
+      utf16: false,
+    });
+  });
+
+  it('readText binary by sample', async () => {
+    const path = await put('b.txt', Buffer.from([0x61, 0x62, 0x63, 0, 0x64]));
+    assert.deepEqual(await readText(fs, path), { kind: 'binary', utf16: false });
+  });
+
+  it('readText UTF-16 BOM', async () => {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')]);
+    assert.deepEqual(await readText(fs, await put('c.txt', bytes)), {
+      kind: 'binary',
+      utf16: true,
+    });
+  });
+
+  it('readText undecodable past the probe', async () => {
+    const latin1 = await readText(fs, await put('d.txt', pastProbe([0xe9])));
+    assert.equal(latin1.kind, 'undecodable');
+    const nul = await readText(fs, await put('e.txt', pastProbe([0])));
+    assert.equal(nul.kind, 'undecodable');
+  });
+
+  it('readText too large', async () => {
+    const path = await put('big.txt', Buffer.alloc(MIB + 1, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.deepEqual(await readText(fs, path), { kind: 'tooLarge', size: MIB + 1 });
+    });
+  });
+
+  it('readText bounds the read of a file that reports size 0', async (t) => {
+    // procfs and some FUSE files report size 0 and stream on.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 0 })));
+      return handle;
+    });
+    const small = await readText(fs, await put('virtual.txt', 'text\n'));
+    assert.equal(small.kind, 'text');
+    const path = await put('stream.txt', Buffer.alloc(4 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      const verdict = await readText(fs, path);
+      assert.equal(verdict.kind, 'tooLarge');
+      if (verdict.kind !== 'tooLarge') return;
+      assert.ok(verdict.size > MIB && verdict.size < 2 * MIB, String(verdict.size));
+    });
+  });
+
+  for (const [stalls, reportedSize] of [
+    ['stat', undefined],
+    ['read', undefined],
+    ['read', 0],
+  ] as const) {
+    it(
+      `readText abandons a stalled ${stalls}${reportedSize === 0 ? ' of a size-0 file' : ''}`,
+      {
+        timeout: 2000,
+      },
+      async (t) => {
+        // A hung mount or FIFO: the call never returns until the test settles it.
+        let settle!: () => void;
+        const stalled = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        let closed = false;
+        const open = fs.open.bind(fs);
+        t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+          const handle = await open(...args);
+          const real = await handle.stat();
+          t.mock.method(handle, 'stat', () =>
+            stalls === 'stat'
+              ? stalled.then(() => real)
+              : Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
+          );
+          if (stalls === 'read') {
+            t.mock.method(handle, 'read', () =>
+              stalled.then(() => ({ bytesRead: 0, buffer: Buffer.alloc(0) })),
+            );
+          }
+          const close = handle.close.bind(handle);
+          t.mock.method(handle, 'close', async () => {
+            closed = true;
+            await close();
+          });
+          return handle;
+        });
+        const controller = new AbortController();
+        const pending = readText(fs, await put('stall.txt', 'text'), controller.signal);
+        setTimeout(() => controller.abort(), 10);
+        await assert.rejects(pending, { name: 'AbortError' });
+        // close() would queue behind the call in flight, so it waits for that call to settle.
+        assert.equal(closed, false);
+        settle();
+        await sleep(10);
+        assert.equal(closed, true);
+      },
+    );
+  }
+
+  it('readText keeps no whole read chunk per short read', async (t) => {
+    // procfs and FUSE files return a page per read; each kept chunk must be filled first.
+    const text = 'x'.repeat(64 * 1024);
+    const open = fs.open.bind(fs);
+    let reportedSize: number | undefined;
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      const read = handle.read.bind(handle);
+      t.mock.method(handle, 'stat', () =>
+        Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
+      );
+      t.mock.method(
+        handle,
+        'read',
+        (buffer: Buffer, offset: number, length: number, position: number) =>
+          read(buffer, offset, Math.min(length, 4096), position),
+      );
+      return handle;
+    });
+    const allocUnsafe = Buffer.allocUnsafe.bind(Buffer);
+    const large = t.mock.method(Buffer, 'allocUnsafe', (size: number) => allocUnsafe(size));
+    const largeAllocations = () =>
+      large.mock.calls.filter((call) => call.arguments[0] >= 64 * 1024).length;
+
+    reportedSize = 0;
+    const virtual = await readText(fs, await put('proc.txt', text));
+    assert.equal(virtual.kind, 'text');
+    if (virtual.kind !== 'text') return;
+    assert.equal(virtual.bytes.toString('utf8'), text);
+    assert.equal(largeAllocations(), 1, 'one chunk filled across the short reads');
+
+    large.mock.resetCalls();
+    reportedSize = undefined;
+    assert.equal((await readText(fs, await put('small.txt', 'text\n'))).kind, 'text');
+    assert.equal(largeAllocations(), 0, 'finding EOF after a sized read needs no read chunk');
+  });
+
+  it('readText reads a file that grew after the fstat to EOF', async (t) => {
+    // Another process appends between fstat and read; a Rewrite must not drop the tail.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 5 })));
+      return handle;
+    });
+    const verdict = await readText(fs, await put('grows.txt', 'head\ntail\n'));
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.equal(verdict.bytes.toString('utf8'), 'head\ntail\n');
+    const path = await put('grows-big.txt', Buffer.alloc(2 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.equal((await readText(fs, path)).kind, 'tooLarge');
+    });
+  });
+
+  it('readText pre-aborted signal rejects', async () => {
+    const path = await put('f.txt', 'text');
+    await assert.rejects(readText(fs, path, AbortSignal.abort()));
+  });
+});
+
+describe('readNamedText', () => {
+  let tmpDir: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    tmpDir = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([tmpDir]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('readNamedText returns validated path, content, and stats', async () => {
+    const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');
+
+    const result = await readNamedText(fs, filePath);
+
+    assert.strictEqual(result.validPath, normalizePath(filePath));
+    assert.strictEqual(result.content, 'editable content');
+    assert.strictEqual(result.stats.size, Buffer.byteLength('editable content'));
+  });
+
+  it('readNamedText rejects files above the configured text limit', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const filePath = join(tmpDir, 'too-large.txt');
+      await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
+
+      await assert.rejects(
+        readNamedText(fs, filePath),
+        fsErrorMatcher(ErrorCode.TOO_LARGE, 'File too large for edit'),
+      );
+    });
+  });
+
+  it('readNamedText rejects binary files', async () => {
+    const filePath = join(tmpDir, 'editable.png');
+    await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    await assert.rejects(
+      readNamedText(fs, filePath),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary file detected\.$/),
+    );
+  });
+
+  // Issue #11: the 512-byte binary probe must not reject a multi-byte
+  // character cut by the sample boundary.
+  it('readNamedText accepts UTF-8 split at the sample boundary', async () => {
+    for (const [name, text] of [
+      ['split-cjk.md', '我'.repeat(171)],
+      ['split-emoji.txt', `${'a'.repeat(510)}${'😀'.repeat(4)}`],
+      ['split-latin.txt', `${'a'.repeat(511)}${'é'.repeat(4)}`],
+    ] as const) {
+      const filePath = join(tmpDir, name);
+      await writeFile(filePath, text);
+      assert.strictEqual((await readNamedText(fs, filePath)).content, text, name);
+    }
+  });
+
+  it('readNamedText rejects non-UTF-8 bytes past the binary probe', async () => {
+    const filePath = join(tmpDir, 'latin1-late.txt');
+    await writeFile(
+      filePath,
+      Buffer.concat([
+        Buffer.alloc(600, 0x61),
+        Buffer.from('\ncaf'),
+        Buffer.from([0xe9]),
+        Buffer.from('\n'),
+      ]),
+    );
+    await assert.rejects(
+      readNamedText(fs, filePath),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
+    );
+
+    const utf16 = join(tmpDir, 'utf16le.txt');
+    await writeFile(
+      utf16,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
+    );
+    // UTF-16 is named at the shared probe, for edit as for read.
+    await assert.rejects(
+      readNamedText(fs, utf16),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+      ),
+    );
   });
 });

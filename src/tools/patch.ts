@@ -4,10 +4,10 @@ import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
 import { ErrorCode, FsError } from '../core/errors.ts';
-import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
+import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
+import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
-import { postWriteStat } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const PatchInputSchema = z.strictObject({
@@ -58,19 +58,58 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
     subject: basename(args.path),
   }),
   mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
-  run: async (args, ctx) =>
-    // A dry run never writes, so it needs no lock.
-    args.dryRun
-      ? applyPatchOnce(args, ctx)
-      : ctx.fs.lockForWrite(args.path, () => applyPatchOnce(args, ctx)),
+  run: (args, ctx) => applyPatchOnce(args, ctx),
 });
 
 async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolCtx) {
-  const { validPath, content, stats } = await ctx.fs.readEditableText(args.path, {
-    signal: ctx.signal,
-    tool: 'patch',
-  });
+  const done = await rewriteFile(
+    {
+      fs: ctx.fs,
+      path: args.path,
+      dryRun: args.dryRun,
+      signal: ctx.signal,
+      transport: ctx.transport,
+      tool: 'patch',
+    },
+    (content) => {
+      const result = patchContent(args, content);
+      return { content: result.patched, result, write: true };
+    },
+  );
+  const patched = done.after;
+  const { linesAdded, linesRemoved } = done.result;
+  // The patched file used to come back whole in the text block, so a one-line
+  // hunk against a 5000-line file returned 5000 lines. Every other write tool
+  // answers with a summary; the result is reachable via `resourceUri` or a
+  // follow-up `read` when the caller actually wants the bytes.
+  const summaryText = `patch: ${basename(args.path)} +${String(linesAdded)} -${String(linesRemoved)}`;
 
+  if (done.written) {
+    ctx.log('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
+  }
+
+  const { resourceLink, validPath, modified, ...fileMeta } = done.report();
+  return {
+    structured: {
+      path: validPath,
+      ...fileMeta,
+      modified,
+      linesAdded,
+      linesRemoved,
+      ...(args.dryRun ? { diff: args.diff } : {}),
+    },
+    // A dry run exists to be previewed, so it keeps returning the patched
+    // text; only the write path summarizes, where the bytes are on disk.
+    text: args.dryRun ? patched : summaryText,
+    ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
+  };
+}
+
+/** The transform: parse, clamp, apply, and the line-count backstop. */
+function patchContent(
+  args: z.infer<typeof PatchInputSchema>,
+  content: string,
+): { patched: string; linesAdded: number; linesRemoved: number } {
   // patch is single-file only: a multi-file unified diff (parsePatch length > 1)
   // is rejected. Multi-file application needs per-file PathGuard-resolved loaders
   // and is deferred (out of scope).
@@ -127,44 +166,5 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       args.path,
     );
   }
-  // The patched file used to come back whole in the text block, so a one-line
-  // hunk against a 5000-line file returned 5000 lines. Every other write tool
-  // answers with a summary; the result is reachable via `resourceUri` or a
-  // follow-up `read` when the caller actually wants the bytes.
-  const summaryText = `patch: ${basename(args.path)} +${String(linesAdded)} -${String(linesRemoved)}`;
-
-  if (!args.dryRun) {
-    await ctx.fs.writeFile(args.path, patched, { signal: ctx.signal });
-    ctx.log('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
-  }
-
-  // `modified` is read from a post-write stat and is advisory: under a concurrent
-  // writer it may reflect that writer's mtime while `size`/content come from this
-  // patch's atomic write. The file content itself is always consistent.
-  let modified = stats.mtime.toISOString();
-  if (!args.dryRun) {
-    modified = ((await postWriteStat(ctx, validPath))?.mtime ?? new Date()).toISOString();
-  }
-  const meta = buildWrittenFileMeta({
-    validPath,
-    content: patched,
-    dryRun: args.dryRun,
-    lastModified: modified,
-    transport: ctx.transport,
-  });
-  const { resourceLink, ...fileMeta } = meta;
-  return {
-    structured: {
-      path: validPath,
-      ...fileMeta,
-      modified,
-      linesAdded,
-      linesRemoved,
-      ...(args.dryRun ? { diff: args.diff } : {}),
-    },
-    // A dry run exists to be previewed, so it keeps returning the patched
-    // text; only the write path summarizes, where the bytes are on disk.
-    text: args.dryRun ? patched : summaryText,
-    ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
-  };
+  return { patched, linesAdded, linesRemoved };
 }

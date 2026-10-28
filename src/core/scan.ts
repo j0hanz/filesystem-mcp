@@ -1,3 +1,5 @@
+import { isUtf8 } from 'node:buffer';
+import type { Stats } from 'node:fs';
 import { opendir, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -6,10 +8,18 @@ import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
+import { MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
+import { assertFileStats, binaryKind, binaryRefusal, NOT_UTF8_MESSAGE } from './read.ts';
+import { getMaxTextFileSize } from './util.ts';
+
+/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
+const READ_CHUNK_BYTES = 512 * 1024;
+/** The read past a sized read, which nearly always returns 0 at EOF. */
+const EOF_PROBE_BYTES = 4 * 1024;
 
 export interface ScanScope {
   readonly root: string;
@@ -39,6 +49,146 @@ export async function resolveScanScope(
   // character class. The scan visits exactly this file instead, and
   // hidden/ignored filtering is moot for a file the caller named.
   return { root: dirname(resolved), explicitFile: resolved };
+}
+
+export type TextVerdict =
+  | { readonly kind: 'text'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'undecodable'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | { readonly kind: 'tooLarge'; readonly size: number };
+
+/**
+ * The one content verdict (ADR-005): guarded open, size, read's binary rule on
+ * the leading bytes, then strict UTF-8 on the rest. Never decodes; a caller
+ * that searches lossily decodes an `undecodable` file's bytes itself.
+ */
+export async function readText(
+  fs: GuardedFileSystem,
+  path: string,
+  signal?: AbortSignal,
+  /** The client's spelling of `path`, for errors. */
+  requestedPath?: string,
+): Promise<TextVerdict> {
+  const maxFileSize = getMaxTextFileSize();
+  let bytes: Buffer;
+  let stats: Stats;
+  {
+    // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
+    // re-checks the descriptor's real path (H4), so these bytes are the
+    // validated file's, not whatever the name points at by now. The signal
+    // lets a stalled open (FIFO swapped in, hung mount) be abandoned.
+    const handle = await fs.open(path, { signal, requestedPath });
+    // The fstat or read in flight, if any: the signal ends the wait for it, not the call.
+    let pending: Promise<unknown> | undefined;
+    const settled = async <T>(call: Promise<T>): Promise<T> => {
+      pending = call;
+      const result = await withAbort(call, signal);
+      pending = undefined;
+      return result;
+    };
+    try {
+      stats = await settled(handle.stat());
+      const { size } = stats;
+      if (size > maxFileSize) return { kind: 'tooLarge', size };
+      // Read the size fstat reported into one buffer: handle.readFile would fstat
+      // again, an extra round trip on every file a walk touches. Then read on to
+      // EOF, so a file that grew meanwhile is read whole (a Rewrite writes back
+      // what it read), as is a procfs or other virtual file, which reports a
+      // size of 0 while holding text. Usually that is one read that returns 0.
+      const chunks: Buffer[] = [];
+      let total = 0;
+      if (size > 0) {
+        const head = Buffer.allocUnsafe(size);
+        while (total < size) {
+          // In readFile's own chunks, with its check of the signal before each,
+          // so a deadline on a slow filesystem lands as soon as it did there.
+          signal?.throwIfAborted();
+          const length = Math.min(size - total, READ_CHUNK_BYTES);
+          const { bytesRead } = await settled(handle.read(head, total, length, total));
+          if (bytesRead === 0) break;
+          total += bytesRead;
+        }
+        chunks.push(head.subarray(0, total));
+      }
+      // A file that came up short has shrunk, so it is already at EOF.
+      if (total === size) {
+        // Each chunk is filled across reads before it is kept: procfs returns a
+        // page per read, and a kept subarray holds its whole chunk. After a sized
+        // read the first chunk is small, since it usually only finds EOF.
+        let chunk = Buffer.allocUnsafe(size > 0 ? EOF_PROBE_BYTES : READ_CHUNK_BYTES);
+        let used = 0;
+        for (;;) {
+          // Stop once past the cap: a virtual file may never end.
+          signal?.throwIfAborted();
+          const { bytesRead } = await settled(handle.read(chunk, used, chunk.length - used, total));
+          if (bytesRead === 0) break;
+          total += bytesRead;
+          used += bytesRead;
+          if (total > maxFileSize) return { kind: 'tooLarge', size: total };
+          if (used === chunk.length) {
+            chunks.push(chunk);
+            chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+            used = 0;
+          }
+        }
+        if (used > 0) chunks.push(chunk.subarray(0, used));
+      }
+      const [only] = chunks;
+      // The common case is the one head buffer: no copy.
+      bytes = chunks.length === 1 && only ? only : Buffer.concat(chunks, total);
+    } finally {
+      // A failed close must not replace the verdict or the refusal, so it is logged, not thrown.
+      const close = () =>
+        handle.close().catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close read descriptor for ${path}: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      // close() queues behind a call still in flight, so after an abort close once it settles.
+      if (pending) void pending.then(close, close);
+      else await close();
+    }
+  }
+  // The probe is a slice of the bytes already read: no extra syscall.
+  const binary = binaryKind(path, bytes.subarray(0, MIME_SAMPLE_SIZE));
+  if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
+  // The probe samples only the leading bytes. A caller that writes the text
+  // back must refuse any byte the decode would replace with U+FFFD.
+  if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
+  return { kind: 'text', bytes, stats };
+}
+
+/**
+ * A file the client named is not a scan (ADR-005): any verdict but text fails
+ * the call, with the refusals edit, patch and diff have always given.
+ */
+export async function readNamedText(
+  fs: GuardedFileSystem,
+  filePath: string,
+  options?: { readonly signal?: AbortSignal | undefined; readonly tool?: string },
+): Promise<{ validPath: string; content: string; stats: Stats }> {
+  const signal = options?.signal;
+  const { stats, validPath } = await fs.stat(filePath, { signal });
+  assertFileStats(filePath, stats);
+  const verdict = await readText(fs, validPath, signal, filePath);
+  switch (verdict.kind) {
+    case 'text':
+      return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
+    case 'tooLarge': {
+      const maxSize = getMaxTextFileSize();
+      // `tool` labels the TOO_LARGE message so the client sees which tool refused.
+      throw new FsError(
+        ErrorCode.TOO_LARGE,
+        `File too large for ${options?.tool ?? 'edit'} (${verdict.size} bytes > ${maxSize} bytes)`,
+        filePath,
+        { size: verdict.size, maxFileSize: maxSize },
+      );
+    }
+    case 'binary':
+      throw binaryRefusal(verdict.utf16 ? 'utf16' : 'binary', filePath);
+    case 'undecodable':
+      throw new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, filePath);
+  }
 }
 
 export interface ScanEntry {

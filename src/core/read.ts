@@ -1,5 +1,4 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
-import { isUtf8 } from 'node:buffer';
 import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
@@ -35,7 +34,7 @@ export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promi
 }
 
 export type ReadSpec =
-  | { kind: 'full'; signal?: AbortSignal; strictUtf8?: boolean }
+  | { kind: 'full'; signal?: AbortSignal }
   | { kind: 'head'; lines: number; signal?: AbortSignal }
   | { kind: 'tail'; lines: number; signal?: AbortSignal }
   | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
@@ -407,14 +406,8 @@ async function readFullContent(
   maxSize: number,
   requestedPath: string,
   signal: AbortSignal | undefined,
-  strictUtf8: boolean,
 ): Promise<{ content: string; totalLines: number }> {
   const buffer = await readFileBufferWithLimit(handle, maxSize, requestedPath, signal);
-  // The binary probe samples only the first 512 bytes. A caller that writes the
-  // text back must refuse any byte the decode would replace with U+FFFD.
-  if (strictUtf8 && (!isUtf8(buffer) || buffer.includes(0))) {
-    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary or non-UTF-8 file detected.', requestedPath);
-  }
   const content = buffer.toString('utf-8');
   return { content, totalLines: countLines(content) };
 }
@@ -430,6 +423,30 @@ export function isBinaryRefusal(error: unknown): error is FsError {
   );
 }
 
+/** The refusal of a file whose bytes a writer would not round-trip as UTF-8. */
+export const NOT_UTF8_MESSAGE = 'Binary or non-UTF-8 file detected.';
+
+/** read's binary rule on a file's leading bytes; undefined for text. */
+export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16' | undefined {
+  if (isKnownBinaryExtension(validPath)) return 'binary';
+  // A UTF-16 BOM passes the binary probe (it is text), but every reader
+  // here (read and edit) decodes UTF-8 and would hand back U+FFFD and NULs
+  // as content.
+  if (hasUtf16Bom(probe)) return 'utf16';
+  return isBinarySample(probe) ? 'binary' : undefined;
+}
+
+/** The refusal `read`, `edit`, `patch` and `diff` give for a binary verdict. */
+export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsError {
+  return kind === 'utf16'
+    ? new FsError(
+        ErrorCode.INVALID_INPUT,
+        'UTF-16 text file detected; convert it to UTF-8 first.',
+        filePath,
+      )
+    : new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
+}
+
 async function assertNotBinary(
   validPath: string,
   filePath: string,
@@ -437,23 +454,8 @@ async function assertNotBinary(
   normalized: ReadOptions,
 ): Promise<void> {
   normalized.signal?.throwIfAborted();
-  if (isKnownBinaryExtension(validPath)) {
-    throw new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
-  }
-  const probe = await readProbe(handle, normalized.signal);
-  // A UTF-16 BOM passes the binary probe (it is text), but every reader
-  // here (read and edit) decodes UTF-8 and would hand back U+FFFD and NULs
-  // as content.
-  if (hasUtf16Bom(probe)) {
-    throw new FsError(
-      ErrorCode.INVALID_INPUT,
-      'UTF-16 text file detected; convert it to UTF-8 first.',
-      filePath,
-    );
-  }
-  if (isBinarySample(probe)) {
-    throw new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
-  }
+  const kind = binaryKind(validPath, await readProbe(handle, normalized.signal));
+  if (kind !== undefined) throw binaryRefusal(kind, filePath);
 }
 
 async function readByMode(
@@ -482,7 +484,6 @@ async function readByMode(
         options.maxSize,
         filePath,
         options.signal,
-        spec.strictUtf8 === true,
       );
       return { ...base, content, totalLines, linesRead: totalLines, hasMoreLines: false };
     }
