@@ -31,15 +31,24 @@ describe('Rewrite', () => {
     await cleanupTestRoot(root);
   });
 
-  /** Holds the file's write lock until the returned release is called. */
-  const holdLock = (): { release: () => void; held: Promise<unknown> } => {
+  /**
+   * Holds the file's write lock until the returned release is called. Resolves
+   * once the lock is held: lockForWrite validates the path before it queues, so
+   * a writer started before then could queue first.
+   */
+  const holdLock = async (): Promise<{ release: () => void; held: Promise<unknown> }> => {
     const gate = Promise.withResolvers<undefined>();
-    const held = fs.lockForWrite(path, () => gate.promise);
+    const acquired = Promise.withResolvers<undefined>();
+    const held = fs.lockForWrite(path, () => {
+      acquired.resolve(undefined);
+      return gate.promise;
+    });
+    await acquired.promise;
     return { release: () => gate.resolve(undefined), held };
   };
 
   it('dry run neither locks nor writes', async () => {
-    const { release, held } = holdLock();
+    const { release, held } = await holdLock();
     try {
       const done = await rewriteFile({ fs, path, dryRun: true, tool: 'edit' }, upper);
       assert.equal(done.written, false);
@@ -52,7 +61,7 @@ describe('Rewrite', () => {
   });
 
   it('real run waits for the write lock', async () => {
-    const { release, held } = holdLock();
+    const { release, held } = await holdLock();
     const events: string[] = [];
     const running = rewriteFile({ fs, path, dryRun: false, tool: 'edit' }, (c) => {
       events.push('transform');
