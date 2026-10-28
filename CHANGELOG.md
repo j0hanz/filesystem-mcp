@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.12.0] - 2026-10-28
+
+A hardening release. Overwrite and delete prompts catch an entry swapped
+while they are open, a cross-device `move` stages its copy, and the scanning
+tools report what they skipped and why. Before upgrading, read under
+Changed: `replace_text`'s match cap is now `maxMatches` and its stop reason
+reads `'maxMatches'`; a cross-device `move` onto an existing directory now
+refuses where it merged; `create` reports a file that appears during
+confirmation as `CANCELLED`; `search_text` skips binary files it searched
+before, and `replace_text` counts a binary or oversized file as skipped
+where it failed; and `list` returns a partial result on timeout where it
+failed.
 
 ### Security
 
@@ -16,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`create`, `move` and `copy` refuse an entry replaced after you approved
   overwriting it.** Before, a file swapped in between the approval and the
   write was overwritten instead of the one you were asked about.
+- **`delete` refuses any entry replaced after it was planned.** Before, a
+  socket or FIFO swapped in between planning and deletion skipped the
+  identity check and was deleted though no one had approved it.
 - **`delete` asks again for a directory that was replaced while the prompt
   was open.** Before, the call failed that entry.
 
@@ -25,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is a page size in every other tool.
 - **`replace_text` reports `stoppedReason: 'maxMatches'` when it hits its
   match cap.** Before, it reported `'maxResults'`.
+- **A cross-device `move` copies into a temporary sibling and renames it
+  into place.** A move onto an existing directory now refuses, as a
+  same-device move does; before, the trees were merged. A copy that fails
+  part-way leaves nothing at the destination; before, it left a partial
+  tree. Undo of a cross-device move still fails with `EXDEV`.
+- **`create` reports a file that appears while its confirmation is open as
+  `CANCELLED`.** Before, it reported `INVALID_INPUT`, as if the call were
+  malformed.
 - **Write tools over stdio link every file stdio can read back.** Before,
   `create` with `append` linked only text files under about 1.7 MB, and a
   binary file got no link in the last 64 KiB under the limit.
@@ -83,6 +105,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own result and the rest proceeds.
 - **A destination or directory that becomes pending while the prompt is open
   is asked about again.** Before, it failed the whole call.
+- **One confirmation reissues its question at most once.** Before, a
+  reprompt cleared the flag that stops a second reissue, so a client that
+  kept answering in a shape the SDK drops saw four rounds; a confirmation now
+  runs three rounds at most.
+- **`list` reports `stoppedReason: 'maxResults'` in `_meta` and in the
+  externalized tree when it stops at its entry cap.** Before, only the text
+  trailer said so.
+- **`find_files` reports `stoppedReason: 'maxResults'` only when a match
+  past its result cap was dropped.** Before, a search that matched exactly
+  as many files as the cap was reported as truncated.
+- **`find_files`, `search_text`, `replace_text` and `list` report
+  `'timeout'` only when the deadline cut work short.** Before, a deadline
+  that fired after every entry had finished turned a complete run into a
+  timeout, and `replace_text` said it stopped early.
+- **The constraints help text states the file size limit in MiB with one
+  decimal.** Before, it was floored to whole MB: a `FS_MAX_FILE_SIZE` of
+  10.5 MiB read as `10 MB`; it now reads `10.5 MiB`.
 
 ## [2.11.0] - 2026-10-24
 
