@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import {
   cleanupTestRoot,
   createElicitationClientPair,
@@ -45,6 +46,24 @@ async function withPrompts(
     await pair?.close();
     await cleanupTestRoot(root);
   }
+}
+
+/** Runs `action` once, on the first write lock taken (the approved round), then locks for real. */
+function beforeFirstWriteLock(t: TestContext, action: () => Promise<void>): void {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+  const { lockForWrite } = GuardedFileSystem.prototype;
+  let done = false;
+  t.mock.method(
+    GuardedFileSystem.prototype,
+    'lockForWrite',
+    async function (this: GuardedFileSystem, ...args: Parameters<typeof lockForWrite>) {
+      if (!done) {
+        done = true;
+        await action();
+      }
+      return lockForWrite.apply(this, args);
+    },
+  );
 }
 
 describe('Confirmation gaps', () => {
@@ -155,6 +174,53 @@ describe('Confirmation gaps', () => {
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(prompts(), 2);
         assert.strictEqual(await readFile(path, 'utf8'), 'NEW');
+      },
+    );
+  });
+
+  it('create refuses a file replaced after its overwrite was approved', async (t) => {
+    await withPrompts(
+      'overwrite',
+      async () => {},
+      async ({ root, pair, prompts }) => {
+        const dst = await writeTestFile(root, 'dst.txt', 'ORIGINAL');
+        const other = await writeTestFile(root, 'other.txt', 'ORIGINAL');
+        beforeFirstWriteLock(t, () => swap(dst, 'SWAPPED'));
+        const result = await pair.client.callTool({
+          name: 'create',
+          arguments: {
+            files: [
+              { path: dst, content: 'NEW' },
+              { path: other, content: 'NEW' },
+            ],
+          },
+        });
+        // One round, one prompt per pending entry: no re-prompt.
+        assert.strictEqual(prompts(), 2);
+        assert.match(
+          firstTextBlock(result).text ?? '',
+          /replaced after the overwrite was approved/,
+        );
+        assert.strictEqual(await readFile(dst, 'utf8'), 'SWAPPED');
+        assert.strictEqual(await readFile(other, 'utf8'), 'NEW');
+      },
+    );
+  });
+
+  it('create writes a file that vanished after its overwrite was approved', async (t) => {
+    await withPrompts(
+      'overwrite',
+      async () => {},
+      async ({ root, pair, prompts }) => {
+        const dst = await writeTestFile(root, 'dst.txt', 'ORIGINAL');
+        beforeFirstWriteLock(t, () => rm(dst));
+        const result = await pair.client.callTool({
+          name: 'create',
+          arguments: { files: [{ path: dst, content: 'NEW' }] },
+        });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+        assert.strictEqual(prompts(), 1);
+        assert.strictEqual(await readFile(dst, 'utf8'), 'NEW');
       },
     );
   });
