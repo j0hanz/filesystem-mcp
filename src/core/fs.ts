@@ -640,9 +640,10 @@ export class GuardedFileSystem {
   async copyIntoPlace(source: string, destination: string): Promise<void> {
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
+    // Not validated on its own: it sits under the validated destination's
+    // parent, and the denylist has ruled on the destination, which a rooted
+    // allow or deny entry names exactly and the staged spelling would miss.
     const staged = crossDeviceStagingPath(validDest);
-    // The staged path keeps the destination's name, so the denylist rules on it as in place.
-    await this.pathGuard.validatePathForWrite(staged);
     // As in cp: a forced copy across a merged tree cannot be told apart for undo.
     this.#capture?.abandon('copies are not undoable yet');
     const stagingDir = dirname(staged);
@@ -876,8 +877,8 @@ export class GuardedFileSystem {
 
 /**
  * Where `copyIntoPlace` stages a copy: `<parent>/.<12 hex>.tmp/<name>`. Every
- * segment of the destination survives, so a deny rule that covers an entry in
- * place covers it staged too.
+ * segment of the destination survives, so a deny rule that is not rooted at an
+ * absolute path covers an entry staged as it does in place.
  */
 export function crossDeviceStagingPath(validDest: string): string {
   const stagingDir = `.${randomUUID().replace(/-/g, '').slice(0, 12)}.tmp`;

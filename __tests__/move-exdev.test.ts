@@ -182,6 +182,18 @@ describe('performRenameWithFallback on disk', () => {
     });
   });
 
+  it('a rooted allow entry for the destination lets the move through', async () => {
+    const dest = join(root, '.env');
+    // Rooted: it relieves this one path, not `<anything>/.env`.
+    await withEnv({ FS_ALLOWLIST: dest }, async () => {
+      const guarded = new GuardedFileSystem(await makeGuard([root]));
+      const a = join(root, 'a.txt');
+      await writeFile(a, 'new');
+      await performRenameWithFallback(a, dest, exdevOnce(guarded), 'a.txt');
+      assert.strictEqual(await readFile(dest, 'utf8'), 'new');
+    });
+  });
+
   it('a staged entry keeps the protection it has at the destination', async () => {
     const guard = await makeGuard([root]);
     const dest = join(root, 'dst', '.aws');
