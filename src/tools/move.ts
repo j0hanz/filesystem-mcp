@@ -7,17 +7,9 @@ import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import {
-  ErrorCode,
-  FsError,
-  isFsError,
-  isNodeError,
-  Problem,
-  rethrowIfAborted,
-} from '../core/errors.ts';
+import { ErrorCode, FsError, isFsError, Problem, rethrowIfAborted } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists, destIdentity, type EntryIdentity, sameIdentity } from '../core/fs.ts';
-import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import type { TransferKind } from '../core/path.ts';
@@ -234,7 +226,7 @@ async function executeTransfer(
   await ctx.fs.mkdir(dirname(plan.validDest), { recursive: true });
 
   if (op === 'move') {
-    await performRenameWithFallback(plan.opSource, plan.validDest, ctx.fs, plan.pair.source);
+    await ctx.fs.rename(plan.opSource, plan.validDest);
     ctx.log('info', `move: ${plan.pair.source} -> ${plan.pair.destination}`, 'move');
   } else {
     await ctx.fs.cp(plan.opSource, plan.validDest, {
@@ -549,53 +541,6 @@ async function assertTreeHasNoProtectedEntries(
       `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
       requestedSource,
     );
-  }
-}
-
-export async function performRenameWithFallback(
-  validSource: string,
-  validDest: string,
-  fsOps: Pick<GuardedFileSystem, 'rename' | 'copyIntoPlace' | 'rm'>,
-  originalSource: string,
-): Promise<void> {
-  try {
-    await fsOps.rename(validSource, validDest);
-  } catch (error: unknown) {
-    rethrowIfAborted(error);
-
-    if (!isNodeError(error) || error.code !== 'EXDEV') {
-      throw error;
-    }
-
-    // EXDEV: cross-device rename. Copy into place on the destination's device
-    // (see copyIntoPlace: a non-empty directory is never merged into, and a
-    // partial copy never reaches the destination); only then remove the source.
-    let copied = false;
-    try {
-      await fsOps.copyIntoPlace(validSource, validDest);
-      copied = true;
-      await fsOps.rm(validSource, { recursive: true, force: true });
-    } catch (copyOrRemoveError) {
-      rethrowIfAborted(copyOrRemoveError);
-      if (copied) {
-        // cp succeeded but rm failed: the destination already holds a complete
-        // copy and the source remains. Surface the rm error as the cause so the
-        // caller can recover (clean up the duplicate) instead of a silent generic
-        // failure that hides the partial completion.
-        const baseProblem = Problem.fromUnknown(
-          copyOrRemoveError,
-          ErrorCode.UNKNOWN,
-          originalSource,
-        );
-        throw new FsError(
-          baseProblem.code,
-          `Cross-device move of ${originalSource}: copy succeeded but source removal failed (destination holds a copy): ${baseProblem.message}`,
-          originalSource,
-          copyOrRemoveError,
-        );
-      }
-      throw copyOrRemoveError;
-    }
   }
 }
 

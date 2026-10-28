@@ -1,122 +1,81 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
-import { crossDeviceStagingPath, GuardedFileSystem } from '../src/core/fs.ts';
-import { performRenameWithFallback } from '../src/tools/move.ts';
+import { crossDeviceStagingPath, GuardedFileSystem, type RawOps } from '../src/core/fs.ts';
+import type { PathGuard } from '../src/core/path.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard, trySymlink, withEnv } from './helpers.ts';
-
-type FsOps = Pick<GuardedFileSystem, 'rename' | 'copyIntoPlace' | 'rm'>;
-type Behavior = (...args: string[]) => Promise<void>;
 
 const errno = (code: string): NodeJS.ErrnoException =>
   Object.assign(new Error(`${code}: fake`), { code });
 
-function fakeOps(behavior: { rename?: Behavior; copyIntoPlace?: Behavior; rm?: Behavior }): {
-  ops: FsOps;
-  calls: string[];
-} {
-  const calls: string[] = [];
-  const op =
-    (name: 'rename' | 'copyIntoPlace' | 'rm') =>
-    async (...args: unknown[]): Promise<void> => {
-      // Paths only: the options object of rm is not part of the record.
-      const paths = args.filter((a): a is string => typeof a === 'string');
-      calls.push(`${name} ${paths.join(' ')}`);
-      await (behavior[name] ?? (() => Promise.resolve()))(...paths);
-    };
-  const ops = {
-    rename: op('rename'),
-    copyIntoPlace: op('copyIntoPlace'),
-    rm: op('rm'),
-  } as unknown as FsOps;
-  return { ops, calls };
+/** The raw ops, except that the first rename fails as a cross-device one. */
+function exdevOnce(extra: Pick<RawOps, 'rm'> = {}): RawOps {
+  let first = true;
+  return {
+    rename: (a, b) => {
+      if (first) {
+        first = false;
+        return Promise.reject(errno('EXDEV'));
+      }
+      return rename(a, b);
+    },
+    ...extra,
+  };
 }
 
-const exdev: Behavior = () => Promise.reject(errno('EXDEV'));
-
-describe('performRenameWithFallback (EXDEV)', () => {
-  it('a plain rename never copies', async () => {
-    const { ops, calls } = fakeOps({});
-    await performRenameWithFallback('/src', '/dst', ops, 'src');
-    assert.deepStrictEqual(calls, ['rename /src /dst']);
-  });
-
-  it('EXDEV copies into place, then removes the source', async () => {
-    const { ops, calls } = fakeOps({ rename: exdev });
-    await performRenameWithFallback('/src', '/dst', ops, 'src');
-    assert.deepStrictEqual(calls, ['rename /src /dst', 'copyIntoPlace /src /dst', 'rm /src']);
-  });
-
-  it('a non-EXDEV rename error is rethrown untouched', async () => {
-    const { ops, calls } = fakeOps({ rename: () => Promise.reject(errno('EACCES')) });
-    await assert.rejects(
-      performRenameWithFallback('/src', '/dst', ops, 'src'),
-      (err: unknown) => (err as NodeJS.ErrnoException).code === 'EACCES',
-    );
-    assert.deepStrictEqual(calls, ['rename /src /dst']);
-  });
-
-  it('a failed copy rethrows its error and never removes the source', async () => {
-    const { ops, calls } = fakeOps({
-      rename: exdev,
-      copyIntoPlace: () => Promise.reject(errno('ENOTEMPTY')),
-    });
-    await assert.rejects(
-      performRenameWithFallback('/src', '/dst', ops, 'src'),
-      (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOTEMPTY',
-    );
-    assert.deepStrictEqual(calls, ['rename /src /dst', 'copyIntoPlace /src /dst']);
-  });
-
-  it('copy ok but remove failed says the destination holds a copy', async () => {
-    const { ops } = fakeOps({ rename: exdev, rm: () => Promise.reject(errno('EPERM')) });
-    await assert.rejects(performRenameWithFallback('/src', '/dst', ops, 'src'), (err: unknown) => {
-      assert.ok(isFsError(err));
-      assert.notStrictEqual(err.code, ErrorCode.CANCELLED);
-      assert.match(
-        err.message,
-        /copy succeeded but source removal failed \(destination holds a copy\)/,
-      );
-      return true;
-    });
-  });
-});
-
-describe('performRenameWithFallback on disk', () => {
+describe('rename across devices (EXDEV)', () => {
   let root: string;
+  let guard: PathGuard;
   let fs: GuardedFileSystem;
 
   beforeEach(async () => {
     root = await createTestRoot();
-    fs = new GuardedFileSystem(await makeGuard([root]));
+    guard = await makeGuard([root]);
+    fs = new GuardedFileSystem(guard, undefined, exdevOnce());
   });
 
   afterEach(async () => {
     await cleanupTestRoot(root);
   });
 
-  /** The real filesystem, except that the first rename fails as a cross-device one. */
-  const exdevOnce = (guarded: GuardedFileSystem = fs): FsOps => {
-    let first = true;
-    return {
-      rename: (a: string, b: string) => {
-        if (first) {
-          first = false;
-          return Promise.reject(errno('EXDEV'));
-        }
-        return guarded.rename(a, b);
-      },
-      copyIntoPlace: guarded.copyIntoPlace.bind(guarded),
-      rm: guarded.rm.bind(guarded),
-    };
-  };
-
   /** Staging directories left behind: hidden `.tmp` entries anywhere under root. */
   const leftovers = async (): Promise<string[]> =>
     (await readdir(root, { recursive: true })).filter((name) => name.endsWith('.tmp'));
+
+  it('a plain rename never copies', async () => {
+    const calls: string[] = [];
+    const plain = new GuardedFileSystem(guard, undefined, {
+      rename: (a, b) => {
+        calls.push('rename');
+        return rename(a, b);
+      },
+      rm: () => {
+        calls.push('rm');
+        return Promise.reject(errno('EPERM'));
+      },
+    });
+    const a = join(root, 'a.txt');
+    await writeFile(a, 'x');
+    await plain.rename(a, join(root, 'b.txt'));
+    assert.deepStrictEqual(calls, ['rename']);
+    assert.deepStrictEqual(await readdir(root), ['b.txt']);
+  });
+
+  it('a non-EXDEV rename error is rethrown untouched', async () => {
+    const eacces = new GuardedFileSystem(guard, undefined, {
+      rename: () => Promise.reject(errno('EACCES')),
+    });
+    const a = join(root, 'a.txt');
+    await writeFile(a, 'x');
+    await assert.rejects(
+      eacces.rename(a, join(root, 'b.txt')),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'EACCES',
+    );
+    assert.deepStrictEqual(await readdir(root), ['a.txt']);
+  });
 
   it('refuses to merge into an existing directory', async () => {
     const src = join(root, 'src');
@@ -125,7 +84,7 @@ describe('performRenameWithFallback on disk', () => {
     await mkdir(dst);
     await writeFile(join(src, 'x.txt'), 'x');
     await writeFile(join(dst, 'y.txt'), 'y');
-    await assert.rejects(performRenameWithFallback(src, dst, exdevOnce(), 'src'));
+    await assert.rejects(fs.rename(src, dst));
     assert.deepStrictEqual(await readdir(dst), ['y.txt']);
     assert.deepStrictEqual(await readdir(src), ['x.txt']);
     assert.deepStrictEqual(await leftovers(), []);
@@ -136,7 +95,7 @@ describe('performRenameWithFallback on disk', () => {
     const b = join(root, 'b.txt');
     await writeFile(a, 'new');
     await writeFile(b, 'old');
-    await performRenameWithFallback(a, b, exdevOnce(), 'a.txt');
+    await fs.rename(a, b);
     assert.strictEqual(await readFile(b, 'utf8'), 'new');
     assert.deepStrictEqual(await readdir(root), ['b.txt']);
   });
@@ -146,14 +105,51 @@ describe('performRenameWithFallback on disk', () => {
     const dst = join(root, 'dst');
     await mkdir(src);
     await writeFile(join(src, 'x.txt'), 'x');
-    await performRenameWithFallback(src, dst, exdevOnce(), 'src');
+    await fs.rename(src, dst);
     assert.deepStrictEqual(await readdir(dst), ['x.txt']);
     assert.deepStrictEqual(await readdir(root), ['dst']);
   });
 
-  it('a failed copy leaves no staging directory', async () => {
-    await assert.rejects(fs.copyIntoPlace(join(root, 'missing'), join(root, 'dst')));
+  it('a failed copy rethrows its error, skips the removal and leaves no staging directory', async () => {
+    const src = join(root, 'src');
+    await mkdir(src);
+    await writeFile(join(src, 'x.txt'), 'x');
+    // The source vanishes between validation and the copy, so the copy fails.
+    const vanishing = new GuardedFileSystem(guard, undefined, {
+      rename: async () => {
+        await rm(src, { recursive: true });
+        throw errno('EXDEV');
+      },
+      // A copy failure must never reach the source removal.
+      rm: () => Promise.reject(errno('EPERM')),
+    });
+    await assert.rejects(
+      vanishing.rename(src, join(root, 'dst')),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
+    );
     assert.deepStrictEqual(await readdir(root), []);
+  });
+
+  it('copy ok but remove failed says the destination holds a copy', async () => {
+    const stuck = new GuardedFileSystem(
+      guard,
+      undefined,
+      exdevOnce({ rm: () => Promise.reject(errno('EPERM')) }),
+    );
+    const a = join(root, 'a.txt');
+    const b = join(root, 'b.txt');
+    await writeFile(a, 'new');
+    await assert.rejects(stuck.rename(a, b), (err: unknown) => {
+      assert.ok(isFsError(err));
+      assert.notStrictEqual(err.code, ErrorCode.CANCELLED);
+      assert.match(
+        err.message,
+        /copy succeeded but source removal failed \(destination holds a copy\)/,
+      );
+      return true;
+    });
+    assert.strictEqual(await readFile(b, 'utf8'), 'new');
+    assert.strictEqual(await readFile(a, 'utf8'), 'new');
   });
 
   it('moves a relative link whose target names the destination', async (t) => {
@@ -165,7 +161,7 @@ describe('performRenameWithFallback on disk', () => {
     await writeFile(dest, 'old');
     const link = join(root, 'a', 'link');
     if (!(await trySymlink('x', link, () => t.skip('symlinks need privileges'), 'file'))) return;
-    await performRenameWithFallback(link, dest, exdevOnce(), 'a/link');
+    await fs.rename(link, dest);
     assert.ok((await lstat(dest)).isSymbolicLink());
     assert.deepStrictEqual(await readdir(join(root, 'a')), []);
     assert.deepStrictEqual(await readdir(join(root, 'b')), ['x']);
@@ -173,11 +169,11 @@ describe('performRenameWithFallback on disk', () => {
 
   it('an operator deny on *.tmp does not block the move', async () => {
     await withEnv({ FS_DENYLIST: '*.tmp' }, async () => {
-      const guarded = new GuardedFileSystem(await makeGuard([root]));
+      const guarded = new GuardedFileSystem(await makeGuard([root]), undefined, exdevOnce());
       const a = join(root, 'a.txt');
       const b = join(root, 'b.txt');
       await writeFile(a, 'new');
-      await performRenameWithFallback(a, b, exdevOnce(guarded), 'a.txt');
+      await guarded.rename(a, b);
       assert.strictEqual(await readFile(b, 'utf8'), 'new');
     });
   });
@@ -186,16 +182,66 @@ describe('performRenameWithFallback on disk', () => {
     const dest = join(root, '.env');
     // Rooted: it relieves this one path, not `<anything>/.env`.
     await withEnv({ FS_ALLOWLIST: dest }, async () => {
-      const guarded = new GuardedFileSystem(await makeGuard([root]));
+      const guarded = new GuardedFileSystem(await makeGuard([root]), undefined, exdevOnce());
       const a = join(root, 'a.txt');
       await writeFile(a, 'new');
-      await performRenameWithFallback(a, dest, exdevOnce(guarded), 'a.txt');
+      await guarded.rename(a, dest);
       assert.strictEqual(await readFile(dest, 'utf8'), 'new');
     });
   });
 
+  it('crossDevice: false rethrows EXDEV and changes nothing', async () => {
+    const a = join(root, 'a.txt');
+    await writeFile(a, 'x');
+    await assert.rejects(
+      fs.rename(a, join(root, 'b.txt'), { crossDevice: false }),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'EXDEV',
+    );
+    assert.deepStrictEqual(await readdir(root), ['a.txt']);
+  });
+
+  it('an ancestor swapped for an out-of-root link during the copy stops the removal', async (t) => {
+    const outside = await createTestRoot();
+    try {
+      await mkdir(join(outside, 'dir'));
+      await writeFile(join(outside, 'dir', 'x.txt'), 'outside');
+      const dir = join(root, 'dir');
+      await mkdir(dir);
+      const src = join(dir, 'x.txt');
+      await writeFile(src, 'inside');
+      let removed: string | undefined;
+      let swapped = true;
+      const swapping = new GuardedFileSystem(guard, undefined, {
+        rename: async () => {
+          // The ancestor becomes a link out of the root before the copy reads.
+          await rm(dir, { recursive: true });
+          swapped = await trySymlink(join(outside, 'dir'), dir, () =>
+            t.skip('symlinks need privileges'),
+          );
+          throw errno('EXDEV');
+        },
+        rm: (path) => {
+          removed = String(path);
+          return Promise.resolve();
+        },
+      });
+      const attempt = assert.rejects(swapping.rename(src, join(root, 'y.txt')), (err: unknown) => {
+        assert.ok(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      if (!swapped) return;
+      await attempt;
+      assert.strictEqual(removed, undefined);
+      assert.strictEqual(await readFile(join(outside, 'dir', 'x.txt'), 'utf8'), 'outside');
+      // Nothing was copied: the destination never appeared.
+      assert.deepStrictEqual(await readdir(root), ['dir']);
+    } finally {
+      await cleanupTestRoot(outside);
+    }
+  });
+
   it('a staged entry keeps the protection it has at the destination', async () => {
-    const guard = await makeGuard([root]);
     const dest = join(root, 'dst', '.aws');
     const staged = crossDeviceStagingPath(dest);
     assert.strictEqual(basename(staged), '.aws');

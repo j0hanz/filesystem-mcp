@@ -30,6 +30,8 @@ import {
   isMissing,
   isNodeError,
   isNotFoundErrno,
+  Problem,
+  rethrowIfAborted,
   unlessMissing,
 } from './errors.ts';
 import { detectMimeFromContent, type FileKind } from './mime.ts';
@@ -73,13 +75,23 @@ const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
+/** The raw ops a test swaps to force a cross-device rename or a failed removal. */
+export interface RawOps {
+  readonly rename?: typeof fsRename;
+  readonly rm?: typeof fsRm;
+}
+
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
   readonly #capture: UndoCapture | undefined;
+  readonly #rawRename: typeof fsRename;
+  readonly #rawRm: typeof fsRm;
 
-  constructor(pathGuard: PathGuard, capture?: UndoCapture) {
+  constructor(pathGuard: PathGuard, capture?: UndoCapture, raw: RawOps = {}) {
     this.pathGuard = pathGuard;
     this.#capture = capture;
+    this.#rawRename = raw.rename ?? fsRename;
+    this.#rawRm = raw.rm ?? fsRm;
   }
 
   /**
@@ -298,7 +310,16 @@ export class GuardedFileSystem {
     }
   }
 
-  async rename(oldPath: string, newPath: string): Promise<void> {
+  /**
+   * On EXDEV the entry is copied into place and the source removed, unless
+   * `crossDevice` is false: a copy gives every descendant a new identity,
+   * which undo's records cannot follow, so a restore rethrows instead.
+   */
+  async rename(
+    oldPath: string,
+    newPath: string,
+    { crossDevice = true }: { crossDevice?: boolean } = {},
+  ): Promise<void> {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
@@ -336,7 +357,14 @@ export class GuardedFileSystem {
         capture.abandon('could not read the old content');
       }
     }
-    await fsRename(validOld, validNew);
+    try {
+      await this.#rawRename(validOld, validNew);
+    } catch (error: unknown) {
+      rethrowIfAborted(error);
+      if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
+      await this.#moveAcrossDevices(validOld, validNew, oldPath);
+      return;
+    }
     // ponytail: the rename check is identity only. A moved directory whose
     // contents changed after the move is still moved back; upgrade by hashing
     // the tree under `to` before recording it.
@@ -631,15 +659,50 @@ export class GuardedFileSystem {
   }
 
   /**
-   * The cross-device half of a move: copy `source` (a link stays a link) into
-   * a fresh staging directory beside `destination`, then rename it into place.
-   * That rename stays on one device, so it refuses what a plain rename would
-   * (a non-empty directory is never merged into), and a partial copy never
-   * reaches the destination. The staging directory is removed either way.
+   * The cross-device half of `rename`, after the raw rename failed with EXDEV:
+   * copy into place on the destination's device, and only then remove the
+   * source.
    */
-  async copyIntoPlace(source: string, destination: string): Promise<void> {
+  async #moveAcrossDevices(source: string, destination: string, label: string): Promise<void> {
+    // Validated again after the failed rename, as the public copy helper did:
+    // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
+    let copied = false;
+    try {
+      await this.#copyIntoPlace(validSource, validDest);
+      copied = true;
+      // Re-check containment, as the guarded rm did: an ancestor swapped for an
+      // out-of-root link during the copy must not steer the removal outside.
+      await this.pathGuard.validatePathForDelete(validSource);
+      await this.#rawRm(validSource, { recursive: true, force: true });
+    } catch (copyOrRemoveError: unknown) {
+      rethrowIfAborted(copyOrRemoveError);
+      if (copied) {
+        // cp succeeded but rm failed: the destination already holds a complete
+        // copy and the source remains. Surface the rm error as the cause so the
+        // caller can recover (clean up the duplicate) instead of a silent generic
+        // failure that hides the partial completion.
+        const baseProblem = Problem.fromUnknown(copyOrRemoveError, ErrorCode.UNKNOWN, label);
+        throw new FsError(
+          baseProblem.code,
+          `Cross-device move of ${label}: copy succeeded but source removal failed (destination holds a copy): ${baseProblem.message}`,
+          label,
+          copyOrRemoveError,
+        );
+      }
+      throw copyOrRemoveError;
+    }
+  }
+
+  /**
+   * Copy `validSource` (a link stays a link) into a fresh staging directory
+   * beside `validDest`, then rename it into place. That rename stays on one
+   * device, so it refuses what a plain rename would (a non-empty directory is
+   * never merged into), and a partial copy never reaches the destination. The
+   * staging directory is removed either way.
+   */
+  async #copyIntoPlace(validSource: string, validDest: string): Promise<void> {
     // Not validated on its own: it sits under the validated destination's
     // parent, and the denylist has ruled on the destination, which a rooted
     // allow or deny entry names exactly and the staged spelling would miss.
@@ -876,7 +939,7 @@ export class GuardedFileSystem {
 }
 
 /**
- * Where `copyIntoPlace` stages a copy: `<parent>/.<12 hex>.tmp/<name>`. Every
+ * Where a cross-device `rename` stages its copy: `<parent>/.<12 hex>.tmp/<name>`. Every
  * segment of the destination survives, so a deny rule that is not rooted at an
  * absolute path covers an entry staged as it does in place.
  */
