@@ -857,6 +857,13 @@ export function identityOf(stats: Stats): EntryIdentity {
 
 // On FAT/exFAT the file id comes from the directory slot, so a recreated file can
 // match every field; swaps there go undetected.
+// Numbers, not undo's bigints: NTFS file ids pass 2^53 and round, so about 2% of
+// siblings share a tuple, yet a 500-trial probe never saw a swap of one path match.
+// Undo keys many entries at once and needs the exact form.
+// shortcut: on ext4 a file deleted and recreated within a few ms keeps its inode
+// and birth ms (83-88% of fast swaps matched, bigint too), so a swap inside the
+// write-time window goes undetected; Node exposes no inode generation, so closing
+// it needs the mutation to act on a descriptor held since the check.
 export function sameIdentity(a: EntryIdentity, b: EntryIdentity): boolean {
   return (
     a.itemType === b.itemType &&
