@@ -110,7 +110,7 @@ describe('rename across devices (EXDEV)', () => {
     assert.deepStrictEqual(await readdir(root), ['dst']);
   });
 
-  it('a failed copy leaves no staging directory and keeps the source', async () => {
+  it('a failed copy rethrows its error, skips the removal and leaves no staging directory', async () => {
     const src = join(root, 'src');
     await mkdir(src);
     await writeFile(join(src, 'x.txt'), 'x');
@@ -120,8 +120,13 @@ describe('rename across devices (EXDEV)', () => {
         await rm(src, { recursive: true });
         throw errno('EXDEV');
       },
+      // A copy failure must never reach the source removal.
+      rm: () => Promise.reject(errno('EPERM')),
     });
-    await assert.rejects(vanishing.rename(src, join(root, 'dst')));
+    await assert.rejects(
+      vanishing.rename(src, join(root, 'dst')),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
+    );
     assert.deepStrictEqual(await readdir(root), []);
   });
 

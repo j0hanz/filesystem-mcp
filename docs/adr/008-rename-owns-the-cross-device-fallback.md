@@ -35,8 +35,10 @@ cross-device undo is not recorded yet.
 
 The partial-completion error keeps its code and wording: the code of the
 removal error, and the message `Cross-device move of <oldPath>: copy succeeded
-but source removal failed (destination holds a copy): …`, where `<oldPath>` is
-the source as the caller passed it to `rename`.
+but source removal failed (destination holds a copy): …`. `<oldPath>` is the
+source as the caller passed it to `rename`: for the move tool that is now the
+validated spelling, where it was the client's spelling before. No test or
+snapshot pins that label.
 
 Tests force a cross-device rename through the constructor's third argument,
 `RawOps`, which swaps the raw `rename` and `rm`. That is the one seam: node's
