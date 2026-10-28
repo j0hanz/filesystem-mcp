@@ -234,6 +234,8 @@ describe('rename across devices (EXDEV)', () => {
       await attempt;
       assert.strictEqual(removed, undefined);
       assert.strictEqual(await readFile(join(outside, 'dir', 'x.txt'), 'utf8'), 'outside');
+      // Nothing was copied: the destination never appeared.
+      assert.deepStrictEqual(await readdir(root), ['dir']);
     } finally {
       await cleanupTestRoot(outside);
     }

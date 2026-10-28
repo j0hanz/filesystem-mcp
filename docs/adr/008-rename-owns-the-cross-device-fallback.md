@@ -25,15 +25,16 @@ the helper added no depth: deleting it moves its branch into `fs.ts` whole.
 `GuardedFileSystem.rename` owns the whole move: validation, the self-move and
 Respelling rules, the Capture snapshot, the raw rename, and on `EXDEV` the
 staged copy, the rename into place and the removal of the source.
-`copyIntoPlace` is private and takes the paths `rename` already validated.
+`copyIntoPlace` is private; the fallback validates both paths again after the
+failed rename, as the public helper did, before it copies.
 `performRenameWithFallback` is deleted; the move tool calls `rename`.
 
 A move completed by a copy abandons the Capture, as a copy does: a
 cross-device move is not undoable yet. Undo's restore (`world.rename` in
 `src/core/undo.ts`) opts out of the fallback and rethrows `EXDEV`: a copy
 gives every descendant a new identity, and an older record that tracks one of
-them would then read as modified since. Before the copy is removed, the
-source is validated again, as the guarded `rm` did, so an ancestor swapped
+them would then read as modified since. The source is validated once more
+before the copy is removed, as the guarded `rm` did, so an ancestor swapped
 for an out-of-root link during the copy cannot steer the removal outside.
 
 The partial-completion error keeps its code and wording: the code of the

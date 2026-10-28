@@ -661,9 +661,13 @@ export class GuardedFileSystem {
   /**
    * The cross-device half of `rename`, after the raw rename failed with EXDEV:
    * copy into place on the destination's device, and only then remove the
-   * source. Both paths are already validated by `rename`.
+   * source.
    */
-  async #moveAcrossDevices(validSource: string, validDest: string, label: string): Promise<void> {
+  async #moveAcrossDevices(source: string, destination: string, label: string): Promise<void> {
+    // Validated again after the failed rename, as the public copy helper did:
+    // an ancestor swapped for a link in between must not steer the copy.
+    const validSource = await this.pathGuard.validatePathForDelete(source);
+    const validDest = await this.pathGuard.validatePathForWrite(destination);
     let copied = false;
     try {
       await this.#copyIntoPlace(validSource, validDest);
