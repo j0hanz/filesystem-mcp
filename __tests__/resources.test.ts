@@ -24,6 +24,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { ResourceStore } from '../src/core/store.ts';
+import { MIB } from '../src/core/util.ts';
 import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
 import { buildSectionsRecord, INSTRUCTIONS_URI, renderSections } from '../src/instructions.ts';
 import { getResourceContracts, registerResources } from '../src/resources.ts';
@@ -36,6 +37,7 @@ import {
   fsErrorMatcher,
   makeGuard,
   waitFor,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -179,6 +181,48 @@ describe('MCP Resources', () => {
       assert.strictEqual(instructionsContent.mimeType, 'text/markdown');
       assert.ok('text' in instructionsContent);
       assert.strictEqual(instructionsContent.text, rendered);
+    });
+
+    async function readInstructionsText(): Promise<string> {
+      const contracts = getResourceContracts({
+        resourceStore: new ResourceStore(),
+        pathGuard: await makeGuard([tmpdir()]),
+        readOnly: false,
+      });
+      const contract = contracts.find((c) => c.name === 'filesystem-mcp-instructions');
+      assert.ok(contract);
+      const content = firstResourceContent(
+        await contract.read(new URL(INSTRUCTIONS_URI), {}, dummyContext),
+      );
+      assert.ok('text' in content);
+      return content.text;
+    }
+
+    it('instructions name both TOO_LARGE limits', async () => {
+      const text = await readInstructionsText();
+      assert.match(text, /TOO_LARGE: Over the file size limit, use read/);
+      assert.match(
+        text,
+        /Over the stdio message limit, .*connect over HTTP; media and binary files need HTTP\./,
+      );
+    });
+
+    it('instructions state limits in MiB', async () => {
+      const text = await withEnv({ FS_MAX_FILE_SIZE: undefined }, readInstructionsText);
+      assert.match(text, /max file size 10 MiB/);
+      assert.match(
+        text,
+        /stdio responses up to 9\.8 MiB once JSON-encoded \(HTTP has no such limit\)/,
+      );
+    });
+
+    it('enforced_limits renders a fractional file size limit', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(1.5 * MIB) }, () => {
+        assert.match(
+          requiredSection(buildSectionsRecord(false), 'constraints'),
+          /max file size 1\.5 MiB/,
+        );
+      });
     });
   });
 
