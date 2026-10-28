@@ -51,6 +51,10 @@ has no fake-based test of the fallback any more.
   `fs.ts` alone, and `__tests__/move-exdev.test.ts` exercises the real copy.
 - An undo of a move that crossed devices now moves the entry back by copying,
   where it failed with `EXDEV` before.
+- If that undo copies but cannot remove the source, the first result names
+  the duplicate and the record stays; a retry reports the entry as modified
+  since, because `record.from` now holds a new inode. Known and accepted:
+  reaching it needs the record's parent to change mount after the move.
 - A separate `fs.move` beside `rename` would split the fallback again. Do not
   add one; extend `rename`.
 
