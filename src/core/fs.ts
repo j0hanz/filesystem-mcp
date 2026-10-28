@@ -310,7 +310,16 @@ export class GuardedFileSystem {
     }
   }
 
-  async rename(oldPath: string, newPath: string): Promise<void> {
+  /**
+   * On EXDEV the entry is copied into place and the source removed, unless
+   * `crossDevice` is false: a copy gives every descendant a new identity,
+   * which undo's records cannot follow, so a restore rethrows instead.
+   */
+  async rename(
+    oldPath: string,
+    newPath: string,
+    { crossDevice = true }: { crossDevice?: boolean } = {},
+  ): Promise<void> {
     // Not validateExistingPath: that resolves through a symlink, so renaming a
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
@@ -352,7 +361,7 @@ export class GuardedFileSystem {
       await this.#rawRename(validOld, validNew);
     } catch (error: unknown) {
       rethrowIfAborted(error);
-      if (!isNodeError(error) || error.code !== 'EXDEV') throw error;
+      if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
       await this.#moveAcrossDevices(validOld, validNew, oldPath);
       return;
     }
@@ -659,6 +668,9 @@ export class GuardedFileSystem {
     try {
       await this.#copyIntoPlace(validSource, validDest);
       copied = true;
+      // Re-check containment, as the guarded rm did: an ancestor swapped for an
+      // out-of-root link during the copy must not steer the removal outside.
+      await this.pathGuard.validatePathForDelete(validSource);
       await this.#rawRm(validSource, { recursive: true, force: true });
     } catch (copyOrRemoveError: unknown) {
       rethrowIfAborted(copyOrRemoveError);

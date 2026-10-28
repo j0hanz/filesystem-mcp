@@ -549,7 +549,9 @@ function diskWorld(
     mkdir: (path, mode) => fs.mkdir(path, { mode }),
     mkdirp: (path) => fs.mkdir(path, { recursive: true }),
     symlink: (target, path, type) => fs.symlink(target, path, type),
-    rename: (oldPath, newPath) => fs.rename(oldPath, newPath),
+    // No cross-device copy: it would give every descendant a new identity,
+    // and the records that track them would read as modified since.
+    rename: (oldPath, newPath) => fs.rename(oldPath, newPath, { crossDevice: false }),
     treeNames: async (path) => ['', ...(await fsReaddir(path, { recursive: true }))],
     lock: (path, fn) => fs.lockForWrite(path, fn),
     lockPair: (a, b, fn) => fs.lockPairForWrite(a, b, fn),

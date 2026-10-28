@@ -190,6 +190,55 @@ describe('rename across devices (EXDEV)', () => {
     });
   });
 
+  it('crossDevice: false rethrows EXDEV and changes nothing', async () => {
+    const a = join(root, 'a.txt');
+    await writeFile(a, 'x');
+    await assert.rejects(
+      fs.rename(a, join(root, 'b.txt'), { crossDevice: false }),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'EXDEV',
+    );
+    assert.deepStrictEqual(await readdir(root), ['a.txt']);
+  });
+
+  it('an ancestor swapped for an out-of-root link during the copy stops the removal', async (t) => {
+    const outside = await createTestRoot();
+    try {
+      await mkdir(join(outside, 'dir'));
+      await writeFile(join(outside, 'dir', 'x.txt'), 'outside');
+      const dir = join(root, 'dir');
+      await mkdir(dir);
+      const src = join(dir, 'x.txt');
+      await writeFile(src, 'inside');
+      let removed: string | undefined;
+      let swapped = true;
+      const swapping = new GuardedFileSystem(guard, undefined, {
+        rename: async () => {
+          // The ancestor becomes a link out of the root before the copy reads.
+          await rm(dir, { recursive: true });
+          swapped = await trySymlink(join(outside, 'dir'), dir, () =>
+            t.skip('symlinks need privileges'),
+          );
+          throw errno('EXDEV');
+        },
+        rm: (path) => {
+          removed = String(path);
+          return Promise.resolve();
+        },
+      });
+      const attempt = assert.rejects(swapping.rename(src, join(root, 'y.txt')), (err: unknown) => {
+        assert.ok(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        return true;
+      });
+      if (!swapped) return;
+      await attempt;
+      assert.strictEqual(removed, undefined);
+      assert.strictEqual(await readFile(join(outside, 'dir', 'x.txt'), 'utf8'), 'outside');
+    } finally {
+      await cleanupTestRoot(outside);
+    }
+  });
+
   it('a staged entry keeps the protection it has at the destination', async () => {
     const dest = join(root, 'dst', '.aws');
     const staged = crossDeviceStagingPath(dest);

@@ -28,10 +28,13 @@ staged copy, the rename into place and the removal of the source.
 `copyIntoPlace` is private and takes the paths `rename` already validated.
 `performRenameWithFallback` is deleted; the move tool calls `rename`.
 
-Every caller of `rename` gets the fallback, including undo's restore
-(`world.rename` in `src/core/undo.ts`). A move completed by a copy abandons
-the Capture, as a copy does, for the move tool and for undo alike: a
-cross-device undo is not recorded yet.
+A move completed by a copy abandons the Capture, as a copy does: a
+cross-device move is not undoable yet. Undo's restore (`world.rename` in
+`src/core/undo.ts`) opts out of the fallback and rethrows `EXDEV`: a copy
+gives every descendant a new identity, and an older record that tracks one of
+them would then read as modified since. Before the copy is removed, the
+source is validated again, as the guarded `rm` did, so an ancestor swapped
+for an out-of-root link during the copy cannot steer the removal outside.
 
 The partial-completion error keeps its code and wording: the code of the
 removal error, and the message `Cross-device move of <oldPath>: copy succeeded
@@ -49,12 +52,8 @@ has no fake-based test of the fallback any more.
 
 - Locality: a staging or denylist bug on the cross-device path is fixed in
   `fs.ts` alone, and `__tests__/move-exdev.test.ts` exercises the real copy.
-- An undo of a move that crossed devices now moves the entry back by copying,
-  where it failed with `EXDEV` before.
-- If that undo copies but cannot remove the source, the first result names
-  the duplicate and the record stays; a retry reports the entry as modified
-  since, because `record.from` now holds a new inode. Known and accepted:
-  reaching it needs the record's parent to change mount after the move.
+- An undo whose source parent became another mount after the move still
+  fails with `EXDEV` and changes nothing, as it did before.
 - A separate `fs.move` beside `rename` would split the fallback again. Do not
   add one; extend `rename`.
 
