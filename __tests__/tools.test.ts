@@ -5167,10 +5167,12 @@ describe('High-severity bug-hunt regressions (tools)', () => {
       });
       const structured = result.structuredContent as {
         files?: unknown[];
-        failures?: unknown[];
+        failures?: { error: { code: string; message: string } }[];
       };
       assert.strictEqual(structured.files?.length, 1, JSON.stringify(result));
       assert.strictEqual(structured.failures?.length, 1);
+      assert.strictEqual(structured.failures[0]?.error.code, 'CANCELLED');
+      assert.match(structured.failures[0]?.error.message ?? '', /appeared after overwrite/);
       const contents = await readFile(file, 'utf-8');
       assert.ok(contents === 'first' || contents === 'second');
     });

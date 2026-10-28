@@ -245,7 +245,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
           (await destExists(ctx.fs, resolvedTarget, 'create'))
         ) {
           throw new FsError(
-            ErrorCode.INVALID_INPUT,
+            ErrorCode.CANCELLED,
             `create refused: "${path}" appeared after overwrite confirmation was checked`,
             path,
           );
