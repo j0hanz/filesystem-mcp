@@ -711,6 +711,44 @@ describe('readText', () => {
     );
   }
 
+  it('readText keeps no whole read chunk per short read', async (t) => {
+    // procfs and FUSE files return a page per read; each kept chunk must be filled first.
+    const text = 'x'.repeat(64 * 1024);
+    const open = fs.open.bind(fs);
+    let reportedSize: number | undefined;
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      const read = handle.read.bind(handle);
+      t.mock.method(handle, 'stat', () =>
+        Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
+      );
+      t.mock.method(
+        handle,
+        'read',
+        (buffer: Buffer, offset: number, length: number, position: number) =>
+          read(buffer, offset, Math.min(length, 4096), position),
+      );
+      return handle;
+    });
+    const allocUnsafe = Buffer.allocUnsafe.bind(Buffer);
+    const large = t.mock.method(Buffer, 'allocUnsafe', (size: number) => allocUnsafe(size));
+    const largeAllocations = () =>
+      large.mock.calls.filter((call) => call.arguments[0] >= 64 * 1024).length;
+
+    reportedSize = 0;
+    const virtual = await readText(fs, await put('proc.txt', text));
+    assert.equal(virtual.kind, 'text');
+    if (virtual.kind !== 'text') return;
+    assert.equal(virtual.bytes.toString('utf8'), text);
+    assert.equal(largeAllocations(), 1, 'one chunk filled across the short reads');
+
+    large.mock.resetCalls();
+    reportedSize = undefined;
+    assert.equal((await readText(fs, await put('small.txt', 'text\n'))).kind, 'text');
+    assert.equal(largeAllocations(), 0, 'finding EOF after a sized read needs no read chunk');
+  });
+
   it('readText reads a file that grew after the fstat to EOF', async (t) => {
     // Another process appends between fstat and read; a Rewrite must not drop the tail.
     const open = fs.open.bind(fs);

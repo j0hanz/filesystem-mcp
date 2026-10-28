@@ -18,6 +18,8 @@ import { getMaxTextFileSize } from './util.ts';
 
 /** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
 const READ_CHUNK_BYTES = 512 * 1024;
+/** The read past a sized read, which nearly always returns 0 at EOF. */
+const EOF_PROBE_BYTES = 4 * 1024;
 
 export interface ScanScope {
   readonly root: string;
@@ -110,16 +112,26 @@ export async function readText(
       }
       // A file that came up short has shrunk, so it is already at EOF.
       if (total === size) {
+        // Each chunk is filled across reads before it is kept: procfs returns a
+        // page per read, and a kept subarray holds its whole chunk. After a sized
+        // read the first chunk is small, since it usually only finds EOF.
+        let chunk = Buffer.allocUnsafe(size > 0 ? EOF_PROBE_BYTES : READ_CHUNK_BYTES);
+        let used = 0;
         for (;;) {
           // Stop once past the cap: a virtual file may never end.
           signal?.throwIfAborted();
-          const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-          const { bytesRead } = await settled(handle.read(chunk, 0, READ_CHUNK_BYTES, total));
+          const { bytesRead } = await settled(handle.read(chunk, used, chunk.length - used, total));
           if (bytesRead === 0) break;
           total += bytesRead;
+          used += bytesRead;
           if (total > maxFileSize) return { kind: 'tooLarge', size: total };
-          chunks.push(chunk.subarray(0, bytesRead));
+          if (used === chunk.length) {
+            chunks.push(chunk);
+            chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+            used = 0;
+          }
         }
+        if (used > 0) chunks.push(chunk.subarray(0, used));
       }
       const [only] = chunks;
       // The common case is the one head buffer: no copy.
