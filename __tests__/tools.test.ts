@@ -3727,16 +3727,66 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
-  it('replace_text on a named file past maxResults replaces every match and does not stop', async () => {
+  it('replace_text on a named file past maxMatches replaces every match and does not stop', async () => {
     const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
     const result = await harness.client.callTool({
       name: 'replace_text',
-      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxResults: 2 },
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxMatches: 2 },
     });
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
     assert.strictEqual(meta.totalMatches, 5);
     assert.strictEqual(meta.stoppedReason, undefined);
     assert.doesNotMatch(firstTextBlock(result).text ?? '', /scan stopped early/u);
+  });
+
+  it('replace_text maxResults still caps as a deprecated alias', async () => {
+    // More files than replace_text dispatches at once, so the cap trips mid-sweep.
+    for (let i = 0; i < 10; i++) {
+      await writeTestFile(tmpDir, `replace_alias/${String(i)}.txt`, 'x\n');
+    }
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: join(tmpDir, 'replace_alias'),
+        searchPattern: 'x',
+        replacement: 'y',
+        dryRun: true,
+        maxResults: 1,
+      },
+    });
+    // The cap is checked as files settle, so a batch in flight may overshoot it; the sweep still stops early.
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
+    assert.ok(meta.totalMatches < 10, String(meta.totalMatches));
+  });
+
+  it('replace_text rejects maxMatches with maxResults', async () => {
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: tmpDir,
+        searchPattern: 'x',
+        replacement: 'y',
+        dryRun: true,
+        maxMatches: 1,
+        maxResults: 1,
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(
+      firstTextBlock(result).text ?? '',
+      /Cannot use both 'maxMatches' and 'maxResults'/u,
+    );
+  });
+
+  it('replace_text publishes maxResults as deprecated', async () => {
+    const { tools } = await harness.client.listTools();
+    const props = tools.find((t) => t.name === 'replace_text')?.inputSchema.properties as {
+      maxResults?: { deprecated?: boolean };
+      maxMatches?: object;
+    };
+    assert.strictEqual(props.maxResults?.deprecated, true);
+    assert.ok(props.maxMatches);
   });
 
   it('edit, patch and diff refuse a non-UTF-8 file and leave its bytes intact', async () => {
@@ -3808,7 +3858,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(applied).text ?? '', /no match for oldText "gamma"/);
 
     // More files than replace_text dispatches at once, so a finished file
-    // trips maxResults=1 before the sweep ends.
+    // trips maxMatches=1 before the sweep ends.
     for (let i = 1; i < 10; i++) await writeTestFile(tmpDir, `preview/${String(i)}.txt`, 'alpha\n');
     const replace = await harness.client.callTool({
       name: 'replace_text',
@@ -3817,15 +3867,33 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         searchPattern: 'alpha',
         replacement: 'ALPHA',
         dryRun: true,
-        maxResults: 1,
+        maxMatches: 1,
       },
     });
     const replaceText = firstTextBlock(replace).text ?? '';
     assert.match(replaceText, /^\+ALPHA$/mu);
     assert.ok(
-      replaceText.includes('// scan stopped early: hit the maxResults limit;'),
+      replaceText.includes('// scan stopped early: hit the maxMatches limit;'),
       replaceText,
     );
+    assert.strictEqual((replace._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+  });
+
+  it('replace_text maxFiles stop keeps its reason', async () => {
+    const dir = join(tmpDir, 'replace_max_files_stop');
+    await writeTestFile(dir, 'a.txt', 'needle');
+    await writeTestFile(dir, 'b.txt', 'needle');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: dir,
+        searchPattern: 'needle',
+        replacement: 'pin',
+        dryRun: true,
+        maxFiles: 1,
+      },
+    });
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxFiles');
   });
 
   // RE2 reports offsets in code points; JS strings index in UTF-16 code units,
@@ -4978,8 +5046,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Raised 2026-10-23 to 9850 read-only (full unchanged): the list and diff
   // descriptions name their default skips and refusals, gaps the Glama TDQS
   // review flagged; measured 20397 / 9668.
+  // Raised 2026-10-28 to 20750 full (read-only unchanged): replace_text
+  // gains maxMatches beside the deprecated maxResults alias; measured 20673.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_550;
+    const BUDGET_CHARS = 20_750;
     const BUDGET_CHARS_READ_ONLY = 9_850;
 
     const full = await createTestClientPair([tmpDir]);

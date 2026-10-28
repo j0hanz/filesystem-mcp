@@ -585,9 +585,15 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "description": "Include a unified diff of all changes in the response",
             "type": "boolean"
           },
+          "maxMatches": {
+            "description": "Maximum total match count across all files before stopping (default: 100)",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
           "maxResults": {
-            "default": 100,
-            "description": "Maximum total match count across all files before stopping",
+            "description": "Deprecated alias of maxMatches; removed in the next release",
+            "deprecated": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 10000

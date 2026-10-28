@@ -50,50 +50,74 @@ import {
 import { type BatchResult, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
-const SearchAndReplaceInputSchema = z.strictObject({
-  path: OptionalPath.describe(
-    'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — ' +
-      'scope it deliberately, and pair a wide scope with dryRun=true first',
-  ),
-  pattern: SafeGlobPattern.optional().describe(
-    'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
-  ),
-  searchPattern: nonBlankString('searchPattern')
-    .max(10000)
-    .describe(
-      'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
+const SearchAndReplaceInputSchema = z
+  .strictObject({
+    path: OptionalPath.describe(
+      'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — ' +
+        'scope it deliberately, and pair a wide scope with dryRun=true first',
     ),
-  replacement: z
-    .string()
-    .max(10000)
-    .describe(
-      'Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.',
-    )
-    .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
-  isRegex: defaultFalseBoolean('Treat searchPattern as a RE2 regex (default: literal text match)'),
-  includeHidden: IncludeHidden,
-  includeIgnored: IncludeIgnored,
-  caseSensitive: defaultFalseBoolean('Enable case-sensitive matching (default: case-insensitive)'),
-  wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
-  dryRun: defaultFalseBoolean(
-    'Preview replacements without writing to disk (default: false = apply changes)',
-  ),
-  returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
-  maxResults: z
-    .uint32()
-    .min(1)
-    .max(MAX_SEARCH_RESULTS)
-    .optional()
-    .default(DEFAULT_SEARCH_RESULTS)
-    .describe('Maximum total match count across all files before stopping'),
-  maxFiles: z
-    .uint32()
-    .min(1)
-    .max(MAX_SEARCH_RESULTS)
-    .optional()
-    .describe('Maximum number of files to process'),
-  maxDepth: MaxDepth,
-});
+    pattern: SafeGlobPattern.optional().describe(
+      'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
+    ),
+    searchPattern: nonBlankString('searchPattern')
+      .max(10000)
+      .describe(
+        'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
+      ),
+    replacement: z
+      .string()
+      .max(10000)
+      .describe(
+        'Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.',
+      )
+      .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
+    isRegex: defaultFalseBoolean(
+      'Treat searchPattern as a RE2 regex (default: literal text match)',
+    ),
+    includeHidden: IncludeHidden,
+    includeIgnored: IncludeIgnored,
+    caseSensitive: defaultFalseBoolean(
+      'Enable case-sensitive matching (default: case-insensitive)',
+    ),
+    wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
+    dryRun: defaultFalseBoolean(
+      'Preview replacements without writing to disk (default: false = apply changes)',
+    ),
+    returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
+    maxMatches: z
+      .uint32()
+      .min(1)
+      .max(MAX_SEARCH_RESULTS)
+      .optional()
+      .describe(
+        `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)})`,
+      ),
+    // shortcut: maxResults alias ships one release; then drop together the field
+    // + superRefine, the `?? args.maxResults` fallback, and BUDGET_CHARS 20_750 in tools.test.ts.
+    maxResults: z
+      .uint32()
+      .min(1)
+      .max(MAX_SEARCH_RESULTS)
+      .optional()
+      .describe('Deprecated alias of maxMatches; removed in the next release')
+      .meta({ deprecated: true }),
+    maxFiles: z
+      .uint32()
+      .min(1)
+      .max(MAX_SEARCH_RESULTS)
+      .optional()
+      .describe('Maximum number of files to process'),
+    maxDepth: MaxDepth,
+  })
+  .superRefine((value, ctx) => {
+    if (value.maxMatches !== undefined && value.maxResults !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['maxResults'],
+        message: "Cannot use both 'maxMatches' and 'maxResults'",
+      });
+    }
+  });
 
 type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
   /** The root `results[].path` is relative to; a path that would not read back from it is absolute. */
@@ -507,7 +531,13 @@ function buildSearchAndReplaceStructuredResult(
       : {}),
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
-    ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
+    // The scan names its cap `maxResults`; replace_text's argument is `maxMatches`.
+    ...(outcome.stoppedReason
+      ? {
+          stoppedReason:
+            outcome.stoppedReason === 'maxResults' ? 'maxMatches' : outcome.stoppedReason,
+        }
+      : {}),
   };
 }
 
@@ -567,7 +597,7 @@ async function handleSearchAndReplace(
         onlyFiles: true,
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
         concurrency: REPLACE_CONCURRENCY,
-        cap: args.maxResults,
+        cap: args.maxMatches ?? args.maxResults ?? DEFAULT_SEARCH_RESULTS,
         weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
         // Bounds the patches held above an unsettled prefix.
@@ -702,7 +732,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
         );
       }
     } else if (stop !== undefined) {
-      // maxResults/maxFiles here are the caller's own caps, so raising one is
+      // maxMatches/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
       lines.push(
         `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,
