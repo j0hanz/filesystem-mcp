@@ -421,9 +421,12 @@ entries and directories it could not read.
   [Pagination](#pagination-and-cached-results)). `replace_text` stops at
   the same deadline too: in a live run the files it already rewrote stay
   rewritten, and the text names them. Run a wide replacement with
-  `dryRun: true` first. `maxMatches` stops a run once that many matches are
-  found; it does not shorten the scan itself. A narrower `path`, `pattern`,
-  or `maxDepth` does.
+  `dryRun: true` first. In a directory run, `maxMatches` ends the scan early
+  once that many matches are found, and the result says so. It is a stopping
+  point, not a strict bound: files already in flight, and every match in a
+  file already being rewritten, still count, so the total can pass it. A
+  `path` that names one file ignores it. A narrower `path`, `pattern`, or
+  `maxDepth` also shortens the scan.
 
 ## Confirmations
 
