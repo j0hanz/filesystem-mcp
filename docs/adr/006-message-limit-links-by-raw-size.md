@@ -48,7 +48,8 @@ how to know that before linking, when the server has only the file's size.
 A new core module, `src/core/outbound.ts`, owns the Message limit: the
 constant, the measures, the "does it fit" check and both refusals (the
 tool's `FsError` `TOO_LARGE` and the resource read's `ProtocolError`). It
-answers per transport. HTTP and the in-memory pair always fit (ADR-003).
+answers per transport. HTTP and the in-memory pair always fit: only the
+SDK's fixed 10 MiB stdio read buffer limits a message.
 
 Over stdio, a file is linkable when:
 

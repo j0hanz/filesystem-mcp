@@ -105,7 +105,8 @@ export function readFloorOver(
 
 /**
  * `value`'s JSON-encoded size when it is over the Message limit on
- * `transport`, else `undefined`. Only stdio has one (ADR-003).
+ * `transport`, else `undefined`. Only stdio has one: the SDK's fixed 10 MiB
+ * stdio read buffer, which HTTP does not have.
  */
 export function bytesOverMessageLimit(transport: Transport, value: unknown): number | undefined {
   return transport === 'stdio' ? jsonBytesOver(value, MAX_OUTBOUND_RESULT_BYTES) : undefined;

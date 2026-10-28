@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **get-help and `internal://instructions` give the right TOO_LARGE advice
+  for the stdio message limit.** Before, they advised only head/tail, which
+  can't return a media or binary file, and named the file size limit in MB.
 - **`edit` with `dryRun` reports the file's own modified time.** Before,
   `modified` was the time of the preview, although nothing was written.
 - **`replace_text` stats each file right after it writes it.** Before, it
