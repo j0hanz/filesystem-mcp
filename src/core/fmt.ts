@@ -58,14 +58,15 @@ export function formatCount(count: number, singular: string, plural = `${singula
 const SIZE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
 
 /** Human-readable byte size for tree lines and summary text: `5 B`, `1 KiB`, `1.5 KiB`, `20 KiB`. */
-export function formatByteSize(bytes: number): string {
+/** `fine` keeps one decimal at any magnitude (`10.5 MiB`) for configured limits. */
+export function formatByteSize(bytes: number, fine = false): string {
   let value = bytes;
   let unit = 0;
   while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
     value /= 1024;
     unit++;
   }
-  let rounded = unit === 0 || value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  let rounded = unit === 0 || (value >= 10 && !fine) ? Math.round(value) : Math.round(value * 10) / 10;
   if (rounded >= 1024 && unit < SIZE_UNITS.length - 1) {
     rounded = 1;
     unit++;

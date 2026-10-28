@@ -224,6 +224,15 @@ describe('MCP Resources', () => {
         );
       });
     });
+
+    it('enforced_limits keeps one decimal on a file size limit of 10 MiB or more', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(10.5 * MIB) }, () => {
+        assert.match(
+          requiredSection(buildSectionsRecord(false), 'constraints'),
+          /max file size 10\.5 MiB/,
+        );
+      });
+    });
   });
 
   describe('filesystem-mcp://result/{id} (TC-FUNC-058–060)', () => {
