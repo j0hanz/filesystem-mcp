@@ -203,6 +203,25 @@ describe('Confirmation', () => {
     });
   });
 
+  it('reissued-then-swap: the reprompt keeps reissued, so a dropped answer refuses', async () => {
+    const state = await asRound(
+      await run(ctx(sealed({ a: 1 }, { reissued: true })), [item('a', 9)]),
+    );
+    assert.strictEqual(state.reprompted, true);
+    assert.strictEqual(state.reissued, true);
+    const done = asConfirmed(await run(ctx(state, {}, ['confirm_0']), [item('a', 9)]));
+    assert.deepStrictEqual(done.verdict('a'), {
+      refused: describeRefusal({ droppedInputResponseKeys: ['confirm_0'] }, 'confirm_0'),
+    });
+  });
+
+  it('reprompt-no-gate: a reprompt does not re-check elicitation capability', async () => {
+    const noElicit = { ...ctx(sealed({ a: 1 })), clientCapabilities: {} };
+    await assert.rejects(run({ ...noElicit, requestState: () => undefined }, [item('a')]));
+    const state = await asRound(await run(noElicit, [item('a', 9)]));
+    assert.strictEqual(state.reprompted, true);
+  });
+
   it('vanish-then-dropped: a vanished entry’s dropped key does not re-issue', async () => {
     const done = asConfirmed(
       await run(ctx(sealed({ a: 1, b: 2 }), both, ['confirm_0']), [item('b', 2)]),

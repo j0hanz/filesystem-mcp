@@ -71,6 +71,9 @@ export async function confirm(
         paths: pending.map((item) => item.path),
         identities: pending.map((item) => ({ path: item.path, ...item.identity })),
         ...(reprompted ? { reprompted: true as const } : {}),
+        // A reprompt keeps `reissued`: one call reissues at most once, so a
+        // Confirmation runs three rounds at most.
+        ...(sealed?.reissued === true ? { reissued: true as const } : {}),
       },
       pending.map((item, i) => input(item, confirmKey(i))),
     );
@@ -92,6 +95,8 @@ export async function confirm(
       })
       .map((item) => item.path),
   );
+  // No capability gate here: the client already answered an elicitation in
+  // this call, so it can answer the reprompt too.
   if (changed.size > 0 && sealed.reprompted !== true) return freshRound(true);
 
   // Answers are keyed by the index in the SEALED list: an entry that vanished
