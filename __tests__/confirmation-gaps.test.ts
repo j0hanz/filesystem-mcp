@@ -9,6 +9,7 @@ import {
   createElicitationClientPair,
   createTestRoot,
   firstTextBlock,
+  trySymlink,
   writeTestFile,
 } from './helpers.ts';
 
@@ -264,6 +265,35 @@ describe('Confirmation gaps', () => {
         );
         assert.strictEqual(await readFile(dst, 'utf8'), 'SWAPPED');
         assert.strictEqual(await readFile(other, 'utf8'), 'NEW');
+      },
+    );
+  });
+
+  it('create cancels the second entry naming one approved file through a symlinked parent', async (t) => {
+    await withPrompts(
+      'overwrite',
+      async () => {},
+      async ({ root, pair }) => {
+        const real = await writeTestFile(root, 'real/f.txt', 'ORIGINAL');
+        if (
+          !(await trySymlink(join(root, 'real'), join(root, 'alias'), () => t.skip('no symlinks')))
+        )
+          return;
+        const result = await pair.client.callTool({
+          name: 'create',
+          arguments: {
+            files: [
+              { path: real, content: 'FIRST' },
+              { path: join(root, 'alias', 'f.txt'), content: 'SECOND' },
+            ],
+          },
+        });
+        // The first write replaces the file the second entry was approved against.
+        assert.match(
+          firstTextBlock(result).text ?? '',
+          /replaced after the overwrite was approved/,
+        );
+        assert.strictEqual(await readFile(real, 'utf8'), 'FIRST');
       },
     );
   });

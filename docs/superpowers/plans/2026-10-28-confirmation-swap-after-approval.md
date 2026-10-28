@@ -32,7 +32,7 @@ the 2026-10-28 grilling: cover `create`, `move` and `copy`; refuse with
 ## Review Focus
 
 1. **A batch with one swapped entry:** the swapped entry fails with `CANCELLED`, and the other entries are still written. Task 1 tests this.
-2. **A swap after approval:** exactly one prompt is shown, never a second. Tasks 1 and 2 assert `prompts() === 1`.
+2. **A swap after approval:** one round, no re-prompt: the swapped entry is refused, not asked about again. Tasks 1 and 2 assert the prompt count of that single round (`create` shows one prompt per pending file).
 3. **A destination that vanished after approval:** the write proceeds. Tasks 1 and 2 test this.
 4. **`move` takes no lock:** the re-check narrows the swap window to the gap between the check and the rename, but does not close it. Task 2 marks this with a `shortcut:` comment.
 5. **A symlinked destination under `COUNT_THROUGH_FD`:** both stats return `UNKNOWN_IDENTITY`, so the write proceeds. This is unchanged behaviour, with no new test.
@@ -59,7 +59,7 @@ the 2026-10-28 grilling: cover `create`, `move` and `copy`; refuse with
   it('create refuses a file replaced after its overwrite was approved', …
     // files: [{ path: dst.txt, content: 'NEW' }, { path: other.txt, content: 'NEW' }]
     // dst.txt and other.txt both exist; the hook swaps only dst.txt ('SWAPPED')
-    assert.strictEqual(prompts(), 1);
+    assert.strictEqual(prompts(), 2); // one round, one prompt per pending file: no re-prompt
     assert.match(firstTextBlock(result).text ?? '', /replaced after the overwrite was approved/);
     assert.strictEqual(await readFile(dst, 'utf8'), 'SWAPPED');
     assert.strictEqual(await readFile(other, 'utf8'), 'NEW');
@@ -112,7 +112,7 @@ the 2026-10-28 grilling: cover `create`, `move` and `copy`; refuse with
 
   ```ts
   it('move refuses a destination replaced after its overwrite was approved', …
-    assert.strictEqual(prompts(), 1);
+    assert.strictEqual(prompts(), 2); // one round, one prompt per pending file: no re-prompt
     assert.match(firstTextBlock(result).text ?? '', /replaced after the overwrite was approved/);
     assert.strictEqual(await readFile(destination, 'utf8'), 'SWAPPED');
     await access(source); // move did not consume the source

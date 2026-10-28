@@ -226,6 +226,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       // symlinked parent) cannot clobber each other.
       return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
         // Replaced since approval: the verdict only covers the identity it sealed.
+        // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the rename; lock the file across processes if that window matters
         if (pending !== undefined) {
           const now = await destIdentity(ctx.fs, resolvedTarget, 'create');
           if (now && !sameIdentity(now, pending.identity)) {
