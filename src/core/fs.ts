@@ -19,7 +19,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -630,6 +630,42 @@ export class GuardedFileSystem {
     await fsCp(validSource, validDest, options);
   }
 
+  /**
+   * The cross-device half of a move: copy `source` (a link stays a link) into
+   * a fresh staging directory beside `destination`, then rename it into place.
+   * That rename stays on one device, so it refuses what a plain rename would
+   * (a non-empty directory is never merged into), and a partial copy never
+   * reaches the destination. The staging directory is removed either way.
+   */
+  async copyIntoPlace(source: string, destination: string): Promise<void> {
+    const validSource = await this.pathGuard.validatePathForDelete(source);
+    const validDest = await this.pathGuard.validatePathForWrite(destination);
+    const staged = crossDeviceStagingPath(validDest);
+    // The staged path keeps the destination's name, so the denylist rules on it as in place.
+    await this.pathGuard.validatePathForWrite(staged);
+    // As in cp: a forced copy across a merged tree cannot be told apart for undo.
+    this.#capture?.abandon('copies are not undoable yet');
+    const stagingDir = dirname(staged);
+    await fsMkdir(stagingDir, { mode: 0o700 });
+    try {
+      await fsCp(validSource, staged, {
+        recursive: true,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+      });
+      // Raw, not this.rename: both ends are validated, and the guarded rename
+      // would read a relative link that now resolves to the destination as a
+      // move onto itself, and do nothing.
+      await fsRename(staged, validDest);
+    } finally {
+      await fsRm(stagingDir, { recursive: true, force: true }).catch((cleanupError: unknown) => {
+        Logger.warn(
+          `Failed to remove staging directory ${stagingDir} after a cross-device move: ${formatUnknownErrorMessage(cleanupError)}`,
+        );
+      });
+    }
+  }
+
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
@@ -836,6 +872,16 @@ export class GuardedFileSystem {
       });
     }
   }
+}
+
+/**
+ * Where `copyIntoPlace` stages a copy: `<parent>/.<12 hex>.tmp/<name>`. Every
+ * segment of the destination survives, so a deny rule that covers an entry in
+ * place covers it staged too.
+ */
+export function crossDeviceStagingPath(validDest: string): string {
+  const stagingDir = `.${randomUUID().replace(/-/g, '').slice(0, 12)}.tmp`;
+  return join(dirname(validDest), stagingDir, basename(validDest));
 }
 
 /** What an approval round pins an entry to: a swapped entry differs in at least one field. */

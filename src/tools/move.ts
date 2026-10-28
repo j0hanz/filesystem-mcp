@@ -1,7 +1,6 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { randomUUID } from 'node:crypto';
 import { basename, dirname, relative, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -10,7 +9,6 @@ import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   ErrorCode,
-  formatUnknownErrorMessage,
   FsError,
   isFsError,
   isNodeError,
@@ -21,7 +19,6 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists, destIdentity, type EntryIdentity, sameIdentity } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import { Logger } from '../core/observability.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import type { TransferKind } from '../core/path.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
@@ -558,7 +555,7 @@ async function assertTreeHasNoProtectedEntries(
 export async function performRenameWithFallback(
   validSource: string,
   validDest: string,
-  fsOps: Pick<GuardedFileSystem, 'rename' | 'cp' | 'rm'>,
+  fsOps: Pick<GuardedFileSystem, 'rename' | 'copyIntoPlace' | 'rm'>,
   originalSource: string,
 ): Promise<void> {
   try {
@@ -570,29 +567,12 @@ export async function performRenameWithFallback(
       throw error;
     }
 
-    // EXDEV: cross-device rename. Copy to a temp sibling on the destination's
-    // device, preserving symlinks and timestamps, then rename it into place:
-    // that same-device rename refuses what the original would have (a
-    // non-empty directory is never merged into), and a partial copy never
-    // reaches the destination. Only then is the source removed.
-    const tmp = `${validDest}.${randomUUID().replace(/-/g, '').slice(0, 12)}.tmp`;
+    // EXDEV: cross-device rename. Copy into place on the destination's device
+    // (see copyIntoPlace: a non-empty directory is never merged into, and a
+    // partial copy never reaches the destination); only then remove the source.
     let copied = false;
     try {
-      try {
-        await fsOps.cp(validSource, tmp, {
-          recursive: true,
-          verbatimSymlinks: true,
-          preserveTimestamps: true,
-        });
-        await fsOps.rename(tmp, validDest);
-      } catch (stageError) {
-        await fsOps.rm(tmp, { recursive: true, force: true }).catch((cleanupError: unknown) => {
-          Logger.warn(
-            `Failed to remove temp copy ${tmp} after a failed cross-device move: ${formatUnknownErrorMessage(cleanupError)}`,
-          );
-        });
-        throw stageError;
-      }
+      await fsOps.copyIntoPlace(validSource, validDest);
       copied = true;
       await fsOps.rm(validSource, { recursive: true, force: true });
     } catch (copyOrRemoveError) {
