@@ -3756,7 +3756,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     // The cap is checked as files settle, so a batch in flight may overshoot it; the sweep still stops early.
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
-    assert.ok(meta.stoppedReason, 'expected the cap to stop the run');
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
     assert.ok(meta.totalMatches < 10, String(meta.totalMatches));
   });
 

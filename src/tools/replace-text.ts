@@ -92,6 +92,8 @@ const SearchAndReplaceInputSchema = z
       .describe(
         `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)})`,
       ),
+    // shortcut: maxResults alias ships one release; then drop together the field
+    // + superRefine, the `?? args.maxResults` fallback, and BUDGET_CHARS 20_750 in tools.test.ts.
     maxResults: z
       .uint32()
       .min(1)
