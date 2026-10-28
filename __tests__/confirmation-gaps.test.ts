@@ -269,34 +269,41 @@ describe('Confirmation gaps', () => {
     );
   });
 
-  it('create cancels the second entry naming one approved file through a symlinked parent', async (t) => {
-    await withPrompts(
-      'overwrite',
-      async () => {},
-      async ({ root, pair }) => {
-        const real = await writeTestFile(root, 'real/f.txt', 'ORIGINAL');
-        if (
-          !(await trySymlink(join(root, 'real'), join(root, 'alias'), () => t.skip('no symlinks')))
-        )
-          return;
-        const result = await pair.client.callTool({
-          name: 'create',
-          arguments: {
-            files: [
-              { path: real, content: 'FIRST' },
-              { path: join(root, 'alias', 'f.txt'), content: 'SECOND' },
-            ],
-          },
-        });
-        // The first write replaces the file the second entry was approved against.
-        assert.match(
-          firstTextBlock(result).text ?? '',
-          /replaced after the overwrite was approved/,
-        );
-        assert.strictEqual(await readFile(real, 'utf8'), 'FIRST');
-      },
-    );
-  });
+  // Entries validate their paths concurrently, so either may take the write lock first.
+  for (const delayFirstLock of [false, true]) {
+    it(`create cancels the later writer naming one approved file through a symlinked parent (first lock delayed: ${delayFirstLock})`, async (t) => {
+      await withPrompts(
+        'overwrite',
+        async () => {},
+        async ({ root, pair }) => {
+          const real = await writeTestFile(root, 'real/f.txt', 'ORIGINAL');
+          if (
+            !(await trySymlink(join(root, 'real'), join(root, 'alias'), () =>
+              t.skip('no symlinks'),
+            ))
+          )
+            return;
+          // Delaying the first entry's lock makes the second entry the writer that wins.
+          if (delayFirstLock) beforeFirstWriteLock(t, () => new Promise((r) => setTimeout(r, 50)));
+          const result = await pair.client.callTool({
+            name: 'create',
+            arguments: {
+              files: [
+                { path: real, content: 'FIRST' },
+                { path: join(root, 'alias', 'f.txt'), content: 'SECOND' },
+              ],
+            },
+          });
+          // The winning write replaces the file the other entry was approved against.
+          const text = firstTextBlock(result).text ?? '';
+          assert.strictEqual(text.match(/replaced after the overwrite was approved/g)?.length, 1);
+          const content = await readFile(real, 'utf8');
+          assert.ok(['FIRST', 'SECOND'].includes(content), content);
+          if (delayFirstLock) assert.strictEqual(content, 'SECOND');
+        },
+      );
+    });
+  }
 
   it('create writes a file that vanished after its overwrite was approved', async (t) => {
     await withPrompts(
