@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { describe, it, type TestContext } from 'node:test';
 
@@ -81,6 +82,29 @@ function afterApprovedPlanStat(t: TestContext, action: () => Promise<void>): voi
       return result;
     },
   );
+}
+
+/** Runs `action` after the `n`th lstat of a path ending in `name`. */
+function afterNthLstat(t: TestContext, name: string, n: number, action: () => Promise<void>): void {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+  const { lstat } = GuardedFileSystem.prototype;
+  let seen = 0;
+  t.mock.method(
+    GuardedFileSystem.prototype,
+    'lstat',
+    async function (this: GuardedFileSystem, ...args: Parameters<typeof lstat>) {
+      const result = await lstat.apply(this, args);
+      if (args[0].endsWith(name) && (seen += 1) === n) await action();
+      return result;
+    },
+  );
+}
+
+/** The delete result row for the first requested path. */
+function deleteError(result: Awaited<ReturnType<Pair['client']['callTool']>>) {
+  const meta = result._meta as
+    { results?: { error?: { code: string; message: string } }[] } | undefined;
+  return meta?.results?.[0]?.error;
 }
 
 describe('Confirmation gaps', () => {
@@ -202,24 +226,27 @@ describe('Confirmation gaps', () => {
     });
   }
 
-  it('move writes a destination that vanished after its overwrite was approved', async (t) => {
-    await withPrompts(
-      'overwrite',
-      async () => {},
-      async ({ root, pair, prompts }) => {
-        const source = await writeTestFile(root, 'src.txt', 'SOURCE');
-        const destination = await writeTestFile(root, 'dest.txt', 'ORIGINAL');
-        afterApprovedPlanStat(t, () => rm(destination));
-        const result = await pair.client.callTool({
-          name: 'move',
-          arguments: { moves: [{ source, destination }] },
-        });
-        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
-        assert.strictEqual(prompts(), 1);
-        assert.strictEqual(await readFile(destination, 'utf8'), 'SOURCE');
-      },
-    );
-  });
+  for (const copy of [false, true]) {
+    const tool = copy ? 'copy' : 'move';
+    it(`${tool} writes a destination that vanished after its overwrite was approved`, async (t) => {
+      await withPrompts(
+        'overwrite',
+        async () => {},
+        async ({ root, pair, prompts }) => {
+          const source = await writeTestFile(root, 'src.txt', 'SOURCE');
+          const destination = await writeTestFile(root, 'dest.txt', 'ORIGINAL');
+          afterApprovedPlanStat(t, () => rm(destination));
+          const result = await pair.client.callTool({
+            name: 'move',
+            arguments: { ...(copy && { copy }), moves: [{ source, destination }] },
+          });
+          assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+          assert.strictEqual(prompts(), 1);
+          assert.strictEqual(await readFile(destination, 'utf8'), 'SOURCE');
+        },
+      );
+    });
+  }
 
   it('create re-prompts for a file swapped during confirmation', async () => {
     await withPrompts(
@@ -346,6 +373,64 @@ describe('Confirmation gaps', () => {
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(await readFile(a, 'utf8'), 'newA');
         assert.strictEqual(await readFile(b, 'utf8'), 'newB');
+      },
+    );
+  });
+
+  it('delete refuses a directory replaced after its delete was approved', async (t) => {
+    await withPrompts(
+      'delete',
+      async () => {},
+      async ({ root, pair, prompts }) => {
+        const target = join(root, 'target');
+        const other = await writeTestFile(root, 'other.txt', 'other');
+        await writeTestFile(root, 'target/child.txt', 'original');
+        // 1st lstat plans the prompt round, 2nd plans the approved retry.
+        afterNthLstat(t, 'target', 2, async () => {
+          await rm(target, { recursive: true });
+          await writeTestFile(root, 'target/child.txt', 'replacement');
+        });
+        const result = await pair.client.callTool({
+          name: 'delete',
+          arguments: { paths: [target, other], recursive: true },
+        });
+        assert.strictEqual(prompts(), 1);
+        assert.strictEqual(deleteError(result)?.code, 'CANCELLED', JSON.stringify(result));
+        assert.match(deleteError(result)?.message ?? '', /replaced after the delete was approved/);
+        assert.strictEqual(await readFile(join(target, 'child.txt'), 'utf8'), 'replacement');
+      },
+    );
+  });
+
+  it('delete refuses a socket replaced after it was planned', async (t) => {
+    if (process.platform === 'win32') return t.skip('unix sockets need POSIX');
+    await withPrompts(
+      'delete',
+      async () => {},
+      async ({ root, pair }) => {
+        const sock = join(root, 's.sock');
+        const other = await writeTestFile(root, 'other.txt', 'other');
+        const listen = (server: Server) =>
+          new Promise<void>((resolve) => server.listen(sock, resolve));
+        const first = createServer();
+        const second = createServer();
+        await listen(first);
+        try {
+          afterNthLstat(t, 's.sock', 1, async () => {
+            await new Promise((resolve) => first.close(resolve));
+            await rm(sock, { force: true });
+            await listen(second);
+          });
+          const result = await pair.client.callTool({
+            name: 'delete',
+            arguments: { paths: [sock, other] },
+          });
+          assert.strictEqual(deleteError(result)?.code, 'CANCELLED', JSON.stringify(result));
+          assert.strictEqual(await exists(sock), true);
+        } finally {
+          first.close();
+          second.close();
+        }
       },
     );
   });

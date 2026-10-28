@@ -166,7 +166,6 @@ async function finalizeDeletion(
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
 
-  const currentItemType = resolveEntryType(currentStats.stats);
   // Identity comparison, not just the coarse category: a swap during the
   // confirmation gap (delete original, create a same-named replacement) keeps
   // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
@@ -177,12 +176,12 @@ async function finalizeDeletion(
     identityOf(plan.firstStats.stats),
     identityOf(currentStats.stats),
   );
-  if (plan.itemType !== 'other' && identityChanged) {
+  if (identityChanged) {
     return {
       failure: {
         path: plan.validPath,
-        error: Problem.invalidInput(
-          `Delete failed: item type changed from ${plan.itemType} to ${currentItemType} during confirmation.`,
+        error: Problem.cancelled(
+          `Delete cancelled: "${plan.validPath}" was replaced after the delete was approved.`,
           { path: plan.validPath },
         ),
       },

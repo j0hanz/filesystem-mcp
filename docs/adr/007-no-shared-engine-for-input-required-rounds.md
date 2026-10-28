@@ -57,3 +57,23 @@ Two Confirmation rules are settled instead:
   new op, or `prompts/get` or `resources/read` eliciting). Three users may
   share enough to justify a seam; two that differ in all but one step do
   not.
+
+## Addendum, 2026-10-28: no write-time check behind the Confirmation
+
+The same review proposed that the Confirmation also own the check made at
+write time: an approved entry replaced since is refused. `create`, `move`
+and `copy` share about nine lines of it (re-stat, compare, refuse). `delete`
+differs on purpose:
+
+- It checks the **Entry** with `lstat`; an overwrite checks the **Landing**.
+- A vanished entry follows its `ignoreIfNotExists` contract.
+- It re-checks entries that were never pending, for which the Confirmation
+  seals no identity.
+
+A check behind the Confirmation would take the view, the vanished-entry
+policy, the wording and the result key from each caller: as wide as the
+code it hides. Each tool keeps its own check. What differed by accident is
+aligned instead: an entry replaced after approval, or one that appeared at
+an overwrite's landing during the Confirmation, is refused with
+`CANCELLED` in every tool, and `delete` checks every entry type, sockets
+and FIFOs included.
