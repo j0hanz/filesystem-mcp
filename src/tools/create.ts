@@ -15,7 +15,13 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import { destExists, destIdentity, type Stats } from '../core/fs.ts';
+import {
+  destExists,
+  destIdentity,
+  type EntryIdentity,
+  sameIdentity,
+  type Stats,
+} from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
@@ -163,12 +169,12 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       PARALLEL_CONCURRENCY,
       ctx.signal,
     );
-    const pendingByPath = new Map<string, string>();
+    const pendingByPath = new Map<string, { validPath: string; identity: EntryIdentity }>();
     const items = new Map<string, ConfirmItem>();
     for (const { index, value } of planned) {
       const requested = files[index]?.path;
       if (!value || !requested) continue;
-      pendingByPath.set(requested, value.validPath);
+      pendingByPath.set(requested, value);
       items.set(value.validPath, {
         path: value.validPath,
         identity: value.identity,
@@ -201,9 +207,9 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
     >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
-      const pendingPath = pendingByPath.get(path);
-      if (pendingPath !== undefined) {
-        const verdict = confirmed.verdict(pendingPath);
+      const pending = pendingByPath.get(path);
+      if (pending !== undefined) {
+        const verdict = confirmed.verdict(pending.validPath);
         if (verdict === 'skipped') return { skipped: path };
         if (verdict !== 'proceed') {
           throw new FsError(
@@ -219,11 +225,23 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       // Lock per resolved file so two entries naming one file (e.g. through a
       // symlinked parent) cannot clobber each other.
       return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+        // Replaced since approval: the verdict only covers the identity it sealed.
+        // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the rename; lock the file across processes if that window matters
+        if (pending !== undefined) {
+          const now = await destIdentity(ctx.fs, resolvedTarget, 'create');
+          if (now && !sameIdentity(now, pending.identity)) {
+            throw new FsError(
+              ErrorCode.CANCELLED,
+              `create cancelled: "${path}" was replaced after the overwrite was approved.`,
+              path,
+            );
+          }
+        }
         // The file may have appeared since the overwrite set was planned.
         if (
           !append &&
           !overwrite &&
-          pendingPath === undefined &&
+          pending === undefined &&
           (await destExists(ctx.fs, resolvedTarget, 'create'))
         ) {
           throw new FsError(
