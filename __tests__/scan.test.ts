@@ -711,6 +711,25 @@ describe('readText', () => {
     );
   }
 
+  it('readText reads a file that grew after the fstat to EOF', async (t) => {
+    // Another process appends between fstat and read; a Rewrite must not drop the tail.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 5 })));
+      return handle;
+    });
+    const verdict = await readText(fs, await put('grows.txt', 'head\ntail\n'));
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.equal(verdict.bytes.toString('utf8'), 'head\ntail\n');
+    const path = await put('grows-big.txt', Buffer.alloc(2 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.equal((await readText(fs, path)).kind, 'tooLarge');
+    });
+  });
+
   it('readText pre-aborted signal rejects', async () => {
     const path = await put('f.txt', 'text');
     await assert.rejects(readText(fs, path, AbortSignal.abort()));

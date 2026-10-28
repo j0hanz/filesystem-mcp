@@ -99,7 +99,12 @@ export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   if (!signal) {
     return promise;
   }
-  signal.throwIfAborted();
+  if (signal.aborted) {
+    // The caller already started `promise`; nothing else awaits it, so a late
+    // rejection would be unhandled, and the server exits on one.
+    promise.catch(() => undefined);
+    signal.throwIfAborted();
+  }
   let onAbort: (() => void) | undefined;
   return Promise.race([
     promise,

@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { processInParallel } from '../src/core/concurrency.ts';
+import { processInParallel, withAbort } from '../src/core/concurrency.ts';
+
+describe('withAbort', () => {
+  it('a pre-aborted call leaves no unhandled rejection behind', async () => {
+    // The server shuts down on an unhandled rejection (src/index.ts).
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const late = new Promise((_, reject) => setTimeout(() => reject(new Error('ENOENT')), 5));
+      assert.throws(() => withAbort(late, AbortSignal.abort()), { name: 'AbortError' });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
 
 describe('Concurrency Tests', () => {
   it('TC-CONC-001: an abort after every item ran still returns the results', async () => {

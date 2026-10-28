@@ -88,39 +88,42 @@ export async function readText(
       stats = await settled(handle.stat());
       const { size } = stats;
       if (size > maxFileSize) return { kind: 'tooLarge', size };
-      // Read the size fstat reported: handle.readFile would fstat again and then
-      // read once more to find EOF, two extra round trips on every file a walk
-      // touches. A file that grows meanwhile is read as it was at the fstat.
-      // A size of 0 is also what procfs and other virtual files report while
-      // holding text, so those still read to EOF.
-      if (size === 0) {
-        // Read to EOF in chunks, stopping once past the cap: such a file may never end.
-        const chunks: Buffer[] = [];
-        let total = 0;
+      // Read the size fstat reported into one buffer: handle.readFile would fstat
+      // again, an extra round trip on every file a walk touches. Then read on to
+      // EOF, so a file that grew meanwhile is read whole (a Rewrite writes back
+      // what it read), as is a procfs or other virtual file, which reports a
+      // size of 0 while holding text. Usually that is one read that returns 0.
+      const chunks: Buffer[] = [];
+      let total = 0;
+      if (size > 0) {
+        const head = Buffer.allocUnsafe(size);
+        while (total < size) {
+          // In readFile's own chunks, with its check of the signal before each,
+          // so a deadline on a slow filesystem lands as soon as it did there.
+          signal?.throwIfAborted();
+          const length = Math.min(size - total, READ_CHUNK_BYTES);
+          const { bytesRead } = await settled(handle.read(head, total, length, total));
+          if (bytesRead === 0) break;
+          total += bytesRead;
+        }
+        chunks.push(head.subarray(0, total));
+      }
+      // A file that came up short has shrunk, so it is already at EOF.
+      if (total === size) {
         for (;;) {
+          // Stop once past the cap: a virtual file may never end.
           signal?.throwIfAborted();
           const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-          const { bytesRead } = await settled(handle.read(chunk, 0, READ_CHUNK_BYTES, null));
+          const { bytesRead } = await settled(handle.read(chunk, 0, READ_CHUNK_BYTES, total));
           if (bytesRead === 0) break;
           total += bytesRead;
           if (total > maxFileSize) return { kind: 'tooLarge', size: total };
           chunks.push(chunk.subarray(0, bytesRead));
         }
-        bytes = Buffer.concat(chunks, total);
-      } else {
-        bytes = Buffer.allocUnsafe(size);
-        let filled = 0;
-        while (filled < size) {
-          // In readFile's own chunks, with its check of the signal before each,
-          // so a deadline on a slow filesystem lands as soon as it did there.
-          signal?.throwIfAborted();
-          const length = Math.min(size - filled, READ_CHUNK_BYTES);
-          const { bytesRead } = await settled(handle.read(bytes, filled, length, filled));
-          if (bytesRead === 0) break;
-          filled += bytesRead;
-        }
-        bytes = bytes.subarray(0, filled);
       }
+      const [only] = chunks;
+      // The common case is the one head buffer: no copy.
+      bytes = chunks.length === 1 && only ? only : Buffer.concat(chunks, total);
     } finally {
       // A failed close must not replace the verdict or the refusal, so it is logged, not thrown.
       const close = () =>
