@@ -394,10 +394,12 @@ readable with `resources/read` for about 60 seconds. These cached results
 appear in `resources/list`, and each one added or expired sends
 `notifications/resources/list_changed`.
 
-A `find_files`, `search_text` or `list` scan that hit a limit ends with
-`// scan stopped early: ...` and sets `_meta.stoppedReason` (`maxResults` or
-`timeout`). The totals are then a floor, not a count. Narrow the path or the
-pattern. The [limits table](configuration.md#limits) has the numbers. A scan
+A `find_files`, `search_text`, `list` or `replace_text` scan that hit a limit
+ends with `// scan stopped early: ...` and sets `_meta.stoppedReason`
+(`maxResults`, `maxMatches`, `maxFiles` or `timeout`; `maxMatches` and
+`maxFiles` are replace_text's caps). The totals are then a floor, not a count.
+Narrow the path or the pattern, or for `replace_text` raise `maxMatches` or
+`maxFiles`. The [limits table](configuration.md#limits) has the numbers. A scan
 does not follow a symlinked file, and `_meta.skippedInaccessible` counts the
 entries and directories it could not read.
 
@@ -419,8 +421,12 @@ entries and directories it could not read.
   [Pagination](#pagination-and-cached-results)). `replace_text` stops at
   the same deadline too: in a live run the files it already rewrote stay
   rewritten, and the text names them. Run a wide replacement with
-  `dryRun: true` first. `maxResults` does not shorten a scan; a narrower
-  `path`, `pattern`, or `maxDepth` does.
+  `dryRun: true` first. In a directory run, `maxMatches` ends the scan early
+  once that many matches are found, and the result says so. It is a stopping
+  point, not a strict bound: files already in flight, and every match in a
+  file already being rewritten, still count, so the total can pass it. A
+  `path` that names one file ignores it. A narrower `path`, `pattern`, or
+  `maxDepth` also shortens the scan.
 
 ## Confirmations
 

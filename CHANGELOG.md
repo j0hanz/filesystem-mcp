@@ -13,11 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the overwrite prompt is open.** Before, the call overwrote whatever
   now sat at the destination, not the file you were asked about. A second
   replacement refuses that entry.
+- **`create`, `move` and `copy` refuse an entry replaced after you approved
+  overwriting it.** Before, a file swapped in between the approval and the
+  write was overwritten instead of the one you were asked about.
 - **`delete` asks again for a directory that was replaced while the prompt
   was open.** Before, the call failed that entry.
 
 ### Changed
 
+- **`replace_text`'s match cap is `maxMatches`.** Before, it was `maxResults`,
+  which is a page size in every other tool.
+- **`replace_text` reports `stoppedReason: 'maxMatches'` when it hits its
+  match cap.** Before, it reported `'maxResults'`.
 - **Write tools over stdio link every file stdio can read back.** Before,
   `create` with `append` linked only text files under about 1.7 MB, and a
   binary file got no link in the last 64 KiB under the limit.
@@ -37,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `skippedTooLarge`, as `search_text` does.** Before, each one was a
   `TOO_LARGE` failure row, and a run with nothing else to change reported
   an error. A file you name still fails with `TOO_LARGE`.
+
+### Deprecated
+
+- **`replace_text`'s `maxResults`** is read as `maxMatches`. Use `maxMatches`;
+  `maxResults` is removed in the next release.
 
 ### Fixed
 
