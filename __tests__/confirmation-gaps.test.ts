@@ -66,6 +66,22 @@ function beforeFirstWriteLock(t: TestContext, action: () => Promise<void>): void
   );
 }
 
+/** Runs `action` after the approved round's plan stat of `dest.txt` (its 2nd stat), which still sees the original. */
+function afterApprovedPlanStat(t: TestContext, action: () => Promise<void>): void {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+  const { stat } = GuardedFileSystem.prototype;
+  let seen = 0;
+  t.mock.method(
+    GuardedFileSystem.prototype,
+    'stat',
+    async function (this: GuardedFileSystem, ...args: Parameters<typeof stat>) {
+      const result = await stat.apply(this, args);
+      if (args[0].endsWith('dest.txt') && (seen += 1) === 2) await action();
+      return result;
+    },
+  );
+}
+
 describe('Confirmation gaps', () => {
   it('move re-prompts for a destination swapped during confirmation', async () => {
     await withPrompts(
@@ -154,6 +170,51 @@ describe('Confirmation gaps', () => {
         });
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.strictEqual(prompts(), 2);
+        assert.strictEqual(await readFile(destination, 'utf8'), 'SOURCE');
+      },
+    );
+  });
+
+  for (const copy of [false, true]) {
+    const tool = copy ? 'copy' : 'move';
+    it(`${tool} refuses a destination replaced after its overwrite was approved`, async (t) => {
+      await withPrompts(
+        'overwrite',
+        async () => {},
+        async ({ root, pair, prompts }) => {
+          const source = await writeTestFile(root, 'src.txt', 'SOURCE');
+          const destination = await writeTestFile(root, 'dest.txt', 'ORIGINAL');
+          afterApprovedPlanStat(t, () => swap(destination, 'SWAPPED'));
+          const result = await pair.client.callTool({
+            name: 'move',
+            arguments: { ...(copy && { copy }), moves: [{ source, destination }] },
+          });
+          assert.strictEqual(prompts(), 1);
+          assert.match(
+            firstTextBlock(result).text ?? '',
+            /replaced after the overwrite was approved/,
+          );
+          assert.strictEqual(await readFile(destination, 'utf8'), 'SWAPPED');
+          await access(source); // not consumed
+        },
+      );
+    });
+  }
+
+  it('move writes a destination that vanished after its overwrite was approved', async (t) => {
+    await withPrompts(
+      'overwrite',
+      async () => {},
+      async ({ root, pair, prompts }) => {
+        const source = await writeTestFile(root, 'src.txt', 'SOURCE');
+        const destination = await writeTestFile(root, 'dest.txt', 'ORIGINAL');
+        afterApprovedPlanStat(t, () => rm(destination));
+        const result = await pair.client.callTool({
+          name: 'move',
+          arguments: { moves: [{ source, destination }] },
+        });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+        assert.strictEqual(prompts(), 1);
         assert.strictEqual(await readFile(destination, 'utf8'), 'SOURCE');
       },
     );

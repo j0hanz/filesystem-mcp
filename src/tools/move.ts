@@ -16,7 +16,7 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import { destExists, destIdentity, type EntryIdentity } from '../core/fs.ts';
+import { destExists, destIdentity, type EntryIdentity, sameIdentity } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
@@ -216,6 +216,19 @@ async function executeTransfer(
       `${VERB[op]} cancelled: destination "${plan.pair.destination}" was created during confirmation.`,
       plan.pair.destination,
     );
+  }
+
+  // Replaced since approval: the verdict only covers the identity it sealed.
+  // shortcut: move/copy take no write lock, so a swap between this check and the rename still lands; lock the destination if that window matters
+  if (plan.pending && plan.destIdentity) {
+    const now = await destIdentity(ctx.fs, plan.validDest, op);
+    if (now && !sameIdentity(now, plan.destIdentity)) {
+      throw new FsError(
+        ErrorCode.CANCELLED,
+        `${VERB[op]} cancelled: destination "${plan.pair.destination}" was replaced after the overwrite was approved.`,
+        plan.pair.destination,
+      );
+    }
   }
 
   await ctx.fs.mkdir(dirname(plan.validDest), { recursive: true });

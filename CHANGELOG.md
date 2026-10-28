@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the overwrite prompt is open.** Before, the call overwrote whatever
   now sat at the destination, not the file you were asked about. A second
   replacement refuses that entry.
+- **`create`, `move` and `copy` refuse an entry replaced after you approved
+  overwriting it.** Before, a file swapped in between the approval and the
+  write was overwritten instead of the one you were asked about.
 - **`delete` asks again for a directory that was replaced while the prompt
   was open.** Before, the call failed that entry.
 
