@@ -16,8 +16,7 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
-import { escapeRegExp, toCrlf, usesCrlf } from '../core/util.ts';
+import { toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -150,21 +149,178 @@ interface EditMatches {
   truncated: boolean;
 }
 
+// Whitespace-flexible matching for ignoreWhitespace, without a regex. One RE2
+// pattern built from the whole oldText outgrew re2-wasm's fixed heap at a few
+// thousand lines, and the file itself shares that heap (issue #157); V8's
+// backtracking engine overflows its stack on the same pattern. oldText is
+// literal tokens with no whitespace in them, separated by whitespace gaps, and
+// every gap is followed by a literal or the end, so a greedy walk from each
+// candidate start is exact and never backtracks.
+
+export interface FlexMatch {
+  /** UTF-16 offset into the full content. */
+  start: number;
+  /** UTF-16 length; always > 0, since oldText holds at least one non-whitespace character. */
+  length: number;
+}
+
 /**
- * Pattern for a whitespace run of oldText that contains a newline. Between two
- * pieces of text it stays flexible — at least one newline, as many as the file
- * has. At either edge of oldText it matches exactly the newlines written: a
- * flexible edge swallows the blank lines around the match and, at the trailing
- * edge, the next line's indentation, all of which newText then replaces. Each
- * newline may carry horizontal whitespace before it, which covers the `\r` of
- * a CRLF file and a blank line with stray spaces.
+ * A whitespace run of oldText. `horizontal` stays on one line; `required`
+ * keeps two word characters apart. `lines` contains a newline: between two
+ * pieces of text it stays flexible (`count` undefined) — at least one
+ * newline, as many as the file has. At either edge of oldText it matches
+ * exactly `count` newlines: a flexible edge would swallow the blank lines
+ * around the match and, at the trailing edge, the next line's indentation,
+ * all of which newText then replaces. Each newline may carry horizontal
+ * whitespace before it, which covers the `\r` of a CRLF file and a blank
+ * line with stray spaces. `tail` takes the horizontal whitespace after the
+ * last newline; a trailing edge takes none unless the caller wrote
+ * indentation there.
  */
-function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
-  if (!edge.leading && !edge.trailing) return '(?:[^\\S\\n]*\\n)+[^\\S\\n]*';
-  const count = token.split('\n').length - 1;
-  const lines = `(?:[^\\S\\n]*\\n){${String(count)}}`;
-  // Nothing after the final newline unless the caller wrote indentation there.
-  return edge.trailing && token.endsWith('\n') ? lines : `${lines}[^\\S\\n]*`;
+type Gap =
+  | { kind: 'horizontal'; required: boolean }
+  | { kind: 'lines'; count: number | undefined; tail: boolean };
+
+interface FlexSpec {
+  lead: Gap | undefined;
+  /** Non-empty, whitespace-free; `gaps[k]` sits between `literals[k]` and `literals[k + 1]`. */
+  literals: string[];
+  gaps: Gap[];
+  trail: Gap | undefined;
+}
+
+// Horizontal whitespace is JS `\s` minus the newline, the class oldText is
+// split on; the RE2 pattern took only ASCII there, so an NBSP oldText could
+// not match the same NBSP in the file. U+FEFF is left out: as a file-leading
+// BOM it would be absorbed as indentation and copied onto every new line.
+//
+// Char-code loops, not sticky regexes: a repetitive file can walk the gaps of
+// every candidate, and a regex call per gap made that ten times slower.
+const isSpace = (code: number): boolean =>
+  code === 32 ||
+  (code >= 9 && code <= 13) ||
+  (code >= 0xa0 && code !== 0xfeff && /\s/u.test(String.fromCharCode(code)));
+const isHorizontal = (code: number): boolean => code !== 10 && isSpace(code);
+
+function skipHorizontal(content: string, at: number): number {
+  let pos = at;
+  while (pos < content.length && isHorizontal(content.charCodeAt(pos))) pos += 1;
+  return pos;
+}
+
+function buildFlexSpec(oldText: string): FlexSpec {
+  // `split` on whitespace puts text at even indices and whitespace runs at odd ones.
+  const tokens = oldText.split(/(\s+)/u);
+  const last = tokens.length - 1;
+  const spec: FlexSpec = { lead: undefined, literals: [], gaps: [], trail: undefined };
+  for (const [i, token] of tokens.entries()) {
+    if (i % 2 === 0) {
+      if (token !== '') spec.literals.push(token);
+      continue;
+    }
+    const leading = i === 1 && tokens[0] === '';
+    const trailing = i === last - 1 && tokens[last] === '';
+    let gap: Gap;
+    if (token.includes('\n')) {
+      gap =
+        leading || trailing
+          ? {
+              kind: 'lines',
+              count: token.split('\n').length - 1,
+              tail: !(trailing && token.endsWith('\n')),
+            }
+          : { kind: 'lines', count: undefined, tail: true };
+    } else {
+      const required = /\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '');
+      gap = { kind: 'horizontal', required };
+    }
+    if (leading) spec.lead = gap;
+    else if (trailing) spec.trail = gap;
+    else spec.gaps.push(gap);
+  }
+  return spec;
+}
+
+/** Where a gap starting at `at` ends, or -1 when the content there does not fit it. */
+function walkGap(content: string, at: number, gap: Gap): number {
+  if (gap.kind === 'horizontal') {
+    const end = skipHorizontal(content, at);
+    return gap.required && end === at ? -1 : end;
+  }
+  if (gap.count === undefined) {
+    let pos = at;
+    let newline = false;
+    for (let code = content.charCodeAt(pos); isSpace(code); code = content.charCodeAt(++pos)) {
+      newline ||= code === 10;
+    }
+    return newline ? pos : -1;
+  }
+  let pos = at;
+  for (let n = 0; n < gap.count; n++) {
+    pos = skipHorizontal(content, pos);
+    if (content[pos] !== '\n') return -1;
+    pos += 1;
+  }
+  return gap.tail ? skipHorizontal(content, pos) : pos;
+}
+
+/**
+ * Where the leading gap ending at `at` starts, never below `floor`, or -1.
+ * Walking back as far as it fits gives the leftmost start.
+ */
+function walkLeadBack(content: string, at: number, gap: Gap, floor: number): number {
+  const back = (pos: number): number => {
+    let p = pos;
+    while (p > floor && isHorizontal(content.charCodeAt(p - 1))) p -= 1;
+    return p;
+  };
+  if (gap.kind === 'horizontal') return back(at);
+  let pos = back(at);
+  for (let n = 0; n < (gap.count ?? 0); n++) {
+    if (pos <= floor || content[pos - 1] !== '\n') return -1;
+    pos = back(pos - 1);
+  }
+  return pos;
+}
+
+/** Where a match whose first literal sits at `at` ends, or -1. */
+function walkForward(content: string, at: number, spec: FlexSpec): number {
+  let pos = at + (spec.literals[0]?.length ?? 0);
+  for (const [k, gap] of spec.gaps.entries()) {
+    pos = walkGap(content, pos, gap);
+    const literal = spec.literals[k + 1] ?? '';
+    if (pos === -1 || !content.startsWith(literal, pos)) return -1;
+    pos += literal.length;
+  }
+  return spec.trail ? walkGap(content, pos, spec.trail) : pos;
+}
+
+/**
+ * Leftmost non-overlapping matches of oldText's whitespace-flexible form,
+ * scanning content from `from` (default 0) as if `content.slice(from)` were
+ * all there is, with offsets into the full content. Lazy, so a caller can
+ * stop after a few.
+ */
+export function* flexMatches(content: string, oldText: string, from = 0): Generator<FlexMatch> {
+  const spec = buildFlexSpec(oldText);
+  const first = spec.literals[0];
+  if (first === undefined) return;
+  // Every candidate's first literal starts with non-whitespace and a leading
+  // gap walks back over whitespace only, so candidate starts rise with the
+  // literal's offset and the first hit that fits is the leftmost match.
+  let floor = from;
+  let at = content.indexOf(first, floor);
+  while (at !== -1) {
+    const start = spec.lead ? walkLeadBack(content, at, spec.lead, floor) : at;
+    const end = start === -1 ? -1 : walkForward(content, at, spec);
+    if (end === -1) {
+      at = content.indexOf(first, at + 1);
+      continue;
+    }
+    yield { start, length: end - start };
+    floor = end;
+    at = content.indexOf(first, floor);
+  }
 }
 
 /**
@@ -193,53 +349,24 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // a newline keeps at least one newline, so a single-line oldText cannot
     // match across a newline and a multi-line oldText cannot collapse onto one
     // line. Horizontal whitespace stays mandatory between word characters so
-    // adjacent identifiers are not merged. Built token by token: `split` on
-    // whitespace puts text at even indices and whitespace runs at odd ones.
-    // A newline run at either edge of oldText matches exactly, so the edit
-    // cannot reach past the lines the caller named.
-    const tokens = oldText.split(/(\s+)/u);
-    const last = tokens.length - 1;
-    let pattern = '';
-    for (const [i, token] of tokens.entries()) {
-      if (i % 2 === 0) {
-        pattern += escapeRegExp(token);
-      } else if (token.includes('\n')) {
-        pattern += newlineRunPattern(token, {
-          leading: i === 1 && tokens[0] === '',
-          trailing: i === last - 1 && tokens[last] === '',
-        });
-      } else if (/\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '')) {
-        pattern += '[^\\S\\n]+';
-      } else {
-        pattern += '[^\\S\\n]*';
+    // adjacent identifiers are not merged. A newline run at either edge of
+    // oldText matches exactly, so the edit cannot reach past the lines the
+    // caller named.
+    const scan = (from: number): void => {
+      for (const match of flexMatches(content, oldText, from)) {
+        if (add(match.start, match.length)) return;
+        if (from > 0) return;
       }
-    }
-    const regex = compileRegex(pattern, { caseSensitive: true });
-    try {
-      // execMatches resets lastIndex and reports UTF-16 offsets; the raw RE2
-      // index counts code points and would splice off-by-one per emoji.
-      const scan = (from: number): void => {
-        for (const match of execMatches(regex, from === 0 ? content : content.slice(from))) {
-          // A zero-length match names an empty span, which cannot be replaced.
-          if (match.text.length > 0 && add(from + match.start, match.text.length)) return;
-          if (from > 0) return;
-        }
-      };
-      scan(0);
-      // execMatches resumes past each match, so a second match overlapping the
-      // first is never reported; look once more from just past its first
-      // non-whitespace character. Starting inside the leading whitespace would
-      // re-find the same occurrence, since the pattern's leading run is `*`. The
-      // pattern carries no anchors, so matching a suffix finds the same spans.
-      if (found.count === 1 && found.first) {
-        const { startIndex, length } = found.first;
-        const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
-        scan(afterCodePoint(content, startIndex + lead));
-      }
-    } finally {
-      // The compiled pattern owns wasm memory re2-wasm never reclaims on its
-      // own; its lifetime is this one search.
-      freeRegex(regex);
+    };
+    scan(0);
+    // flexMatches resumes past each match, so a second match overlapping the
+    // first is never reported; look once more from just past its first
+    // non-whitespace character. Starting inside the leading whitespace would
+    // re-find the same occurrence, since a leading run walks back over it.
+    if (found.count === 1 && found.first) {
+      const { startIndex, length } = found.first;
+      const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
+      scan(afterCodePoint(content, startIndex + lead));
     }
     return found;
   }
@@ -339,6 +466,14 @@ function applyEdits(
   const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
+    // The file is decoded UTF-8, so its pairs are whole; a lone half in oldText
+    // can only match half of one and would leave the other half in the file.
+    if (!edit.oldText.isWellFormed()) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
+      );
+    }
     const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
     const newText = crlf ? toCrlf(edit.newText) : edit.newText;
     const found = findEditMatches(newContent, oldText, ignoreWhitespace);
