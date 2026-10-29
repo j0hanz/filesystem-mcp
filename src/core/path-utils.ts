@@ -167,7 +167,8 @@ export function normalizePath(p: string): string {
   // The rest of the path retains its original casing.
   // IMPORTANT: callers must use isSamePath / isPathInsideDirectory for all
   // equality and containment checks — never raw string equality — because
-  // those helpers apply full case-folding before comparing.
+  // those helpers fold ASCII case only (see normalizeCaseForComparison); a full
+  // Unicode fold would reopen the U+212A sibling escape.
   if (IS_WINDOWS && resolved.length >= 2 && resolved.charCodeAt(1) === CHAR_COLON) {
     return resolved.charAt(0).toLowerCase() + resolved.slice(1);
   }
