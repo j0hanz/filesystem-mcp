@@ -462,7 +462,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       for (let round = 0; round < 20; round++) {
         await Promise.all([fs.writeFile(filePath, 'AAAA'), fs.writeFile(twin, 'B')]);
         const content = await readFile(filePath, 'utf-8');
-        assert.ok(content === 'AAAA' || content === 'B', `round ${String(round)}: ${JSON.stringify(content)}`);
+        assert.ok(
+          content === 'AAAA' || content === 'B',
+          `round ${String(round)}: ${JSON.stringify(content)}`,
+        );
         assert.strictEqual(await readFile(twin, 'utf-8'), content);
       }
     });
@@ -484,7 +487,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         },
       } as unknown as AbortSignal;
 
-      await assert.rejects(fs.writeFile(filePath, 'new bytes\n', { signal }), { name: 'AbortError' });
+      await assert.rejects(fs.writeFile(filePath, 'new bytes\n', { signal }), {
+        name: 'AbortError',
+      });
       assert.strictEqual(await readFile(filePath, 'utf-8'), 'old bytes\n');
       assert.strictEqual(await readFile(twin, 'utf-8'), 'old bytes\n');
     });

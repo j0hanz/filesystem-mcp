@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import {
   access,
   chmod,
-  lstat,
   link,
+  lstat,
   mkdir,
   readdir,
   readFile,
