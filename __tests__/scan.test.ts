@@ -676,20 +676,29 @@ describe('readText', () => {
         const stalled = new Promise<void>((resolve) => {
           settle = resolve;
         });
+        // Abort once the stalled call is in flight, not on a timer: a slow open
+        // would let the abort land before it, with nothing in flight to wait for.
+        let reached!: () => void;
+        const inFlight = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
         let closed = false;
         const open = fs.open.bind(fs);
         t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
           const handle = await open(...args);
           const real = await handle.stat();
-          t.mock.method(handle, 'stat', () =>
-            stalls === 'stat'
-              ? stalled.then(() => real)
-              : Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
-          );
+          t.mock.method(handle, 'stat', () => {
+            if (stalls !== 'stat') {
+              return Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size }));
+            }
+            reached();
+            return stalled.then(() => real);
+          });
           if (stalls === 'read') {
-            t.mock.method(handle, 'read', () =>
-              stalled.then(() => ({ bytesRead: 0, buffer: Buffer.alloc(0) })),
-            );
+            t.mock.method(handle, 'read', () => {
+              reached();
+              return stalled.then(() => ({ bytesRead: 0, buffer: Buffer.alloc(0) }));
+            });
           }
           const close = handle.close.bind(handle);
           t.mock.method(handle, 'close', async () => {
@@ -700,7 +709,7 @@ describe('readText', () => {
         });
         const controller = new AbortController();
         const pending = readText(fs, await put('stall.txt', 'text'), controller.signal);
-        setTimeout(() => controller.abort(), 10);
+        void inFlight.then(() => controller.abort());
         await assert.rejects(pending, { name: 'AbortError' });
         // close() would queue behind the call in flight, so it waits for that call to settle.
         assert.equal(closed, false);
