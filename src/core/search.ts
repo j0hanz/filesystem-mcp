@@ -306,7 +306,7 @@ export function* execMatches(
     const consumed = matched.slice(0, matched.length - tail.length);
     const step = codePointLength(matched) - codePointLength(tail);
     let next = match.index + (step > 0 ? step : 1);
-    // shortcut: a needle ending in a non-word char that matches at text start (empty `^` lead) cannot back up onto the search start, so an immediately following match is missed (`--` wholeWord on `--` gives `X-`); upgrade by redesigning the lead and trailing boundary, if reported.
+    // Backing up onto the search start would find the same match again.
     if (keepLast && backUpOver && consumed !== '' && backUpOver.test(consumed) && next - 1 > from) {
       next -= 1;
     }

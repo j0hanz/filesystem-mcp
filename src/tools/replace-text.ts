@@ -197,6 +197,9 @@ const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
 // Matches a consumed text that ends in a non-word char: its last char may lead the next match.
 const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
+// wholeWord scans behind this non-word char instead of a `^` lead: an empty lead
+// cannot be backed up onto, so a match right after one at text start was missed (#158).
+const TEXT_START = '\n';
 
 interface ReplaceLimits {
   maxMatches: number;
@@ -272,7 +275,8 @@ function createRegexReplacementMatcher(
       // The regex is global and shared across every file in the batch, so a
       // previous file's match would otherwise start this scan mid-string.
       regex.lastIndex = 0;
-      return regex.test(buffer.toString('utf-8'));
+      const text = buffer.toString('utf-8');
+      return regex.test(wholeWord ? TEXT_START + text : text);
     },
     async replace(content, replacement, signal, limits) {
       // Splicing by hand rather than through `String.replace(regex, …)`: RE2's
@@ -287,14 +291,16 @@ function createRegexReplacementMatcher(
       try {
         // wholeWord's lead and trailing groups are boundary characters: the lead is
         // spliced around, and the trailing one is left for the next match to use.
-        for (const found of execMatches(regex, content, wholeWord, ENDS_NON_WORD)) {
+        // The scanned text starts with TEXT_START, so offsets shift back by one.
+        const scanned = wholeWord ? TEXT_START + content : content;
+        for (const found of execMatches(regex, scanned, wholeWord, ENDS_NON_WORD)) {
           const lead = wholeWord ? (found.groups[0] ?? '') : '';
           const trail = wholeWord ? (found.groups[found.groups.length - 1] ?? '') : '';
           const match = wholeWord
             ? {
                 ...found,
-                start: found.start + lead.length,
-                end: found.end - trail.length,
+                start: found.start + lead.length - TEXT_START.length,
+                end: found.end - trail.length - TEXT_START.length,
                 text: found.text.slice(lead.length, found.text.length - trail.length),
                 groups: found.groups.slice(1, -1),
               }
@@ -631,7 +637,7 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
   const needle = args.isRegex ? args.searchPattern : escapeRegExp(args.searchPattern);
   // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
-  return args.wholeWord ? `(^|[^${WORD_CLASS}])(?:${needle})([^${WORD_CLASS}]|$)` : needle;
+  return args.wholeWord ? `([^${WORD_CLASS}])(?:${needle})([^${WORD_CLASS}]|$)` : needle;
 }
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {
