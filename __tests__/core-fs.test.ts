@@ -491,6 +491,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await assert.rejects(fs.writeFile(filePath, 'new bytes\n', { signal }), {
         name: 'AbortError',
       });
+      // The entry check and the pre-truncate check, and no more: a third would make this pass vacuously.
+      assert.strictEqual(checks, 2);
       assert.strictEqual(await readFile(filePath, 'utf-8'), 'old bytes\n');
       assert.strictEqual(await readFile(twin, 'utf-8'), 'old bytes\n');
     });
@@ -517,6 +519,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await assert.rejects(capturing.writeFile(filePath, 'new bytes\n', { signal }), {
         name: 'AbortError',
       });
+      assert.strictEqual(checks, 2);
       // Nothing was written, so the call stays undoable.
       assert.strictEqual(capture.unavailableReason(), undefined);
     });

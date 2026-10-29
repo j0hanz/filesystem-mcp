@@ -1403,6 +1403,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
   });
 
+  // A timing guard, not a regression catcher: the old quadratic code was also fast at 2000 lines.
   it('edit with ignoreWhitespace re-indents a 2000-line block well inside the deadline', async () => {
     const body = Array.from({ length: 2_000 }, (_, i) => `    v${String(i)} = ${String(i)};`);
     const file = await writeTestFile(tmpDir, 'reindent/huge.js', `${body.join('\n')}\n`);
