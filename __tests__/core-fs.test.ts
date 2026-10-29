@@ -449,6 +449,29 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
     });
+    it('TC-FUNC-011f: writeFile over a write-only hardlinked file overwrites it on POSIX', async (t) => {
+      // Root reads any mode, so the EACCES this guards against needs a non-root POSIX caller.
+      if (process.platform === 'win32' || process.getuid?.() === 0) {
+        return t.skip('POSIX non-root only: the write-only mode is what is tested');
+      }
+      const filePath = await writeTestFile(tmpDir, 'hardlink_wo_a.txt', 'old\n');
+      const twin = join(tmpDir, 'hardlink_wo_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      await chmod(filePath, 0o222);
+      try {
+        await fs.writeFile(filePath, 'new\n');
+      } finally {
+        await chmod(filePath, 0o644);
+      }
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'new\n');
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'new\n');
+    });
     it('TC-FUNC-011c: concurrent writes through two links leave one whole content, never a mix', async (t) => {
       const filePath = await writeTestFile(tmpDir, 'hardlink_race_a.txt', 'seed\n');
       const twin = join(tmpDir, 'hardlink_race_b.txt');
