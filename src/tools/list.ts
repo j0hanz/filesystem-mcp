@@ -240,6 +240,7 @@ function summaryLine(metadata: ListPageMetadata, totalBytes: number): string {
   return `\n\n// ${formatCount(metadata.totalFiles, 'file')}, ${formatCount(
     metadata.totalDirectories,
     'directory',
+    'directories',
   )}, ${formatByteSize(totalBytes)} total`;
 }
 
