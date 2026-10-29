@@ -131,18 +131,37 @@ describe('Security (P0)', () => {
         const inside = join(parent, 'kroot');
         const lookalike = join(parent, 'Kroot');
         await mkdir(inside);
-        await mkdir(lookalike);
+        try {
+          await mkdir(lookalike);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          t.skip('filesystem folds U+212A onto k, so the look-alike sibling cannot exist');
+          return;
+        }
         await writeFile(join(lookalike, 'secret.txt'), 'KELVIN-SECRET');
         const kGuard = await makeGuard([inside]);
         const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Outside allowed directories/);
         await assert.rejects(kGuard.validateExistingPath(join(lookalike, 'secret.txt')), denied);
         await assert.rejects(kGuard.validatePathForWrite(join(lookalike, 'planted.txt')), denied);
         await assert.rejects(kGuard.validatePathForDelete(join(lookalike, 'secret.txt')), denied);
+      } finally {
+        await cleanupTestRoot(parent);
+      }
+    });
+
+    it('TC-SEC-044: a root whose name differs only in non-ASCII case is refused', async (t) => {
+      if (!IS_CASE_INSENSITIVE_FS) {
+        t.skip('case folding applies on a case-insensitive filesystem');
+        return;
+      }
+      const parent = await createTestRoot();
+      try {
         // Review Focus 1: a root whose own name differs only in non-ASCII case is refused, never served.
         const cafe = join(parent, 'café');
         await mkdir(cafe);
         await writeFile(join(cafe, 'x.txt'), 'x');
         const cafeGuard = await makeGuard([cafe]);
+        const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Outside allowed directories/);
         await assert.rejects(cafeGuard.validateExistingPath(join(parent, 'CAFÉ', 'x.txt')), denied);
         assert.ok(
           (await cafeGuard.validateExistingPath(join(parent, 'CAFé', 'x.txt'))).endsWith('x.txt'),
