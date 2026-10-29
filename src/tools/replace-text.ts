@@ -195,13 +195,6 @@ const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
 // RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
 const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
-const WORD_CHAR = new RegExp(`[${WORD_CLASS}]`, 'uy');
-
-function isWordCharAt(text: string, index: number): boolean {
-  if (index >= text.length) return false;
-  WORD_CHAR.lastIndex = index;
-  return WORD_CHAR.test(text);
-}
 
 interface ReplaceLimits {
   maxMatches: number;
@@ -290,22 +283,20 @@ function createRegexReplacementMatcher(
       let cursor = 0;
       const tick = createYielder(signal);
       try {
-        for (const found of execMatches(regex, content)) {
-          // The lead group consumes the boundary char before the match.
+        // wholeWord's lead and trailing groups are boundary characters: the lead is
+        // spliced around, and the trailing one is left for the next match to use.
+        for (const found of execMatches(regex, content, wholeWord)) {
           const lead = wholeWord ? (found.groups[0] ?? '') : '';
+          const trail = wholeWord ? (found.groups[found.groups.length - 1] ?? '') : '';
           const match = wholeWord
             ? {
                 ...found,
                 start: found.start + lead.length,
-                text: found.text.slice(lead.length),
-                groups: found.groups.slice(1),
+                end: found.end - trail.length,
+                text: found.text.slice(lead.length, found.text.length - trail.length),
+                groups: found.groups.slice(1, -1),
               }
             : found;
-          // shortcut: a rejected regex match does not retry a longer alternative ('foo|foobar' on 'foobar'); fix with a second exec from match.start if reported.
-          if (wholeWord && isWordCharAt(content, match.end)) {
-            if (await tick()) signal?.throwIfAborted();
-            continue;
-          }
           if (matchCount === limits.maxMatches) {
             more = true;
             break;
@@ -636,7 +627,8 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
   const needle = args.isRegex ? args.searchPattern : escapeRegExp(args.searchPattern);
-  return args.wholeWord ? `(^|[^${WORD_CLASS}])(?:${needle})` : needle;
+  // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
+  return args.wholeWord ? `(^|[^${WORD_CLASS}])(?:${needle})([^${WORD_CLASS}]|$)` : needle;
 }
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {

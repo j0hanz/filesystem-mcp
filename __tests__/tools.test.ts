@@ -4743,6 +4743,57 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'ba[ab] xab ba[ab]\n');
   });
 
+  it('replace_text wholeWord lets the boundary pick the regex alternative', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_alt/a.txt', '');
+    const cases = [
+      // RE2 must not stop at the first alternative that the boundary rejects.
+      { searchPattern: 'foo|foobar', before: 'foobar foo\n', after: 'X X\n', matches: 2 },
+      { searchPattern: 'a+?', before: 'aaa b\n', after: 'X b\n', matches: 1 },
+      // A match's trailing character is the next match's leading one.
+      { searchPattern: 'aa', before: 'aaa aa\n', after: 'aaa X\n', matches: 1 },
+      { searchPattern: 'a', before: 'a a a\n', after: 'X X X\n', matches: 3 },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: 'X',
+          isRegex: true,
+          caseSensitive: true,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.searchPattern);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.searchPattern);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.searchPattern,
+      );
+    }
+  });
+
+  it('replace_text wholeWord maxMatches stops mid-run with its reason', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_max/a.txt', 'aa a a\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'a',
+        replacement: 'X',
+        caseSensitive: true,
+        wholeWord: true,
+        maxMatches: 1,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf-8'), 'aa X a\n');
+  });
+
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
     // The shared tmpDir holds more than find_files' default 100 results of *.txt.

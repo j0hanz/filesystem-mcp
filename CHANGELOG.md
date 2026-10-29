@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`replace_text` `wholeWord` finds the regex alternative that fits.** With `isRegex`, `foo|foobar` replaced nothing in `foobar`: the first alternative failed the word boundary, and the second was never tried. The boundary is now part of the pattern, so every alternative is considered.
 - **`edit` with `ignoreWhitespace` re-indents a large block in linear time.** Each newText line was compared with every indent of oldText, so a block of thousands of lines took quadratic time. Each line now looks up its indent once. The result is unchanged.
 - **Default-excluded folders are hidden only under their ASCII spelling.** A folder such as `.svelte-kit` spelled with the Kelvin sign (U+212A) was treated as excluded and skipped in walks, even though it is a different name. Only `A-Z` now fold for the exclusion list.
 - **A glob with an unmatched `[` matches only the literal name.** On Windows and macOS, `[abc.txt` was folded into a character class that matched `abc.txt`. The unclosed `[` now stays literal.

@@ -263,8 +263,15 @@ const codePointLength = (text: string): number =>
  * Zero-length matches (e.g. `a*`) advance by one code point so they cannot loop
  * forever. The regex is global and shared across calls, so `lastIndex` is reset
  * on entry.
+ *
+ * With `keepLast`, the final capture group is a lookahead-like tail: its text is
+ * not consumed, so the next search starts at its first code point.
  */
-export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, undefined> {
+export function* execMatches(
+  regex: Regex,
+  text: string,
+  keepLast = false,
+): Generator<RegexMatch, undefined> {
   regex.lastIndex = 0;
   // Cursor into `text`, carried forward across matches: RE2 reports them in
   // ascending order, so the walk is O(text) in total rather than per match.
@@ -289,7 +296,9 @@ export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, 
       end: start + matched.length,
     };
     // Own the advance rather than trusting the wrapper's mixed-unit arithmetic.
-    regex.lastIndex = match.index + (matched.length === 0 ? 1 : codePointLength(matched));
+    const tail = keepLast && match.length > 1 ? (match[match.length - 1] ?? '') : '';
+    const step = codePointLength(matched) - codePointLength(tail);
+    regex.lastIndex = match.index + (step > 0 ? step : 1);
   }
 }
 
