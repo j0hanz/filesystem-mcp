@@ -24,7 +24,7 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
   getMaxTextFileSize,
   MAX_LIST_ENTRIES,
@@ -4842,6 +4842,40 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         'grep_context_adjacent/c.txt:3: NEEDLE b',
       ].join('\n'),
     );
+  });
+
+  it('search_text clips a multi-megabyte match line and its context lines', async () => {
+    const dir = join(tmpDir, 'grep_clip_long_line');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'big.txt'),
+      'ctx' +
+        'c'.repeat(2_000_000) +
+        '\n' +
+        'x'.repeat(1_000_000) +
+        'NEEDLE' +
+        'x'.repeat(1_000_000) +
+        '\n',
+    );
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.ok((firstTextBlock(result).text ?? '').length < 5000);
+    const structured = result._meta as {
+      matches?: { column: number; content: string; before?: string[] }[];
+    };
+    const match = structured.matches?.[0];
+    assert.ok(match);
+    assert.ok(match.content.includes('NEEDLE'));
+    assert.ok(match.content.startsWith('…['));
+    assert.ok(match.content.endsWith(' chars]'));
+    assert.ok(match.content.length < MAX_MATCH_LINE_CHARS + 100);
+    assert.strictEqual(match.column, 1_000_000);
+    const before = match.before?.[0];
+    assert.ok(before !== undefined && before.length < MAX_MATCH_LINE_CHARS + 100);
   });
 
   it('search_text counts an unreadable directory', async (t) => {

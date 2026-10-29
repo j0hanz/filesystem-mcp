@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`edit` no longer reports `(no change)` after an edit too large to diff.** When the line diff hit its 1-second limit, for example on a rewrite of a whole large file, the summary claimed nothing changed and a dry run showed no preview. It now reads `changed (too many lines to diff)`.
 - **Writes to a hard-linked file update every link.** `edit`, `patch`, `replace_text`, `create` with overwrite, and `undo` now write a file that has more than one hard link in place. Before, the temp-file rename gave the edited path a new inode, and the other links kept the old content.
 - **`find_files` matches case-insensitively on Windows and macOS, and reports on-disk names.** Before, a pattern like `Upper.txt` matched nothing when the file was `Upper.TXT`, and a result could echo the pattern's spelling instead of the file's. Patterns now match the way the filesystem does, and results carry the on-disk name. Default excludes such as `node_modules` also match any spelling there.
+- **`search_text` clips long match and context lines.** Before, a match on a multi-megabyte line returned the whole line, so one hit could fill the response. Match and context lines now return a 1000-character window around the match, with each cut marked by the number of characters removed.
 
 ## [2.12.1] - 2026-10-29
 
