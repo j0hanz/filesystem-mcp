@@ -451,12 +451,16 @@ async function processEntry(
           signal,
           limits,
         );
-        if (more) ctx.cut = true;
-        if (matchCount === 0) return undefined;
+        // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
+        if (matchCount === 0) {
+          if (more) ctx.cut = true;
+          return undefined;
+        }
         // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
         if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
         // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
         ctx.remaining -= matchCount;
+        if (more) ctx.cut = true;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;

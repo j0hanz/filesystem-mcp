@@ -4272,6 +4272,69 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
   });
 
+  it('replace_text maxMatches on the regex path stops at the cap mid-file', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_regex_cap/a.txt', 'x x x x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'x',
+        replacement: 'y',
+        isRegex: true,
+        maxMatches: 2,
+      },
+    });
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
+  });
+
+  it('replace_text does not report a cut for a named file refused as too large', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_cut_toolarge/a.txt', 'x'.repeat(1000));
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: 'x',
+          replacement: 'y'.repeat(2000),
+          caseSensitive: true,
+          maxMatches: 999,
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(failedSummary(result)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(file, 'utf8'), 'x'.repeat(1000));
+      assert.notStrictEqual(
+        (result._meta as { stoppedReason?: string }).stoppedReason,
+        'maxMatches',
+      );
+    });
+  });
+
+  it('replace_text does not report a cut when the UTF-8 size check refuses a capped file', async () => {
+    // Two-byte replacement: the UTF-16 check passes at 999 matches, the UTF-8 check after the matcher does not.
+    const file = await writeTestFile(tmpDir, 'replace_cut_utf8/a.txt', 'x'.repeat(1000));
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: 'x',
+          replacement: 'é'.repeat(1000),
+          caseSensitive: true,
+          maxMatches: 999,
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(failedSummary(result)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(file, 'utf8'), 'x'.repeat(1000));
+      assert.notStrictEqual(
+        (result._meta as { stoppedReason?: string }).stoppedReason,
+        'maxMatches',
+      );
+    });
+  });
+
   it('replace_text maxResults still caps as a deprecated alias', async () => {
     // More files than replace_text dispatches at once, so the cap trips mid-sweep.
     for (let i = 0; i < 10; i++) {
