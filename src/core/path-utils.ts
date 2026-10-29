@@ -179,7 +179,7 @@ export function normalizePath(p: string): string {
 export const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
 
 // ASCII only: JS folds U+212A/U+017F onto k/s, NTFS does not, so a full fold equates a sibling with the root.
-function normalizeCaseForComparison(value: string): string {
+export function normalizeCaseForComparison(value: string): string {
   return IS_CASE_INSENSITIVE_FS ? value.replace(/[A-Z]/gu, (c) => c.toLowerCase()) : value;
 }
 

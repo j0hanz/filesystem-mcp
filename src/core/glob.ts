@@ -12,6 +12,7 @@ import {
   IS_CASE_INSENSITIVE_FS,
   IS_WINDOWS,
   isPathInsideDirectory,
+  normalizeCaseForComparison,
   toPosixPath,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
@@ -807,9 +808,10 @@ const DEFAULT_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
 
 // On a case-insensitive filesystem, fs.glob yields on-disk spellings (`Node_Modules`).
 const DEFAULT_EXCLUDED_KEYS: ReadonlySet<string> = new Set(
-  [...DEFAULT_EXCLUDED_NAMES].map((name) => (IS_CASE_INSENSITIVE_FS ? name.toLowerCase() : name)),
+  [...DEFAULT_EXCLUDED_NAMES].map(normalizeCaseForComparison),
 );
 
+// ASCII fold only: toLowerCase would equate U+212A (Kelvin) with k, hiding `.svelte-kit` spelled with it.
 function isDefaultExcludedName(name: string): boolean {
-  return DEFAULT_EXCLUDED_KEYS.has(IS_CASE_INSENSITIVE_FS ? name.toLowerCase() : name);
+  return DEFAULT_EXCLUDED_KEYS.has(normalizeCaseForComparison(name));
 }

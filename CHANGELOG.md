@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Default-excluded folders are hidden only under their ASCII spelling.** A folder such as `.svelte-kit` spelled with the Kelvin sign (U+212A) was treated as excluded and skipped in walks, even though it is a different name. Only `A-Z` now fold for the exclusion list.
 - **A glob with an unmatched `[` matches only the literal name.** On Windows and macOS, `[abc.txt` was folded into a character class that matched `abc.txt`. The unclosed `[` now stays literal.
 - **A cancelled write to a hard-linked file no longer goes through.** Cancellation was checked only before the file was opened, so a write cancelled while the file was open still truncated it and wrote the new bytes. The check now also runs before the truncate, so both links keep their old content.
 - **Concurrent writes through two links of one file no longer mix.** Writes through different names of a hard-linked file could interleave their truncate and write, leaving `BAAA` for a write of `AAAA` and one of `B`. In-place writes to one file now run one at a time, so the file ends with one of the two whole contents.

@@ -145,6 +145,33 @@ describe('globEntries', () => {
     }
   });
 
+  it('default excludes fold only ASCII case, so a Kelvin-sign spelling of a name is not hidden', async (t) => {
+    if (!IS_CASE_INSENSITIVE_FS) {
+      t.skip('case folding applies on a case-insensitive filesystem');
+      return;
+    }
+    const root = await createTestRoot();
+    try {
+      // toLowerCase folds U+212A onto k, which would equate this name with `.svelte-kit`.
+      const kelvin = '.svelte-Kit';
+      try {
+        await mkdir(join(root, kelvin));
+      } catch (error) {
+        t.skip(`filesystem refused the name: ${String(error)}`);
+        return;
+      }
+      await writeFile(join(root, kelvin, 'x.txt'), 'x');
+      await mkdir(join(root, 'Node_Modules'));
+      await writeFile(join(root, 'Node_Modules', 'y.txt'), 'y');
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/*.txt', skipIgnored: true, includeHidden: true }),
+        [`${kelvin}/x.txt`],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('a brace range matches its letters whatever the case of the filesystem', async () => {
     const root = await createTestRoot();
     try {
