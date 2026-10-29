@@ -102,18 +102,25 @@ interface LineHit {
  * copy is most of what a search costs: once per file to rule it out, then once
  * per line of every file it could not rule out.
  */
-interface LiteralMatcher {
+export interface LiteralMatcher {
   /** True when this file holds a character RE2 folds onto one of the needle's letters. */
-  needsRe2(buffer: Buffer): boolean;
+  needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
   mayMatch(buffer: Buffer): boolean;
   matchLine(line: string): LineHit | undefined;
 }
 
 /** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
-const KELVIN_SIGN_UTF8 = Buffer.from('\u212A', 'utf8'); // folds onto k
-const LONG_S_UTF8 = Buffer.from('\u017F', 'utf8'); // folds onto s
+const KELVIN_SIGN = '\u212A'; // folds onto k
+const LONG_S = '\u017F'; // folds onto s
 const ASCII_UPPER_RE = /[A-Z]+/gu;
+
+/** Folds A-Z only, so every UTF-16 offset in the result matches the input. */
+export function foldAsciiCase(text: string): string {
+  // String#toLowerCase turns U+0130 into two code units, which shifts every
+  // later column and spells an `i` RE2 does not match.
+  return text.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase());
+}
 
 /** Non-overlapping occurrences, left to right, as a global RE2 exec walks them. */
 function countOccurrences(line: string, needle: string): LineHit | undefined {
@@ -129,7 +136,10 @@ function countOccurrences(line: string, needle: string): LineHit | undefined {
 }
 
 /** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
-function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
+export function createLiteralMatcher(
+  needle: string,
+  caseSensitive: boolean,
+): LiteralMatcher | undefined {
   // The file is decoded with U+FFFD for every invalid byte, and a lone
   // surrogate reaches RE2 as U+FFFD, so a needle holding either can match
   // decoded text that the raw bytes, or indexOf, do not.
@@ -148,22 +158,16 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
   if (Buffer.byteLength(needle, 'utf8') !== needle.length) return undefined;
   const lower = needle.toLowerCase();
   const folds = [
-    ...(lower.includes('k') ? [KELVIN_SIGN_UTF8] : []),
-    ...(lower.includes('s') ? [LONG_S_UTF8] : []),
+    ...(lower.includes('k') ? [KELVIN_SIGN] : []),
+    ...(lower.includes('s') ? [LONG_S] : []),
   ];
   return {
-    needsRe2: (buffer) => folds.some((fold) => buffer.includes(fold)),
+    needsRe2: (input) => folds.some((fold) => input.includes(fold)),
     // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
     // is found exactly where the bytes spell it in either case.
     mayMatch: (buffer) => buffer.toString('latin1').toLowerCase().includes(lower),
-    // ASCII letters only: String#toLowerCase turns U+0130 into two code units,
-    // which shifts every later column and spells an `i` RE2 does not match.
-    matchLine: (line) =>
-      countOccurrences(
-        line.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase()),
-        lower,
-      ),
+    matchLine: (line) => countOccurrences(foldAsciiCase(line), lower),
   };
 }
 

@@ -26,6 +26,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
+  escapeRegExp,
   getMaxTextFileSize,
   MAX_LIST_ENTRIES,
   MAX_SEARCH_RESULTS,
@@ -3527,8 +3528,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       );
     }
 
-    // A literal search reaches the regex matcher when it is case-insensitive,
-    // and there the replacement must stay verbatim.
+    // A case-insensitive literal search must keep the replacement verbatim.
     const literal = await writeTestFile(tmpDir, 'dollar/literal.txt', 'Alpha alpha');
     await harness.client.callTool({
       name: 'replace_text',
@@ -3540,6 +3540,66 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.strictEqual(await readFile(literal, 'utf-8'), '$1 $1');
+  });
+
+  it('replace_text case-insensitive literal replaces 300 matches in a 3 MB file well inside the deadline', async () => {
+    const line = `${'x'.repeat(9990)} Needle\n`;
+    const file = await writeTestFile(tmpDir, 'ci_literal/big.txt', line.repeat(300));
+    const started = Date.now();
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'NEEDLE', replacement: 'pin' },
+    });
+    const elapsed = Date.now() - started;
+    assert.notStrictEqual(result.isError, true);
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.stoppedReason, undefined);
+    assert.strictEqual(meta.totalMatches, 300);
+    assert.ok(elapsed < 2000, `took ${String(elapsed)} ms`);
+    assert.strictEqual(await readFile(file, 'utf-8'), `${'x'.repeat(9990)} pin\n`.repeat(300));
+  });
+
+  it('replace_text case-insensitive literal rewrites exactly what the escaped RE2 regex rewrites', async () => {
+    const KELVIN = String.fromCodePoint(0x212a); // RE2 folds it onto k
+    const LONG_S = String.fromCodePoint(0x017f); // RE2 folds it onto s
+    const DOTTED_I = String.fromCodePoint(0x0130); // RE2 does not fold it onto i
+    const EMOJI = String.fromCodePoint(0x1f600);
+    const cases: { content: string; needle: string; matches: number }[] = [
+      { content: `x ${KELVIN}ey key KEY\n`, needle: 'key', matches: 3 },
+      { content: `${LONG_S}tate STATE state\n`, needle: 'state', matches: 3 },
+      { content: `${DOTTED_I}d id ID\n`, needle: 'id', matches: 2 },
+      { content: `${EMOJI}${EMOJI} Needle needle\n`, needle: 'needle', matches: 2 },
+      { content: 'aaaa aAaA\n', needle: 'aa', matches: 4 },
+      { content: 'line one\r\nLINE two\r\n', needle: 'line', matches: 2 },
+      { content: 'STRASSE straße Straße\n', needle: 'Straße', matches: 2 },
+      { content: 'É e E é\n', needle: 'e', matches: 2 },
+      { content: 'a.b*c axbbc A.B*C\n', needle: 'a.b*c', matches: 2 },
+    ];
+    for (const [i, c] of cases.entries()) {
+      const literal = await writeTestFile(tmpDir, `ci_parity/lit${String(i)}.txt`, c.content);
+      const regex = await writeTestFile(tmpDir, `ci_parity/re${String(i)}.txt`, c.content);
+      // '<$&>' must land verbatim from a literal; '<$$&>' is the same text from a regex.
+      const lit = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: literal, searchPattern: c.needle, replacement: '<$&>' },
+      });
+      await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: regex,
+          searchPattern: escapeRegExp(c.needle),
+          replacement: '<$$&>',
+          isRegex: true,
+        },
+      });
+      const rewritten = await readFile(literal, 'utf-8');
+      assert.strictEqual(rewritten, await readFile(regex, 'utf-8'), `case ${String(i)}`);
+      assert.strictEqual(
+        (lit._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        `case ${String(i)}: ${rewritten}`,
+      );
+    }
   });
 
   it('replace_text regex mode on a file past the RE2 input cap fails that file with TOO_LARGE', async () => {

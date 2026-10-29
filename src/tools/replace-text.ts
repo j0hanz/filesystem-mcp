@@ -32,11 +32,13 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import type { Regex } from '../core/search.ts';
+import type { LiteralMatcher, Regex } from '../core/search.ts';
 import {
   compileRegex,
+  createLiteralMatcher,
   createYielder,
   execMatches,
+  foldAsciiCase,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
 } from '../core/search.ts';
@@ -233,7 +235,7 @@ function createRegexReplacementMatcher(
       if (buffer.length > RE2_MAX_INPUT_BYTES) {
         throw new FsError(
           ErrorCode.TOO_LARGE,
-          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or the default caseSensitive: false; pass caseSensitive: true with a literal searchPattern, or split the file.`,
+          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern, or split the file.`,
         );
       }
       // The regex is global and shared across every file in the batch, so a
@@ -253,8 +255,8 @@ function createRegexReplacementMatcher(
       for (const match of execMatches(regex, content)) {
         matchCount++;
         // Only isRegex=true opts into $1/$& substitution. A literal search
-        // reaches this matcher too (case-insensitive and wholeWord both need a
-        // regex), and there the replacement must be inserted verbatim.
+        // reaches this matcher too (wholeWord, or a case-insensitive needle
+        // RE2 must judge), and there the replacement must be inserted verbatim.
         updated +=
           content.slice(cursor, match.start) +
           (expandReplacement
@@ -274,6 +276,38 @@ function createRegexReplacementMatcher(
     },
     dispose(): void {
       freeRegex(regex);
+    },
+  };
+}
+
+/** An ASCII needle matched case-insensitively in native code, as RE2 would match it; `fallback` judges the files RE2 must. */
+function createCaseInsensitiveLiteralMatcher(
+  searchPattern: string,
+  literal: LiteralMatcher,
+  fallback: ReplacementMatcher,
+): ReplacementMatcher {
+  const lower = searchPattern.toLowerCase();
+  return {
+    testBuffer(buffer) {
+      return literal.needsRe2(buffer) ? fallback.testBuffer(buffer) : literal.mayMatch(buffer);
+    },
+    // One native O(n) pass, like the case-sensitive matcher; nothing to yield for.
+    replace(content, replacement, signal) {
+      if (literal.needsRe2(content)) return fallback.replace(content, replacement, signal);
+      // foldAsciiCase keeps every UTF-16 offset, so a hit in `folded` splices `content`.
+      const folded = foldAsciiCase(content);
+      let matchCount = 0;
+      let updated = '';
+      let cursor = 0;
+      for (let at = folded.indexOf(lower); at !== -1; at = folded.indexOf(lower, cursor)) {
+        updated += content.slice(cursor, at) + replacement;
+        cursor = at + lower.length;
+        matchCount++;
+      }
+      return Promise.resolve({ content: updated + content.slice(cursor), matchCount });
+    },
+    dispose(): void {
+      fallback.dispose();
     },
   };
 }
@@ -484,12 +518,17 @@ function buildSearchPattern(args: SearchAndReplaceArgs): string {
 }
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {
-  // Use regex when isRegex, wholeWord, or case-insensitive (all require RE2)
-  if (args.isRegex || args.wholeWord || !args.caseSensitive) {
-    const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
-    return createRegexReplacementMatcher(regex, args.isRegex);
+  if (!args.isRegex && !args.wholeWord && args.caseSensitive) {
+    return createCaseSensitiveLiteralMatcher(args.searchPattern);
   }
-  return createCaseSensitiveLiteralMatcher(args.searchPattern);
+  const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
+  const matcher = createRegexReplacementMatcher(regex, args.isRegex);
+  // A case-insensitive literal is matched natively unless RE2 must judge the needle.
+  const literal =
+    args.isRegex || args.wholeWord ? undefined : createLiteralMatcher(args.searchPattern, false);
+  return literal
+    ? createCaseInsensitiveLiteralMatcher(args.searchPattern, literal, matcher)
+    : matcher;
 }
 
 function buildSearchAndReplaceStructuredResult(
