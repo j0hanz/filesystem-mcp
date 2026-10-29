@@ -121,6 +121,30 @@ describe('globEntries', () => {
     }
   });
 
+  it('an unmatched [ stays a literal bracket when the case is folded', async (t) => {
+    if (!IS_CASE_INSENSITIVE_FS) {
+      t.skip('case folding applies on a case-insensitive filesystem');
+      return;
+    }
+    assert.strictEqual(foldPatternCase('[abc.txt'), '[[][aA][bB][cC].[tT][xX][tT]');
+    const root = await createTestRoot();
+    try {
+      await writeFile(join(root, 'abc.txt'), 'x');
+      let named = true;
+      try {
+        await writeFile(join(root, '[abc.txt'), 'x');
+      } catch {
+        named = false;
+      }
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '[abc.txt' }),
+        named ? ['[abc.txt'] : [],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('a brace range matches its letters whatever the case of the filesystem', async () => {
     const root = await createTestRoot();
     try {

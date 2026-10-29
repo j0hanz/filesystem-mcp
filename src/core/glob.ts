@@ -495,7 +495,8 @@ export function foldPatternCase(pattern: string): string {
       if (pattern[end] === ']') end++;
       const close = pattern.indexOf(']', end);
       if (close === -1) {
-        out += ch;
+        // Unclosed: a literal `[`, not a class that would fold the rest of the pattern into it.
+        out += '[[]';
         continue;
       }
       out += pattern.slice(i, close + 1);
