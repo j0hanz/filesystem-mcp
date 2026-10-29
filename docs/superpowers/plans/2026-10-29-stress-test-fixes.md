@@ -39,11 +39,13 @@
 ### Task 1: Containment folds ASCII case only (critical)
 
 **Files:**
+
 - Modify: `src/core/path-utils.ts:172-174` (`normalizeCaseForComparison`) and `:187-189` (`unicodeMatchKey`)
 - Test: `__tests__/path-helpers.test.ts` (describe `PathGuard containment helpers`), `__tests__/security.test.ts` (describe `PathGuard boundary enforcement`, after TC-SEC-014)
 - Modify: `CHANGELOG.md:7`
 
 **Interfaces:**
+
 - Produces: `normalizeCaseForComparison(value: string): string`, which folds only `A-Z` on case-insensitive filesystems. It is used by `isSamePath` and `isPathInsideDirectory`. `unicodeMatchKey` keeps its full `toLowerCase()` fold through a new private `foldNameCase(value: string): string`. It only matches spellings within one directory and is not a containment check.
 
 - [ ] **Step 1: Write the failing tests**
@@ -51,14 +53,20 @@
 `__tests__/path-helpers.test.ts`:
 
 ```ts
-  it('TC-PH-020: a Kelvin sign is not the letter k for containment', (t) => {
-    if (!IS_CASE_INSENSITIVE_FS) { t.skip('case folding applies on a case-insensitive filesystem'); return; }
-    const root = normalizePath('C:/x/kroot');
-    assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/x/\u212Aroot/secret.txt')), false);
-    assert.strictEqual(isSamePath('C:/x/\u212Aroot', 'C:/x/kroot'), false);
-    assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/x/\u017Froot/s')), false); // long s
-    assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/X/KROOT/a.txt')), true);   // ASCII still folds
-  });
+it('TC-PH-020: a Kelvin sign is not the letter k for containment', (t) => {
+  if (!IS_CASE_INSENSITIVE_FS) {
+    t.skip('case folding applies on a case-insensitive filesystem');
+    return;
+  }
+  const root = normalizePath('C:/x/kroot');
+  assert.strictEqual(
+    isPathInsideDirectory(root, normalizePath('C:/x/\u212Aroot/secret.txt')),
+    false,
+  );
+  assert.strictEqual(isSamePath('C:/x/\u212Aroot', 'C:/x/kroot'), false);
+  assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/x/\u017Froot/s')), false); // long s
+  assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/X/KROOT/a.txt')), true); // ASCII still folds
+});
 ```
 
 Add `IS_CASE_INSENSITIVE_FS` and `normalizePath` to the `../src/core/path-utils.ts` import if they are not already there.
@@ -66,31 +74,39 @@ Add `IS_CASE_INSENSITIVE_FS` and `normalizePath` to the `../src/core/path-utils.
 `__tests__/security.test.ts` (TC-SEC-043, after TC-SEC-014):
 
 ```ts
-    it('TC-SEC-043: a Unicode case-fold look-alike sibling of the root is outside it', async (t) => {
-      if (!IS_CASE_INSENSITIVE_FS) { t.skip('case folding applies on a case-insensitive filesystem'); return; }
-      const parent = await createTestRoot();
-      try {
-        const inside = join(parent, 'kroot');
-        const lookalike = join(parent, '\u212Aroot');
-        await mkdir(inside);
-        await mkdir(lookalike);
-        await writeFile(join(lookalike, 'secret.txt'), 'KELVIN-SECRET');
-        const kGuard = await makeGuard([inside]);
-        const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Outside allowed directories/);
-        await assert.rejects(kGuard.validateExistingPath(join(lookalike, 'secret.txt')), denied);
-        await assert.rejects(kGuard.validatePathForWrite(join(lookalike, 'planted.txt')), denied);
-        await assert.rejects(kGuard.validatePathForDelete(join(lookalike, 'secret.txt')), denied);
-        // Review Focus 1: a root whose own name differs only in non-ASCII case is refused, never served.
-        const cafe = join(parent, 'caf\u00e9');
-        await mkdir(cafe);
-        await writeFile(join(cafe, 'x.txt'), 'x');
-        const cafeGuard = await makeGuard([cafe]);
-        await assert.rejects(cafeGuard.validateExistingPath(join(parent, 'CAF\u00c9', 'x.txt')), denied);
-        assert.ok((await cafeGuard.validateExistingPath(join(parent, 'CAF\u00e9', 'x.txt'))).endsWith('x.txt')); // ASCII case still folds
-      } finally {
-        await cleanupTestRoot(parent);
-      }
-    });
+it('TC-SEC-043: a Unicode case-fold look-alike sibling of the root is outside it', async (t) => {
+  if (!IS_CASE_INSENSITIVE_FS) {
+    t.skip('case folding applies on a case-insensitive filesystem');
+    return;
+  }
+  const parent = await createTestRoot();
+  try {
+    const inside = join(parent, 'kroot');
+    const lookalike = join(parent, '\u212Aroot');
+    await mkdir(inside);
+    await mkdir(lookalike);
+    await writeFile(join(lookalike, 'secret.txt'), 'KELVIN-SECRET');
+    const kGuard = await makeGuard([inside]);
+    const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Outside allowed directories/);
+    await assert.rejects(kGuard.validateExistingPath(join(lookalike, 'secret.txt')), denied);
+    await assert.rejects(kGuard.validatePathForWrite(join(lookalike, 'planted.txt')), denied);
+    await assert.rejects(kGuard.validatePathForDelete(join(lookalike, 'secret.txt')), denied);
+    // Review Focus 1: a root whose own name differs only in non-ASCII case is refused, never served.
+    const cafe = join(parent, 'caf\u00e9');
+    await mkdir(cafe);
+    await writeFile(join(cafe, 'x.txt'), 'x');
+    const cafeGuard = await makeGuard([cafe]);
+    await assert.rejects(
+      cafeGuard.validateExistingPath(join(parent, 'CAF\u00c9', 'x.txt')),
+      denied,
+    );
+    assert.ok(
+      (await cafeGuard.validateExistingPath(join(parent, 'CAF\u00e9', 'x.txt'))).endsWith('x.txt'),
+    ); // ASCII case still folds
+  } finally {
+    await cleanupTestRoot(parent);
+  }
+});
 ```
 
 > NTFS keeps `kroot` and `\u212Aroot` as two folders (verified 2026-10-29 on Windows 11). On a filesystem that merges them, the second `mkdir` throws `EEXIST`. Then call `t.skip('filesystem folds U+212A')`.
@@ -103,6 +119,7 @@ Expected on Windows: FAIL. `isPathInsideDirectory` returns `true`, and `validate
 - [ ] **Step 3: Implement**
 
 In `path-utils.ts`:
+
 - Make `normalizeCaseForComparison` return `value.replace(/[A-Z]/gu, (c) => c.toLowerCase())` when `IS_CASE_INSENSITIVE_FS`.
 - Add `foldNameCase(value)` with the old `toLowerCase()` body and use it in `unicodeMatchKey`.
 - Comment the why in one line: `// ASCII only: JS folds U+212A/U+017F onto k/s, NTFS does not, so a full fold equates a sibling with the root.`
@@ -123,10 +140,12 @@ git commit -m "fix(path): fold only ASCII case in containment checks"
 ### Task 2: Refuse NTFS alternate data stream paths
 
 **Files:**
+
 - Modify: `src/core/path-utils.ts:139` (new export after `isWindowsDrivePath`), `src/core/path.ts:18-34` (import), `src/core/path.ts:581-582` (`validateAccess`, after the drive-relative throw)
 - Test: `__tests__/security.test.ts` (TC-SEC-041, TC-SEC-042 after TC-SEC-043), `__tests__/tools.test.ts:882` (TC-FUNC-009s/009t after TC-FUNC-009d)
 
 **Interfaces:**
+
 - Produces: `export const hasAlternateDataStream = (requestedPath: string): boolean`, which is true when a `:` follows `win32.parse(requestedPath).root`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -158,10 +177,12 @@ Keep `sensitive.ts` `stripAlternateDataStreams` as is.
 ### Task 3: `move` of a missing source reports NOT_FOUND
 
 **Files:**
+
 - Modify: `src/tools/move.ts:10` (import `unlessMissing`), `src/tools/move.ts:482-483`
 - Test: `__tests__/tools.test.ts:1752` (after TC-FUNC-054; add `lstat` and `readlink` to the `node:fs/promises` import)
 
 **Interfaces:**
+
 - Consumes: `unlessMissing<T>(promise: Promise<T>): Promise<T | undefined>` (`src/core/errors.ts:208`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -181,6 +202,7 @@ Keep `sensitive.ts` `stripAlternateDataStreams` as is.
 ### Task 4: `create` caps size in UTF-8 bytes
 
 **Files:**
+
 - Modify: `src/tools/create.ts:39` (per-file refine), `:107-111` (batch sum and comment), `:117` (message says "bytes"), and the `src/core/util.ts:143-158` doc comment only
 - Test: `__tests__/tools.test.ts:1401` (after `'create refuses a batch whose combined content exceeds the file limit'`)
 
@@ -200,10 +222,12 @@ Keep `sensitive.ts` `stripAlternateDataStreams` as is.
 ### Task 5: Batch `read` slices are charged their returned bytes
 
 **Files:**
+
 - Modify: `src/tools/read.ts:177-191` (drop `fullRead` from `BudgetMode`, delete line 187), `:222-231` (use `budgetSkip`), `:428-447` (`run`)
 - Test: `__tests__/tools.test.ts:313` (after `'batch slice of an svg is charged its raw size, not base64'`)
 
 **Interfaces:**
+
 - Produces, both in `read.ts`: `function budgetSkip(path: string, maxTotalSize: number, suggestion?: string): FsError`. Its message is the existing line-228 text, unchanged. Also `const SLICE_SKIP_SUGGESTION = 'Read it on its own with path, or ask for fewer lines.'`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -222,12 +246,14 @@ Keep `sensitive.ts` `stripAlternateDataStreams` as is.
 ### Task 6: `edit` stops reporting "(no change)" for a change too large to diff
 
 **Files:**
+
 - Modify: `src/tools/edit.ts:422-423` (`formatEditSummary`)
 - Test: `__tests__/tools.test.ts:1107` (after TC-FUNC-013)
 
 - [ ] **Step 1: Write the failing test** `'edit reports a change it could not diff instead of "(no change)"'`
 
 Rewrite 20000 lines `a<i>` to `b<i>`. The test triggers the real 1000 ms `DIFF_TIMEOUT_MS`.
+
 - The dry-run text equals `'edit: edit-diff-timeout.txt changed (too many lines to diff) [dry run]'`, and the file is unchanged.
 - The real run's text matches `/^edit: edit-diff-timeout\.txt changed \(too many lines to diff\) · undo \S+$/u`, and the file equals the rewritten content.
 - An identical `b0\n`→`b0\n` edit still matches `/^edit: edit-diff-timeout\.txt \(no change\)/u`.
@@ -243,12 +269,14 @@ Rewrite 20000 lines `a<i>` to `b<i>`. The test triggers the real 1000 ms `DIFF_T
 ### Task 7: `edit` with `ignoreWhitespace` re-indents newText
 
 **Files:**
+
 - Modify: `src/tools/edit.ts:70-72` (description: newText is re-indented to the matched lines, and blank lines inside the matched span are replaced), `:263-266` (new helpers after `afterCodePoint`), `:327-331` (splice)
 - Modify: `__tests__/tools.test.ts:1192-1204`. The existing test pins the bug. Its expected value becomes `'f() {\n    go();\n}\n'`.
 - Test: `__tests__/tools.test.ts:~1236` (after `'keeps the blank lines before a leading newline'`)
 - Modify: `__tests__/contract.test.ts.snapshot` (regenerated)
 
 **Interfaces:**
+
 - Produces, both module-private: `const indentOf = (line: string): string => /^\s*/u.exec(line)?.[0] ?? ''` and `function reindentNewText(newText: string, oldText: string, matched: string, atLineStart: boolean): string`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -261,7 +289,7 @@ Rewrite 20000 lines `a<i>` to `b<i>`. The test triggers the real 1000 ms `DIFF_T
 - [ ] **Step 2: Run, expect FAIL.** Run: `npm test -- --test-name-pattern="ignoreWhitespace"`
 
 - [ ] **Step 3: Implement `reindentNewText`.** This algorithm is not determined by the tests, so follow it exactly:
-  - A line *counts* when it holds non-whitespace and (`index > 0 || atLineStart`). `atLineStart` means the match starts at offset 0 or right after `\n`.
+  - A line _counts_ when it holds non-whitespace and (`index > 0 || atLineStart`). `atLineStart` means the match starts at offset 0 or right after `\n`.
   - `from[]` is `indentOf` of each counted oldText line. `to[]` is `indentOf` of each counted line of the matched span.
   - For each counted newText line:
     - When the counted newText count equals `from.length`, pair by position.
@@ -278,10 +306,12 @@ Rewrite 20000 lines `a<i>` to `b<i>`. The test triggers the real 1000 ms `DIFF_T
 ### Task 8: Write hardlinked files in place
 
 **Files:**
+
 - Modify: `src/core/read.ts:24-27` (new `WRITE_NOFOLLOW`), `src/core/fs.ts:43-52` (import), `src/core/fs.ts:385-469` (`GuardedFileSystem.writeFile`)
 - Test: `__tests__/core-fs.test.ts:422` (TC-FUNC-011b; add `link` to the import), `__tests__/undo.test.ts:475` (in `restoreEntry`; add `link` and `readFile` to the import)
 
 **Interfaces:**
+
 - Produces: `export const WRITE_NOFOLLOW = constants.O_RDWR | O_NOFOLLOW | O_NONBLOCK`. The `writeFile` signature does not change.
 
 - [ ] **Step 1: Write the failing tests** (each skips when `link()` throws)
@@ -307,15 +337,18 @@ Rewrite 20000 lines `a<i>` to `b<i>`. The test triggers the real 1000 ms `DIFF_T
 ### Task 9: `find_files` matches case-insensitively on Windows and macOS, with on-disk names
 
 **Files:**
+
 - Modify: `src/core/glob.ts` (new `foldPatternCase` near `normalizePattern:465`; apply it to `patterns` in `globEntries` before `fsGlob` at about `:709`; `DEFAULT_EXCLUDED_NAMES.has(...)` lookups at `:337` and `:613` use the lowercased name when `IS_CASE_INSENSITIVE_FS`)
 - Test: `__tests__/glob.test.ts` (describe `globEntries`; import `IS_CASE_INSENSITIVE_FS`)
 
 **Interfaces:**
+
 - Produces: `function foldPatternCase(pattern: string): string`. It turns each ASCII letter outside a `[...]` class into `[xX]`, which forces fs.glob to match by wildcard and yield on-disk names.
 
 - [ ] **Step 1: Write the failing test** `'globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem'` (gated on `IS_CASE_INSENSITIVE_FS`)
 
 The root holds `Upper.TXT`, `d/f01.txt` and `Node_Modules/x.txt`. Using the `walk` helper:
+
 - `{ pattern: 'Upper.txt', baseNameMatch: true }` gives `['Upper.TXT']`.
 - `{ pattern: '**/F01.TXT' }` gives `['d/f01.txt']`.
 - `{ pattern: 'D/f01.txt' }` gives `['d/f01.txt']` (the on-disk spelling).
@@ -333,15 +366,18 @@ The root holds `Upper.TXT`, `d/f01.txt` and `Node_Modules/x.txt`. Using the `wal
 ### Task 10: `search_text` clips long match and context lines
 
 **Files:**
+
 - Modify: `src/core/search.ts` (new constant and helper near `own` at `:16`; apply at `:386` (`content`) and `:389-390` (`before`/`after`))
 - Test: `__tests__/tools.test.ts:4523` (after `'search_text context: a match beats context on a shared line…'`)
 
 **Interfaces:**
+
 - Produces: `export const MAX_MATCH_LINE_CHARS = 1000` and `function clipLine(line: string, column: number): string`. The helper returns a window of `MAX_MATCH_LINE_CHARS` UTF-16 units that starts at `max(0, column - 200)`. It never splits a surrogate pair. It prefixes `…[N chars] ` when it cut the start and suffixes ` […N chars]` when it cut the end, where N is the number of chars cut. Context lines use `column = 0`.
 
 - [ ] **Step 1: Write the failing test** `'search_text clips a multi-megabyte match line and its context lines'`
 
 The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + 'NEEDLE' + 'x'.repeat(1_000_000) + '\n'`. Call with `context: 1`.
+
 - The text length is under 5000.
 - `structuredContent.matches[0].content` contains `'NEEDLE'`, starts with `'…['`, ends with `' chars]'` and has length < 1100.
 - `column === 1_000_000`.
@@ -358,11 +394,13 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 ### Task 11: `replace_text` case-insensitive literals match natively (timeout)
 
 **Files:**
+
 - Modify: `src/core/search.ts:73-84,100,118-134`. Export `LiteralMatcher` and `createLiteralMatcher`. `needsRe2` takes `Buffer | string`. The Kelvin and long-s constants become strings. Add `export function foldAsciiCase(text: string): string`.
 - Modify: `src/tools/replace-text.ts:35-42` (imports), after `:301` (new matcher), `:486-493` (`createReplacementMatcher` routing)
 - Test: `__tests__/tools.test.ts:~3249` (after `'replace_text expands $ tokens exactly like String.prototype.replace'`)
 
 **Interfaces:**
+
 - Consumes: `createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined`. It returns `undefined` for needles it cannot fold exactly like RE2.
 - Produces: `function createCaseInsensitiveLiteralMatcher(searchPattern: string, literal: LiteralMatcher, fallback: ReplacementMatcher): ReplacementMatcher`.
   - Its `testBuffer` checks `needsRe2(buffer)`. If true it calls `fallback.testBuffer`, else `literal.mayMatch`.
@@ -385,10 +423,12 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 ### Task 12: `replace_text` refuses output past the text size limit
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts:174-184` (`ReplacementMatcher.replace` signature), regex matcher `:244-274`, literal matcher `:289-296`, the Task 11 matcher, `ReplaceContext:305-313`, `processEntry:335-353`, context literal `:577-585`
 - Test: `__tests__/tools.test.ts:3307` (after `'replace_text counts walked files over the text size limit in skippedTooLarge'`)
 
 **Interfaces:**
+
 - Produces the shared signature that Tasks 13-15 use:
   - `interface ReplaceLimits { maxMatches: number; maxBytes: number; path: string }`.
   - `ReplacementMatcher.replace(content: string, replacement: string, signal: AbortSignal | undefined, limits: ReplaceLimits): Promise<{ content: string; matchCount: number; more: boolean }>`.
@@ -397,7 +437,7 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 
 - [ ] **Step 1: Write the failing tests** (under `withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) })`)
 
-- `'replace_text refuses a $\` expansion that grows a file past the text size limit, dry run included'`: 44 KiB of `a`, `replacement: '$\`'`, `isRegex: true`. For `dryRun` true and false, expect `isError`, `error.code === 'TOO_LARGE'`, `error.message === 'Replacement result exceeds the size limit (more than 1048576 bytes)'`, and the file unchanged.
+- `'replace_text refuses a $\` expansion that grows a file past the text size limit, dry run included'`: 44 KiB of `a`, `replacement: '$\`'`, `isRegex: true`. For `dryRun`true and false, expect`isError`, `error.code === 'TOO_LARGE'`, `error.message === 'Replacement result exceeds the size limit (more than 1048576 bytes)'`, and the file unchanged.
 - `'replace_text fails only the walked file whose literal replacement outgrows the limit'`: `blow.txt` holds `'x'.repeat(1000)` and `ok.txt` holds `'x\n'`. With replacement `'y'.repeat(2000)` and `caseSensitive: true`, expect `summary` to deep-equal `{ total: 2, succeeded: 1, failed: 1 }`, `blow.txt` unchanged, and `ok.txt` equal to `'y'.repeat(2000) + '\n'`.
 - `'replace_text caps the result in UTF-8 bytes, not UTF-16 units, and allows exactly the limit'`: replace `'a'`→`'€'` with `caseSensitive: true`. On `'a'.repeat(349526)` the result is 349526 units but 1048578 bytes, so it is refused and the file is unchanged. On `'a'.repeat(349525) + 'b'` the result is exactly 1048576 bytes, so it is written, and `stat().size === 1048576`.
 
@@ -416,6 +456,7 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 ### Task 13: `replace_text` `maxMatches` is a strict bound
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts`:
   - the matchers stop at `limits.maxMatches` and set `more`;
   - `ReplaceContext` gains `remaining: number`;
@@ -428,6 +469,7 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 - Test: `__tests__/tools.test.ts` (after `:3788`)
 
 **Interfaces:**
+
 - Consumes: `ReplaceLimits` and `more` from Task 12.
 - `explicitCap = args.maxMatches ?? args.maxResults`. Without one, a named file runs with `maxMatches: Infinity` (`sed -i`), and a walk keeps today's `DEFAULT_SEARCH_RESULTS` cap at file granularity.
 
@@ -449,10 +491,12 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 ### Task 14: `replace_text` literal text follows a CRLF file's line endings
 
 **Files:**
+
 - Modify: `src/core/util.ts` (after `escapeRegExp:122`, move `usesCrlf`/`toCrlf` and their comment from `src/tools/edit.ts:290-301`), `src/tools/edit.ts:20` (import), `src/tools/replace-text.ts:43-49` (import), `ReplaceContext` (`crlf?: { matcher: ReplacementMatcher; replacement: string }`), `handleSearchAndReplace` (build it after `createReplacementMatcher`, dispose it in `finally`), `processEntry` (pick per file)
 - Test: `__tests__/tools.test.ts` (after `'replace_text regex mode on a file past the RE2 input cap fails that file with TOO_LARGE'`)
 
 **Interfaces:**
+
 - Produces: `export function usesCrlf(content: string): boolean` and `export function toCrlf(text: string): string`, moved verbatim.
 - Rule: when `!isRegex` and the file is all-CRLF, use `toCrlf(searchPattern)` and `toCrlf(replacement)`. Regex and mixed-ending files are taken as written.
 
@@ -476,11 +520,13 @@ The file holds `'ctx' + 'c'.repeat(2_000_000) + '\n' + 'x'.repeat(1_000_000) + '
 ### Task 15: `replace_text` `wholeWord` uses Unicode word boundaries
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts`: near `DOLLAR_TOKEN` (`WORD_CLASS`, `WORD_CHAR`, `isWordCharAt`), `buildSearchPattern:478-484`, `createRegexReplacementMatcher:227` (new `wholeWord` param), `createReplacementMatcher:490`
 - Test: `__tests__/tools.test.ts:~3974` (after `'replace_text and edit splice correctly past astral characters'`)
 
 **Interfaces:**
-- Produces: `const WORD_CLASS = String.raw\`\p{L}\p{N}\p{M}_\``, `const WORD_CHAR = new RegExp(\`[${WORD_CLASS}]\`, 'uy')`, `function isWordCharAt(text: string, index: number): boolean` and `function createRegexReplacementMatcher(regex: Regex, expandReplacement: boolean, wholeWord: boolean): ReplacementMatcher`.
+
+- Produces: `const WORD_CLASS = String.raw\`\p{L}\p{N}\p{M}_\``, `const WORD_CHAR = new RegExp(\`[${WORD_CLASS}]\`, 'uy')`, `function isWordCharAt(text: string, index: number): boolean`and`function createRegexReplacementMatcher(regex: Regex, expandReplacement: boolean, wholeWord: boolean): ReplacementMatcher`.
 - Pattern: `` `(^|[^${WORD_CLASS}])(?:${needle})` ``. The lead boundary is consumed and captured. The trailing boundary is checked in JS at `match.end`, so adjacent words keep their shared separator. The splice offset becomes `match.start + lead.length`, and the caller's groups are `match.groups.slice(1)`.
 
 - [ ] **Step 1: Write the failing tests**
