@@ -1403,6 +1403,25 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
   });
 
+  it('edit with ignoreWhitespace re-indents a 2000-line block well inside the deadline', async () => {
+    const body = Array.from({ length: 2_000 }, (_, i) => `    v${String(i)} = ${String(i)};`);
+    const file = await writeTestFile(tmpDir, 'reindent/huge.js', `${body.join('\n')}\n`);
+    const withExtra = [body[0], '    extra();', ...body.slice(1)];
+    const started = Date.now();
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: body.join('\n'), newText: withExtra.join('\n') }],
+        ignoreWhitespace: true,
+      },
+    });
+    const elapsed = Date.now() - started;
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(elapsed < 2000, `took ${String(elapsed)} ms`);
+    assert.strictEqual(await readFile(file, 'utf-8'), `${withExtra.join('\n')}\n`);
+  });
+
   it('edit with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
     const file = await writeTestFile(
       tmpDir,

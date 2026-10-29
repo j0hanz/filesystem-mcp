@@ -283,6 +283,10 @@ function reindentNewText(
   const to = indents(matched);
   const lines = newText.split('\n');
   const positional = lines.filter(counted).length === from.length;
+  // Indexed once, so a line finds its indent without scanning every one of `from`.
+  const firstIndex = new Map<string, number>();
+  for (const [k, ind] of from.entries()) if (!firstIndex.has(ind)) firstIndex.set(ind, k);
+  const lengths = [...new Set(from.map((ind) => ind.length))].sort((a, b) => b - a);
   let next = 0;
   return lines
     .map((line, i) => {
@@ -290,9 +294,9 @@ function reindentNewText(
       const own = indentOf(line);
       let j = positional ? next++ : -1;
       if (!positional) {
-        for (const [k, ind] of from.entries()) {
-          if (own.startsWith(ind) && (j === -1 || ind.length > (from[j] ?? '').length)) j = k;
-        }
+        // The longest indent that prefixes the line; on a tie the earliest.
+        const len = lengths.find((n) => n <= own.length && firstIndex.has(own.slice(0, n)));
+        j = len === undefined ? -1 : (firstIndex.get(own.slice(0, len)) ?? -1);
       }
       const base = from[j];
       const target = to[j];
