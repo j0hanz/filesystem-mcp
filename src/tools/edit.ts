@@ -16,8 +16,7 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
-import { escapeRegExp, toCrlf, usesCrlf } from '../core/util.ts';
+import { toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -193,15 +192,19 @@ interface FlexSpec {
 // Horizontal whitespace is JS `\s` minus the newline, the class oldText is
 // split on; the RE2 pattern took only ASCII there, so an NBSP oldText could
 // not match the same NBSP in the file.
-const isHorizontal = (ch: string | undefined): boolean =>
-  ch !== undefined && ch !== '\n' && /\s/u.test(ch);
-const HORIZONTAL_RUN = /[^\S\n]*/y;
-const WHITESPACE_RUN = /\s*/y;
+//
+// Char-code loops, not sticky regexes: a repetitive file can walk the gaps of
+// every candidate, and a regex call per gap made that ten times slower.
+const isSpace = (code: number): boolean =>
+  code === 32 ||
+  (code >= 9 && code <= 13) ||
+  (code >= 0xa0 && /\s/u.test(String.fromCharCode(code)));
+const isHorizontal = (code: number): boolean => code !== 10 && isSpace(code);
 
-function skipRun(run: RegExp, content: string, at: number): number {
-  run.lastIndex = at;
-  run.exec(content);
-  return run.lastIndex;
+function skipHorizontal(content: string, at: number): number {
+  let pos = at;
+  while (pos < content.length && isHorizontal(content.charCodeAt(pos))) pos += 1;
+  return pos;
 }
 
 function buildFlexSpec(oldText: string): FlexSpec {
@@ -240,21 +243,24 @@ function buildFlexSpec(oldText: string): FlexSpec {
 /** Where a gap starting at `at` ends, or -1 when the content there does not fit it. */
 function walkGap(content: string, at: number, gap: Gap): number {
   if (gap.kind === 'horizontal') {
-    const end = skipRun(HORIZONTAL_RUN, content, at);
+    const end = skipHorizontal(content, at);
     return gap.required && end === at ? -1 : end;
   }
   if (gap.count === undefined) {
-    const end = skipRun(WHITESPACE_RUN, content, at);
-    const newline = content.indexOf('\n', at);
-    return newline !== -1 && newline < end ? end : -1;
+    let pos = at;
+    let newline = false;
+    for (let code = content.charCodeAt(pos); isSpace(code); code = content.charCodeAt(++pos)) {
+      newline ||= code === 10;
+    }
+    return newline ? pos : -1;
   }
   let pos = at;
   for (let n = 0; n < gap.count; n++) {
-    pos = skipRun(HORIZONTAL_RUN, content, pos);
+    pos = skipHorizontal(content, pos);
     if (content[pos] !== '\n') return -1;
     pos += 1;
   }
-  return gap.tail ? skipRun(HORIZONTAL_RUN, content, pos) : pos;
+  return gap.tail ? skipHorizontal(content, pos) : pos;
 }
 
 /**
@@ -264,7 +270,7 @@ function walkGap(content: string, at: number, gap: Gap): number {
 function walkLeadBack(content: string, at: number, gap: Gap, floor: number): number {
   const back = (pos: number): number => {
     let p = pos;
-    while (p > floor && isHorizontal(content[p - 1])) p -= 1;
+    while (p > floor && isHorizontal(content.charCodeAt(p - 1))) p -= 1;
     return p;
   };
   if (gap.kind === 'horizontal') return back(at);
@@ -317,23 +323,6 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
 }
 
 /**
- * Pattern for a whitespace run of oldText that contains a newline. Between two
- * pieces of text it stays flexible — at least one newline, as many as the file
- * has. At either edge of oldText it matches exactly the newlines written: a
- * flexible edge swallows the blank lines around the match and, at the trailing
- * edge, the next line's indentation, all of which newText then replaces. Each
- * newline may carry horizontal whitespace before it, which covers the `\r` of
- * a CRLF file and a blank line with stray spaces.
- */
-function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
-  if (!edge.leading && !edge.trailing) return '(?:[^\\S\\n]*\\n)+[^\\S\\n]*';
-  const count = token.split('\n').length - 1;
-  const lines = `(?:[^\\S\\n]*\\n){${String(count)}}`;
-  // Nothing after the final newline unless the caller wrote indentation there.
-  return edge.trailing && token.endsWith('\n') ? lines : `${lines}[^\\S\\n]*`;
-}
-
-/**
  * Where `oldText` matches. `count` is non-overlapping occurrences, except that a
  * lone match with a second one overlapping it counts two (`abab` in `ababab`),
  * since either is a span the caller could have meant — the count is exact only
@@ -359,53 +348,24 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // a newline keeps at least one newline, so a single-line oldText cannot
     // match across a newline and a multi-line oldText cannot collapse onto one
     // line. Horizontal whitespace stays mandatory between word characters so
-    // adjacent identifiers are not merged. Built token by token: `split` on
-    // whitespace puts text at even indices and whitespace runs at odd ones.
-    // A newline run at either edge of oldText matches exactly, so the edit
-    // cannot reach past the lines the caller named.
-    const tokens = oldText.split(/(\s+)/u);
-    const last = tokens.length - 1;
-    let pattern = '';
-    for (const [i, token] of tokens.entries()) {
-      if (i % 2 === 0) {
-        pattern += escapeRegExp(token);
-      } else if (token.includes('\n')) {
-        pattern += newlineRunPattern(token, {
-          leading: i === 1 && tokens[0] === '',
-          trailing: i === last - 1 && tokens[last] === '',
-        });
-      } else if (/\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '')) {
-        pattern += '[^\\S\\n]+';
-      } else {
-        pattern += '[^\\S\\n]*';
+    // adjacent identifiers are not merged. A newline run at either edge of
+    // oldText matches exactly, so the edit cannot reach past the lines the
+    // caller named.
+    const scan = (from: number): void => {
+      for (const match of flexMatches(content, oldText, from)) {
+        if (add(match.start, match.length)) return;
+        if (from > 0) return;
       }
-    }
-    const regex = compileRegex(pattern, { caseSensitive: true });
-    try {
-      // execMatches resets lastIndex and reports UTF-16 offsets; the raw RE2
-      // index counts code points and would splice off-by-one per emoji.
-      const scan = (from: number): void => {
-        for (const match of execMatches(regex, from === 0 ? content : content.slice(from))) {
-          // A zero-length match names an empty span, which cannot be replaced.
-          if (match.text.length > 0 && add(from + match.start, match.text.length)) return;
-          if (from > 0) return;
-        }
-      };
-      scan(0);
-      // execMatches resumes past each match, so a second match overlapping the
-      // first is never reported; look once more from just past its first
-      // non-whitespace character. Starting inside the leading whitespace would
-      // re-find the same occurrence, since the pattern's leading run is `*`. The
-      // pattern carries no anchors, so matching a suffix finds the same spans.
-      if (found.count === 1 && found.first) {
-        const { startIndex, length } = found.first;
-        const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
-        scan(afterCodePoint(content, startIndex + lead));
-      }
-    } finally {
-      // The compiled pattern owns wasm memory re2-wasm never reclaims on its
-      // own; its lifetime is this one search.
-      freeRegex(regex);
+    };
+    scan(0);
+    // flexMatches resumes past each match, so a second match overlapping the
+    // first is never reported; look once more from just past its first
+    // non-whitespace character. Starting inside the leading whitespace would
+    // re-find the same occurrence, since a leading run walks back over it.
+    if (found.count === 1 && found.first) {
+      const { startIndex, length } = found.first;
+      const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
+      scan(afterCodePoint(content, startIndex + lead));
     }
     return found;
   }

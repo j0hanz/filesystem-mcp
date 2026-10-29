@@ -1431,6 +1431,74 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), `${withExtra.join('\n')}\n`);
   });
 
+  it('edit with ignoreWhitespace applies a 5,000-line oldText (#157)', async () => {
+    const body = `${Array.from({ length: 5_000 }, (_, i) => `    v${String(i)} = ${String(i)};`).join('\n')}\n`;
+    const file = await writeTestFile(tmpDir, 'flex/big-old.js', body);
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: body.replaceAll('    ', '  '), newText: 'done();\n' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'done();\n');
+  });
+
+  it('edit with ignoreWhitespace edits a 9 MB file (#157)', async () => {
+    const filler = '    filler_line_with_some_text = 12345;\n';
+    const file = await writeTestFile(
+      tmpDir,
+      'flex/big-file.txt',
+      `${filler.repeat(240_000)}    unique_marker();\n`,
+    );
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'unique_marker();', newText: 'done();' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok((await readFile(file, 'utf-8')).endsWith('    done();\n'));
+  });
+
+  it('edit with ignoreWhitespace stays fast on repetitive near-matches', async () => {
+    const file = await writeTestFile(tmpDir, 'flex/repetitive.txt', 'a\n'.repeat(200_000));
+    const started = Date.now();
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        // Every line is a candidate walked 100 lines deep before it fails:
+        // the walk is candidates × oldText, so this guards the constant.
+        edits: [{ oldText: `${'a\n'.repeat(100)}b`, newText: 'x' }],
+        ignoreWhitespace: true,
+        dryRun: true,
+      },
+    });
+    const elapsed = Date.now() - started;
+    // A dry run reports an unmatched edit without failing.
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(elapsed < 2000, `took ${String(elapsed)} ms`);
+  });
+
+  it('edit with ignoreWhitespace matches an NBSP oldText against the same NBSP', async () => {
+    const file = await writeTestFile(tmpDir, 'flex/nbsp.txt', 'a b\n');
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'a b', newText: 'ok' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'ok\n');
+  });
+
   it('edit with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
     const file = await writeTestFile(
       tmpDir,
