@@ -36,7 +36,7 @@ const CreateFileItemSchema = z.strictObject({
   path: RequiredPath.describe('Absolute path where the file will be created'),
   content: z
     .string()
-    .refine((val) => val.length <= getMaxTextFileSize(), {
+    .refine((val) => Buffer.byteLength(val, 'utf8') <= getMaxTextFileSize(), {
       message: 'Content exceeds maximum allowed text file size',
     })
     .describe('Text content to write, verbatim.'),
@@ -106,15 +106,15 @@ const CreateInputSchema = z
     }
     // One call's content is what one inbound message carries; the transports
     // size their message bound from this same limit (getMaxInboundMessageBytes),
-    // so a batch that passes here always fits on the wire. Counted in the same
-    // UTF-16 units as the per-file refine above.
-    const total = files.reduce((sum, file) => sum + file.content.length, 0);
+    // so a batch that passes here always fits on the wire. Counted in UTF-8 bytes,
+    // like the per-file refine above and like read/edit measure the file on disk.
+    const total = files.reduce((sum, file) => sum + Buffer.byteLength(file.content, 'utf8'), 0);
     const limit = getMaxTextFileSize();
     if (total > limit) {
       ctx.addIssue({
         code: 'custom',
         path: ['files'],
-        message: `combined content is ${String(total)} characters; one create call carries at most ${String(limit)} (FS_MAX_FILE_SIZE). Split the batch.`,
+        message: `combined content is ${String(total)} bytes; one create call carries at most ${String(limit)} (FS_MAX_FILE_SIZE). Split the batch.`,
         input: value,
       });
     }

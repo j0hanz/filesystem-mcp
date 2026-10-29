@@ -17,7 +17,7 @@ import {
   RequiredPath,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
-import { escapeRegExp } from '../core/util.ts';
+import { escapeRegExp, toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -68,7 +68,7 @@ const EditFileInputSchema = z
       'Preview diffs without writing to disk (default: false = apply edits)',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Ignore leading/trailing whitespace differences when matching oldText',
+      'Ignore leading/trailing whitespace differences when matching oldText; newText is re-indented to the match and replaces its inner blank lines',
     ),
   })
   .superRefine((value, ctx) => {
@@ -265,6 +265,47 @@ function afterCodePoint(content: string, index: number): number {
   return index + ((content.codePointAt(index) ?? 0) > 0xffff ? 2 : 1);
 }
 
+const indentOf = (line: string): string => /^\s*/u.exec(line)?.[0] ?? '';
+
+// The flexible match absorbs the file's indentation, so newText is mapped back
+// onto the matched lines. Pairs come from the non-blank lines of oldText and
+// matched, which correspond one to one under ignoreWhitespace.
+function reindentNewText(
+  newText: string,
+  oldText: string,
+  matched: string,
+  atLineStart: boolean,
+): string {
+  const counted = (line: string, i: number): boolean => /\S/u.test(line) && (i > 0 || atLineStart);
+  const indents = (text: string): string[] =>
+    text.split('\n').flatMap((line, i) => (counted(line, i) ? [indentOf(line)] : []));
+  const from = indents(oldText);
+  const to = indents(matched);
+  const lines = newText.split('\n');
+  const positional = lines.filter(counted).length === from.length;
+  // Indexed once, so a line finds its indent without scanning every one of `from`.
+  const firstIndex = new Map<string, number>();
+  for (const [k, ind] of from.entries()) if (!firstIndex.has(ind)) firstIndex.set(ind, k);
+  const lengths = [...new Set(from.map((ind) => ind.length))].sort((a, b) => b - a);
+  let next = 0;
+  return lines
+    .map((line, i) => {
+      if (!counted(line, i)) return line;
+      const own = indentOf(line);
+      let j = positional ? next++ : -1;
+      if (!positional) {
+        // The longest indent that prefixes the line; on a tie the earliest.
+        const len = lengths.find((n) => n <= own.length && firstIndex.has(own.slice(0, n)));
+        j = len === undefined ? -1 : (firstIndex.get(own.slice(0, len)) ?? -1);
+      }
+      const base = from[j];
+      const target = to[j];
+      if (base === undefined || target === undefined || !own.startsWith(base)) return line;
+      return target + line.slice(base.length);
+    })
+    .join('\n');
+}
+
 function ambiguousEditError(
   content: string,
   found: EditMatches,
@@ -285,19 +326,6 @@ function ambiguousEditError(
     `edits[${String(editIndex)}]: oldText matches ${count} places${where} ` +
       `(${label} ${lines.join(', ')}${more}). Add surrounding lines so it matches once.`,
   );
-}
-
-// A file whose every newline is CRLF gets LF-only edit text converted to match
-// — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
-// and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
-// already carries a `\r` is taken as written. Mixed-ending files are not
-// converted: there is no one ending to convert to.
-function usesCrlf(content: string): boolean {
-  return content.includes('\r\n') && !/(?<!\r)\n/u.test(content);
-}
-
-function toCrlf(text: string): string {
-  return text.includes('\r') ? text : text.replaceAll('\n', '\r\n');
 }
 
 function applyEdits(
@@ -325,10 +353,17 @@ function applyEdits(
     }
 
     const first = found.first;
-    newContent =
-      newContent.slice(0, first.startIndex) +
-      newText +
-      newContent.slice(first.startIndex + first.length);
+    const end = first.startIndex + first.length;
+    // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
+    const replacement = ignoreWhitespace
+      ? reindentNewText(
+          newText,
+          oldText,
+          newContent.slice(first.startIndex, end),
+          first.startIndex === 0 || newContent[first.startIndex - 1] === '\n',
+        )
+      : newText;
+    newContent = newContent.slice(0, first.startIndex) + replacement + newContent.slice(end);
     appliedEdits += 1;
   }
 
@@ -419,6 +454,10 @@ function formatEditSummary(
     if (v.unmatchedEdits && v.unmatchedEdits.length > 0) {
       const quoted = v.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t)));
       return `${basename(v.path)} NO MATCH ${joinRoster(quoted, ', ')}`;
+    }
+    // Counts are absent only when the Myers diff hit DIFF_TIMEOUT_MS; the edit still applied.
+    if (v.appliedEdits > 0 && v.linesAdded === undefined) {
+      return `${basename(v.path)} changed (too many lines to diff)`;
     }
     const added = v.linesAdded ?? 0;
     const removed = v.linesRemoved ?? 0;

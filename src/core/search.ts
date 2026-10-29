@@ -15,6 +15,38 @@ import { escapeRegExp, MIB, PARALLEL_CONCURRENCY } from './util.ts';
  */
 const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
 
+/** Longest line a result carries; a longer one is cut to a window around the match. */
+export const MAX_MATCH_LINE_CHARS = 1000;
+const MATCH_LEAD_CHARS = 200;
+
+/**
+ * `line` cut to a window that starts `MATCH_LEAD_CHARS` before `column`, with
+ * each cut marked by the number of chars removed. A cut never splits a pair.
+ */
+function clipLine(line: string, column: number): string {
+  if (line.length <= MAX_MATCH_LINE_CHARS) return line;
+  let start = Math.max(0, column - MATCH_LEAD_CHARS);
+  let end = Math.min(line.length, start + MAX_MATCH_LINE_CHARS);
+  if (
+    start > 0 &&
+    isHighSurrogate(line.charCodeAt(start - 1)) &&
+    isLowSurrogate(line.charCodeAt(start))
+  )
+    start--;
+  if (
+    end < line.length &&
+    isHighSurrogate(line.charCodeAt(end - 1)) &&
+    isLowSurrogate(line.charCodeAt(end))
+  )
+    end++;
+  const head = start > 0 ? `…[${start} chars] ` : '';
+  const tail = end < line.length ? ` […${line.length - end} chars]` : '';
+  return head + line.slice(start, end) + tail;
+}
+
+const isHighSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
+const isLowSurrogate = (c: number): boolean => c >= 0xdc00 && c <= 0xdfff;
+
 interface SearchResult {
   file: string;
   line: number;
@@ -70,18 +102,25 @@ interface LineHit {
  * copy is most of what a search costs: once per file to rule it out, then once
  * per line of every file it could not rule out.
  */
-interface LiteralMatcher {
+export interface LiteralMatcher {
   /** True when this file holds a character RE2 folds onto one of the needle's letters. */
-  needsRe2(buffer: Buffer): boolean;
+  needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
   mayMatch(buffer: Buffer): boolean;
   matchLine(line: string): LineHit | undefined;
 }
 
 /** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
-const KELVIN_SIGN_UTF8 = Buffer.from('\u212A', 'utf8'); // folds onto k
-const LONG_S_UTF8 = Buffer.from('\u017F', 'utf8'); // folds onto s
+const KELVIN_SIGN = '\u212A'; // folds onto k
+const LONG_S = '\u017F'; // folds onto s
 const ASCII_UPPER_RE = /[A-Z]+/gu;
+
+/** Folds A-Z only, so every UTF-16 offset in the result matches the input. */
+export function foldAsciiCase(text: string): string {
+  // String#toLowerCase turns U+0130 into two code units, which shifts every
+  // later column and spells an `i` RE2 does not match.
+  return text.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase());
+}
 
 /** Non-overlapping occurrences, left to right, as a global RE2 exec walks them. */
 function countOccurrences(line: string, needle: string): LineHit | undefined {
@@ -97,7 +136,10 @@ function countOccurrences(line: string, needle: string): LineHit | undefined {
 }
 
 /** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
-function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
+export function createLiteralMatcher(
+  needle: string,
+  caseSensitive: boolean,
+): LiteralMatcher | undefined {
   // The file is decoded with U+FFFD for every invalid byte, and a lone
   // surrogate reaches RE2 as U+FFFD, so a needle holding either can match
   // decoded text that the raw bytes, or indexOf, do not.
@@ -116,22 +158,16 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
   if (Buffer.byteLength(needle, 'utf8') !== needle.length) return undefined;
   const lower = needle.toLowerCase();
   const folds = [
-    ...(lower.includes('k') ? [KELVIN_SIGN_UTF8] : []),
-    ...(lower.includes('s') ? [LONG_S_UTF8] : []),
+    ...(lower.includes('k') ? [KELVIN_SIGN] : []),
+    ...(lower.includes('s') ? [LONG_S] : []),
   ];
   return {
-    needsRe2: (buffer) => folds.some((fold) => buffer.includes(fold)),
+    needsRe2: (input) => folds.some((fold) => input.includes(fold)),
     // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
     // is found exactly where the bytes spell it in either case.
     mayMatch: (buffer) => buffer.toString('latin1').toLowerCase().includes(lower),
-    // ASCII letters only: String#toLowerCase turns U+0130 into two code units,
-    // which shifts every later column and spells an `i` RE2 does not match.
-    matchLine: (line) =>
-      countOccurrences(
-        line.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase()),
-        lower,
-      ),
+    matchLine: (line) => countOccurrences(foldAsciiCase(line), lower),
   };
 }
 
@@ -227,13 +263,26 @@ const codePointLength = (text: string): number =>
  * Zero-length matches (e.g. `a*`) advance by one code point so they cannot loop
  * forever. The regex is global and shared across calls, so `lastIndex` is reset
  * on entry.
+ *
+ * With `keepLast`, the final capture group is a lookahead-like tail: its text is
+ * not consumed, so the next search starts at its first code point. When the
+ * consumed text ends in a character `backUpOver` (a `$`-anchored pattern)
+ * matches, the next search starts on that character instead, so it can lead the
+ * next match. A resume point never moves back to or before the current search start.
  */
-export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, undefined> {
+export function* execMatches(
+  regex: Regex,
+  text: string,
+  keepLast = false,
+  backUpOver?: RegExp,
+): Generator<RegexMatch, undefined> {
   regex.lastIndex = 0;
   // Cursor into `text`, carried forward across matches: RE2 reports them in
   // ascending order, so the walk is O(text) in total rather than per match.
   let cursorCp = 0;
   let cursorU16 = 0;
+  // Code-point offset the current search started from.
+  let from = 0;
   let match: RE2ExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     while (cursorCp < match.index && cursorU16 < text.length) {
@@ -253,7 +302,16 @@ export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, 
       end: start + matched.length,
     };
     // Own the advance rather than trusting the wrapper's mixed-unit arithmetic.
-    regex.lastIndex = match.index + (matched.length === 0 ? 1 : codePointLength(matched));
+    const tail = keepLast && match.length > 1 ? (match[match.length - 1] ?? '') : '';
+    const consumed = matched.slice(0, matched.length - tail.length);
+    const step = codePointLength(matched) - codePointLength(tail);
+    let next = match.index + (step > 0 ? step : 1);
+    // shortcut: a needle ending in a non-word char that matches at text start (empty `^` lead) cannot back up onto the search start, so an immediately following match is missed (`--` wholeWord on `--` gives `X-`); upgrade by redesigning the lead and trailing boundary, if reported.
+    if (keepLast && backUpOver && consumed !== '' && backUpOver.test(consumed) && next - 1 > from) {
+      next -= 1;
+    }
+    regex.lastIndex = next;
+    from = next;
   }
 }
 
@@ -383,12 +441,16 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
         file: entryPath,
         line: i + 1,
         column: found.column,
-        content: own(line),
+        content: own(clipLine(line, found.column)),
         matchCount: found.count,
         ...(scanCtx.context > 0
           ? {
-              before: lines.slice(Math.max(0, i - scanCtx.context), i).map(own),
-              after: lines.slice(i + 1, Math.min(lineCount, i + 1 + scanCtx.context)).map(own),
+              before: lines
+                .slice(Math.max(0, i - scanCtx.context), i)
+                .map((l) => own(clipLine(l, 0))),
+              after: lines
+                .slice(i + 1, Math.min(lineCount, i + 1 + scanCtx.context))
+                .map((l) => own(clipLine(l, 0))),
             }
           : {}),
       });

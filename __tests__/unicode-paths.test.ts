@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ErrorCode } from '../src/core/errors.ts';
 import { encodeFileUriPath, FILESYSTEM_FILE_URI_TEMPLATE } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { normalizePath } from '../src/core/path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
@@ -664,6 +664,42 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'target.txt']);
       assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
       assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+    });
+
+    it('a link renamed from a non-ASCII case-only spelling is renamed by identity', async (t) => {
+      if (!IS_CASE_INSENSITIVE_FS) {
+        t.skip('case folding applies on a case-insensitive filesystem');
+        return;
+      }
+      await mkdir(join(root, 'target-dir'));
+      await writeFile(join(root, 'target-dir', 'f.txt'), 'target');
+      if (
+        !(await trySymlink(join(root, 'target-dir'), join(root, '\u00c9-link'), () =>
+          t.skip('symlink not permitted'),
+        ))
+      ) {
+        return;
+      }
+      const guard = await makeGuard([root]);
+      await new GuardedFileSystem(guard).rename(
+        join(root, '\u00c9-link'),
+        join(root, '\u00e9-link'),
+      );
+      assert.deepStrictEqual((await readdir(root)).sort(), ['target-dir', '\u00e9-link']);
+      assert.strictEqual(await readFile(join(root, '\u00e9-link', 'f.txt'), 'utf8'), 'target');
+
+      // Two entries that the filesystem keeps apart (U+212A is not a case variant of k on NTFS) are not one entry.
+      await mkdir(join(root, 'kroot'));
+      try {
+        await mkdir(join(root, '\u212Aroot'));
+      } catch {
+        return;
+      }
+      const { kind } = await guard.resolveTransferDestination(join(root, 'kroot'), {
+        entry: join(root, '\u212Aroot'),
+        landing: join(root, '\u212Aroot'),
+      });
+      assert.strictEqual(kind, 'distinct');
     });
 
     it('rename onto a separate link to the source changes nothing', async (t) => {

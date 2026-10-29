@@ -32,11 +32,13 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import type { Regex } from '../core/search.ts';
+import type { LiteralMatcher, Regex } from '../core/search.ts';
 import {
   compileRegex,
+  createLiteralMatcher,
   createYielder,
   execMatches,
+  foldAsciiCase,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
 } from '../core/search.ts';
@@ -46,6 +48,8 @@ import {
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
+  toCrlf,
+  usesCrlf,
 } from '../core/util.ts';
 import { type BatchResult, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
@@ -172,18 +176,46 @@ function recordChangedFile(
 }
 
 interface ReplacementMatcher {
-  /** Yields periodically and throws on abort: a partial splice must never be written. */
+  /**
+   * Yields periodically and throws on abort: a partial splice must never be written.
+   * Throws TOO_LARGE once the result is known to exceed `limits.maxBytes` UTF-8 bytes.
+   */
   replace(
     content: string,
     replacement: string,
     signal: AbortSignal | undefined,
-  ): Promise<{ content: string; matchCount: number }>;
+    limits: ReplaceLimits,
+  ): Promise<{ content: string; matchCount: number; more: boolean }>;
   testBuffer(buffer: Buffer): boolean;
   /** Releases any compiled pattern this matcher owns. Idempotent. */
   dispose(): void;
 }
 
 const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
+
+// RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
+const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
+// Matches a consumed text that ends in a non-word char: its last char may lead the next match.
+const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
+
+interface ReplaceLimits {
+  maxMatches: number;
+  maxBytes: number;
+  path: string;
+}
+
+const OUTPUT_TOO_LARGE_SUGGESTION =
+  "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
+
+function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
+    limits.path,
+    cause,
+    OUTPUT_TOO_LARGE_SUGGESTION,
+  );
+}
 
 /**
  * Expand `$`-substitutions in a replacement template the way `RegExp` does.
@@ -227,13 +259,14 @@ function expandDollarTokens(
 function createRegexReplacementMatcher(
   regex: Regex,
   expandReplacement: boolean,
+  wholeWord: boolean,
 ): ReplacementMatcher {
   return {
     testBuffer(buffer: Buffer): boolean {
       if (buffer.length > RE2_MAX_INPUT_BYTES) {
         throw new FsError(
           ErrorCode.TOO_LARGE,
-          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or the default caseSensitive: false; pass caseSensitive: true with a literal searchPattern, or split the file.`,
+          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern, or split the file.`,
         );
       }
       // The regex is global and shared across every file in the batch, so a
@@ -241,39 +274,108 @@ function createRegexReplacementMatcher(
       regex.lastIndex = 0;
       return regex.test(buffer.toString('utf-8'));
     },
-    async replace(content, replacement, signal) {
+    async replace(content, replacement, signal, limits) {
       // Splicing by hand rather than through `String.replace(regex, …)`: RE2's
       // own replacer indexes the JS string with the code-point offsets it
       // reports, which lands the replacement short by one per astral character
       // (most emoji) earlier in the file. execMatches reports UTF-16 offsets.
       let matchCount = 0;
+      let more = false;
       let updated = '';
       let cursor = 0;
       const tick = createYielder(signal);
-      for (const match of execMatches(regex, content)) {
-        matchCount++;
-        // Only isRegex=true opts into $1/$& substitution. A literal search
-        // reaches this matcher too (case-insensitive and wholeWord both need a
-        // regex), and there the replacement must be inserted verbatim.
-        updated +=
-          content.slice(cursor, match.start) +
-          (expandReplacement
-            ? expandDollarTokens(
-                replacement,
-                match.text,
-                match.groups,
-                match.start,
-                content,
-                match.named,
-              )
-            : replacement);
-        cursor = match.end;
-        if (await tick()) signal?.throwIfAborted();
+      try {
+        // wholeWord's lead and trailing groups are boundary characters: the lead is
+        // spliced around, and the trailing one is left for the next match to use.
+        for (const found of execMatches(regex, content, wholeWord, ENDS_NON_WORD)) {
+          const lead = wholeWord ? (found.groups[0] ?? '') : '';
+          const trail = wholeWord ? (found.groups[found.groups.length - 1] ?? '') : '';
+          const match = wholeWord
+            ? {
+                ...found,
+                start: found.start + lead.length,
+                end: found.end - trail.length,
+                text: found.text.slice(lead.length, found.text.length - trail.length),
+                groups: found.groups.slice(1, -1),
+              }
+            : found;
+          // The resume point never precedes the previous needle end; guard the splice against it.
+          if (match.start < cursor) continue;
+          if (matchCount === limits.maxMatches) {
+            more = true;
+            break;
+          }
+          matchCount++;
+          // Only isRegex=true opts into $1/$& substitution. A literal search
+          // reaches this matcher too (wholeWord, or a case-insensitive needle
+          // RE2 must judge), and there the replacement must be inserted verbatim.
+          updated +=
+            content.slice(cursor, match.start) +
+            (expandReplacement
+              ? expandDollarTokens(
+                  replacement,
+                  match.text,
+                  match.groups,
+                  match.start,
+                  content,
+                  match.named,
+                )
+              : replacement);
+          // `updated` only grows, and each UTF-16 unit is at least one UTF-8 byte.
+          if (updated.length > limits.maxBytes) throw outputTooLarge(limits);
+          cursor = match.end;
+          if (await tick()) signal?.throwIfAborted();
+        }
+      } catch (error) {
+        // V8 throws RangeError once one expansion overruns its maximum string length.
+        if (error instanceof RangeError) throw outputTooLarge(limits, error);
+        throw error;
       }
-      return { content: updated + content.slice(cursor), matchCount };
+      return { content: updated + content.slice(cursor), matchCount, more };
     },
     dispose(): void {
       freeRegex(regex);
+    },
+  };
+}
+
+/** An ASCII needle matched case-insensitively in native code, as RE2 would match it; `fallback` judges the files RE2 must. */
+function createCaseInsensitiveLiteralMatcher(
+  searchPattern: string,
+  literal: LiteralMatcher,
+  fallback: ReplacementMatcher,
+): ReplacementMatcher {
+  const lower = searchPattern.toLowerCase();
+  return {
+    testBuffer(buffer) {
+      return literal.needsRe2(buffer) ? fallback.testBuffer(buffer) : literal.mayMatch(buffer);
+    },
+    // One native O(n) pass, like the case-sensitive matcher; nothing to yield for.
+    replace(content, replacement, signal, limits) {
+      if (literal.needsRe2(content)) return fallback.replace(content, replacement, signal, limits);
+      // foldAsciiCase keeps every UTF-16 offset, so a hit in `folded` splices `content`.
+      const folded = foldAsciiCase(content);
+      let matchCount = 0;
+      let more = false;
+      let updated = '';
+      let cursor = 0;
+      let size = content.length;
+      const delta = replacement.length - lower.length;
+      for (let at = folded.indexOf(lower); at !== -1; at = folded.indexOf(lower, cursor)) {
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          break;
+        }
+        updated += content.slice(cursor, at) + replacement;
+        cursor = at + lower.length;
+        matchCount++;
+        size += delta;
+        if (size > limits.maxBytes) throw outputTooLarge(limits);
+      }
+      return Promise.resolve({ content: updated + content.slice(cursor), matchCount, more });
+    },
+    dispose(): void {
+      fallback.dispose();
     },
   };
 }
@@ -286,13 +388,24 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
       return buffer.indexOf(searchBuffer) !== -1;
     },
     // One native O(n) pass; nothing to yield for.
-    replace(content, replacement) {
+    replace(content, replacement, _signal, limits) {
       let matchCount = 0;
-      const updated = content.replaceAll(searchPattern, () => {
+      let more = false;
+      // Each match is searchPattern long, so the result's UTF-16 length moves by a fixed delta.
+      let size = content.length;
+      const delta = replacement.length - searchPattern.length;
+      const updated = content.replaceAll(searchPattern, (match) => {
+        // Past the cap, the match is kept as it was.
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          return match;
+        }
         matchCount++;
+        size += delta;
+        if (size > limits.maxBytes) throw outputTooLarge(limits);
         return replacement;
       });
-      return Promise.resolve({ content: updated, matchCount });
+      return Promise.resolve({ content: updated, matchCount, more });
     },
     dispose(): void {
       // no compiled pattern to release
@@ -310,6 +423,15 @@ interface ReplaceContext {
   fs: GuardedFileSystem;
   transport: 'stdio' | 'http' | undefined;
   singleFile: boolean;
+  maxBytes: number;
+  /** Matches still replaceable under an explicit cap; Infinity without one. Walked sequentially, so no lock. */
+  remaining: number;
+  /** A file had a match left unreplaced because the cap ran out. */
+  cut: boolean;
+  /** Literal search whose LF text is CRLF-converted for an all-CRLF file. Present only when that changes the text. */
+  crlf?: { matcher: ReplacementMatcher; replacement: string };
+  /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
+  linked: Set<string>;
 }
 
 /** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
@@ -342,11 +464,42 @@ async function processEntry(
     // lost; a dry run never writes and skips the lock.
     const done = await rewriteEntry(
       { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
-      async (bytes) => {
-        if (!matcher.testBuffer(bytes)) return undefined;
+      async (bytes, stats) => {
+        // Hard links share one inode, so a write through one name is seen by every
+        // other name: a second name would transform the same bytes again.
+        if (stats.nlink > 1) {
+          const id = `${stats.dev}:${stats.ino}`;
+          if (ctx.linked.has(id)) return undefined;
+          ctx.linked.add(id);
+        }
+        // Same rule as edit: an all-CRLF file gets its LF literal text converted.
+        const eol =
+          ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
+            ? ctx.crlf
+            : undefined;
+        if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;
         const before = bytes.toString('utf-8');
-        const { content, matchCount } = await matcher.replace(before, replacement, signal);
-        if (matchCount === 0) return undefined;
+        const limits: ReplaceLimits = {
+          maxMatches: ctx.remaining,
+          maxBytes: ctx.maxBytes,
+          path: entryPath,
+        };
+        const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
+          before,
+          eol?.replacement ?? replacement,
+          signal,
+          limits,
+        );
+        // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
+        if (matchCount === 0) {
+          if (more) ctx.cut = true;
+          return undefined;
+        }
+        // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
+        if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+        // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
+        ctx.remaining -= matchCount;
+        if (more) ctx.cut = true;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;
@@ -476,27 +629,50 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 }
 
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
-  if (args.isRegex) {
-    return args.wholeWord ? `\\b(?:${args.searchPattern})\\b` : args.searchPattern;
-  }
-  const escaped = escapeRegExp(args.searchPattern);
-  return args.wholeWord ? `\\b(?:${escaped})\\b` : escaped;
+  const needle = args.isRegex ? args.searchPattern : escapeRegExp(args.searchPattern);
+  // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
+  return args.wholeWord ? `(^|[^${WORD_CLASS}])(?:${needle})([^${WORD_CLASS}]|$)` : needle;
 }
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {
-  // Use regex when isRegex, wholeWord, or case-insensitive (all require RE2)
-  if (args.isRegex || args.wholeWord || !args.caseSensitive) {
-    const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
-    return createRegexReplacementMatcher(regex, args.isRegex);
+  if (!args.isRegex && !args.wholeWord && args.caseSensitive) {
+    return createCaseSensitiveLiteralMatcher(args.searchPattern);
   }
-  return createCaseSensitiveLiteralMatcher(args.searchPattern);
+  const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
+  const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);
+  // A case-insensitive literal is matched natively unless RE2 must judge the needle.
+  const literal =
+    args.isRegex || args.wholeWord ? undefined : createLiteralMatcher(args.searchPattern, false);
+  return literal
+    ? createCaseInsensitiveLiteralMatcher(args.searchPattern, literal, matcher)
+    : matcher;
+}
+
+/** Literal text only: a regex and its $-template are taken as written (use \r?\n). Reuses `matcher` when only the replacement changes. */
+function createCrlfVariant(
+  args: SearchAndReplaceArgs,
+  matcher: ReplacementMatcher,
+): ReplaceContext['crlf'] {
+  if (args.isRegex) return undefined;
+  const pattern = toCrlf(args.searchPattern);
+  const replacement = toCrlf(args.replacement);
+  if (pattern === args.searchPattern && replacement === args.replacement) return undefined;
+  return {
+    matcher:
+      pattern === args.searchPattern
+        ? matcher
+        : createReplacementMatcher({ ...args, searchPattern: pattern }),
+    replacement,
+  };
 }
 
 function buildSearchAndReplaceStructuredResult(
   summary: ReplaceSummary,
   outcome: ScanOutcome<ScannedOutcome>,
   args: SearchAndReplaceArgs,
+  cut: boolean,
 ): SearchAndReplaceOutput {
+  const stop = outcome.stoppedReason ?? (cut ? 'maxResults' : undefined);
   const results = [
     ...summary.changedFiles.map((f) => ({
       index: f.index,
@@ -532,12 +708,8 @@ function buildSearchAndReplaceStructuredResult(
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
     // The scan names its cap `maxResults`; replace_text's argument is `maxMatches`.
-    ...(outcome.stoppedReason
-      ? {
-          stoppedReason:
-            outcome.stoppedReason === 'maxResults' ? 'maxMatches' : outcome.stoppedReason,
-        }
-      : {}),
+    // A cut inside a file stops the run even when the scan itself did not reach its cap.
+    ...(stop ? { stoppedReason: stop === 'maxResults' ? 'maxMatches' : stop } : {}),
   };
 }
 
@@ -555,6 +727,13 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
+  let crlf: ReplaceContext['crlf'];
+  try {
+    crlf = createCrlfVariant(args, matcher);
+  } catch (error) {
+    matcher.dispose();
+    throw error;
+  }
   // The first changed file in walk order is the one the resource_link points
   // at; keep its report so the link needs no read-back.
   let primary: { index: number; report: Rewritten<number>['report'] } | undefined;
@@ -572,18 +751,24 @@ async function handleSearchAndReplace(
   // Failures stay here, not in scan's results: only MAX_FAILURES rows are ever held.
   const failureRows: FailureRow[] = [];
   let failedFiles = 0;
+  // An explicit cap is a strict bound, so its matches are claimed one file at a time, in walk order.
+  const explicitCap = args.maxMatches ?? args.maxResults;
+  const context: ReplaceContext = {
+    dryRun: args.dryRun,
+    replacement: args.replacement,
+    matcher,
+    signal: ctx.signal,
+    fs: ctx.fs,
+    transport: ctx.transport,
+    singleFile: scope.explicitFile !== undefined,
+    maxBytes: getMaxTextFileSize(),
+    remaining: explicitCap ?? Infinity,
+    cut: false,
+    ...(crlf ? { crlf } : {}),
+    linked: new Set(),
+  };
   let outcome: ScanOutcome<ScannedOutcome>;
   try {
-    const context: ReplaceContext = {
-      dryRun: args.dryRun,
-      replacement: args.replacement,
-      matcher,
-      signal: ctx.signal,
-      fs: ctx.fs,
-      transport: ctx.transport,
-      singleFile: scope.explicitFile !== undefined,
-    };
-
     // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
     // gitignore filtering — it is always processed as the one file named.
     outcome = await scan<ScannedOutcome>(
@@ -596,8 +781,8 @@ async function handleSearchAndReplace(
         includeIgnored: args.includeIgnored,
         onlyFiles: true,
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-        concurrency: REPLACE_CONCURRENCY,
-        cap: args.maxMatches ?? args.maxResults ?? DEFAULT_SEARCH_RESULTS,
+        concurrency: explicitCap !== undefined ? 1 : REPLACE_CONCURRENCY,
+        cap: explicitCap ?? DEFAULT_SEARCH_RESULTS,
         weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
         // Bounds the patches held above an unsettled prefix.
@@ -628,6 +813,7 @@ async function handleSearchAndReplace(
     );
   } finally {
     matcher.dispose();
+    if (crlf && crlf.matcher !== matcher) crlf.matcher.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 
@@ -666,7 +852,7 @@ async function handleSearchAndReplace(
     );
   }
 
-  const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args);
+  const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args, context.cut);
 
   // Each written file was stat'd right after its write, inside its lock.
   const link = primary?.report().resourceLink;
@@ -734,8 +920,10 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     } else if (stop !== undefined) {
       // maxMatches/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
+      const rest =
+        stop === 'maxMatches' ? 'later matches were not replaced' : 'later files were not scanned';
       lines.push(
-        `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,
+        `// scan stopped early: hit the ${stop} limit; ${rest}. A higher ${stop} reaches them.`,
       );
     }
     const hint =

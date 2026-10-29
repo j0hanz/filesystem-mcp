@@ -49,6 +49,7 @@ import {
   READ_NOFOLLOW,
   readFileWithStats,
   readProbe,
+  WRITE_NOFOLLOW,
 } from './read.ts';
 import { identityOf as fileIdentityOf, plannedMkdirChain, saveOld, snapshotTree } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
@@ -397,10 +398,15 @@ export class GuardedFileSystem {
     // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
+    let inPlace = false;
+    // Names of one inode share its bytes, so in-place writes through any of them serialize on this key.
+    let inodeKey = '';
     let saved: SavedFile | undefined;
     try {
       const existing = await fsStat(validPath);
       existingMode = existing.mode & 0o777;
+      inPlace = existing.isFile() && existing.nlink > 1;
+      inodeKey = `inode:${existing.dev}:${existing.ino}`;
       // Undo capture: save the bytes about to be overwritten. A write over a
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
@@ -426,35 +432,55 @@ export class GuardedFileSystem {
     }
     const mode = existingMode ?? options.mode;
 
-    try {
+    if (inPlace) {
+      // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
       signal?.throwIfAborted();
-      // Create the temp file already narrowed to the target's mode: a 0600
-      // file's new bytes must never sit at 0644 while the write is in flight.
-      // `wx` fails on a name collision instead of overwriting; the chmod below
-      // still restores bits the umask masked off at creation.
-      await fsWriteFile(tempPath, content, {
-        signal,
-        flag: 'wx',
-        ...(mode !== undefined ? { mode } : {}),
+      await runExclusive(inodeKey, async () => {
+        await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+        await this.#assertFdWithinRoots(handle, filePath);
+        // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
+        signal?.throwIfAborted();
+        try {
+          // No signal on the write: once truncated, an abort would leave the file empty.
+          await handle.truncate(0);
+          await handle.writeFile(content);
+          await handle.sync();
+        } catch (error) {
+          this.#capture?.abandon('the write failed part-way');
+          throw error;
+        }
       });
-      if (mode !== undefined) {
-        await fsChmod(tempPath, mode);
-      }
-      // Last cancellation point. The rename IS the commit: once it starts the
-      // target may already be replaced, so it is never raced against the
-      // signal — a withAbort race would report a finished write as failed, and
-      // a client retry would apply it twice (same reasoning as appendFile).
-      signal?.throwIfAborted();
-      await fsRename(tempPath, validPath);
-    } catch (error) {
+    } else {
       try {
-        await fsUnlink(tempPath);
-      } catch (cleanupError) {
-        Logger.warn(
-          `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
-        );
+        signal?.throwIfAborted();
+        // Create the temp file already narrowed to the target's mode: a 0600
+        // file's new bytes must never sit at 0644 while the write is in flight.
+        // `wx` fails on a name collision instead of overwriting; the chmod below
+        // still restores bits the umask masked off at creation.
+        await fsWriteFile(tempPath, content, {
+          signal,
+          flag: 'wx',
+          ...(mode !== undefined ? { mode } : {}),
+        });
+        if (mode !== undefined) {
+          await fsChmod(tempPath, mode);
+        }
+        // Last cancellation point. The rename IS the commit: once it starts the
+        // target may already be replaced, so it is never raced against the
+        // signal — a withAbort race would report a finished write as failed, and
+        // a client retry would apply it twice (same reasoning as appendFile).
+        signal?.throwIfAborted();
+        await fsRename(tempPath, validPath);
+      } catch (error) {
+        try {
+          await fsUnlink(tempPath);
+        } catch (cleanupError) {
+          Logger.warn(
+            `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
+          );
+        }
+        throw error;
       }
-      throw error;
     }
     if (this.#capture) {
       // A string hashes as its UTF-8 bytes, which is what the write stored.

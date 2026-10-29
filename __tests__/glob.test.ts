@@ -3,8 +3,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
-import { IS_WINDOWS } from '../src/core/path-utils.ts';
+import {
+  foldPatternCase,
+  globEntries,
+  type GlobEntriesOptions,
+  isSafeGlobSyntax,
+} from '../src/core/glob.ts';
+import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS } from '../src/core/path-utils.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -74,6 +79,132 @@ describe('globEntries', () => {
       }
     });
   }
+
+  it('globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
+    const root = await createTestRoot();
+    try {
+      await writeFile(join(root, 'Upper.TXT'), 'x');
+      await mkdir(join(root, 'd'));
+      await writeFile(join(root, 'd', 'f01.txt'), 'x');
+      await mkdir(join(root, 'Node_Modules'));
+      await writeFile(join(root, 'Node_Modules', 'x.txt'), 'x');
+      if (IS_CASE_INSENSITIVE_FS) {
+        assert.deepStrictEqual(
+          await walk({ cwd: root, pattern: 'Upper.txt', baseNameMatch: true }),
+          ['Upper.TXT'],
+        );
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '**/F01.TXT' }), ['d/f01.txt']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: 'D/f01.txt' }), ['d/f01.txt']);
+        const seen = await walk({ cwd: root, pattern: '**/*.txt', skipIgnored: true });
+        assert.ok(!seen.includes('Node_Modules/x.txt'), `saw ${seen.join(', ')}`);
+      } else {
+        assert.deepStrictEqual(
+          await walk({ cwd: root, pattern: 'Upper.txt', baseNameMatch: true }),
+          [],
+        );
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('foldPatternCase leaves brace ranges and class contents alone', () => {
+    const folded = (pattern: string): string => foldPatternCase(pattern);
+    if (IS_CASE_INSENSITIVE_FS) {
+      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.[tT][xX][tT]');
+      assert.strictEqual(folded('{a,b}x'), '{[aA],[bB]}[xX]');
+      assert.strictEqual(folded('[]a]b'), '[]a][bB]');
+      assert.strictEqual(folded('[!]a]b'), '[!]a][bB]');
+      assert.strictEqual(folded('[a-c]x'), '[a-c][xX]');
+    } else {
+      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.txt');
+    }
+  });
+
+  it('an unmatched [ stays a literal bracket when the case is folded', async (t) => {
+    if (!IS_CASE_INSENSITIVE_FS) {
+      t.skip('case folding applies on a case-insensitive filesystem');
+      return;
+    }
+    assert.strictEqual(foldPatternCase('[abc.txt'), '[[][aA][bB][cC].[tT][xX][tT]');
+    const root = await createTestRoot();
+    try {
+      await writeFile(join(root, 'abc.txt'), 'x');
+      let named = true;
+      try {
+        await writeFile(join(root, '[abc.txt'), 'x');
+      } catch {
+        named = false;
+      }
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '[abc.txt' }),
+        named ? ['[abc.txt'] : [],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('a folded pattern still follows a directory symlink named in its literal prefix', async (t) => {
+    const root = await createTestRoot();
+    try {
+      await mkdir(join(root, 'real'));
+      await writeFile(join(root, 'real', 'a.txt'), 'x');
+      const linked = await trySymlink(join(root, 'real'), join(root, 'alias'), () =>
+        t.diagnostic('symlink not permitted; case skipped'),
+      );
+      if (!linked) return;
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: 'alias/*.txt' }), ['alias/a.txt']);
+      if (IS_CASE_INSENSITIVE_FS) {
+        // The prefix is spelled as on disk; only the wildcard part is folded.
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: 'ALIAS/*.TXT' }), ['alias/a.txt']);
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('default excludes fold only ASCII case, so a Kelvin-sign spelling of a name is not hidden', async (t) => {
+    if (!IS_CASE_INSENSITIVE_FS) {
+      t.skip('case folding applies on a case-insensitive filesystem');
+      return;
+    }
+    const root = await createTestRoot();
+    try {
+      // toLowerCase folds U+212A onto k, which would equate this name with `.svelte-kit`.
+      const kelvin = '.svelte-Kit';
+      try {
+        await mkdir(join(root, kelvin));
+      } catch (error) {
+        t.skip(`filesystem refused the name: ${String(error)}`);
+        return;
+      }
+      await writeFile(join(root, kelvin, 'x.txt'), 'x');
+      await mkdir(join(root, 'Node_Modules'));
+      await writeFile(join(root, 'Node_Modules', 'y.txt'), 'y');
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/*.txt', skipIgnored: true, includeHidden: true }),
+        [`${kelvin}/x.txt`],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('a brace range matches its letters whatever the case of the filesystem', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+        await writeFile(join(root, name), 'x');
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: '{a..c}.txt' }), [
+        'a.txt',
+        'b.txt',
+        'c.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 
   it('walks every subdirectory when the process cwd holds a same-named entry', async () => {
     await withCollidingCwd(async (root) => {

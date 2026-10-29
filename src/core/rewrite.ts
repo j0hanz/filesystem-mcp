@@ -67,17 +67,17 @@ export function rewriteFile<T>(
 /**
  * A walked file (replace_text): a non-text verdict comes back untransformed;
  * a transform that returns undefined writes nothing. The transform gets the
- * bytes, so it can rule a file out before anything is decoded.
+ * bytes and the read's stat, so it can rule a file out before anything is decoded.
  */
 export function rewriteEntry<T>(
   request: RewriteRequest,
-  transform: (bytes: Buffer) => Promise<Change<T> | undefined>,
+  transform: (bytes: Buffer, stats: Stats) => Promise<Change<T> | undefined>,
 ): Promise<Rewritten<T> | Skipped | undefined> {
   return locked(request, async () => {
     const verdict = await readText(request.fs, request.path, request.signal);
     if (verdict.kind === 'tooLarge') return verdict;
     if (verdict.kind !== 'text') return { kind: verdict.kind };
-    const change = await transform(verdict.bytes);
+    const change = await transform(verdict.bytes, verdict.stats);
     if (change === undefined) return undefined;
     // A changed file up to the text cap: decode it once, not once per side.
     const before = change.before ?? verdict.bytes.toString('utf8');

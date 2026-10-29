@@ -175,19 +175,29 @@ interface BudgetItem {
 }
 
 interface BudgetMode {
-  fullRead: boolean;
   binary: boolean;
 }
 
 /**
- * What a file costs the batch: one whose bytes ship as base64 costs that size.
- * Only a full read ships base64; a slice of an svg is text.
+ * What a full read costs the batch: base64 size for media/binary, raw size otherwise.
  */
-function budgetBytes(path: string, size: number, { fullRead, binary }: BudgetMode): number {
-  if (!fullRead) return size;
+function budgetBytes(path: string, size: number, { binary }: BudgetMode): number {
   const { kind } = detectMimeType(path);
   const base64 = kind === 'image' || kind === 'audio' || (binary && isKnownBinaryExtension(path));
   return base64 ? base64EncodedBytes(size) : size;
+}
+
+const SLICE_SKIP_SUGGESTION = 'Read it on its own with path, or ask for fewer lines.';
+
+function budgetSkip(path: string, maxTotalSize: number, suggestion?: string): FsError {
+  // undefined falls back to the TOO_LARGE default via the constructor's default param.
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
+    path,
+    undefined,
+    suggestion,
+  );
 }
 
 async function collectFileBudget(
@@ -221,14 +231,7 @@ async function collectFileBudget(
     if (size === undefined) return { path };
     // Skip this file only; a later, smaller file that still fits is read.
     if (total + size > maxTotalSize) {
-      return {
-        path,
-        skip: new FsError(
-          ErrorCode.TOO_LARGE,
-          `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
-          path,
-        ),
-      };
+      return { path, skip: budgetSkip(path, maxTotalSize) };
     }
     total += size;
     return { path };
@@ -426,23 +429,37 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   },
   mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
+    const slice = args.paths !== undefined && hasLineRange(args);
     const items: BudgetItem[] =
-      args.paths !== undefined
-        ? await collectFileBudget(
-            args.paths,
-            READ_MANY_MAX_TOTAL_BYTES,
-            getMaxTextFileSize(),
-            ctx,
-            { fullRead: !hasLineRange(args), binary: args.binary },
-          )
-        : [{ path: args.path ?? '' }];
+      args.paths === undefined
+        ? [{ path: args.path ?? '' }]
+        : slice
+          ? args.paths.map((path) => ({ path }))
+          : await collectFileBudget(
+              args.paths,
+              READ_MANY_MAX_TOTAL_BYTES,
+              getMaxTextFileSize(),
+              ctx,
+              {
+                binary: args.binary,
+              },
+            );
+    let charged = 0;
     const { results: ordered, summary } = await runOverPaths(
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      ({ path, skip }) => {
+      async ({ path, skip }) => {
         if (skip) throw skip;
-        return readOnePath(path, args, ctx);
+        const value = await readOnePath(path, args, ctx);
+        if (!slice) return value;
+        // A slice's cost is known only once read; charged in completion order, so memory stays bounded.
+        const size = Buffer.byteLength(value.content ?? '', 'utf8');
+        if (charged + size > READ_MANY_MAX_TOTAL_BYTES) {
+          throw budgetSkip(path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
+        }
+        charged += size;
+        return value;
       },
     );
 

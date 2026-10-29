@@ -9,6 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { ErrorCode } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { jsonByteBound, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
+import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { MIB } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
@@ -19,6 +20,11 @@ import {
   firstTextBlock,
   withBoundary,
 } from './helpers.ts';
+
+// search_text clips each match line to MAX_MATCH_LINE_CHARS, so one match can
+// no longer overflow stdio. A search overflows by match count instead: many
+// clipped matches, each carried in both the text and the metadata.
+const LONG_LINE = 'x'.repeat(MAX_MATCH_LINE_CHARS + 100);
 
 describe('outbound result limits', { timeout: 60_000 }, () => {
   let root: string;
@@ -63,8 +69,9 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     nearLimitFile = join(root, 'near-limit.txt');
     appendFile = join(root, 'append.txt');
     await Promise.all([
-      writeFile(longLines, `NEEDLE${'x'.repeat(3 * MIB - 6)}\n`.repeat(2)),
-      writeFile(escapedLine, `NEEDLE${'"'.repeat(3 * MIB - 6)}\n`),
+      writeFile(longLines, `NEEDLE${LONG_LINE}\n`.repeat(6000)),
+      // Read, not search: one clipped match is too small to overflow.
+      writeFile(escapedLine, `NEEDLE${'"'.repeat(6 * MIB - 6)}\n`),
       writeFile(smallEscapedLine, `NEEDLE${'"'.repeat(MIB - 6)}\n`),
       writeFile(recoveryFile, 'connection survived\n'),
       writeFile(diffA, `${'a'.repeat(6 * MIB)}\n`),
@@ -74,9 +81,9 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
       writeFile(quotedResourceFile, '"'.repeat(6 * MIB)),
       // Past the default 10 MiB FS_MAX_FILE_SIZE the harness runs with.
       writeFile(overLimitFile, 'x'.repeat(11 * MIB)),
-      writeFile(cachedFile, `NEEDLE${'"'.repeat(MIB)}\n`.repeat(3)),
+      writeFile(cachedFile, `NEEDLE${'"'.repeat(MAX_MATCH_LINE_CHARS + 100)}\n`.repeat(4000)),
       writeFile(smallCachedFile, 'NEEDLE\n'.repeat(3)),
-      writeFile(pagedFile, `${`NEEDLE${'x'.repeat(3 * MIB - 6)}\n`.repeat(2)}NEEDLE\n`),
+      writeFile(pagedFile, `NEEDLE${LONG_LINE}\n`.repeat(8000)),
       writeFile(dryRunFile, `NEEDLE${'a'.repeat(6 * MIB)}\n`),
       writeFile(
         imageFile,
@@ -130,7 +137,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     const result = await harness.client.callTool(
       {
         name: 'search_text',
-        arguments: { path: longLines, searchPattern: 'NEEDLE', maxResults: 2 },
+        arguments: { path: longLines, searchPattern: 'NEEDLE', maxResults: 6000 },
       },
       { timeout: 5000 },
     );
@@ -152,12 +159,10 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.ok(metadata.nextCursor);
   });
 
-  it('counts JSON escaping even for one match and permits smaller escaped content', async () => {
+  it('counts JSON escaping, not only raw size, and permits smaller escaped content', async () => {
+    // 6 MiB of quotes is under the limit raw and over it once escaped.
     const result = await harness.client.callTool(
-      {
-        name: 'search_text',
-        arguments: { path: escapedLine, searchPattern: 'NEEDLE', maxResults: 1 },
-      },
+      { name: 'read', arguments: { path: escapedLine } },
       { timeout: 5000 },
     );
     assert.strictEqual(result.isError, true);
@@ -165,15 +170,11 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     await assertRecovery();
 
     const small = await harness.client.callTool(
-      {
-        name: 'search_text',
-        arguments: { path: smallEscapedLine, searchPattern: 'NEEDLE', maxResults: 1 },
-      },
+      { name: 'read', arguments: { path: smallEscapedLine } },
       { timeout: 5000 },
     );
     assert.notStrictEqual(small.isError, true);
-    const metadata = small._meta as { matches: { content: string }[] };
-    assert.strictEqual(metadata.matches[0]?.content, `NEEDLE${'"'.repeat(MIB - 6)}`);
+    assert.strictEqual(firstTextBlock(small).text, `NEEDLE${'"'.repeat(MIB - 6)}\n`);
   });
 
   it('refuses oversized diffs without losing the connection', async () => {
@@ -228,8 +229,9 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
   });
 
   it('withholds a cached-result link that stdio could never read back', async () => {
-    // The full set stores as ~6 MiB, under the store's cap, but resources/read
-    // re-encodes it as one JSON string, past the stdio limit.
+    // The 4000-match set stores under the store's cap (its text is JSON, so
+    // quotes already double), but resources/read re-encodes that text as one
+    // JSON string, past the stdio limit.
     const page = await harness.client.callTool(
       {
         name: 'search_text',
@@ -282,12 +284,13 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
         await harness.client.listResources(undefined, { timeout: 5000, cacheMode: 'bypass' })
       ).resources.map((resource) => resource.uri);
     const before = new Set(await listed());
-    // Two 3 MiB matches overflow the page; the whole set (all three) fits
-    // the store, so it is cached, with a snapshot, before the refusal.
+    // 5500 clipped matches overflow the page (text and metadata both carry
+    // them); the whole 8000-match set fits the store, so it is cached, with a
+    // snapshot, before the refusal.
     const result = await harness.client.callTool(
       {
         name: 'search_text',
-        arguments: { path: pagedFile, searchPattern: 'NEEDLE', maxResults: 2 },
+        arguments: { path: pagedFile, searchPattern: 'NEEDLE', maxResults: 5500 },
       },
       { timeout: 5000 },
     );
@@ -329,7 +332,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
       try {
         const result = await client.callTool({
           name: 'search_text',
-          arguments: { path: pagedFile, searchPattern: 'NEEDLE', maxResults: 2 },
+          arguments: { path: pagedFile, searchPattern: 'NEEDLE', maxResults: 5500 },
         });
         assert.strictEqual(result.isError, true);
         assert.match(firstTextBlock(result).text ?? '', /TOO_LARGE/);
@@ -511,15 +514,18 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
         const result = await http.client.callTool(
           {
             name: 'search_text',
-            arguments: { path: longLines, searchPattern: 'NEEDLE', maxResults: 2 },
+            arguments: { path: longLines, searchPattern: 'NEEDLE', maxResults: 6000 },
           },
           { timeout: 5000 },
         );
         assert.notStrictEqual(result.isError, true);
         assert.ok(Buffer.byteLength(JSON.stringify(result), 'utf8') > 10 * MIB);
         const metadata = result._meta as { matches: { content: string }[] };
-        assert.strictEqual(metadata.matches.length, 2);
-        assert.ok(metadata.matches.every((match) => match.content.length === 3 * MIB));
+        assert.strictEqual(metadata.matches.length, 6000);
+        assert.ok(
+          metadata.matches.every((match) => match.content.length <= MAX_MATCH_LINE_CHARS + 32),
+          'each match is clipped',
+        );
 
         const diff = await http.client.callTool(
           { name: 'diff', arguments: { a: diffA, b: diffB } },

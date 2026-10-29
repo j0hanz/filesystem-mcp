@@ -25,6 +25,10 @@ export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
 export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
 export const APPEND_CREATE_NOFOLLOW =
   constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
+// POSIX opens write-only: O_RDWR also needs read permission, so a 0222 file could not be overwritten.
+// Windows keeps O_RDWR (= 'r+'), verified there; numeric O_WRONLY|O_TRUNC throws EINVAL, so truncate through the handle instead.
+export const WRITE_NOFOLLOW =
+  (process.platform === 'win32' ? constants.O_RDWR : constants.O_WRONLY) | O_NOFOLLOW | O_NONBLOCK;
 
 /** A file's leading bytes, at most MIME_SAMPLE_SIZE: enough to sniff its type. */
 export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {

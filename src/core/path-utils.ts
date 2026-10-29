@@ -138,6 +138,14 @@ export const isWindowsDrivePath = (requestedPath: string): boolean =>
   /^[A-Za-z]:/u.test(win32.parse(requestedPath).root);
 
 /**
+ * True when a ':' follows the path's root, i.e. an NTFS alternate data stream
+ * (`a.txt:s`, `a.txt::$DATA`). win32.parse keeps the drive colon of `C:\`,
+ * `\\?\C:\` and `\\.\C:\` inside the root, so only stream colons are seen.
+ */
+export const hasAlternateDataStream = (requestedPath: string): boolean =>
+  requestedPath.slice(win32.parse(requestedPath).root.length).includes(':');
+
+/**
  * A drive path this host refuses before resolving it: drive-relative anywhere,
  * and any drive path where the host is not Windows.
  */
@@ -159,7 +167,8 @@ export function normalizePath(p: string): string {
   // The rest of the path retains its original casing.
   // IMPORTANT: callers must use isSamePath / isPathInsideDirectory for all
   // equality and containment checks — never raw string equality — because
-  // those helpers apply full case-folding before comparing.
+  // those helpers fold ASCII case only (see normalizeCaseForComparison); a full
+  // Unicode fold would reopen the U+212A sibling escape.
   if (IS_WINDOWS && resolved.length >= 2 && resolved.charCodeAt(1) === CHAR_COLON) {
     return resolved.charAt(0).toLowerCase() + resolved.slice(1);
   }
@@ -169,7 +178,12 @@ export function normalizePath(p: string): string {
 
 export const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
 
-function normalizeCaseForComparison(value: string): string {
+// ASCII only: JS folds U+212A/U+017F onto k/s, NTFS does not, so a full fold equates a sibling with the root.
+export function normalizeCaseForComparison(value: string): string {
+  return IS_CASE_INSENSITIVE_FS ? value.replace(/[A-Z]/gu, (c) => c.toLowerCase()) : value;
+}
+
+function foldNameCase(value: string): string {
   return IS_CASE_INSENSITIVE_FS ? value.toLowerCase() : value;
 }
 
@@ -190,7 +204,7 @@ export function isSamePath(left: string, right: string): boolean {
  * listing showed it (#101).
  */
 export function unicodeMatchKey(name: string): string {
-  return normalizeCaseForComparison(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
+  return foldNameCase(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
 }
 
 /**

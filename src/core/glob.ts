@@ -1,4 +1,9 @@
-import { glob as fsGlob, readFile as fsReadFile, lstat } from 'node:fs/promises';
+import {
+  glob as fsGlob,
+  readdir as fsReaddir,
+  readFile as fsReadFile,
+  lstat,
+} from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
 
 import type { Ignore } from 'ignore';
@@ -8,7 +13,13 @@ import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
-import { IS_WINDOWS, isPathInsideDirectory, toPosixPath } from './path-utils.ts';
+import {
+  IS_CASE_INSENSITIVE_FS,
+  IS_WINDOWS,
+  isPathInsideDirectory,
+  normalizeCaseForComparison,
+  toPosixPath,
+} from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import { MIB } from './util.ts';
 
@@ -334,7 +345,7 @@ class GitignoreManager {
         exclude: (entry: string) => {
           if (signal?.aborted) return true;
           const name = basename(entry);
-          if (name === '.hg' || name === '.svn' || DEFAULT_EXCLUDED_NAMES.has(name)) return true;
+          if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) return true;
           return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
         },
       });
@@ -470,6 +481,47 @@ function normalizePattern(pattern: string, baseNameMatch: boolean): string {
   return `**/${normalized}`;
 }
 
+/**
+ * On a case-insensitive filesystem, turn each ASCII letter outside a `[...]`
+ * class into `[xX]`. fs.glob matches literal segments case-sensitively but
+ * wildcard segments case-insensitively, and yields on-disk names only for the
+ * latter, so a class forces both. A brace range (`{a..c}`) is copied whole:
+ * a class inside it would stop it being a range.
+ */
+export function foldPatternCase(pattern: string): string {
+  if (!IS_CASE_INSENSITIVE_FS) return pattern;
+  const braceRange = /\{[^{},]*\}/uy;
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i] ?? '';
+    if (ch === '[') {
+      // A `]` first in the class (after `!`/`^`) is literal, as in groupClose.
+      let end = i + 1;
+      if (pattern[end] === '!' || pattern[end] === '^') end++;
+      if (pattern[end] === ']') end++;
+      const close = pattern.indexOf(']', end);
+      if (close === -1) {
+        // Unclosed: a literal `[`, not a class that would fold the rest of the pattern into it.
+        out += '[[]';
+        continue;
+      }
+      out += pattern.slice(i, close + 1);
+      i = close;
+    } else if (ch === '{') {
+      braceRange.lastIndex = i;
+      const set = braceRange.exec(pattern)?.[0];
+      const body = set?.slice(1, -1) ?? '';
+      if (set && (NUMERIC_RANGE_RE.test(body) || ALPHA_RANGE_RE.test(body))) {
+        out += set;
+        i += set.length - 1;
+      } else out += ch;
+    } else if (/[A-Za-z]/u.test(ch)) {
+      out += `[${ch.toLowerCase()}${ch.toUpperCase()}]`;
+    } else out += ch;
+  }
+  return out;
+}
+
 function splitPatternPrefix(normalizedPattern: string): {
   prefix: string;
   remainder: string;
@@ -485,6 +537,38 @@ function splitPatternPrefix(normalizedPattern: string): {
     prefix: segments.slice(0, splitIndex).join(SEP) + SEP,
     remainder: segments.slice(splitIndex).join(SEP),
   };
+}
+
+/**
+ * The literal leading directories of `prefix`, spelled as on disk. A segment is
+ * its exact entry, else the one entry equal to it under ASCII case folding; with
+ * none or several, it stays as written and fs.glob finds nothing there, as on a
+ * case-sensitive filesystem. Only names come back; the walk filters its results as before.
+ */
+async function resolvePrefixOnDisk(prefix: string, cwd: string): Promise<string> {
+  let dir = cwd;
+  const out: string[] = [];
+  for (const segment of prefix.slice(0, -SEP.length).split(SEP)) {
+    const names = await fsReaddir(dir).catch((): string[] => []);
+    const key = normalizeCaseForComparison(segment);
+    const folded = names.filter((name) => normalizeCaseForComparison(name) === key);
+    const name = names.includes(segment) || folded.length !== 1 ? segment : (folded[0] ?? segment);
+    out.push(name);
+    dir = join(dir, name);
+  }
+  return out.join(SEP) + SEP;
+}
+
+/**
+ * foldPatternCase for a walk under `cwd`, with the literal leading directories
+ * spelled as on disk. fs.glob descends a directory symlink only when its segment
+ * is literal, so a folded `alias` would stop the walk at the link.
+ */
+async function foldPatternInWalk(pattern: string, cwd: string): Promise<string> {
+  if (!IS_CASE_INSENSITIVE_FS) return pattern;
+  const { prefix, remainder } = splitPatternPrefix(pattern);
+  if (prefix === '') return foldPatternCase(pattern);
+  return (await resolvePrefixOnDisk(prefix, cwd)) + foldPatternCase(remainder);
 }
 
 /**
@@ -610,7 +694,7 @@ function createWalkFilter(
   // lookup per segment replaces compiling dozens of globs per entry.
   const excluded = (posixRel: string, isDir: boolean): boolean =>
     skipIgnored &&
-    (posixRel.split('/').some((segment) => DEFAULT_EXCLUDED_NAMES.has(segment)) ||
+    (posixRel.split('/').some(isDefaultExcludedName) ||
       (gitignoreMatcher?.isIgnored(posixRel, isDir) ?? false));
   // A sensitive directory's subtree is hidden with the directory: pruning
   // stops descent, and the yielded dirent is dropped below. The guard checks
@@ -706,7 +790,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.onDirectory,
   );
 
-  const iterable = fsGlob([...patterns], {
+  const iterable = fsGlob(await Promise.all(patterns.map((p) => foldPatternInWalk(p, cwd))), {
     cwd,
     exclude: filter.prune,
     withFileTypes: true,
@@ -758,3 +842,13 @@ const DEFAULT_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
   'yarn-error.log',
   'Thumbs.db',
 ]);
+
+// On a case-insensitive filesystem, fs.glob yields on-disk spellings (`Node_Modules`).
+const DEFAULT_EXCLUDED_KEYS: ReadonlySet<string> = new Set(
+  [...DEFAULT_EXCLUDED_NAMES].map(normalizeCaseForComparison),
+);
+
+// ASCII fold only: toLowerCase would equate U+212A (Kelvin) with k, hiding `.svelte-kit` spelled with it.
+function isDefaultExcludedName(name: string): boolean {
+  return DEFAULT_EXCLUDED_KEYS.has(normalizeCaseForComparison(name));
+}

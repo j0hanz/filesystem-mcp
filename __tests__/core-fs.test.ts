@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
+  link,
   mkdir,
   mkdtemp,
   readdir,
@@ -34,6 +35,7 @@ import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -419,6 +421,130 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       const overwrittenRead = await fs.readRaw(filePath);
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
+    });
+
+    it('TC-FUNC-011b: writeFile over a hardlinked file updates every link in place', async (t) => {
+      const filePath = await writeTestFile(
+        tmpDir,
+        'hardlink_a.txt',
+        'old content, longer than the new\n',
+      );
+      const twin = join(tmpDir, 'hardlink_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      await fs.writeFile(filePath, 'new\n');
+
+      // Shorter content: the truncate must drop the old tail on both names.
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'new\n');
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'new\n');
+      assert.strictEqual((await stat(filePath)).nlink, 2);
+      const leftovers = (await readdir(tmpDir)).filter((name) =>
+        name.startsWith('hardlink_a.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
+    });
+    it('TC-FUNC-011f: writeFile over a write-only hardlinked file overwrites it on POSIX', async (t) => {
+      // Root reads any mode, so the EACCES this guards against needs a non-root POSIX caller.
+      if (process.platform === 'win32' || process.getuid?.() === 0) {
+        return t.skip('POSIX non-root only: the write-only mode is what is tested');
+      }
+      const filePath = await writeTestFile(tmpDir, 'hardlink_wo_a.txt', 'old\n');
+      const twin = join(tmpDir, 'hardlink_wo_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      await chmod(filePath, 0o222);
+      try {
+        await fs.writeFile(filePath, 'new\n');
+      } finally {
+        await chmod(filePath, 0o644);
+      }
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'new\n');
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'new\n');
+    });
+    it('TC-FUNC-011c: concurrent writes through two links leave one whole content, never a mix', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_race_a.txt', 'seed\n');
+      const twin = join(tmpDir, 'hardlink_race_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      for (let round = 0; round < 20; round++) {
+        await Promise.all([fs.writeFile(filePath, 'AAAA'), fs.writeFile(twin, 'B')]);
+        const content = await readFile(filePath, 'utf-8');
+        assert.ok(
+          content === 'AAAA' || content === 'B',
+          `round ${String(round)}: ${JSON.stringify(content)}`,
+        );
+        assert.strictEqual(await readFile(twin, 'utf-8'), content);
+      }
+    });
+    it('TC-FUNC-011d: a write cancelled after the open leaves both links on their old bytes', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_cancel_a.txt', 'old bytes\n');
+      const twin = join(tmpDir, 'hardlink_cancel_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      // Passes the entry check, then reports aborted: the window between the open and the truncate.
+      let checks = 0;
+      const signal = {
+        throwIfAborted() {
+          if (++checks > 1) throw new DOMException('aborted', 'AbortError');
+        },
+      } as unknown as AbortSignal;
+
+      await assert.rejects(fs.writeFile(filePath, 'new bytes\n', { signal }), {
+        name: 'AbortError',
+      });
+      // The entry check and the pre-truncate check, and no more: a third would make this pass vacuously.
+      assert.strictEqual(checks, 2);
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old bytes\n');
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'old bytes\n');
+    });
+    it('TC-FUNC-011e: a cancelled in-place write does not abandon the undo capture', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_undo_a.txt', 'old bytes\n');
+      const twin = join(tmpDir, 'hardlink_undo_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      const capture = new UndoJournal(1024 * 1024).beginCapture();
+      const capturing = new GuardedFileSystem(ctx.pathGuard, capture);
+      // Passes the entry check, then reports aborted: the window between the open and the truncate.
+      let checks = 0;
+      const signal = {
+        throwIfAborted() {
+          if (++checks > 1) throw new DOMException('aborted', 'AbortError');
+        },
+      } as unknown as AbortSignal;
+
+      await assert.rejects(capturing.writeFile(filePath, 'new bytes\n', { signal }), {
+        name: 'AbortError',
+      });
+      assert.strictEqual(checks, 2);
+      // Nothing was written, so the call stays undoable.
+      assert.strictEqual(capture.unavailableReason(), undefined);
     });
   });
 

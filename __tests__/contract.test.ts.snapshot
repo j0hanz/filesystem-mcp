@@ -269,7 +269,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "ignoreWhitespace": {
             "default": false,
-            "description": "Ignore leading/trailing whitespace differences when matching oldText",
+            "description": "Ignore leading/trailing whitespace differences when matching oldText; newText is re-indented to the match and replaces its inner blank lines",
             "type": "boolean"
           }
         },

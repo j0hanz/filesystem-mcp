@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
-import { lstat, mkdir, rm, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -472,6 +472,25 @@ describe('restoreEntry', () => {
       'before',
     );
     assert.deepStrictEqual(outcome.remaining, []);
+  });
+
+  it('restore over a hardlinked file puts the old bytes back on every link', async (t) => {
+    const file = join(tmpDir, 'restore-hardlink.txt');
+    const twin = join(tmpDir, 'restore-hardlink-twin.txt');
+    await writeFile(file, 'before');
+    try {
+      await link(file, twin);
+    } catch {
+      return t.skip('hard links not supported here');
+    }
+    const entry = await captureOne((fs) => fs.writeFile(file, 'after'));
+    assert.strictEqual(await readFile(twin, 'utf8'), 'after');
+
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+
+    assert.deepStrictEqual(outcome.remaining, []);
+    assert.strictEqual(await readFile(twin, 'utf8'), 'before');
+    assert.strictEqual((await lstat(file)).nlink, 2);
   });
 
   it('a write whose path already holds the saved bytes counts as restored', async () => {

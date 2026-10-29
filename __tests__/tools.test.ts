@@ -5,9 +5,12 @@ import assert from 'node:assert/strict';
 import {
   access,
   chmod,
+  link,
+  lstat,
   mkdir,
   readdir,
   readFile,
+  readlink,
   rm,
   stat,
   utimes,
@@ -22,8 +25,9 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
+  escapeRegExp,
   getMaxTextFileSize,
   MAX_LIST_ENTRIES,
   MAX_SEARCH_RESULTS,
@@ -310,6 +314,49 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(failedSummary(result)?.results?.[0]?.error, undefined);
     assert.match(firstTextBlock(result).text ?? '', /<svg xmlns/);
+  });
+
+  it('batch head slice of a file larger than maxTotalSize is charged its returned bytes', async () => {
+    // 600 KiB is over the 512 KiB batch budget whole; head: 1 returns 2 bytes.
+    const small = await writeTestFile(tmpDir, 'read-budget/small.txt', 'small\n');
+    const big = await writeTestFile(tmpDir, 'read-budget/big.txt', 'x\n'.repeat(300 * 1024));
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [small, big], head: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const meta = failedSummary(result);
+    assert.strictEqual(meta?.summary?.failed, 0);
+    assert.strictEqual(meta?.results?.[1]?.error, undefined);
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /\/\/ .*small\.txt\nsmall/);
+    assert.match(text, /\/\/ .*big\.txt\nx/);
+  });
+
+  it('batch slices over budget skip one slice without head/tail advice', async () => {
+    // Each head: 1 returns one 300 KiB line; two of them pass 512 KiB.
+    const line = 'y'.repeat(300 * 1024);
+    const a = await writeTestFile(tmpDir, 'read-budget/a.txt', `${line}\nrest\n`);
+    const b = await writeTestFile(tmpDir, 'read-budget/b.txt', `${line}\nrest\n`);
+    const c = await writeTestFile(tmpDir, 'read-budget/c.txt', 'tiny\nrest\n');
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [a, b, c], head: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const errors = (failedSummary(result)?.results ?? []).map((r) => r.error);
+    assert.strictEqual(errors.length, 3);
+    // Charged in completion order: either a or b is skipped, never both; c always fits.
+    assert.strictEqual(errors[2], undefined);
+    const skipped = errors.filter((e) => e !== undefined);
+    assert.strictEqual(skipped.length, 1);
+    assert.strictEqual(skipped[0]?.code, 'TOO_LARGE');
+    assert.match(skipped[0]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
+    assert.strictEqual(
+      skipped[0]?.suggestion,
+      'Read it on its own with path, or ask for fewer lines.',
+    );
+    assert.strictEqual(failedSummary(result)?.summary?.failed, 1);
   });
 
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
@@ -880,6 +927,49 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(result.isError, true);
   });
 
+  it('TC-FUNC-009s: create on an NTFS stream path is INVALID_INPUT, not a raw EINVAL', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('alternate data streams are an NTFS feature');
+      return;
+    }
+    const target = join(tmpDir, 'ads-create.txt:hidden');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: target, content: 'secret' }] },
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = (
+      result.structuredContent as { failures?: { error?: { code?: string; message?: string } }[] }
+    ).failures?.[0];
+    assert.strictEqual(failure?.error?.code, 'INVALID_INPUT');
+    assert.match(failure?.error?.message ?? '', /NTFS alternate data streams are not supported/);
+    assert.doesNotMatch(failure?.error?.message ?? '', /EINVAL|\.tmp/);
+  });
+
+  it('TC-FUNC-009t: move copy:true refuses an NTFS stream destination and writes nothing', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('alternate data streams are an NTFS feature');
+      return;
+    }
+    const source = join(tmpDir, 'ads-src.txt');
+    await writeFile(source, 'body');
+    const before = await readdir(tmpDir);
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: {
+        copy: true,
+        moves: [{ source, destination: join(tmpDir, 'ads-dst.txt:hidden') }],
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = (
+      result._meta as { failures?: { error?: { code?: string; message?: string } }[] } | undefined
+    )?.failures?.[0];
+    assert.strictEqual(failure?.error?.code, 'INVALID_INPUT');
+    assert.match(failure?.error?.message ?? '', /NTFS alternate data streams are not supported/);
+    assert.deepStrictEqual(await readdir(tmpDir), before, 'no ads-dst.txt host file was created');
+  });
+
   it('TC-FUNC-010b: deleting a workspace root names the root, not the parent', async () => {
     // The parent of a root is out-of-root by construction, so the containment
     // check used to answer "Outside allowed directories" for the one directory
@@ -1106,6 +1196,47 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('edit reports a change it could not diff instead of "(no change)"', async () => {
+    const lines = (prefix: string, n: number): string =>
+      Array.from({ length: n }, (_, i) => `${prefix}${String(i)}`).join('\n') + '\n';
+    const before = lines('a', 20000);
+    const after = lines('b', 20000);
+    // A whole-file rewrite outruns DIFF_TIMEOUT_MS: the edit still applies, so the
+    // summary must not claim "(no change)".
+    const file = await writeTestFile(tmpDir, 'edit-diff-timeout.txt', before);
+    const edits = [{ oldText: before, newText: after }];
+
+    const preview = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits, dryRun: true },
+    });
+    assert.notStrictEqual(preview.isError, true);
+    assert.strictEqual(
+      firstTextBlock(preview).text ?? '',
+      'edit: edit-diff-timeout.txt changed (too many lines to diff) [dry run]',
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), before);
+
+    const applied = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits },
+    });
+    assert.notStrictEqual(applied.isError, true);
+    assert.match(
+      firstTextBlock(applied).text ?? '',
+      /^edit: edit-diff-timeout\.txt changed \(too many lines to diff\) · undo \S+$/u,
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), after);
+
+    // An identical replacement is still a true no-op in the summary.
+    const same = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'b0\n', newText: 'b0\n' }] },
+    });
+    assert.notStrictEqual(same.isError, true);
+    assert.match(firstTextBlock(same).text ?? '', /^edit: edit-diff-timeout\.txt \(no change\)/u);
+  });
+
   it('edit refuses an empty or blank oldText with one message', async () => {
     const file = join(tmpDir, 'edit-blank-old.txt');
     await writeFile(file, 'original content');
@@ -1200,7 +1331,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.notStrictEqual(result.isError, true);
-    assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n  go();\n}\n');
+    assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n    go();\n}\n');
   });
 
   it('edit with ignoreWhitespace keeps the blank line and indentation after a trailing newline', async () => {
@@ -1233,6 +1364,84 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(await readFile(file, 'utf-8'), 'a\n\n\n    y = 3\n');
+  });
+
+  // The flexible match absorbs the file's indentation, so newText written at
+  // oldText's indentation must be mapped back onto the file's own.
+  it('edit with ignoreWhitespace re-indents newText to the matched lines', async () => {
+    const spaces = await writeTestFile(
+      tmpDir,
+      'reindent/spaces.js',
+      'function f() {\n    if (x) {\n        y();\n    }\n}\n',
+    );
+    const spaced = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: spaces,
+        edits: [{ oldText: 'if (x) {\n  y();\n}', newText: 'if (x) {\n  z();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(spaced.isError, true);
+    assert.strictEqual(
+      await readFile(spaces, 'utf-8'),
+      'function f() {\n    if (x) {\n        z();\n    }\n}\n',
+    );
+
+    // The file's tabs are reused literally, and an inserted line takes the
+    // indentation of the oldText line it is indented like.
+    const tabs = await writeTestFile(tmpDir, 'reindent/tabs.js', '\tif (x) {\n\t\ty();\n\t}\n');
+    const tabbed = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: tabs,
+        edits: [{ oldText: 'if (x) {\n  y();\n}', newText: 'if (x) {\n  z();\n  w();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(tabbed.isError, true);
+    assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
+  });
+
+  // A timing guard, not a regression catcher: the old quadratic code was also fast at 2000 lines.
+  it('edit with ignoreWhitespace re-indents a 2000-line block well inside the deadline', async () => {
+    const body = Array.from({ length: 2_000 }, (_, i) => `    v${String(i)} = ${String(i)};`);
+    const file = await writeTestFile(tmpDir, 'reindent/huge.js', `${body.join('\n')}\n`);
+    const withExtra = [body[0], '    extra();', ...body.slice(1)];
+    const started = Date.now();
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: body.join('\n'), newText: withExtra.join('\n') }],
+        ignoreWhitespace: true,
+      },
+    });
+    const elapsed = Date.now() - started;
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.ok(elapsed < 2000, `took ${String(elapsed)} ms`);
+    assert.strictEqual(await readFile(file, 'utf-8'), `${withExtra.join('\n')}\n`);
+  });
+
+  it('edit with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
+    const file = await writeTestFile(
+      tmpDir,
+      'reindent/crlf.js',
+      'function f() {\r\n    if (x) {\r\n        y();\r\n    }\r\n}\r\n',
+    );
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'y();\n}', newText: 'w();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'function f() {\r\n    if (x) {\r\n        w();\r\n    }\r\n}\r\n',
+    );
   });
 
   it('edit names the ambiguous edit and flags lines shifted by earlier edits', async () => {
@@ -1398,6 +1607,64 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.strictEqual(result.isError, true);
     assert.match(firstTextBlock(result).text ?? '', /combined content .* Split the batch/);
+  });
+
+  it('create counts the per-file size cap in UTF-8 bytes, not UTF-16 units', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      assert.strictEqual(limit, 1048576);
+      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 units, 1048578 bytes.
+      const over = '€'.repeat(Math.floor(limit / 3) + 1);
+      assert.ok(over.length < limit);
+      assert.strictEqual(Buffer.byteLength(over, 'utf8'), 1048578);
+      const overPath = join(tmpDir, 'bytes-cap-over.txt');
+      const refused = await harness.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: overPath, content: over }] },
+      });
+      assert.strictEqual(refused.isError, true);
+      assert.match(
+        firstTextBlock(refused).text ?? '',
+        /Content exceeds maximum allowed text file size/u,
+      );
+      await assert.rejects(stat(overPath), { code: 'ENOENT' });
+
+      // Exactly at the limit in bytes is accepted.
+      const exact = '€'.repeat(Math.floor(limit / 3)) + 'x'.repeat(limit % 3);
+      assert.strictEqual(Buffer.byteLength(exact, 'utf8'), limit);
+      const exactPath = join(tmpDir, 'bytes-cap-exact.txt');
+      const ok = await harness.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: exactPath, content: exact }] },
+      });
+      assert.notStrictEqual(ok.isError, true);
+      assert.strictEqual((await stat(exactPath)).size, limit);
+    });
+  });
+
+  it('create counts the combined batch cap in UTF-8 bytes', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      // Each entry is under the per-file cap. Together they are over it in bytes (1048584) but not in units (349528).
+      const part = '€'.repeat(Math.ceil(limit / 6) + 1);
+      const totalBytes = 2 * Buffer.byteLength(part, 'utf8');
+      assert.ok(2 * part.length < limit);
+      assert.strictEqual(totalBytes, 1048584);
+      const result = await harness.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: join(tmpDir, 'bytes-batch-a.txt'), content: part },
+            { path: join(tmpDir, 'bytes-batch-b.txt'), content: part },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.match(
+        firstTextBlock(result).text ?? '',
+        /combined content is 1048584 bytes; one create call carries at most 1048576 \(FS_MAX_FILE_SIZE\)\. Split the batch\./u,
+      );
+    });
   });
 
   it('create refuses a batch that names the same file twice', async () => {
@@ -1749,6 +2016,55 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const dstContent = await readFile(dst, 'utf-8');
     assert.strictEqual(srcContent, 'copy content');
     assert.strictEqual(dstContent, 'copy content');
+  });
+
+  it('move with a nonexistent source fails NOT_FOUND naming the source', async () => {
+    const src = join(tmpDir, 'move_missing_src.txt');
+    const dst = join(tmpDir, 'move_missing_dst.txt');
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: src, destination: dst }] },
+    });
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as {
+      failures?: { error?: { code?: string; path?: string; suggestion?: string } }[];
+    };
+    assert.strictEqual(meta.failures?.length, 1);
+    assert.strictEqual(meta.failures?.[0]?.error?.code, 'NOT_FOUND');
+    assert.strictEqual(meta.failures?.[0]?.error?.path, src);
+    assert.doesNotMatch(meta.failures?.[0]?.error?.suggestion ?? '', /list_roots/);
+  });
+
+  it('copy with a nonexistent source fails NOT_FOUND naming the source', async () => {
+    const src = join(tmpDir, 'copy_missing_src.txt');
+    const dst = join(tmpDir, 'copy_missing_dst.txt');
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: src, destination: dst }], copy: true },
+    });
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as { failures?: { error?: { code?: string; path?: string } }[] };
+    assert.strictEqual(meta.failures?.[0]?.error?.code, 'NOT_FOUND');
+    assert.strictEqual(meta.failures?.[0]?.error?.path, src);
+  });
+
+  it('move of a dangling symlink still moves the link itself', async (t) => {
+    const link = join(tmpDir, 'move_dangling_link');
+    const dst = join(tmpDir, 'move_dangling_link_moved');
+    const target = join(tmpDir, 'move_dangling_gone.txt');
+    if (!(await trySymlink(target, link, () => t.skip('symlink creation not permitted'), 'file'))) {
+      return;
+    }
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: link, destination: dst }] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((await lstat(dst)).isSymbolicLink(), true);
+    assert.strictEqual(await readlink(dst), target);
   });
 
   it('TC-FUNC-055: Copy recursive directory via MCP tool call', async () => {
@@ -3233,8 +3549,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       );
     }
 
-    // A literal search reaches the regex matcher when it is case-insensitive,
-    // and there the replacement must stay verbatim.
+    // A case-insensitive literal search must keep the replacement verbatim.
     const literal = await writeTestFile(tmpDir, 'dollar/literal.txt', 'Alpha alpha');
     await harness.client.callTool({
       name: 'replace_text',
@@ -3246,6 +3561,66 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.strictEqual(await readFile(literal, 'utf-8'), '$1 $1');
+  });
+
+  it('replace_text case-insensitive literal replaces 300 matches in a 3 MB file well inside the deadline', async () => {
+    const line = `${'x'.repeat(9990)} Needle\n`;
+    const file = await writeTestFile(tmpDir, 'ci_literal/big.txt', line.repeat(300));
+    const started = Date.now();
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'NEEDLE', replacement: 'pin' },
+    });
+    const elapsed = Date.now() - started;
+    assert.notStrictEqual(result.isError, true);
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.stoppedReason, undefined);
+    assert.strictEqual(meta.totalMatches, 300);
+    assert.ok(elapsed < 2000, `took ${String(elapsed)} ms`);
+    assert.strictEqual(await readFile(file, 'utf-8'), `${'x'.repeat(9990)} pin\n`.repeat(300));
+  });
+
+  it('replace_text case-insensitive literal rewrites exactly what the escaped RE2 regex rewrites', async () => {
+    const KELVIN = String.fromCodePoint(0x212a); // RE2 folds it onto k
+    const LONG_S = String.fromCodePoint(0x017f); // RE2 folds it onto s
+    const DOTTED_I = String.fromCodePoint(0x0130); // RE2 does not fold it onto i
+    const EMOJI = String.fromCodePoint(0x1f600);
+    const cases: { content: string; needle: string; matches: number }[] = [
+      { content: `x ${KELVIN}ey key KEY\n`, needle: 'key', matches: 3 },
+      { content: `${LONG_S}tate STATE state\n`, needle: 'state', matches: 3 },
+      { content: `${DOTTED_I}d id ID\n`, needle: 'id', matches: 2 },
+      { content: `${EMOJI}${EMOJI} Needle needle\n`, needle: 'needle', matches: 2 },
+      { content: 'aaaa aAaA\n', needle: 'aa', matches: 4 },
+      { content: 'line one\r\nLINE two\r\n', needle: 'line', matches: 2 },
+      { content: 'STRASSE straße Straße\n', needle: 'Straße', matches: 2 },
+      { content: 'É e E é\n', needle: 'e', matches: 2 },
+      { content: 'a.b*c axbbc A.B*C\n', needle: 'a.b*c', matches: 2 },
+    ];
+    for (const [i, c] of cases.entries()) {
+      const literal = await writeTestFile(tmpDir, `ci_parity/lit${String(i)}.txt`, c.content);
+      const regex = await writeTestFile(tmpDir, `ci_parity/re${String(i)}.txt`, c.content);
+      // '<$&>' must land verbatim from a literal; '<$$&>' is the same text from a regex.
+      const lit = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: literal, searchPattern: c.needle, replacement: '<$&>' },
+      });
+      await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: regex,
+          searchPattern: escapeRegExp(c.needle),
+          replacement: '<$$&>',
+          isRegex: true,
+        },
+      });
+      const rewritten = await readFile(literal, 'utf-8');
+      assert.strictEqual(rewritten, await readFile(regex, 'utf-8'), `case ${String(i)}`);
+      assert.strictEqual(
+        (lit._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        `case ${String(i)}: ${rewritten}`,
+      );
+    }
   });
 
   it('replace_text regex mode on a file past the RE2 input cap fails that file with TOO_LARGE', async () => {
@@ -3267,6 +3642,109 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(literal.isError, true, 'the literal matcher has no input cap');
     assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
+  });
+
+  it('replace_text transforms a hard-linked file once per run, dry run and live alike', async (t) => {
+    const a = await writeTestFile(tmpDir, 'hardlink_once/a.txt', 'x\n');
+    const b = join(dirname(a), 'b.txt');
+    try {
+      await link(a, b);
+    } catch (error) {
+      t.skip(`hard links not supported here: ${String(error)}`);
+      return;
+    }
+    const totalMatches = async (dryRun: boolean) => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: dirname(a),
+          searchPattern: 'x',
+          replacement: 'xx',
+          caseSensitive: true,
+          dryRun,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, `dryRun=${String(dryRun)}`);
+      return (result._meta as { totalMatches: number }).totalMatches;
+    };
+    assert.strictEqual(await totalMatches(true), 1, 'dry run counts the shared bytes once');
+    assert.strictEqual(await totalMatches(false), 1, 'live run counts the shared bytes once');
+    assert.strictEqual(await readFile(a, 'utf-8'), 'xx\n');
+    assert.strictEqual(await readFile(b, 'utf-8'), 'xx\n');
+  });
+
+  it('replace_text converts LF literal text to CRLF in a CRLF file', async () => {
+    const call = async (args: Record<string, unknown>) => {
+      const result = await harness.client.callTool({ name: 'replace_text', arguments: args });
+      assert.notStrictEqual(result.isError, true);
+      return (result._meta as { totalMatches: number }).totalMatches;
+    };
+
+    // Case-sensitive literal: the Buffer matcher.
+    const sensitive = await writeTestFile(
+      tmpDir,
+      'rt-crlf/sensitive.txt',
+      'one\r\ntwo\r\nthree\r\n',
+    );
+    assert.strictEqual(
+      await call({
+        path: sensitive,
+        searchPattern: 'one\ntwo',
+        replacement: 'uno\ndos',
+        caseSensitive: true,
+      }),
+      1,
+    );
+    assert.strictEqual(await readFile(sensitive, 'utf-8'), 'uno\r\ndos\r\nthree\r\n');
+
+    // Default caseSensitive: false compiles an RE2 regex from the escaped literal.
+    const insensitive = await writeTestFile(tmpDir, 'rt-crlf/insensitive.txt', 'One\r\nTwo\r\n');
+    assert.strictEqual(
+      await call({ path: insensitive, searchPattern: 'one\ntwo', replacement: 'x\ny' }),
+      1,
+    );
+    assert.strictEqual(await readFile(insensitive, 'utf-8'), 'x\r\ny\r\n');
+
+    // A leading newline must take the \r with it, not leave \r\r\n.
+    const leading = await writeTestFile(tmpDir, 'rt-crlf/leading.txt', 'a\r\nb\r\n');
+    assert.strictEqual(
+      await call({ path: leading, searchPattern: '\nb', replacement: '\nc', caseSensitive: true }),
+      1,
+    );
+    assert.strictEqual(await readFile(leading, 'utf-8'), 'a\r\nc\r\n');
+
+    // A single-line pattern with a multi-line replacement keeps the file all-CRLF.
+    const grow = await writeTestFile(tmpDir, 'rt-crlf/grow.txt', 'one\r\ntwo\r\n');
+    assert.strictEqual(
+      await call({
+        path: grow,
+        searchPattern: 'two',
+        replacement: 'two\nhalf',
+        caseSensitive: true,
+      }),
+      1,
+    );
+    assert.strictEqual(await readFile(grow, 'utf-8'), 'one\r\ntwo\r\nhalf\r\n');
+
+    // Mixed endings have no one ending to convert to: nothing matches, file untouched.
+    const mixed = await writeTestFile(tmpDir, 'rt-crlf/mixed/mixed.txt', 'mixed\r\nlf\n');
+    await call({ path: mixed, searchPattern: 'mixed\nlf', replacement: 'x', caseSensitive: true });
+    assert.strictEqual(await readFile(mixed, 'utf-8'), 'mixed\r\nlf\n');
+
+    // isRegex is taken as written: \n does not match \r\n.
+    const regex = await writeTestFile(tmpDir, 'rt-crlf/regex/regex.txt', 'one\r\ntwo\r\n');
+    await call({ path: regex, searchPattern: 'one\\ntwo', replacement: 'x', isRegex: true });
+    assert.strictEqual(await readFile(regex, 'utf-8'), 'one\r\ntwo\r\n');
+
+    // One directory run picks the ending per file.
+    const crlfFile = await writeTestFile(tmpDir, 'rt-crlf/dir/crlf.txt', 'p\r\nq\r\n');
+    const lfFile = await writeTestFile(tmpDir, 'rt-crlf/dir/lf.txt', 'p\nq\n');
+    assert.strictEqual(
+      await call({ path: join(tmpDir, 'rt-crlf/dir'), searchPattern: 'p\nq', replacement: 'r\ns' }),
+      2,
+    );
+    assert.strictEqual(await readFile(crlfFile, 'utf-8'), 'r\r\ns\r\n');
+    assert.strictEqual(await readFile(lfFile, 'utf-8'), 'r\ns\n');
   });
 
   it('replace_text refuses a file over the text size limit with the shared TOO_LARGE wording', async () => {
@@ -3303,6 +3781,84 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.match(firstTextBlock(swept).text ?? '', /2 too large skipped/);
       assert.ok((await readFile(a, 'utf-8')).startsWith('FIND\n'));
       assert.ok((await readFile(b, 'utf-8')).startsWith('FIND\n'));
+    });
+  });
+
+  it('replace_text refuses a $` expansion that grows a file past the text size limit, dry run included', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      // 2 KiB of 'a' with $` per match grows quadratically: about 2 MB uncapped, past the 1 MiB limit.
+      // Small enough that each RE2 exec stays cheap under coverage instrumentation.
+      const original = 'a'.repeat(2 * 1024);
+      const file = await writeTestFile(tmpDir, 'out_cap/prefix.txt', original);
+      for (const dryRun of [true, false]) {
+        const refused = await harness.client.callTool({
+          name: 'replace_text',
+          arguments: { path: file, searchPattern: 'a', replacement: '$`', isRegex: true, dryRun },
+        });
+        assert.strictEqual(refused.isError, true, `dryRun=${String(dryRun)}`);
+        const failure = failedSummary(refused)?.results?.[0]?.error;
+        assert.strictEqual(failure?.code, 'TOO_LARGE');
+        assert.strictEqual(
+          failure?.message,
+          'Replacement result exceeds the size limit (more than 1048576 bytes)',
+        );
+        assert.match(
+          firstTextBlock(refused).text ?? '',
+          /prefix\.txt: TOO_LARGE Replacement result exceeds/,
+        );
+        assert.strictEqual(await readFile(file, 'utf-8'), original, 'file must be untouched');
+      }
+    });
+  });
+
+  it('replace_text fails only the walked file whose literal replacement outgrows the limit', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const dir = join(tmpDir, 'out_cap_walk');
+      // 1000 matches x 2000 chars = 2,000,000 bytes > 1 MiB.
+      const blow = await writeTestFile(dir, 'blow.txt', 'x'.repeat(1000));
+      const ok = await writeTestFile(dir, 'ok.txt', 'x\n');
+      const swept = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: dir,
+          searchPattern: 'x',
+          replacement: 'y'.repeat(2000),
+          caseSensitive: true,
+        },
+      });
+      assert.notStrictEqual(swept.isError, true);
+      const meta = swept._meta as { summary: { total: number; succeeded: number; failed: number } };
+      assert.deepStrictEqual(meta.summary, { total: 2, succeeded: 1, failed: 1 });
+      assert.strictEqual(
+        failedSummary(swept)?.results?.find((r) => r.error)?.error?.code,
+        'TOO_LARGE',
+      );
+      assert.strictEqual(await readFile(blow, 'utf-8'), 'x'.repeat(1000));
+      assert.strictEqual(await readFile(ok, 'utf-8'), 'y'.repeat(2000) + '\n');
+    });
+  });
+
+  it('replace_text caps the result in UTF-8 bytes, not UTF-16 units, and allows exactly the limit', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 of them are 1048578 bytes.
+      const over = await writeTestFile(tmpDir, 'out_cap_utf8/over.txt', 'a'.repeat(349526));
+      const refused = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: over, searchPattern: 'a', replacement: '€', caseSensitive: true },
+      });
+      assert.strictEqual(refused.isError, true);
+      assert.strictEqual(failedSummary(refused)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(over, 'utf-8'), 'a'.repeat(349526));
+
+      // 349525 x '€' plus one 'b' is exactly 1048576 bytes: at the limit, not over it.
+      const exact = await writeTestFile(tmpDir, 'out_cap_utf8/exact.txt', 'a'.repeat(349525) + 'b');
+      const allowed = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: exact, searchPattern: 'a', replacement: '€', caseSensitive: true },
+      });
+      assert.notStrictEqual(allowed.isError, true);
+      assert.strictEqual((await stat(exact)).size, limit);
     });
   });
 
@@ -3754,16 +4310,154 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
-  it('replace_text on a named file past maxMatches replaces every match and does not stop', async () => {
-    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
+  it('replace_text on a named file stops at an explicit maxMatches mid-file', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x\n');
     const result = await harness.client.callTool({
       name: 'replace_text',
-      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxMatches: 2 },
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', maxMatches: 2 },
     });
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
-    assert.strictEqual(meta.totalMatches, 5);
+    assert.strictEqual(meta.totalMatches, 2);
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
+    assert.match(
+      firstTextBlock(result).text ?? '',
+      /hit the maxMatches limit; later matches were not replaced/u,
+    );
+    // The literal matcher honors the same cap.
+    const literal = await writeTestFile(tmpDir, 'replace_named_cap/b.txt', 'x x x x\n');
+    const capped = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: literal,
+        searchPattern: 'x',
+        replacement: 'y',
+        caseSensitive: true,
+        maxMatches: 3,
+      },
+    });
+    assert.strictEqual((capped._meta as { totalMatches: number }).totalMatches, 3);
+    assert.strictEqual(await readFile(literal, 'utf8'), 'y y y x\n');
+  });
+
+  it('replace_text on a named file with no maxMatches replaces past the default cap', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_nocap/a.txt', 'x '.repeat(150));
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true },
+    });
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.totalMatches, 150);
     assert.strictEqual(meta.stoppedReason, undefined);
-    assert.doesNotMatch(firstTextBlock(result).text ?? '', /scan stopped early/u);
+  });
+
+  it('replace_text maxMatches is a strict bound across files in flight', async () => {
+    const dir = join(tmpDir, 'replace_strict_cap');
+    // More files than REPLACE_CONCURRENCY (8), so the cap would be exceeded if files ran in parallel.
+    for (let i = 0; i < 10; i++) await writeTestFile(dir, `${String(i)}.txt`, 'x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'x', replacement: 'y', maxMatches: 3 },
+    });
+    const meta = result._meta as {
+      totalMatches: number;
+      stoppedReason?: string;
+      summary: { succeeded: number };
+    };
+    assert.strictEqual(meta.totalMatches, 3);
+    assert.strictEqual(meta.summary.succeeded, 3);
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
+    // Which three files are rewritten depends on readdir order, so only the count is pinned.
+    let rewritten = 0;
+    for (let i = 0; i < 10; i++) {
+      if ((await readFile(join(dir, `${String(i)}.txt`), 'utf8')) === 'y\n') rewritten++;
+    }
+    assert.strictEqual(rewritten, 3);
+  });
+
+  it('replace_text maxMatches dry run previews exactly what the live run writes', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_preview_cap/a.txt', 'x x x x\n');
+    const dry = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'x',
+        replacement: 'y',
+        dryRun: true,
+        maxMatches: 2,
+      },
+    });
+    assert.match(firstTextBlock(dry).text ?? '', /^\+y y x x$/mu);
+    const live = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', maxMatches: 2 },
+    });
+    assert.strictEqual((dry._meta as { totalMatches: number }).totalMatches, 2);
+    assert.strictEqual((live._meta as { totalMatches: number }).totalMatches, 2);
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
+  });
+
+  it('replace_text maxMatches on the regex path stops at the cap mid-file', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_regex_cap/a.txt', 'x x x x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'x',
+        replacement: 'y',
+        isRegex: true,
+        maxMatches: 2,
+      },
+    });
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
+  });
+
+  it('replace_text does not report a cut for a named file refused as too large', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_cut_toolarge/a.txt', 'x'.repeat(1000));
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: 'x',
+          replacement: 'y'.repeat(2000),
+          caseSensitive: true,
+          maxMatches: 999,
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(failedSummary(result)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(file, 'utf8'), 'x'.repeat(1000));
+      assert.notStrictEqual(
+        (result._meta as { stoppedReason?: string }).stoppedReason,
+        'maxMatches',
+      );
+    });
+  });
+
+  it('replace_text does not report a cut when the UTF-8 size check refuses a capped file', async () => {
+    // Two-byte replacement: the UTF-16 check passes at 999 matches, the UTF-8 check after the matcher does not.
+    const file = await writeTestFile(tmpDir, 'replace_cut_utf8/a.txt', 'x'.repeat(1000));
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: 'x',
+          replacement: 'é'.repeat(1000),
+          caseSensitive: true,
+          maxMatches: 999,
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(failedSummary(result)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(file, 'utf8'), 'x'.repeat(1000));
+      assert.notStrictEqual(
+        (result._meta as { stoppedReason?: string }).stoppedReason,
+        'maxMatches',
+      );
+    });
   });
 
   it('replace_text maxResults still caps as a deprecated alias', async () => {
@@ -3781,10 +4475,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         maxResults: 1,
       },
     });
-    // The cap is checked as files settle, so a batch in flight may overshoot it; the sweep still stops early.
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
     assert.strictEqual(meta.stoppedReason, 'maxMatches');
-    assert.ok(meta.totalMatches < 10, String(meta.totalMatches));
+    assert.strictEqual(meta.totalMatches, 1);
   });
 
   it('replace_text rejects maxMatches with maxResults', async () => {
@@ -3974,11 +4667,179 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(sc.matches?.[0]?.column, 'Line with '.length);
   });
 
+  // RE2's \b is ASCII-only: it saw no boundary around "é"/"ü" and none at a
+  // punctuation edge, so wholeWord matched inside words and skipped real ones.
+  it('replace_text wholeWord treats non-ASCII letters and punctuation edges as word boundaries', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_unicode/a.txt', '');
+    const cases = [
+      {
+        searchPattern: 'café',
+        replacement: 'X',
+        before: 'café cafés xcafé\n',
+        after: 'X cafés xcafé\n',
+        matches: 1,
+      },
+      {
+        searchPattern: 'über',
+        replacement: 'X',
+        before: 'über Über xüber über_\n',
+        after: 'X X xüber über_\n',
+        matches: 2,
+      },
+      {
+        searchPattern: '-x',
+        replacement: 'Y',
+        before: '-x a-x a -x\n',
+        after: 'Y a-x a Y\n',
+        matches: 2,
+      },
+      // Adjacent words share one separator: every one still matches.
+      { searchPattern: 'a', replacement: 'b', before: 'a a a\n', after: 'b b b\n', matches: 3 },
+      // A combining mark is part of the word it follows.
+      { searchPattern: 'x', replacement: 'Y', before: 'x́ x\n', after: 'x́ Y\n', matches: 1 },
+      // An astral non-letter is a boundary on either side.
+      {
+        searchPattern: 'über',
+        replacement: 'X',
+        before: '😀über über😀 ü\n',
+        after: '😀X X😀 ü\n',
+        matches: 2,
+      },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: c.replacement,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.before,
+      );
+    }
+  });
+
+  it('replace_text wholeWord with isRegex keeps the caller capture groups numbered from 1', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_groups/a.txt', 'ab xab ab\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: '(a)(b)',
+        replacement: '$2$1[$&]',
+        isRegex: true,
+        caseSensitive: true,
+        wholeWord: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'ba[ab] xab ba[ab]\n');
+  });
+
+  it('replace_text wholeWord lets the boundary pick the regex alternative', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_alt/a.txt', '');
+    const cases = [
+      // RE2 must not stop at the first alternative that the boundary rejects.
+      { searchPattern: 'foo|foobar', before: 'foobar foo\n', after: 'X X\n', matches: 2 },
+      { searchPattern: 'a+?', before: 'aaa b\n', after: 'X b\n', matches: 1 },
+      // A match's trailing character is the next match's leading one.
+      { searchPattern: 'aa', before: 'aaa aa\n', after: 'aaa X\n', matches: 1 },
+      { searchPattern: 'a', before: 'a a a\n', after: 'X X X\n', matches: 3 },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: 'X',
+          isRegex: true,
+          caseSensitive: true,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.searchPattern);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.searchPattern);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.searchPattern,
+      );
+    }
+  });
+
+  it('replace_text wholeWord lets a needle trailing non-word char lead the next match', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_trail/a.txt', '');
+    const cases = [
+      // The needle's final '-' is the next match's leading boundary.
+      { searchPattern: '-x-', before: '-x--x-\n', after: 'XX\n', matches: 2 },
+      // A one-char needle at text start: no progress is possible, so it must terminate.
+      { searchPattern: '-', before: '-\n', after: 'X\n', matches: 1 },
+      // Known limit (see the shortcut in execMatches): a one-char needle at text start with
+      // a following non-word char cannot resume onto its own start, so the second '-' is missed.
+      { searchPattern: '-', before: '--\n', after: 'X-\n', matches: 1 },
+      {
+        searchPattern: '-',
+        before: 'a - -- b\n',
+        after: 'a X XX b\n',
+        matches: 3,
+      },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: 'X',
+          caseSensitive: true,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.before,
+      );
+    }
+  });
+
+  it('replace_text wholeWord maxMatches stops mid-run with its reason', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_max/a.txt', 'aa a a\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'a',
+        replacement: 'X',
+        caseSensitive: true,
+        wholeWord: true,
+        maxMatches: 1,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf-8'), 'aa X a\n');
+  });
+
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
+    // The shared tmpDir holds more than find_files' default 100 results of *.txt.
     const result = await harness.client.callTool({
       name: 'find_files',
-      arguments: { pattern: '**/*.txt' },
+      arguments: { pattern: '**/findme.txt' },
     });
     assert.notStrictEqual(result.isError, true);
     const sc = result._meta as { results?: { path: string }[] };
@@ -4548,6 +5409,40 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         'grep_context_adjacent/c.txt:3: NEEDLE b',
       ].join('\n'),
     );
+  });
+
+  it('search_text clips a multi-megabyte match line and its context lines', async () => {
+    const dir = join(tmpDir, 'grep_clip_long_line');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'big.txt'),
+      'ctx' +
+        'c'.repeat(2_000_000) +
+        '\n' +
+        'x'.repeat(1_000_000) +
+        'NEEDLE' +
+        'x'.repeat(1_000_000) +
+        '\n',
+    );
+
+    const result = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.ok((firstTextBlock(result).text ?? '').length < 5000);
+    const structured = result._meta as {
+      matches?: { column: number; content: string; before?: string[] }[];
+    };
+    const match = structured.matches?.[0];
+    assert.ok(match);
+    assert.ok(match.content.includes('NEEDLE'));
+    assert.ok(match.content.startsWith('…['));
+    assert.ok(match.content.endsWith(' chars]'));
+    assert.ok(match.content.length < MAX_MATCH_LINE_CHARS + 100);
+    assert.strictEqual(match.column, 1_000_000);
+    const before = match.before?.[0];
+    assert.ok(before !== undefined && before.length < MAX_MATCH_LINE_CHARS + 100);
   });
 
   it('search_text counts an unreadable directory', async (t) => {
