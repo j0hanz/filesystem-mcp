@@ -25,6 +25,8 @@ export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
 export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
 export const APPEND_CREATE_NOFOLLOW =
   constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
+// O_RDWR (= 'r+') is verified on Windows; numeric O_WRONLY|O_TRUNC throws EINVAL there, so truncate through the handle instead.
+export const WRITE_NOFOLLOW = constants.O_RDWR | O_NOFOLLOW | O_NONBLOCK;
 
 /** A file's leading bytes, at most MIME_SAMPLE_SIZE: enough to sniff its type. */
 export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {

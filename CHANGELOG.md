@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A batch `read` with `head`, `tail` or `startLine`/`endLine` charges each slice the bytes it returns.** Before, it charged the whole file's size, so a slice of a file over the 512 KiB batch budget was skipped as `TOO_LARGE`, with advice to use the `head`/`tail` options it already used.
 - **`edit` with `ignoreWhitespace` keeps the file's indentation.** The flexible match absorbed the matched lines' indentation, and newText was spliced in as written, so a block written at a different indentation came out mis-indented. newText lines are now re-indented to the matched lines, using the file's own tabs or spaces. Blank lines between matched lines are still part of the match; the schema description now says so.
 - **`edit` no longer reports `(no change)` after an edit too large to diff.** When the line diff hit its 1-second limit, for example on a rewrite of a whole large file, the summary claimed nothing changed and a dry run showed no preview. It now reads `changed (too many lines to diff)`.
+- **Writes to a hard-linked file update every link.** `edit`, `patch`, `replace_text`, `create` with overwrite, and `undo` now write a file that has more than one hard link in place. Before, the temp-file rename gave the edited path a new inode, and the other links kept the old content.
 
 ## [2.12.1] - 2026-10-29
 

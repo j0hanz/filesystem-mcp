@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
+  link,
   mkdir,
   mkdtemp,
   readdir,
@@ -419,6 +420,33 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       const overwrittenRead = await fs.readRaw(filePath);
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
+    });
+
+    it('TC-FUNC-011b: writeFile over a hardlinked file updates every link in place', async (t) => {
+      const filePath = await writeTestFile(
+        tmpDir,
+        'hardlink_a.txt',
+        'old content, longer than the new\n',
+      );
+      const twin = join(tmpDir, 'hardlink_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      await fs.writeFile(filePath, 'new\n');
+
+      // Shorter content: the truncate must drop the old tail on both names.
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'new\n');
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'new\n');
+      assert.strictEqual((await stat(filePath)).nlink, 2);
+      const leftovers = (await readdir(tmpDir)).filter((name) =>
+        name.startsWith('hardlink_a.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
     });
   });
 
