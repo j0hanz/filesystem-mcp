@@ -1,4 +1,9 @@
-import { glob as fsGlob, readFile as fsReadFile, lstat } from 'node:fs/promises';
+import {
+  glob as fsGlob,
+  readdir as fsReaddir,
+  readFile as fsReadFile,
+  lstat,
+} from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
 
 import type { Ignore } from 'ignore';
@@ -535,6 +540,38 @@ function splitPatternPrefix(normalizedPattern: string): {
 }
 
 /**
+ * The literal leading directories of `prefix`, spelled as on disk. A segment is
+ * its exact entry, else the one entry equal to it under ASCII case folding; with
+ * none or several, it stays as written and fs.glob finds nothing there, as on a
+ * case-sensitive filesystem. Only names come back; the walk filters its results as before.
+ */
+async function resolvePrefixOnDisk(prefix: string, cwd: string): Promise<string> {
+  let dir = cwd;
+  const out: string[] = [];
+  for (const segment of prefix.slice(0, -SEP.length).split(SEP)) {
+    const names = await fsReaddir(dir).catch((): string[] => []);
+    const key = normalizeCaseForComparison(segment);
+    const folded = names.filter((name) => normalizeCaseForComparison(name) === key);
+    const name = names.includes(segment) || folded.length !== 1 ? segment : (folded[0] ?? segment);
+    out.push(name);
+    dir = join(dir, name);
+  }
+  return out.join(SEP) + SEP;
+}
+
+/**
+ * foldPatternCase for a walk under `cwd`, with the literal leading directories
+ * spelled as on disk. fs.glob descends a directory symlink only when its segment
+ * is literal, so a folded `alias` would stop the walk at the link.
+ */
+async function foldPatternInWalk(pattern: string, cwd: string): Promise<string> {
+  if (!IS_CASE_INSENSITIVE_FS) return pattern;
+  const { prefix, remainder } = splitPatternPrefix(pattern);
+  if (prefix === '') return foldPatternCase(pattern);
+  return (await resolvePrefixOnDisk(prefix, cwd)) + foldPatternCase(remainder);
+}
+
+/**
  * The segment matching the dot-prefixed names `segment` would match if fs.glob
  * did not skip them, or `undefined` when there are none. Only a leading `*` or `?`
  * stands for that dot: a literal never does, and a character class or a
@@ -753,7 +790,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.onDirectory,
   );
 
-  const iterable = fsGlob(patterns.map(foldPatternCase), {
+  const iterable = fsGlob(await Promise.all(patterns.map((p) => foldPatternInWalk(p, cwd))), {
     cwd,
     exclude: filter.prune,
     withFileTypes: true,

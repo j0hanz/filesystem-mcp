@@ -145,6 +145,25 @@ describe('globEntries', () => {
     }
   });
 
+  it('a folded pattern still follows a directory symlink named in its literal prefix', async (t) => {
+    const root = await createTestRoot();
+    try {
+      await mkdir(join(root, 'real'));
+      await writeFile(join(root, 'real', 'a.txt'), 'x');
+      const linked = await trySymlink(join(root, 'real'), join(root, 'alias'), () =>
+        t.diagnostic('symlink not permitted; case skipped'),
+      );
+      if (!linked) return;
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: 'alias/*.txt' }), ['alias/a.txt']);
+      if (IS_CASE_INSENSITIVE_FS) {
+        // The prefix is spelled as on disk; only the wildcard part is folded.
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: 'ALIAS/*.TXT' }), ['alias/a.txt']);
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('default excludes fold only ASCII case, so a Kelvin-sign spelling of a name is not hidden', async (t) => {
     if (!IS_CASE_INSENSITIVE_FS) {
       t.skip('case folding applies on a case-insensitive filesystem');
