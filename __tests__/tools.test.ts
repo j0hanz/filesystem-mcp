@@ -4185,16 +4185,91 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
   });
 
-  it('replace_text on a named file past maxMatches replaces every match and does not stop', async () => {
-    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x x\n');
+  it('replace_text on a named file stops at an explicit maxMatches mid-file', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_cap/a.txt', 'x x x x\n');
     const result = await harness.client.callTool({
       name: 'replace_text',
-      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true, maxMatches: 2 },
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', maxMatches: 2 },
     });
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
-    assert.strictEqual(meta.totalMatches, 5);
+    assert.strictEqual(meta.totalMatches, 2);
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
+    assert.match(
+      firstTextBlock(result).text ?? '',
+      /hit the maxMatches limit; later matches were not replaced/u,
+    );
+    // The literal matcher honors the same cap.
+    const literal = await writeTestFile(tmpDir, 'replace_named_cap/b.txt', 'x x x x\n');
+    const capped = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: literal,
+        searchPattern: 'x',
+        replacement: 'y',
+        caseSensitive: true,
+        maxMatches: 3,
+      },
+    });
+    assert.strictEqual((capped._meta as { totalMatches: number }).totalMatches, 3);
+    assert.strictEqual(await readFile(literal, 'utf8'), 'y y y x\n');
+  });
+
+  it('replace_text on a named file with no maxMatches replaces past the default cap', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_named_nocap/a.txt', 'x '.repeat(150));
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', dryRun: true },
+    });
+    const meta = result._meta as { totalMatches: number; stoppedReason?: string };
+    assert.strictEqual(meta.totalMatches, 150);
     assert.strictEqual(meta.stoppedReason, undefined);
-    assert.doesNotMatch(firstTextBlock(result).text ?? '', /scan stopped early/u);
+  });
+
+  it('replace_text maxMatches is a strict bound across files in flight', async () => {
+    const dir = join(tmpDir, 'replace_strict_cap');
+    // More files than REPLACE_CONCURRENCY (8), so the cap would be exceeded if files ran in parallel.
+    for (let i = 0; i < 10; i++) await writeTestFile(dir, `${String(i)}.txt`, 'x\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: 'x', replacement: 'y', maxMatches: 3 },
+    });
+    const meta = result._meta as {
+      totalMatches: number;
+      stoppedReason?: string;
+      summary: { succeeded: number };
+    };
+    assert.strictEqual(meta.totalMatches, 3);
+    assert.strictEqual(meta.summary.succeeded, 3);
+    assert.strictEqual(meta.stoppedReason, 'maxMatches');
+    // Which three files are rewritten depends on readdir order, so only the count is pinned.
+    let rewritten = 0;
+    for (let i = 0; i < 10; i++) {
+      if ((await readFile(join(dir, `${String(i)}.txt`), 'utf8')) === 'y\n') rewritten++;
+    }
+    assert.strictEqual(rewritten, 3);
+  });
+
+  it('replace_text maxMatches dry run previews exactly what the live run writes', async () => {
+    const file = await writeTestFile(tmpDir, 'replace_preview_cap/a.txt', 'x x x x\n');
+    const dry = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: 'x',
+        replacement: 'y',
+        dryRun: true,
+        maxMatches: 2,
+      },
+    });
+    assert.match(firstTextBlock(dry).text ?? '', /^\+y y x x$/mu);
+    const live = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: file, searchPattern: 'x', replacement: 'y', maxMatches: 2 },
+    });
+    assert.strictEqual((dry._meta as { totalMatches: number }).totalMatches, 2);
+    assert.strictEqual((live._meta as { totalMatches: number }).totalMatches, 2);
+    assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
   });
 
   it('replace_text maxResults still caps as a deprecated alias', async () => {
@@ -4212,10 +4287,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         maxResults: 1,
       },
     });
-    // The cap is checked as files settle, so a batch in flight may overshoot it; the sweep still stops early.
     const meta = result._meta as { totalMatches: number; stoppedReason?: string };
     assert.strictEqual(meta.stoppedReason, 'maxMatches');
-    assert.ok(meta.totalMatches < 10, String(meta.totalMatches));
+    assert.strictEqual(meta.totalMatches, 1);
   });
 
   it('replace_text rejects maxMatches with maxResults', async () => {

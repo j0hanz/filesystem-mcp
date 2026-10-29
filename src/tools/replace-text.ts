@@ -272,11 +272,16 @@ function createRegexReplacementMatcher(
       // reports, which lands the replacement short by one per astral character
       // (most emoji) earlier in the file. execMatches reports UTF-16 offsets.
       let matchCount = 0;
+      let more = false;
       let updated = '';
       let cursor = 0;
       const tick = createYielder(signal);
       try {
         for (const match of execMatches(regex, content)) {
+          if (matchCount === limits.maxMatches) {
+            more = true;
+            break;
+          }
           matchCount++;
           // Only isRegex=true opts into $1/$& substitution. A literal search
           // reaches this matcher too (wholeWord, or a case-insensitive needle
@@ -303,7 +308,7 @@ function createRegexReplacementMatcher(
         if (error instanceof RangeError) throw outputTooLarge(limits, error);
         throw error;
       }
-      return { content: updated + content.slice(cursor), matchCount, more: false };
+      return { content: updated + content.slice(cursor), matchCount, more };
     },
     dispose(): void {
       freeRegex(regex);
@@ -328,18 +333,23 @@ function createCaseInsensitiveLiteralMatcher(
       // foldAsciiCase keeps every UTF-16 offset, so a hit in `folded` splices `content`.
       const folded = foldAsciiCase(content);
       let matchCount = 0;
+      let more = false;
       let updated = '';
       let cursor = 0;
       let size = content.length;
       const delta = replacement.length - lower.length;
       for (let at = folded.indexOf(lower); at !== -1; at = folded.indexOf(lower, cursor)) {
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          break;
+        }
         updated += content.slice(cursor, at) + replacement;
         cursor = at + lower.length;
         matchCount++;
         size += delta;
         if (size > limits.maxBytes) throw outputTooLarge(limits);
       }
-      return Promise.resolve({ content: updated + content.slice(cursor), matchCount, more: false });
+      return Promise.resolve({ content: updated + content.slice(cursor), matchCount, more });
     },
     dispose(): void {
       fallback.dispose();
@@ -357,16 +367,22 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
     // One native O(n) pass; nothing to yield for.
     replace(content, replacement, _signal, limits) {
       let matchCount = 0;
+      let more = false;
       // Each match is searchPattern long, so the result's UTF-16 length moves by a fixed delta.
       let size = content.length;
       const delta = replacement.length - searchPattern.length;
-      const updated = content.replaceAll(searchPattern, () => {
+      const updated = content.replaceAll(searchPattern, (match) => {
+        // Past the cap, the match is kept as it was.
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          return match;
+        }
         matchCount++;
         size += delta;
         if (size > limits.maxBytes) throw outputTooLarge(limits);
         return replacement;
       });
-      return Promise.resolve({ content: updated, matchCount, more: false });
+      return Promise.resolve({ content: updated, matchCount, more });
     },
     dispose(): void {
       // no compiled pattern to release
@@ -385,6 +401,10 @@ interface ReplaceContext {
   transport: 'stdio' | 'http' | undefined;
   singleFile: boolean;
   maxBytes: number;
+  /** Matches still replaceable under an explicit cap; Infinity without one. Walked sequentially, so no lock. */
+  remaining: number;
+  /** A file had a match left unreplaced because the cap ran out. */
+  cut: boolean;
 }
 
 /** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
@@ -421,14 +441,22 @@ async function processEntry(
         if (!matcher.testBuffer(bytes)) return undefined;
         const before = bytes.toString('utf-8');
         const limits: ReplaceLimits = {
-          maxMatches: Infinity,
+          maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount } = await matcher.replace(before, replacement, signal, limits);
+        const { content, matchCount, more } = await matcher.replace(
+          before,
+          replacement,
+          signal,
+          limits,
+        );
+        if (more) ctx.cut = true;
         if (matchCount === 0) return undefined;
         // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
         if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+        // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
+        ctx.remaining -= matchCount;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;
@@ -583,7 +611,9 @@ function buildSearchAndReplaceStructuredResult(
   summary: ReplaceSummary,
   outcome: ScanOutcome<ScannedOutcome>,
   args: SearchAndReplaceArgs,
+  cut: boolean,
 ): SearchAndReplaceOutput {
+  const stop = outcome.stoppedReason ?? (cut ? 'maxResults' : undefined);
   const results = [
     ...summary.changedFiles.map((f) => ({
       index: f.index,
@@ -619,12 +649,8 @@ function buildSearchAndReplaceStructuredResult(
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
     // The scan names its cap `maxResults`; replace_text's argument is `maxMatches`.
-    ...(outcome.stoppedReason
-      ? {
-          stoppedReason:
-            outcome.stoppedReason === 'maxResults' ? 'maxMatches' : outcome.stoppedReason,
-        }
-      : {}),
+    // A cut inside a file stops the run even when the scan itself did not reach its cap.
+    ...(stop ? { stoppedReason: stop === 'maxResults' ? 'maxMatches' : stop } : {}),
   };
 }
 
@@ -659,19 +685,22 @@ async function handleSearchAndReplace(
   // Failures stay here, not in scan's results: only MAX_FAILURES rows are ever held.
   const failureRows: FailureRow[] = [];
   let failedFiles = 0;
+  // An explicit cap is a strict bound, so its matches are claimed one file at a time, in walk order.
+  const explicitCap = args.maxMatches ?? args.maxResults;
+  const context: ReplaceContext = {
+    dryRun: args.dryRun,
+    replacement: args.replacement,
+    matcher,
+    signal: ctx.signal,
+    fs: ctx.fs,
+    transport: ctx.transport,
+    singleFile: scope.explicitFile !== undefined,
+    maxBytes: getMaxTextFileSize(),
+    remaining: explicitCap ?? Infinity,
+    cut: false,
+  };
   let outcome: ScanOutcome<ScannedOutcome>;
   try {
-    const context: ReplaceContext = {
-      dryRun: args.dryRun,
-      replacement: args.replacement,
-      matcher,
-      signal: ctx.signal,
-      fs: ctx.fs,
-      transport: ctx.transport,
-      singleFile: scope.explicitFile !== undefined,
-      maxBytes: getMaxTextFileSize(),
-    };
-
     // An explicit single-file target bypasses baseNameMatch/exclude/hidden/
     // gitignore filtering — it is always processed as the one file named.
     outcome = await scan<ScannedOutcome>(
@@ -684,8 +713,8 @@ async function handleSearchAndReplace(
         includeIgnored: args.includeIgnored,
         onlyFiles: true,
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-        concurrency: REPLACE_CONCURRENCY,
-        cap: args.maxMatches ?? args.maxResults ?? DEFAULT_SEARCH_RESULTS,
+        concurrency: explicitCap !== undefined ? 1 : REPLACE_CONCURRENCY,
+        cap: explicitCap ?? DEFAULT_SEARCH_RESULTS,
         weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
         // Bounds the patches held above an unsettled prefix.
@@ -754,7 +783,7 @@ async function handleSearchAndReplace(
     );
   }
 
-  const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args);
+  const structured = buildSearchAndReplaceStructuredResult(summary, outcome, args, context.cut);
 
   // Each written file was stat'd right after its write, inside its lock.
   const link = primary?.report().resourceLink;
@@ -822,8 +851,10 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     } else if (stop !== undefined) {
       // maxMatches/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
+      const rest =
+        stop === 'maxMatches' ? 'later matches were not replaced' : 'later files were not scanned';
       lines.push(
-        `// scan stopped early: hit the ${stop} limit; later files were not scanned. A higher ${stop} reaches them.`,
+        `// scan stopped early: hit the ${stop} limit; ${rest}. A higher ${stop} reaches them.`,
       );
     }
     const hint =
