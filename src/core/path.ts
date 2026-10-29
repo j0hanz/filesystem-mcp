@@ -49,14 +49,6 @@ const MAX_SYMLINK_HOPS = 40;
 export type TransferKind = 'distinct' | 'respelling' | 'self';
 
 /**
- * A write target that already exists is realpathed to its on-disk spelling,
- * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
- * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
- * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
- * re-spelled with the requested basename when the two differ only that way;
- * otherwise the resolved target unchanged. Parent segments are not re-spelled.
- */
-/**
  * Whether two spellings that differ only in case name one entry, by identity.
  * isSamePath folds ASCII only, but NTFS and APFS also fold `É` and `é`, so a
  * rename between them would read as two entries. A hard link is not an alias:
@@ -73,6 +65,14 @@ async function isCaseAliasOfEntry(left: string, right: string): Promise<boolean>
   return a.dev === b.dev && a.ino === b.ino;
 }
 
+/**
+ * A write target that already exists is realpathed to its on-disk spelling,
+ * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
+ * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
+ * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only that way;
+ * otherwise the resolved target unchanged. Parent segments are not re-spelled.
+ */
 function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
   const requestedName = basename(requestedPath);
   const resolvedName = basename(resolvedTarget);
