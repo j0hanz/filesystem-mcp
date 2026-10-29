@@ -3736,8 +3736,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
   it('replace_text refuses a $` expansion that grows a file past the text size limit, dry run included', async () => {
     await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
-      // 44 KiB of 'a' with $` per match grows quadratically: about 1 GB uncapped.
-      const original = 'a'.repeat(44 * 1024);
+      // 2 KiB of 'a' with $` per match grows quadratically: about 2 MB uncapped, past the 1 MiB limit.
+      // Small enough that each RE2 exec stays cheap under coverage instrumentation.
+      const original = 'a'.repeat(2 * 1024);
       const file = await writeTestFile(tmpDir, 'out_cap/prefix.txt', original);
       for (const dryRun of [true, false]) {
         const refused = await harness.client.callTool({
