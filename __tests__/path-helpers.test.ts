@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 import {
   escapeNonAscii,
+  IS_CASE_INSENSITIVE_FS,
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
@@ -113,5 +114,20 @@ describe('PathGuard containment helpers', () => {
   it('TC-PH-016: escapeNonAscii writes each non-ASCII UTF-16 unit as a JSON escape', () => {
     assert.strictEqual(escapeNonAscii('a\u00a0b'), 'a\\u00a0b');
     assert.strictEqual(escapeNonAscii('x\u{1f600}'), 'x\\ud83d\\ude00');
+  });
+
+  it('TC-PH-020: a Kelvin sign is not the letter k for containment', (t) => {
+    if (!IS_CASE_INSENSITIVE_FS) {
+      t.skip('case folding applies on a case-insensitive filesystem');
+      return;
+    }
+    const root = normalizePath('C:/x/kroot');
+    assert.strictEqual(
+      isPathInsideDirectory(root, normalizePath('C:/x/\u212Aroot/secret.txt')),
+      false,
+    );
+    assert.strictEqual(isSamePath('C:/x/\u212Aroot', 'C:/x/kroot'), false);
+    assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/x/\u017Froot/s')), false); // long s
+    assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/X/KROOT/a.txt')), true); // ASCII still folds
   });
 });

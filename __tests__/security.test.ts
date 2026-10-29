@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { cli } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
+import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { SensitiveMatcher } from '../src/core/sensitive.ts';
 import {
@@ -118,6 +119,37 @@ describe('Security (P0)', () => {
       await writeTestFile(root, 'src/aux.ts', 'export const x = 1;\n');
       const resolved = await guard.validateExistingPath(auxPath);
       assert.ok(resolved.endsWith('aux.ts'));
+    });
+
+    it('TC-SEC-043: a Unicode case-fold look-alike sibling of the root is outside it', async (t) => {
+      if (!IS_CASE_INSENSITIVE_FS) {
+        t.skip('case folding applies on a case-insensitive filesystem');
+        return;
+      }
+      const parent = await createTestRoot();
+      try {
+        const inside = join(parent, 'kroot');
+        const lookalike = join(parent, 'Kroot');
+        await mkdir(inside);
+        await mkdir(lookalike);
+        await writeFile(join(lookalike, 'secret.txt'), 'KELVIN-SECRET');
+        const kGuard = await makeGuard([inside]);
+        const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Outside allowed directories/);
+        await assert.rejects(kGuard.validateExistingPath(join(lookalike, 'secret.txt')), denied);
+        await assert.rejects(kGuard.validatePathForWrite(join(lookalike, 'planted.txt')), denied);
+        await assert.rejects(kGuard.validatePathForDelete(join(lookalike, 'secret.txt')), denied);
+        // Review Focus 1: a root whose own name differs only in non-ASCII case is refused, never served.
+        const cafe = join(parent, 'café');
+        await mkdir(cafe);
+        await writeFile(join(cafe, 'x.txt'), 'x');
+        const cafeGuard = await makeGuard([cafe]);
+        await assert.rejects(cafeGuard.validateExistingPath(join(parent, 'CAFÉ', 'x.txt')), denied);
+        assert.ok(
+          (await cafeGuard.validateExistingPath(join(parent, 'CAFé', 'x.txt'))).endsWith('x.txt'),
+        ); // ASCII case still folds
+      } finally {
+        await cleanupTestRoot(parent);
+      }
     });
 
     it('TC-SEC-020: a sibling whose name starts with the root name and a backslash stays outside', async (t) => {

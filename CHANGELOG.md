@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Path containment no longer folds non-ASCII case.** On Windows and macOS, a sibling folder whose name differs from a root only by a character JavaScript folds but NTFS does not (U+212A Kelvin sign, U+017F long s) passed the containment check, so every tool could read, write and delete outside the root. Containment now folds `A-Z` only.
+
+### Fixed
+
 ## [2.12.1] - 2026-10-29
 
 A patch release with one output fix. No caller needs to adapt.
