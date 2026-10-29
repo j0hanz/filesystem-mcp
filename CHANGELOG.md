@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`edit` with `ignoreWhitespace` keeps the file's indentation.** The flexible match absorbed the matched lines' indentation, and newText was spliced in as written, so a block written at a different indentation came out mis-indented. newText lines are now re-indented to the matched lines, using the file's own tabs or spaces. Blank lines between matched lines are still part of the match; the schema description now says so.
 - **`edit` no longer reports `(no change)` after an edit too large to diff.** When the line diff hit its 1-second limit, for example on a rewrite of a whole large file, the summary claimed nothing changed and a dry run showed no preview. It now reads `changed (too many lines to diff)`.
 - **Writes to a hard-linked file update every link.** `edit`, `patch`, `replace_text`, `create` with overwrite, and `undo` now write a file that has more than one hard link in place. Before, the temp-file rename gave the edited path a new inode, and the other links kept the old content.
+- **`find_files` matches case-insensitively on Windows and macOS, and reports on-disk names.** Before, a pattern like `Upper.txt` matched nothing when the file was `Upper.TXT`, and a result could echo the pattern's spelling instead of the file's. Patterns now match the way the filesystem does, and results carry the on-disk name. Default excludes such as `node_modules` also match any spelling there.
 
 ## [2.12.1] - 2026-10-29
 

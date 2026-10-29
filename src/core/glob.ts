@@ -8,7 +8,12 @@ import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
-import { IS_WINDOWS, isPathInsideDirectory, toPosixPath } from './path-utils.ts';
+import {
+  IS_CASE_INSENSITIVE_FS,
+  IS_WINDOWS,
+  isPathInsideDirectory,
+  toPosixPath,
+} from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import { MIB } from './util.ts';
 
@@ -334,7 +339,7 @@ class GitignoreManager {
         exclude: (entry: string) => {
           if (signal?.aborted) return true;
           const name = basename(entry);
-          if (name === '.hg' || name === '.svn' || DEFAULT_EXCLUDED_NAMES.has(name)) return true;
+          if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) return true;
           return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
         },
       });
@@ -468,6 +473,28 @@ function normalizePattern(pattern: string, baseNameMatch: boolean): string {
   if (!baseNameMatch) return normalized;
   if (normalized.includes(SEP)) return normalized;
   return `**/${normalized}`;
+}
+
+/**
+ * On a case-insensitive filesystem, turn each ASCII letter outside a `[...]`
+ * class into `[xX]`. fs.glob matches literal segments case-sensitively but
+ * wildcard segments case-insensitively, and yields on-disk names only for the
+ * latter, so a class forces both.
+ */
+function foldPatternCase(pattern: string): string {
+  if (!IS_CASE_INSENSITIVE_FS) return pattern;
+  let out = '';
+  let inClass = false;
+  for (const ch of pattern) {
+    if (inClass) inClass = ch !== ']';
+    else if (ch === '[') inClass = true;
+    else if (/[A-Za-z]/u.test(ch)) {
+      out += `[${ch.toLowerCase()}${ch.toUpperCase()}]`;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 function splitPatternPrefix(normalizedPattern: string): {
@@ -610,7 +637,7 @@ function createWalkFilter(
   // lookup per segment replaces compiling dozens of globs per entry.
   const excluded = (posixRel: string, isDir: boolean): boolean =>
     skipIgnored &&
-    (posixRel.split('/').some((segment) => DEFAULT_EXCLUDED_NAMES.has(segment)) ||
+    (posixRel.split('/').some(isDefaultExcludedName) ||
       (gitignoreMatcher?.isIgnored(posixRel, isDir) ?? false));
   // A sensitive directory's subtree is hidden with the directory: pruning
   // stops descent, and the yielded dirent is dropped below. The guard checks
@@ -706,7 +733,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.onDirectory,
   );
 
-  const iterable = fsGlob([...patterns], {
+  const iterable = fsGlob(patterns.map(foldPatternCase), {
     cwd,
     exclude: filter.prune,
     withFileTypes: true,
@@ -758,3 +785,12 @@ const DEFAULT_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
   'yarn-error.log',
   'Thumbs.db',
 ]);
+
+// On a case-insensitive filesystem, fs.glob yields on-disk spellings (`Node_Modules`).
+const DEFAULT_EXCLUDED_KEYS: ReadonlySet<string> = new Set(
+  [...DEFAULT_EXCLUDED_NAMES].map((name) => (IS_CASE_INSENSITIVE_FS ? name.toLowerCase() : name)),
+);
+
+function isDefaultExcludedName(name: string): boolean {
+  return DEFAULT_EXCLUDED_KEYS.has(IS_CASE_INSENSITIVE_FS ? name.toLowerCase() : name);
+}

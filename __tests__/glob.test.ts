@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
-import { IS_WINDOWS } from '../src/core/path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS } from '../src/core/path-utils.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -74,6 +74,34 @@ describe('globEntries', () => {
       }
     });
   }
+
+  it('globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
+    const root = await createTestRoot();
+    try {
+      await writeFile(join(root, 'Upper.TXT'), 'x');
+      await mkdir(join(root, 'd'));
+      await writeFile(join(root, 'd', 'f01.txt'), 'x');
+      await mkdir(join(root, 'Node_Modules'));
+      await writeFile(join(root, 'Node_Modules', 'x.txt'), 'x');
+      if (IS_CASE_INSENSITIVE_FS) {
+        assert.deepStrictEqual(
+          await walk({ cwd: root, pattern: 'Upper.txt', baseNameMatch: true }),
+          ['Upper.TXT'],
+        );
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '**/F01.TXT' }), ['d/f01.txt']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: 'D/f01.txt' }), ['d/f01.txt']);
+        const seen = await walk({ cwd: root, pattern: '**/*.txt', skipIgnored: true });
+        assert.ok(!seen.includes('Node_Modules/x.txt'), `saw ${seen.join(', ')}`);
+      } else {
+        assert.deepStrictEqual(
+          await walk({ cwd: root, pattern: 'Upper.txt', baseNameMatch: true }),
+          [],
+        );
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 
   it('walks every subdirectory when the process cwd holds a same-named entry', async () => {
     await withCollidingCwd(async (root) => {
