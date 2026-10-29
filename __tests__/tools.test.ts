@@ -2412,6 +2412,33 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(formatByteSize(1024 * 1024 - 1), '1 MiB');
   });
 
+  it('list includeSizes pluralizes directories in the totals line', async () => {
+    const many = join(tmpDir, 'sizes_many_dirs');
+    await mkdir(join(many, 'd1'), { recursive: true });
+    await mkdir(join(many, 'd2'), { recursive: true });
+    await writeFile(join(many, 'a.txt'), '12345');
+    const manyText =
+      firstTextBlock(
+        await harness.client.callTool({
+          name: 'list',
+          arguments: { path: many, includeSizes: true },
+        }),
+      ).text ?? '';
+    assert.match(manyText, /^\/\/ 1 file, 2 directories, 5 B total$/m);
+
+    const flat = join(tmpDir, 'sizes_no_dirs');
+    await mkdir(flat, { recursive: true });
+    await writeFile(join(flat, 'a.txt'), '12345');
+    const flatText =
+      firstTextBlock(
+        await harness.client.callTool({
+          name: 'list',
+          arguments: { path: flat, includeSizes: true },
+        }),
+      ).text ?? '';
+    assert.match(flatText, /^\/\/ 1 file, 0 directories, 5 B total$/m);
+  });
+
   it('list sortBy size orders files largest first within each directory (#99)', async () => {
     const sub = join(tmpDir, 'sort_dir');
     await mkdir(join(sub, 'mid'), { recursive: true });
