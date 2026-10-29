@@ -1459,14 +1459,16 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   });
 
   it('edit with ignoreWhitespace stays fast on repetitive near-matches', async () => {
-    const file = await writeTestFile(tmpDir, 'flex/repetitive.txt', 'a\n'.repeat(200_000));
+    // Sized for the coverage run, which slows the walk about eightfold.
+    const file = await writeTestFile(tmpDir, 'flex/repetitive.txt', 'a\n'.repeat(20_000));
     const started = Date.now();
     const result = await harness.client.callTool({
       name: 'edit',
       arguments: {
         path: file,
         // Every line is a candidate walked 100 lines deep before it fails:
-        // the walk is candidates × oldText, so this guards the constant.
+        // the walk is candidates × oldText, so this catches a walk that grows
+        // with the file per candidate.
         edits: [{ oldText: `${'a\n'.repeat(100)}b`, newText: 'x' }],
         ignoreWhitespace: true,
         dryRun: true,
@@ -1490,6 +1492,36 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
     assert.strictEqual(await readFile(file, 'utf-8'), 'ok\n');
+  });
+
+  it('edit rejects an oldText holding an unpaired surrogate', async () => {
+    for (const half of ['\ud83d', '\ude00']) {
+      for (const ignoreWhitespace of [false, true]) {
+        const file = await writeTestFile(tmpDir, 'flex/surrogate.txt', '😀\n');
+        const result = await harness.client.callTool({
+          name: 'edit',
+          arguments: { path: file, edits: [{ oldText: half, newText: 'X' }], ignoreWhitespace },
+        });
+        const label = `${JSON.stringify(half)} ignoreWhitespace=${String(ignoreWhitespace)}`;
+        assert.strictEqual(result.isError, true, label);
+        assert.match(firstTextBlock(result).text ?? '', /unpaired surrogate/u, label);
+        assert.strictEqual(await readFile(file, 'utf-8'), '😀\n', label);
+      }
+    }
+  });
+
+  it('edit with ignoreWhitespace keeps a file-leading BOM out of the indentation', async () => {
+    const file = await writeTestFile(tmpDir, 'flex/bom.py', '﻿# header\npass\n');
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: ' # header\npass', newText: ' # header\n # inserted\npass' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+    assert.strictEqual(await readFile(file, 'utf-8'), '﻿ # header\n # inserted\npass\n');
   });
 
   it('edit with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
@@ -6433,8 +6465,8 @@ describe('High-severity bug-hunt regressions (tools)', () => {
 // matcher must agree with span for span. It runs on JS RegExp, whose
 // leftmost-first semantics equal RE2's here: one re2-wasm compile per case
 // made the test take seconds. Its horizontal class is widened from RE2's
-// ASCII-only one to JS `\s` minus the newline, the class oldText is split on.
-const H = '[\\t\\x0b\\f\\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]';
+// ASCII-only one to JS `\s` minus the newline and U+FEFF, as the matcher's is.
+const H = '[\\t\\x0b\\f\\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]';
 
 function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
   if (!edge.leading && !edge.trailing) return `(?:${H}*\\n)+${H}*`;

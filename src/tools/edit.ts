@@ -191,14 +191,15 @@ interface FlexSpec {
 
 // Horizontal whitespace is JS `\s` minus the newline, the class oldText is
 // split on; the RE2 pattern took only ASCII there, so an NBSP oldText could
-// not match the same NBSP in the file.
+// not match the same NBSP in the file. U+FEFF is left out: as a file-leading
+// BOM it would be absorbed as indentation and copied onto every new line.
 //
 // Char-code loops, not sticky regexes: a repetitive file can walk the gaps of
 // every candidate, and a regex call per gap made that ten times slower.
 const isSpace = (code: number): boolean =>
   code === 32 ||
   (code >= 9 && code <= 13) ||
-  (code >= 0xa0 && /\s/u.test(String.fromCharCode(code)));
+  (code >= 0xa0 && code !== 0xfeff && /\s/u.test(String.fromCharCode(code)));
 const isHorizontal = (code: number): boolean => code !== 10 && isSpace(code);
 
 function skipHorizontal(content: string, at: number): number {
@@ -465,6 +466,14 @@ function applyEdits(
   const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
+    // The file is decoded UTF-8, so its pairs are whole; a lone half in oldText
+    // can only match half of one and would leave the other half in the file.
+    if (!edit.oldText.isWellFormed()) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
+      );
+    }
     const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
     const newText = crlf ? toCrlf(edit.newText) : edit.newText;
     const found = findEditMatches(newContent, oldText, ignoreWhitespace);
