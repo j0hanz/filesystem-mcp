@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cancelled write to a hard-linked file no longer goes through.** Cancellation was checked only before the file was opened, so a write cancelled while the file was open still truncated it and wrote the new bytes. The check now also runs before the truncate, so both links keep their old content.
 - **Concurrent writes through two links of one file no longer mix.** Writes through different names of a hard-linked file could interleave their truncate and write, leaving `BAAA` for a write of `AAAA` and one of `B`. In-place writes to one file now run one at a time, so the file ends with one of the two whole contents.
 - **`replace_text` transforms a hard-linked file once per run.** Walking two names of one file rewrote its bytes twice, so `x` became `xxx` where the dry run had previewed `xx`. Each file is now handled once, through its first name, and the dry run reports what the live run does.
 - **`replace_text` refuses a replacement that would grow a file past the max file size.** A ``$` `` or `$'` expansion, or a replacement longer than its match, could turn a 44 KB file into tens of MB. Such a file now fails with `TOO_LARGE` and stays unchanged, in dry runs too. The scan stops building the result as soon as it crosses the limit.

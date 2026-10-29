@@ -439,7 +439,8 @@ export class GuardedFileSystem {
         await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
         try {
           await this.#assertFdWithinRoots(handle, filePath);
-          // No signal on the write: once truncated, an abort would leave the file empty.
+          // The last cancellation point: the write after the truncate is uninterruptible.
+          signal?.throwIfAborted();
           await handle.truncate(0);
           await handle.writeFile(content);
           await handle.sync();

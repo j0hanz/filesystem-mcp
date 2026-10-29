@@ -466,6 +466,28 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         assert.strictEqual(await readFile(twin, 'utf-8'), content);
       }
     });
+    it('TC-FUNC-011d: a write cancelled after the open leaves both links on their old bytes', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_cancel_a.txt', 'old bytes\n');
+      const twin = join(tmpDir, 'hardlink_cancel_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      // Passes the entry check, then reports aborted: the window between the open and the truncate.
+      let checks = 0;
+      const signal = {
+        throwIfAborted() {
+          if (++checks > 1) throw new DOMException('aborted', 'AbortError');
+        },
+      } as unknown as AbortSignal;
+
+      await assert.rejects(fs.writeFile(filePath, 'new bytes\n', { signal }), { name: 'AbortError' });
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old bytes\n');
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'old bytes\n');
+    });
   });
 
   describe('Append (TC-FUNC-047–052)', () => {
