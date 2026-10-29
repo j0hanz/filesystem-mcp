@@ -3,7 +3,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
+import {
+  foldPatternCase,
+  globEntries,
+  type GlobEntriesOptions,
+  isSafeGlobSyntax,
+} from '../src/core/glob.ts';
 import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS } from '../src/core/path-utils.ts';
 import {
   cleanupTestRoot,
@@ -98,6 +103,34 @@ describe('globEntries', () => {
           [],
         );
       }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('foldPatternCase leaves brace ranges and class contents alone', () => {
+    const folded = (pattern: string): string => foldPatternCase(pattern);
+    if (IS_CASE_INSENSITIVE_FS) {
+      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.[tT][xX][tT]');
+      assert.strictEqual(folded('{a,b}x'), '{[aA],[bB]}[xX]');
+      assert.strictEqual(folded('[]a]b'), '[]a][bB]');
+      assert.strictEqual(folded('[!]a]b'), '[!]a][bB]');
+      assert.strictEqual(folded('[a-c]x'), '[a-c][xX]');
+    } else {
+      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.txt');
+    }
+  });
+
+  it('a brace range matches its letters whatever the case of the filesystem', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+        await writeFile(join(root, name), 'x');
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: '{a..c}.txt' }), [
+        'a.txt',
+        'b.txt',
+        'c.txt',
+      ]);
     } finally {
       await cleanupTestRoot(root);
     }

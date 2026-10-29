@@ -479,20 +479,38 @@ function normalizePattern(pattern: string, baseNameMatch: boolean): string {
  * On a case-insensitive filesystem, turn each ASCII letter outside a `[...]`
  * class into `[xX]`. fs.glob matches literal segments case-sensitively but
  * wildcard segments case-insensitively, and yields on-disk names only for the
- * latter, so a class forces both.
+ * latter, so a class forces both. A brace range (`{a..c}`) is copied whole:
+ * a class inside it would stop it being a range.
  */
-function foldPatternCase(pattern: string): string {
+export function foldPatternCase(pattern: string): string {
   if (!IS_CASE_INSENSITIVE_FS) return pattern;
+  const braceRange = /\{[^{},]*\}/uy;
   let out = '';
-  let inClass = false;
-  for (const ch of pattern) {
-    if (inClass) inClass = ch !== ']';
-    else if (ch === '[') inClass = true;
-    else if (/[A-Za-z]/u.test(ch)) {
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i] ?? '';
+    if (ch === '[') {
+      // A `]` first in the class (after `!`/`^`) is literal, as in groupClose.
+      let end = i + 1;
+      if (pattern[end] === '!' || pattern[end] === '^') end++;
+      if (pattern[end] === ']') end++;
+      const close = pattern.indexOf(']', end);
+      if (close === -1) {
+        out += ch;
+        continue;
+      }
+      out += pattern.slice(i, close + 1);
+      i = close;
+    } else if (ch === '{') {
+      braceRange.lastIndex = i;
+      const set = braceRange.exec(pattern)?.[0];
+      const body = set?.slice(1, -1) ?? '';
+      if (set && (NUMERIC_RANGE_RE.test(body) || ALPHA_RANGE_RE.test(body))) {
+        out += set;
+        i += set.length - 1;
+      } else out += ch;
+    } else if (/[A-Za-z]/u.test(ch)) {
       out += `[${ch.toLowerCase()}${ch.toUpperCase()}]`;
-      continue;
-    }
-    out += ch;
+    } else out += ch;
   }
   return out;
 }
