@@ -35,10 +35,12 @@ These are the other two findings from the analysis. Both are deliberately left o
 ### Task 1: Pass `'directories'` to the totals line
 
 **Files:**
+
 - Modify: `src/tools/list.ts:240-243`
 - Test: `__tests__/tools.test.ts` (new `it` after the one at line 2377)
 
 **Interfaces:**
+
 - Consumes: `formatCount(count: number, singular: string, plural?: string): string` from `src/core/fmt.ts:54`. It already exists; do not change it.
 - Produces: nothing new.
 
@@ -47,26 +49,32 @@ These are the other two findings from the analysis. Both are deliberately left o
 Add this after `list includeSizes shows sizes and a totals line (#99)`. It uses the same `harness`, `tmpDir` and `firstTextBlock` helpers as that test.
 
 ```ts
-  it('list includeSizes pluralizes directories in the totals line', async () => {
-    const many = join(tmpDir, 'sizes_many_dirs');
-    await mkdir(join(many, 'd1'), { recursive: true });
-    await mkdir(join(many, 'd2'), { recursive: true });
-    await writeFile(join(many, 'a.txt'), '12345');
-    const manyText =
-      firstTextBlock(
-        await harness.client.callTool({ name: 'list', arguments: { path: many, includeSizes: true } }),
-      ).text ?? '';
-    assert.match(manyText, /^\/\/ 1 file, 2 directories, 5 B total$/m);
+it('list includeSizes pluralizes directories in the totals line', async () => {
+  const many = join(tmpDir, 'sizes_many_dirs');
+  await mkdir(join(many, 'd1'), { recursive: true });
+  await mkdir(join(many, 'd2'), { recursive: true });
+  await writeFile(join(many, 'a.txt'), '12345');
+  const manyText =
+    firstTextBlock(
+      await harness.client.callTool({
+        name: 'list',
+        arguments: { path: many, includeSizes: true },
+      }),
+    ).text ?? '';
+  assert.match(manyText, /^\/\/ 1 file, 2 directories, 5 B total$/m);
 
-    const flat = join(tmpDir, 'sizes_no_dirs');
-    await mkdir(flat, { recursive: true });
-    await writeFile(join(flat, 'a.txt'), '12345');
-    const flatText =
-      firstTextBlock(
-        await harness.client.callTool({ name: 'list', arguments: { path: flat, includeSizes: true } }),
-      ).text ?? '';
-    assert.match(flatText, /^\/\/ 1 file, 0 directories, 5 B total$/m);
-  });
+  const flat = join(tmpDir, 'sizes_no_dirs');
+  await mkdir(flat, { recursive: true });
+  await writeFile(join(flat, 'a.txt'), '12345');
+  const flatText =
+    firstTextBlock(
+      await harness.client.callTool({
+        name: 'list',
+        arguments: { path: flat, includeSizes: true },
+      }),
+    ).text ?? '';
+  assert.match(flatText, /^\/\/ 1 file, 0 directories, 5 B total$/m);
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
