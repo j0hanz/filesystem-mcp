@@ -193,6 +193,16 @@ interface ReplacementMatcher {
 
 const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
+// RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
+const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
+const WORD_CHAR = new RegExp(`[${WORD_CLASS}]`, 'uy');
+
+function isWordCharAt(text: string, index: number): boolean {
+  if (index >= text.length) return false;
+  WORD_CHAR.lastIndex = index;
+  return WORD_CHAR.test(text);
+}
+
 interface ReplaceLimits {
   maxMatches: number;
   maxBytes: number;
@@ -254,6 +264,7 @@ function expandDollarTokens(
 function createRegexReplacementMatcher(
   regex: Regex,
   expandReplacement: boolean,
+  wholeWord: boolean,
 ): ReplacementMatcher {
   return {
     testBuffer(buffer: Buffer): boolean {
@@ -279,7 +290,22 @@ function createRegexReplacementMatcher(
       let cursor = 0;
       const tick = createYielder(signal);
       try {
-        for (const match of execMatches(regex, content)) {
+        for (const found of execMatches(regex, content)) {
+          // The lead group consumes the boundary char before the match.
+          const lead = wholeWord ? (found.groups[0] ?? '') : '';
+          const match = wholeWord
+            ? {
+                ...found,
+                start: found.start + lead.length,
+                text: found.text.slice(lead.length),
+                groups: found.groups.slice(1),
+              }
+            : found;
+          // shortcut: a rejected regex match does not retry a longer alternative ('foo|foobar' on 'foobar'); fix with a second exec from match.start if reported.
+          if (wholeWord && isWordCharAt(content, match.end)) {
+            if (await tick()) signal?.throwIfAborted();
+            continue;
+          }
           if (matchCount === limits.maxMatches) {
             more = true;
             break;
@@ -599,11 +625,8 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 }
 
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
-  if (args.isRegex) {
-    return args.wholeWord ? `\\b(?:${args.searchPattern})\\b` : args.searchPattern;
-  }
-  const escaped = escapeRegExp(args.searchPattern);
-  return args.wholeWord ? `\\b(?:${escaped})\\b` : escaped;
+  const needle = args.isRegex ? args.searchPattern : escapeRegExp(args.searchPattern);
+  return args.wholeWord ? `(^|[^${WORD_CLASS}])(?:${needle})` : needle;
 }
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {
@@ -611,7 +634,7 @@ function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatche
     return createCaseSensitiveLiteralMatcher(args.searchPattern);
   }
   const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
-  const matcher = createRegexReplacementMatcher(regex, args.isRegex);
+  const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);
   // A case-insensitive literal is matched natively unless RE2 must judge the needle.
   const literal =
     args.isRegex || args.wholeWord ? undefined : createLiteralMatcher(args.searchPattern, false);

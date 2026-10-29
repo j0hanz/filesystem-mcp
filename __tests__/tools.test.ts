@@ -4616,6 +4616,83 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(sc.matches?.[0]?.column, 'Line with '.length);
   });
 
+  // RE2's \b is ASCII-only: it saw no boundary around "é"/"ü" and none at a
+  // punctuation edge, so wholeWord matched inside words and skipped real ones.
+  it('replace_text wholeWord treats non-ASCII letters and punctuation edges as word boundaries', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_unicode/a.txt', '');
+    const cases = [
+      {
+        searchPattern: 'café',
+        replacement: 'X',
+        before: 'café cafés xcafé\n',
+        after: 'X cafés xcafé\n',
+        matches: 1,
+      },
+      {
+        searchPattern: 'über',
+        replacement: 'X',
+        before: 'über Über xüber über_\n',
+        after: 'X X xüber über_\n',
+        matches: 2,
+      },
+      {
+        searchPattern: '-x',
+        replacement: 'Y',
+        before: '-x a-x a -x\n',
+        after: 'Y a-x a Y\n',
+        matches: 2,
+      },
+      // Adjacent words share one separator: every one still matches.
+      { searchPattern: 'a', replacement: 'b', before: 'a a a\n', after: 'b b b\n', matches: 3 },
+      // A combining mark is part of the word it follows.
+      { searchPattern: 'x', replacement: 'Y', before: 'x́ x\n', after: 'x́ Y\n', matches: 1 },
+      // An astral non-letter is a boundary on either side.
+      {
+        searchPattern: 'über',
+        replacement: 'X',
+        before: '😀über über😀 ü\n',
+        after: '😀X X😀 ü\n',
+        matches: 2,
+      },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: c.replacement,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.before,
+      );
+    }
+  });
+
+  it('replace_text wholeWord with isRegex keeps the caller capture groups numbered from 1', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_groups/a.txt', 'ab xab ab\n');
+    const result = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: {
+        path: file,
+        searchPattern: '(a)(b)',
+        replacement: '$2$1[$&]',
+        isRegex: true,
+        caseSensitive: true,
+        wholeWord: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'ba[ab] xab ba[ab]\n');
+  });
+
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
     const result = await harness.client.callTool({
