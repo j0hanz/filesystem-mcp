@@ -620,6 +620,24 @@ function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatche
     : matcher;
 }
 
+/** Literal text only: a regex and its $-template are taken as written (use \r?\n). Reuses `matcher` when only the replacement changes. */
+function createCrlfVariant(
+  args: SearchAndReplaceArgs,
+  matcher: ReplacementMatcher,
+): ReplaceContext['crlf'] {
+  if (args.isRegex) return undefined;
+  const pattern = toCrlf(args.searchPattern);
+  const replacement = toCrlf(args.replacement);
+  if (pattern === args.searchPattern && replacement === args.replacement) return undefined;
+  return {
+    matcher:
+      pattern === args.searchPattern
+        ? matcher
+        : createReplacementMatcher({ ...args, searchPattern: pattern }),
+    replacement,
+  };
+}
+
 function buildSearchAndReplaceStructuredResult(
   summary: ReplaceSummary,
   outcome: ScanOutcome<ScannedOutcome>,
@@ -681,16 +699,13 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
-  // Literal text only: a regex and its $-template are taken as written (use \r?\n).
-  const crlfPattern = toCrlf(args.searchPattern);
-  const crlfReplacement = toCrlf(args.replacement);
-  const crlf =
-    !args.isRegex && (crlfPattern !== args.searchPattern || crlfReplacement !== args.replacement)
-      ? {
-          matcher: createReplacementMatcher({ ...args, searchPattern: crlfPattern }),
-          replacement: crlfReplacement,
-        }
-      : undefined;
+  let crlf: ReplaceContext['crlf'];
+  try {
+    crlf = createCrlfVariant(args, matcher);
+  } catch (error) {
+    matcher.dispose();
+    throw error;
+  }
   // The first changed file in walk order is the one the resource_link points
   // at; keep its report so the link needs no read-back.
   let primary: { index: number; report: Rewritten<number>['report'] } | undefined;
@@ -769,7 +784,7 @@ async function handleSearchAndReplace(
     );
   } finally {
     matcher.dispose();
-    crlf?.matcher.dispose();
+    if (crlf && crlf.matcher !== matcher) crlf.matcher.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 
