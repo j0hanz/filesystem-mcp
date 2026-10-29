@@ -143,15 +143,15 @@ export function getMaxTextFileSize(): number {
 /**
  * Upper bound, in bytes, on one inbound JSON-RPC message on either transport.
  * Derived from the file-size limit so that a schema-valid `create` — whose
- * combined content is capped at getMaxTextFileSize() (create.ts) in UTF-16
- * units — still fits after JSON encoding. Per unit the schema counted, the
- * wire carries at most three bytes for well-formed text: a BMP character is
- * up to three UTF-8 bytes, an escaped ASCII character (newline, quote,
- * backslash, tab) is two, a surrogate pair is four bytes for two units. Hence
- * 3× the content, plus 1 MiB for the envelope, paths and sibling arguments.
- * Not covered, deliberately: C0 control characters and lone surrogates
- * (JSON-escaped to six bytes each) — the read tools already refuse such
- * content as binary, and a caller sending it only loses its own connection.
+ * combined content is capped at getMaxTextFileSize() (create.ts) in UTF-8
+ * bytes — still fits after JSON encoding. Per counted byte the wire carries at
+ * most two bytes for well-formed text: non-ASCII UTF-8 goes on the wire
+ * unescaped, and an escaped ASCII character (newline, quote, backslash, tab)
+ * is two. So 2× the content plus 1 MiB for the envelope, paths and sibling
+ * arguments would fit; the 3× bound below keeps headroom. Not covered, deliberately:
+ * C0 control characters (JSON-escaped to six bytes each) — the read tools
+ * already refuse such content as binary, and a caller sending it only loses
+ * its own connection.
  * Past this bound HTTP answers 413 and stdio closes the connection (the
  * SDK's ReadBuffer contract), so it is also the number the instructions
  * resource and --print-config report.

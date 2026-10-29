@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`move` with a missing source reports `NOT_FOUND`.** Before, it reported `ACCESS_DENIED` "Move failed for ..." and suggested `list_roots`. `copy: true` already reported `NOT_FOUND`.
+- **`create` measures its size cap in UTF-8 bytes.** Before, it counted UTF-16 units, so a file of multibyte text could be up to 3 × `FS_MAX_FILE_SIZE` bytes, and `read` and `edit` then refused it. The per-file and combined-batch caps now count the bytes written to disk, and the batch refusal says "bytes" instead of "characters".
 
 ## [2.12.1] - 2026-10-29
 

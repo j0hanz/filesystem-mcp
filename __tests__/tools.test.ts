@@ -1445,6 +1445,64 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(result).text ?? '', /combined content .* Split the batch/);
   });
 
+  it('create counts the per-file size cap in UTF-8 bytes, not UTF-16 units', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      assert.strictEqual(limit, 1048576);
+      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 units, 1048578 bytes.
+      const over = '€'.repeat(Math.floor(limit / 3) + 1);
+      assert.ok(over.length < limit);
+      assert.strictEqual(Buffer.byteLength(over, 'utf8'), 1048578);
+      const overPath = join(tmpDir, 'bytes-cap-over.txt');
+      const refused = await harness.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: overPath, content: over }] },
+      });
+      assert.strictEqual(refused.isError, true);
+      assert.match(
+        firstTextBlock(refused).text ?? '',
+        /Content exceeds maximum allowed text file size/u,
+      );
+      await assert.rejects(stat(overPath), { code: 'ENOENT' });
+
+      // Exactly at the limit in bytes is accepted.
+      const exact = '€'.repeat(Math.floor(limit / 3)) + 'x'.repeat(limit % 3);
+      assert.strictEqual(Buffer.byteLength(exact, 'utf8'), limit);
+      const exactPath = join(tmpDir, 'bytes-cap-exact.txt');
+      const ok = await harness.client.callTool({
+        name: 'create',
+        arguments: { files: [{ path: exactPath, content: exact }] },
+      });
+      assert.notStrictEqual(ok.isError, true);
+      assert.strictEqual((await stat(exactPath)).size, limit);
+    });
+  });
+
+  it('create counts the combined batch cap in UTF-8 bytes', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      // Each entry is under the per-file cap. Together they are over it in bytes (1048584) but not in units (349528).
+      const part = '€'.repeat(Math.ceil(limit / 6) + 1);
+      const totalBytes = 2 * Buffer.byteLength(part, 'utf8');
+      assert.ok(2 * part.length < limit);
+      assert.strictEqual(totalBytes, 1048584);
+      const result = await harness.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: join(tmpDir, 'bytes-batch-a.txt'), content: part },
+            { path: join(tmpDir, 'bytes-batch-b.txt'), content: part },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.match(
+        firstTextBlock(result).text ?? '',
+        /combined content is 1048584 bytes; one create call carries at most 1048576 \(FS_MAX_FILE_SIZE\)\. Split the batch\./u,
+      );
+    });
+  });
+
   it('create refuses a batch that names the same file twice', async () => {
     const file = join(tmpDir, 'dup-create', 'dup.txt');
     const result = await harness.client.callTool({
