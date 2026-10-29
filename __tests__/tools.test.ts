@@ -1329,7 +1329,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.notStrictEqual(result.isError, true);
-    assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n  go();\n}\n');
+    assert.strictEqual(await readFile(file, 'utf-8'), 'f() {\n    go();\n}\n');
   });
 
   it('edit with ignoreWhitespace keeps the blank line and indentation after a trailing newline', async () => {
@@ -1362,6 +1362,64 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(await readFile(file, 'utf-8'), 'a\n\n\n    y = 3\n');
+  });
+
+  // The flexible match absorbs the file's indentation, so newText written at
+  // oldText's indentation must be mapped back onto the file's own.
+  it('edit with ignoreWhitespace re-indents newText to the matched lines', async () => {
+    const spaces = await writeTestFile(
+      tmpDir,
+      'reindent/spaces.js',
+      'function f() {\n    if (x) {\n        y();\n    }\n}\n',
+    );
+    const spaced = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: spaces,
+        edits: [{ oldText: 'if (x) {\n  y();\n}', newText: 'if (x) {\n  z();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(spaced.isError, true);
+    assert.strictEqual(
+      await readFile(spaces, 'utf-8'),
+      'function f() {\n    if (x) {\n        z();\n    }\n}\n',
+    );
+
+    // The file's tabs are reused literally, and an inserted line takes the
+    // indentation of the oldText line it is indented like.
+    const tabs = await writeTestFile(tmpDir, 'reindent/tabs.js', '\tif (x) {\n\t\ty();\n\t}\n');
+    const tabbed = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: tabs,
+        edits: [{ oldText: 'if (x) {\n  y();\n}', newText: 'if (x) {\n  z();\n  w();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(tabbed.isError, true);
+    assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
+  });
+
+  it('edit with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
+    const file = await writeTestFile(
+      tmpDir,
+      'reindent/crlf.js',
+      'function f() {\r\n    if (x) {\r\n        y();\r\n    }\r\n}\r\n',
+    );
+    const result = await harness.client.callTool({
+      name: 'edit',
+      arguments: {
+        path: file,
+        edits: [{ oldText: 'y();\n}', newText: 'w();\n}' }],
+        ignoreWhitespace: true,
+      },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'function f() {\r\n    if (x) {\r\n        w();\r\n    }\r\n}\r\n',
+    );
   });
 
   it('edit names the ambiguous edit and flags lines shifted by earlier edits', async () => {

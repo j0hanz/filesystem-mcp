@@ -68,7 +68,7 @@ const EditFileInputSchema = z
       'Preview diffs without writing to disk (default: false = apply edits)',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Ignore leading/trailing whitespace differences when matching oldText',
+      'Ignore leading/trailing whitespace differences when matching oldText; newText is re-indented to the match and replaces its inner blank lines',
     ),
   })
   .superRefine((value, ctx) => {
@@ -265,6 +265,43 @@ function afterCodePoint(content: string, index: number): number {
   return index + ((content.codePointAt(index) ?? 0) > 0xffff ? 2 : 1);
 }
 
+const indentOf = (line: string): string => /^\s*/u.exec(line)?.[0] ?? '';
+
+// The flexible match absorbs the file's indentation, so newText is mapped back
+// onto the matched lines. Pairs come from the non-blank lines of oldText and
+// matched, which correspond one to one under ignoreWhitespace.
+function reindentNewText(
+  newText: string,
+  oldText: string,
+  matched: string,
+  atLineStart: boolean,
+): string {
+  const counted = (line: string, i: number): boolean => /\S/u.test(line) && (i > 0 || atLineStart);
+  const indents = (text: string): string[] =>
+    text.split('\n').flatMap((line, i) => (counted(line, i) ? [indentOf(line)] : []));
+  const from = indents(oldText);
+  const to = indents(matched);
+  const lines = newText.split('\n');
+  const positional = lines.filter(counted).length === from.length;
+  let next = 0;
+  return lines
+    .map((line, i) => {
+      if (!counted(line, i)) return line;
+      const own = indentOf(line);
+      let j = positional ? next++ : -1;
+      if (!positional) {
+        for (const [k, ind] of from.entries()) {
+          if (own.startsWith(ind) && (j === -1 || ind.length > (from[j] ?? '').length)) j = k;
+        }
+      }
+      const base = from[j];
+      const target = to[j];
+      if (base === undefined || target === undefined || !own.startsWith(base)) return line;
+      return target + line.slice(base.length);
+    })
+    .join('\n');
+}
+
 function ambiguousEditError(
   content: string,
   found: EditMatches,
@@ -325,10 +362,17 @@ function applyEdits(
     }
 
     const first = found.first;
-    newContent =
-      newContent.slice(0, first.startIndex) +
-      newText +
-      newContent.slice(first.startIndex + first.length);
+    const end = first.startIndex + first.length;
+    // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
+    const replacement = ignoreWhitespace
+      ? reindentNewText(
+          newText,
+          oldText,
+          newContent.slice(first.startIndex, end),
+          first.startIndex === 0 || newContent[first.startIndex - 1] === '\n',
+        )
+      : newText;
+    newContent = newContent.slice(0, first.startIndex) + replacement + newContent.slice(end);
     appliedEdits += 1;
   }
 
