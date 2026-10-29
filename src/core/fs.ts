@@ -437,10 +437,11 @@ export class GuardedFileSystem {
       signal?.throwIfAborted();
       await runExclusive(inodeKey, async () => {
         await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+        await this.#assertFdWithinRoots(handle, filePath);
+        // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
+        signal?.throwIfAborted();
         try {
-          await this.#assertFdWithinRoots(handle, filePath);
-          // The last cancellation point: the write after the truncate is uninterruptible.
-          signal?.throwIfAborted();
+          // No signal on the write: once truncated, an abort would leave the file empty.
           await handle.truncate(0);
           await handle.writeFile(content);
           await handle.sync();

@@ -35,6 +35,7 @@ import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -492,6 +493,32 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
       assert.strictEqual(await readFile(filePath, 'utf-8'), 'old bytes\n');
       assert.strictEqual(await readFile(twin, 'utf-8'), 'old bytes\n');
+    });
+    it('TC-FUNC-011e: a cancelled in-place write does not abandon the undo capture', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_undo_a.txt', 'old bytes\n');
+      const twin = join(tmpDir, 'hardlink_undo_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+      const capture = new UndoJournal(1024 * 1024).beginCapture();
+      const capturing = new GuardedFileSystem(ctx.pathGuard, capture);
+      // Passes the entry check, then reports aborted: the window between the open and the truncate.
+      let checks = 0;
+      const signal = {
+        throwIfAborted() {
+          if (++checks > 1) throw new DOMException('aborted', 'AbortError');
+        },
+      } as unknown as AbortSignal;
+
+      await assert.rejects(capturing.writeFile(filePath, 'new bytes\n', { signal }), {
+        name: 'AbortError',
+      });
+      // Nothing was written, so the call stays undoable.
+      assert.strictEqual(capture.unavailableReason(), undefined);
     });
   });
 
