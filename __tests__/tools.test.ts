@@ -4885,9 +4885,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       { searchPattern: '-x-', before: '-x--x-\n', after: 'XX\n', matches: 2 },
       // A one-char needle at text start: no progress is possible, so it must terminate.
       { searchPattern: '-', before: '-\n', after: 'X\n', matches: 1 },
-      // Known limit (see the shortcut in execMatches): a one-char needle at text start with
-      // a following non-word char cannot resume onto its own start, so the second '-' is missed.
-      { searchPattern: '-', before: '--\n', after: 'X-\n', matches: 1 },
+      // A match at text start leads the next one (#158).
+      { searchPattern: '-', before: '--\n', after: 'XX\n', matches: 2 },
+      { searchPattern: '-', before: '---\n', after: 'XXX\n', matches: 3 },
       {
         searchPattern: '-',
         before: 'a - -- b\n',
