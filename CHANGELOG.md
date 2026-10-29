@@ -5,14 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.13.0] - 2026-10-29
+
+A correctness release. Path containment and NTFS stream paths close two
+ways out of a root, writes keep every hard link of a file in step,
+`replace_text` gets Unicode whole-word matching, a strict match cap and
+CRLF-aware literals, and `edit` with `ignoreWhitespace` re-indents its
+replacement and no longer runs out of memory on large input. Before
+upgrading, read under Security: Windows now refuses any path with a `:`
+after its root. Under Changed: a `wholeWord` regex needle no longer matches
+at `^` or `\A`. Under Fixed: `replace_text` on a named file now honors an
+explicit `maxMatches`; `edit` refuses an `oldText` holding a lone
+surrogate; and a write to a read-only hard-linked file now fails with
+`EACCES`.
 
 ### Security
 
 - **Path containment no longer folds non-ASCII case.** On Windows and macOS, a sibling folder whose name differs from a root only by a character JavaScript folds but NTFS does not (U+212A Kelvin sign, U+017F long s) passed the containment check, so every tool could read, write and delete outside the root. Containment now folds `A-Z` only.
 - **Paths naming an NTFS alternate data stream are refused on Windows.** Before, `move` with `copy: true` could write a hidden `file.txt:stream`, and `create` failed with a raw `EINVAL` naming its temp file. Now every tool answers `INVALID_INPUT`, including reads of `file.txt::$DATA`, which used to alias `file.txt`.
 
+### Changed
+
+- **A `wholeWord` regex needle no longer matches at `^` or `\A`.** With `isRegex` and `wholeWord`, an anchor to the start of the text never matches now, so such a needle replaces nothing.
+
 ### Fixed
+
+- **`edit` with `ignoreWhitespace` no longer runs out of memory on large input.** The whole oldText was compiled into one RE2 pattern inside re2-wasm's fixed 16 MB heap, so a 3,000-line oldText, or a 9 MB file with a one-line oldText, failed with "Cannot enlarge memory arrays". Matching now needs no regex. A non-breaking space in oldText now also matches one in the file.
+- **`edit` refuses an `oldText` holding a lone surrogate.** Such an oldText matched half of a surrogate pair in the file and left the other half behind, in exact mode too. It is now an input error.
+- **`edit` with `ignoreWhitespace` no longer copies a byte order mark onto new lines.** A file-leading BOM counted as indentation, so re-indented newText lines each began with U+FEFF.
 
 - **`replace_text` `wholeWord` finds the regex alternative that fits.** With `isRegex`, `foo|foobar` replaced nothing in `foobar`: the first alternative failed the word boundary, and the second was never tried. The boundary is now part of the pattern, so every alternative is considered.
 - **`edit` with `ignoreWhitespace` re-indents a large block in linear time.** Each newText line was compared with every indent of oldText, so a block of thousands of lines took quadratic time. Each line now looks up its indent once. The result is unchanged.
@@ -34,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` `maxMatches` is a strict bound.** Before, the cap was checked only between files, so a file with more matches than the cap was rewritten in full, files already in flight all counted, and a named file ignored the cap; none of that set `stoppedReason`. Now at most `maxMatches` matches are replaced, in walk order, and the run stops mid-file with `stoppedReason: 'maxMatches'`. This is a behavior change for named files: a `path` that names one file now honors an explicit `maxMatches` and may leave later matches unreplaced. A named file without `maxMatches` still replaces every match.
 - **`replace_text` literal text follows a CRLF file's line endings.** In a file whose every newline is CRLF, LF in a literal `searchPattern` and `replacement` is now converted to CRLF, as `edit` already does. Before, `"a\nb"` matched nothing there, and an LF replacement wrote mixed line endings. `isRegex` patterns are still taken as written; use `\r?\n` to match either ending.
 - **`replace_text` `wholeWord` uses Unicode word boundaries.** Before, the match ignored non-ASCII letters and punctuation edges, so `café` matched inside `cafés` and `-x` matched inside `a-x`, and standalone words were skipped. Letters, digits, combining marks and `_` now count as word characters in any script.
-- **`replace_text` `wholeWord` finds a match right after another.** With `-x-`, `-x--x-` gave `X-x-` instead of `XX`: the second match needed the first match's final `-` as its leading boundary, and the search had already moved past it. Adjacent whole-word matches separated by the needle's own trailing punctuation are now all replaced, except a repeat right after a match at the very start of the text (`--` with `-` gives `X-`).
+- **`replace_text` `wholeWord` finds a match right after another.** With `-x-`, `-x--x-` gave `X-x-` instead of `XX`: the second match needed the first match's final `-` as its leading boundary, and the search had already moved past it. Adjacent whole-word matches separated by the needle's own trailing punctuation are now all replaced, including a repeat right after a match at the very start of the text (`--` with `-` gives `XX`).
 - **`move` renames a symlink under a non-ASCII case-only respelling.** On Windows and macOS, `move` of `É-link` to `é-link` did nothing: the two spellings were not seen as one entry, so the move was taken as a self-move. Same-entry spellings are now recognised by file identity, when they differ only in case.
 
 ## [2.12.1] - 2026-10-29
