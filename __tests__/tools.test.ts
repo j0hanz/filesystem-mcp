@@ -314,6 +314,49 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(result).text ?? '', /<svg xmlns/);
   });
 
+  it('batch head slice of a file larger than maxTotalSize is charged its returned bytes', async () => {
+    // 600 KiB is over the 512 KiB batch budget whole; head: 1 returns 2 bytes.
+    const small = await writeTestFile(tmpDir, 'read-budget/small.txt', 'small\n');
+    const big = await writeTestFile(tmpDir, 'read-budget/big.txt', 'x\n'.repeat(300 * 1024));
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [small, big], head: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const meta = failedSummary(result);
+    assert.strictEqual(meta?.summary?.failed, 0);
+    assert.strictEqual(meta?.results?.[1]?.error, undefined);
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /\/\/ .*small\.txt\nsmall/);
+    assert.match(text, /\/\/ .*big\.txt\nx/);
+  });
+
+  it('batch slices over budget skip one slice without head/tail advice', async () => {
+    // Each head: 1 returns one 300 KiB line; two of them pass 512 KiB.
+    const line = 'y'.repeat(300 * 1024);
+    const a = await writeTestFile(tmpDir, 'read-budget/a.txt', `${line}\nrest\n`);
+    const b = await writeTestFile(tmpDir, 'read-budget/b.txt', `${line}\nrest\n`);
+    const c = await writeTestFile(tmpDir, 'read-budget/c.txt', 'tiny\nrest\n');
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [a, b, c], head: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const errors = (failedSummary(result)?.results ?? []).map((r) => r.error);
+    assert.strictEqual(errors.length, 3);
+    // Charged in completion order: either a or b is skipped, never both; c always fits.
+    assert.strictEqual(errors[2], undefined);
+    const skipped = errors.filter((e) => e !== undefined);
+    assert.strictEqual(skipped.length, 1);
+    assert.strictEqual(skipped[0]?.code, 'TOO_LARGE');
+    assert.match(skipped[0]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
+    assert.strictEqual(
+      skipped[0]?.suggestion,
+      'Read it on its own with path, or ask for fewer lines.',
+    );
+    assert.strictEqual(failedSummary(result)?.summary?.failed, 1);
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');
