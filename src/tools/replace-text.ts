@@ -456,19 +456,18 @@ async function processEntry(
   const write = { started: false };
 
   try {
-    // Hard links share one inode, so a write through one name is seen by every
-    // other name: a second name would transform the same bytes again.
-    const { stats } = await ctx.fs.stat(entryPath, { signal });
-    if (stats.nlink > 1) {
-      const id = `${stats.dev}:${stats.ino}`;
-      if (ctx.linked.has(id)) return undefined;
-      ctx.linked.add(id);
-    }
     // The Rewrite locks the read→write per file so a concurrent writer is not
     // lost; a dry run never writes and skips the lock.
     const done = await rewriteEntry(
       { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
-      async (bytes) => {
+      async (bytes, stats) => {
+        // Hard links share one inode, so a write through one name is seen by every
+        // other name: a second name would transform the same bytes again.
+        if (stats.nlink > 1) {
+          const id = `${stats.dev}:${stats.ino}`;
+          if (ctx.linked.has(id)) return undefined;
+          ctx.linked.add(id);
+        }
         // Same rule as edit: an all-CRLF file gets its LF literal text converted.
         const eol =
           ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
