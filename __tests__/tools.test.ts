@@ -3660,6 +3660,83 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
+  it('replace_text refuses a $` expansion that grows a file past the text size limit, dry run included', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      // 44 KiB of 'a' with $` per match grows quadratically: about 1 GB uncapped.
+      const original = 'a'.repeat(44 * 1024);
+      const file = await writeTestFile(tmpDir, 'out_cap/prefix.txt', original);
+      for (const dryRun of [true, false]) {
+        const refused = await harness.client.callTool({
+          name: 'replace_text',
+          arguments: { path: file, searchPattern: 'a', replacement: '$`', isRegex: true, dryRun },
+        });
+        assert.strictEqual(refused.isError, true, `dryRun=${String(dryRun)}`);
+        const failure = failedSummary(refused)?.results?.[0]?.error;
+        assert.strictEqual(failure?.code, 'TOO_LARGE');
+        assert.strictEqual(
+          failure?.message,
+          'Replacement result exceeds the size limit (more than 1048576 bytes)',
+        );
+        assert.match(
+          firstTextBlock(refused).text ?? '',
+          /prefix\.txt: TOO_LARGE Replacement result exceeds/,
+        );
+        assert.strictEqual(await readFile(file, 'utf-8'), original, 'file must be untouched');
+      }
+    });
+  });
+
+  it('replace_text fails only the walked file whose literal replacement outgrows the limit', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const dir = join(tmpDir, 'out_cap_walk');
+      // 1000 matches x 2000 chars = 2,000,000 bytes > 1 MiB.
+      const blow = await writeTestFile(dir, 'blow.txt', 'x'.repeat(1000));
+      const ok = await writeTestFile(dir, 'ok.txt', 'x\n');
+      const swept = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: dir,
+          searchPattern: 'x',
+          replacement: 'y'.repeat(2000),
+          caseSensitive: true,
+        },
+      });
+      assert.notStrictEqual(swept.isError, true);
+      const meta = swept._meta as { summary: { total: number; succeeded: number; failed: number } };
+      assert.deepStrictEqual(meta.summary, { total: 2, succeeded: 1, failed: 1 });
+      assert.strictEqual(
+        failedSummary(swept)?.results?.find((r) => r.error)?.error?.code,
+        'TOO_LARGE',
+      );
+      assert.strictEqual(await readFile(blow, 'utf-8'), 'x'.repeat(1000));
+      assert.strictEqual(await readFile(ok, 'utf-8'), 'y'.repeat(2000) + '\n');
+    });
+  });
+
+  it('replace_text caps the result in UTF-8 bytes, not UTF-16 units, and allows exactly the limit', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 of them are 1048578 bytes.
+      const over = await writeTestFile(tmpDir, 'out_cap_utf8/over.txt', 'a'.repeat(349526));
+      const refused = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: over, searchPattern: 'a', replacement: '€', caseSensitive: true },
+      });
+      assert.strictEqual(refused.isError, true);
+      assert.strictEqual(failedSummary(refused)?.results?.[0]?.error?.code, 'TOO_LARGE');
+      assert.strictEqual(await readFile(over, 'utf-8'), 'a'.repeat(349526));
+
+      // 349525 x '€' plus one 'b' is exactly 1048576 bytes: at the limit, not over it.
+      const exact = await writeTestFile(tmpDir, 'out_cap_utf8/exact.txt', 'a'.repeat(349525) + 'b');
+      const allowed = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: exact, searchPattern: 'a', replacement: '€', caseSensitive: true },
+      });
+      assert.notStrictEqual(allowed.isError, true);
+      assert.strictEqual((await stat(exact)).size, limit);
+    });
+  });
+
   it('replace_text failure rows name same-named files by their full relative paths', async () => {
     const dir = join(tmpDir, 'regex_cap_rows');
     const body = 'x'.repeat(RE2_MAX_INPUT_BYTES + 1 - 5) + 'FIND\n';
