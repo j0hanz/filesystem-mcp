@@ -399,11 +399,14 @@ export class GuardedFileSystem {
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
     let inPlace = false;
+    // Names of one inode share its bytes, so in-place writes through any of them serialize on this key.
+    let inodeKey = '';
     let saved: SavedFile | undefined;
     try {
       const existing = await fsStat(validPath);
       existingMode = existing.mode & 0o777;
       inPlace = existing.isFile() && existing.nlink > 1;
+      inodeKey = `inode:${existing.dev}:${existing.ino}`;
       // Undo capture: save the bytes about to be overwritten. A write over a
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
@@ -432,17 +435,19 @@ export class GuardedFileSystem {
     if (inPlace) {
       // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
       signal?.throwIfAborted();
-      await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
-      try {
-        await this.#assertFdWithinRoots(handle, filePath);
-        // No signal on the write: once truncated, an abort would leave the file empty.
-        await handle.truncate(0);
-        await handle.writeFile(content);
-        await handle.sync();
-      } catch (error) {
-        this.#capture?.abandon('the write failed part-way');
-        throw error;
-      }
+      await runExclusive(inodeKey, async () => {
+        await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+        try {
+          await this.#assertFdWithinRoots(handle, filePath);
+          // No signal on the write: once truncated, an abort would leave the file empty.
+          await handle.truncate(0);
+          await handle.writeFile(content);
+          await handle.sync();
+        } catch (error) {
+          this.#capture?.abandon('the write failed part-way');
+          throw error;
+        }
+      });
     } else {
       try {
         signal?.throwIfAborted();

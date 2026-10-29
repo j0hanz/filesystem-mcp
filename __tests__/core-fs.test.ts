@@ -448,6 +448,24 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       assert.deepStrictEqual(leftovers, [], 'no temp file may be left behind');
     });
+    it('TC-FUNC-011c: concurrent writes through two links leave one whole content, never a mix', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_race_a.txt', 'seed\n');
+      const twin = join(tmpDir, 'hardlink_race_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      for (let round = 0; round < 20; round++) {
+        await Promise.all([fs.writeFile(filePath, 'AAAA'), fs.writeFile(twin, 'B')]);
+        const content = await readFile(filePath, 'utf-8');
+        assert.ok(content === 'AAAA' || content === 'B', `round ${String(round)}: ${JSON.stringify(content)}`);
+        assert.strictEqual(await readFile(twin, 'utf-8'), content);
+      }
+    });
   });
 
   describe('Append (TC-FUNC-047–052)', () => {
