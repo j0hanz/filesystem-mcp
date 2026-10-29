@@ -7,7 +7,14 @@ import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import { ErrorCode, FsError, isFsError, Problem, rethrowIfAborted } from '../core/errors.ts';
+import {
+  ErrorCode,
+  FsError,
+  isFsError,
+  Problem,
+  rethrowIfAborted,
+  unlessMissing,
+} from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists, destIdentity, type EntryIdentity, sameIdentity } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
@@ -479,8 +486,9 @@ async function validateTransferSource(
         return { realSource, opSource, isDirectory: stats.isDirectory() };
       } catch (err) {
         if (!isFsError(err) || err.code !== ErrorCode.NOT_FOUND) throw err;
-        const { stats } = await fs.lstat(source, { signal });
-        if (!stats.isSymbolicLink()) throw err;
+        // No entry at all is the stat's NOT_FOUND, not the outer catch's ACCESS_DENIED.
+        const link = await unlessMissing(fs.lstat(source, { signal }));
+        if (!link?.stats.isSymbolicLink()) throw err;
         return { realSource: opSource, opSource, isDirectory: false };
       }
     }

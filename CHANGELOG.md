@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`move` with a missing source reports `NOT_FOUND`.** Before, it reported `ACCESS_DENIED` "Move failed for ..." and suggested `list_roots`. `copy: true` already reported `NOT_FOUND`.
+
 ## [2.12.1] - 2026-10-29
 
 A patch release with one output fix. No caller needs to adapt.

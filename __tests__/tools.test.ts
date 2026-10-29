@@ -5,9 +5,11 @@ import assert from 'node:assert/strict';
 import {
   access,
   chmod,
+  lstat,
   mkdir,
   readdir,
   readFile,
+  readlink,
   rm,
   stat,
   utimes,
@@ -1792,6 +1794,55 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const dstContent = await readFile(dst, 'utf-8');
     assert.strictEqual(srcContent, 'copy content');
     assert.strictEqual(dstContent, 'copy content');
+  });
+
+  it('move with a nonexistent source fails NOT_FOUND naming the source', async () => {
+    const src = join(tmpDir, 'move_missing_src.txt');
+    const dst = join(tmpDir, 'move_missing_dst.txt');
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: src, destination: dst }] },
+    });
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as {
+      failures?: { error?: { code?: string; path?: string; suggestion?: string } }[];
+    };
+    assert.strictEqual(meta.failures?.length, 1);
+    assert.strictEqual(meta.failures?.[0]?.error?.code, 'NOT_FOUND');
+    assert.strictEqual(meta.failures?.[0]?.error?.path, src);
+    assert.doesNotMatch(meta.failures?.[0]?.error?.suggestion ?? '', /list_roots/);
+  });
+
+  it('copy with a nonexistent source fails NOT_FOUND naming the source', async () => {
+    const src = join(tmpDir, 'copy_missing_src.txt');
+    const dst = join(tmpDir, 'copy_missing_dst.txt');
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: src, destination: dst }], copy: true },
+    });
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as { failures?: { error?: { code?: string; path?: string } }[] };
+    assert.strictEqual(meta.failures?.[0]?.error?.code, 'NOT_FOUND');
+    assert.strictEqual(meta.failures?.[0]?.error?.path, src);
+  });
+
+  it('move of a dangling symlink still moves the link itself', async (t) => {
+    const link = join(tmpDir, 'move_dangling_link');
+    const dst = join(tmpDir, 'move_dangling_link_moved');
+    const target = join(tmpDir, 'move_dangling_gone.txt');
+    if (!(await trySymlink(target, link, () => t.skip('symlink creation not permitted'), 'file'))) {
+      return;
+    }
+
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: { moves: [{ source: link, destination: dst }] },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((await lstat(dst)).isSymbolicLink(), true);
+    assert.strictEqual(await readlink(dst), target);
   });
 
   it('TC-FUNC-055: Copy recursive directory via MCP tool call', async () => {
