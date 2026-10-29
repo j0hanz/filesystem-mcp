@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` literal text follows a CRLF file's line endings.** In a file whose every newline is CRLF, LF in a literal `searchPattern` and `replacement` is now converted to CRLF, as `edit` already does. Before, `"a\nb"` matched nothing there, and an LF replacement wrote mixed line endings. `isRegex` patterns are still taken as written; use `\r?\n` to match either ending.
 - **`replace_text` `wholeWord` uses Unicode word boundaries.** Before, the match ignored non-ASCII letters and punctuation edges, so `café` matched inside `cafés` and `-x` matched inside `a-x`, and standalone words were skipped. Letters, digits, combining marks and `_` now count as word characters in any script.
 - **`replace_text` `wholeWord` finds a match right after another.** With `-x-`, `-x--x-` gave `X-x-` instead of `XX`: the second match needed the first match's final `-` as its leading boundary, and the search had already moved past it. The search now resumes on that character, so adjacent matches are all replaced.
+- **`move` renames a symlink under a non-ASCII case-only respelling.** On Windows and macOS, `move` of `É-link` to `é-link` did nothing: the two spellings were not seen as one entry, so the move was taken as a self-move. Same-entry spellings are now recognised by file identity, when they differ only in case.
 
 ## [2.12.1] - 2026-10-29
 

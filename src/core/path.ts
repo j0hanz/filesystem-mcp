@@ -20,6 +20,7 @@ import {
   expandHome,
   getReservedDeviceNameForPath,
   hasAlternateDataStream,
+  IS_CASE_INSENSITIVE_FS,
   IS_WINDOWS,
   isPathInsideDirectory,
   isPathWithinDirectories,
@@ -55,6 +56,23 @@ export type TransferKind = 'distinct' | 'respelling' | 'self';
  * re-spelled with the requested basename when the two differ only that way;
  * otherwise the resolved target unchanged. Parent segments are not re-spelled.
  */
+/**
+ * Whether two spellings that differ only in case name one entry, by identity.
+ * isSamePath folds ASCII only, but NTFS and APFS also fold `É` and `é`, so a
+ * rename between them would read as two entries. A hard link is not an alias:
+ * its names differ beyond case, and it never reaches the identity test.
+ */
+async function isCaseAliasOfEntry(left: string, right: string): Promise<boolean> {
+  if (!IS_CASE_INSENSITIVE_FS || left.toLowerCase() !== right.toLowerCase()) return false;
+  const [a, b] = await Promise.all([
+    lstat(left).catch(() => undefined),
+    lstat(right).catch(() => undefined),
+  ]);
+  // A zero inode says nothing about identity (some filesystems report none): keep the old answer.
+  if (!a || !b || a.ino === 0 || b.ino === 0) return false;
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
 function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
   const requestedName = basename(requestedPath);
   const resolvedName = basename(resolvedTarget);
@@ -1259,7 +1277,9 @@ export class PathGuard {
   ): Promise<{ readonly destination: string; readonly kind: TransferKind }> {
     let landing = await this.validatePathForWrite(destination);
     const entry = await this.validatePathForDelete(destination).catch(() => undefined);
-    const sameEntry = entry !== undefined && isSamePath(entry, source.entry);
+    const sameEntry =
+      entry !== undefined &&
+      (isSamePath(entry, source.entry) || (await isCaseAliasOfEntry(entry, source.entry)));
     if (sameEntry) landing = respellSpellingOnlyTarget(destination, source.entry);
     const resolvedSource = resolve(source.landing);
     const resolvedDest = resolve(landing);
