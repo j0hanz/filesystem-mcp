@@ -265,18 +265,24 @@ const codePointLength = (text: string): number =>
  * on entry.
  *
  * With `keepLast`, the final capture group is a lookahead-like tail: its text is
- * not consumed, so the next search starts at its first code point.
+ * not consumed, so the next search starts at its first code point. When the
+ * consumed text ends in a character `backUpOver` (a `$`-anchored pattern)
+ * matches, the next search starts on that character instead, so it can lead the
+ * next match. A resume point never moves back to or before the current search start.
  */
 export function* execMatches(
   regex: Regex,
   text: string,
   keepLast = false,
+  backUpOver?: RegExp,
 ): Generator<RegexMatch, undefined> {
   regex.lastIndex = 0;
   // Cursor into `text`, carried forward across matches: RE2 reports them in
   // ascending order, so the walk is O(text) in total rather than per match.
   let cursorCp = 0;
   let cursorU16 = 0;
+  // Code-point offset the current search started from.
+  let from = 0;
   let match: RE2ExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     while (cursorCp < match.index && cursorU16 < text.length) {
@@ -297,8 +303,14 @@ export function* execMatches(
     };
     // Own the advance rather than trusting the wrapper's mixed-unit arithmetic.
     const tail = keepLast && match.length > 1 ? (match[match.length - 1] ?? '') : '';
+    const consumed = matched.slice(0, matched.length - tail.length);
     const step = codePointLength(matched) - codePointLength(tail);
-    regex.lastIndex = match.index + (step > 0 ? step : 1);
+    let next = match.index + (step > 0 ? step : 1);
+    if (keepLast && backUpOver && consumed !== '' && backUpOver.test(consumed) && next - 1 > from) {
+      next -= 1;
+    }
+    regex.lastIndex = next;
+    from = next;
   }
 }
 

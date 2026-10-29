@@ -4777,6 +4777,42 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('replace_text wholeWord lets a needle trailing non-word char lead the next match', async () => {
+    const file = await writeTestFile(tmpDir, 'whole_word_trail/a.txt', '');
+    const cases = [
+      // The needle's final '-' is the next match's leading boundary.
+      { searchPattern: '-x-', before: '-x--x-\n', after: 'XX\n', matches: 2 },
+      // A one-char needle at text start: no progress is possible, so it must terminate.
+      { searchPattern: '-', before: '-\n', after: 'X\n', matches: 1 },
+      {
+        searchPattern: '-',
+        before: 'a - -- b\n',
+        after: 'a X XX b\n',
+        matches: 3,
+      },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: file,
+          searchPattern: c.searchPattern,
+          replacement: 'X',
+          caseSensitive: true,
+          wholeWord: true,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+      assert.strictEqual(
+        (result._meta as { totalMatches: number }).totalMatches,
+        c.matches,
+        c.before,
+      );
+    }
+  });
+
   it('replace_text wholeWord maxMatches stops mid-run with its reason', async () => {
     const file = await writeTestFile(tmpDir, 'whole_word_max/a.txt', 'aa a a\n');
     const result = await harness.client.callTool({

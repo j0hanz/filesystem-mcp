@@ -195,6 +195,8 @@ const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
 // RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
 const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
+// Matches a consumed text that ends in a non-word char: its last char may lead the next match.
+const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
 
 interface ReplaceLimits {
   maxMatches: number;
@@ -285,7 +287,7 @@ function createRegexReplacementMatcher(
       try {
         // wholeWord's lead and trailing groups are boundary characters: the lead is
         // spliced around, and the trailing one is left for the next match to use.
-        for (const found of execMatches(regex, content, wholeWord)) {
+        for (const found of execMatches(regex, content, wholeWord, ENDS_NON_WORD)) {
           const lead = wholeWord ? (found.groups[0] ?? '') : '';
           const trail = wholeWord ? (found.groups[found.groups.length - 1] ?? '') : '';
           const match = wholeWord
@@ -297,6 +299,8 @@ function createRegexReplacementMatcher(
                 groups: found.groups.slice(1, -1),
               }
             : found;
+          // The resume point never precedes the previous needle end; guard the splice against it.
+          if (match.start < cursor) continue;
           if (matchCount === limits.maxMatches) {
             more = true;
             break;
