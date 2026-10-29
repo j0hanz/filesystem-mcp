@@ -6,6 +6,7 @@ import {
   access,
   chmod,
   lstat,
+  link,
   mkdir,
   readdir,
   readFile,
@@ -3621,6 +3622,35 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(literal.isError, true, 'the literal matcher has no input cap');
     assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
+  });
+
+  it('replace_text transforms a hard-linked file once per run, dry run and live alike', async (t) => {
+    const a = await writeTestFile(tmpDir, 'hardlink_once/a.txt', 'x\n');
+    const b = join(dirname(a), 'b.txt');
+    try {
+      await link(a, b);
+    } catch (error) {
+      t.skip(`hard links not supported here: ${String(error)}`);
+      return;
+    }
+    const totalMatches = async (dryRun: boolean) => {
+      const result = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: {
+          path: dirname(a),
+          searchPattern: 'x',
+          replacement: 'xx',
+          caseSensitive: true,
+          dryRun,
+        },
+      });
+      assert.notStrictEqual(result.isError, true, `dryRun=${String(dryRun)}`);
+      return (result._meta as { totalMatches: number }).totalMatches;
+    };
+    assert.strictEqual(await totalMatches(true), 1, 'dry run counts the shared bytes once');
+    assert.strictEqual(await totalMatches(false), 1, 'live run counts the shared bytes once');
+    assert.strictEqual(await readFile(a, 'utf-8'), 'xx\n');
+    assert.strictEqual(await readFile(b, 'utf-8'), 'xx\n');
   });
 
   it('replace_text converts LF literal text to CRLF in a CRLF file', async () => {

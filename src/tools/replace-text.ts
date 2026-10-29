@@ -435,6 +435,8 @@ interface ReplaceContext {
   cut: boolean;
   /** Literal search whose LF text is CRLF-converted for an all-CRLF file. Present only when that changes the text. */
   crlf?: { matcher: ReplacementMatcher; replacement: string };
+  /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
+  linked: Set<string>;
 }
 
 /** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
@@ -463,6 +465,14 @@ async function processEntry(
   const write = { started: false };
 
   try {
+    // Hard links share one inode, so a write through one name is seen by every
+    // other name: a second name would transform the same bytes again.
+    const { stats } = await ctx.fs.stat(entryPath, { signal });
+    if (stats.nlink > 1) {
+      const id = `${stats.dev}:${stats.ino}`;
+      if (ctx.linked.has(id)) return undefined;
+      ctx.linked.add(id);
+    }
     // The Rewrite locks the read→write per file so a concurrent writer is not
     // lost; a dry run never writes and skips the lock.
     const done = await rewriteEntry(
@@ -760,6 +770,7 @@ async function handleSearchAndReplace(
     remaining: explicitCap ?? Infinity,
     cut: false,
     ...(crlf ? { crlf } : {}),
+    linked: new Set(),
   };
   let outcome: ScanOutcome<ScannedOutcome>;
   try {

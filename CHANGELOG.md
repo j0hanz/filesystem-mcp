@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`replace_text` transforms a hard-linked file once per run.** Walking two names of one file rewrote its bytes twice, so `x` became `xxx` where the dry run had previewed `xx`. Each file is now handled once, through its first name, and the dry run reports what the live run does.
 - **`replace_text` refuses a replacement that would grow a file past the max file size.** A ``$` `` or `$'` expansion, or a replacement longer than its match, could turn a 44 KB file into tens of MB. Such a file now fails with `TOO_LARGE` and stays unchanged, in dry runs too. The scan stops building the result as soon as it crosses the limit.
 - **`move` with a missing source reports `NOT_FOUND`.** Before, it reported `ACCESS_DENIED` "Move failed for ..." and suggested `list_roots`. `copy: true` already reported `NOT_FOUND`.
 - **`create` measures its size cap in UTF-8 bytes.** Before, it counted UTF-16 units, so a file of multibyte text could be up to 3 × `FS_MAX_FILE_SIZE` bytes, and `read` and `edit` then refused it. The per-file and combined-batch caps now count the bytes written to disk, and the batch refusal says "bytes" instead of "characters".
