@@ -25,14 +25,7 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import {
-  compileRegex,
-  execMatches,
-  freeRegex,
-  MAX_MATCH_LINE_CHARS,
-  RE2_MAX_INPUT_BYTES,
-  searchContent,
-} from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
   escapeRegExp,
   getMaxTextFileSize,
@@ -6436,9 +6429,11 @@ describe('High-severity bug-hunt regressions (tools)', () => {
   });
 });
 
-// The RE2 pattern edit built before #157, kept as the oracle the regex-free
-// matcher must agree with span for span. Its horizontal class is widened from
-// RE2's ASCII-only one to JS `\s` minus the newline, the class oldText is split on.
+// The pattern edit built before #157, kept as the oracle the regex-free
+// matcher must agree with span for span. It runs on JS RegExp, whose
+// leftmost-first semantics equal RE2's here: one re2-wasm compile per case
+// made the test take seconds. Its horizontal class is widened from RE2's
+// ASCII-only one to JS `\s` minus the newline, the class oldText is split on.
 const H = '[\\t\\x0b\\f\\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]';
 
 function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
@@ -6472,18 +6467,13 @@ function oraclePattern(oldText: string): string {
 const LIMIT = 6;
 
 function oracle(content: string, oldText: string, from: number): FlexMatch[] {
-  const regex = compileRegex(oraclePattern(oldText), { caseSensitive: true });
-  try {
-    const found: FlexMatch[] = [];
-    for (const match of execMatches(regex, content.slice(from))) {
-      if (match.text.length === 0) continue;
-      found.push({ start: from + match.start, length: match.text.length });
-      if (found.length === LIMIT) break;
-    }
-    return found;
-  } finally {
-    freeRegex(regex);
+  const found: FlexMatch[] = [];
+  for (const match of content.slice(from).matchAll(new RegExp(oraclePattern(oldText), 'gu'))) {
+    if (match[0].length === 0) continue;
+    found.push({ start: from + match.index, length: match[0].length });
+    if (found.length === LIMIT) break;
   }
+  return found;
 }
 
 function take<T>(items: Iterable<T>, n: number): T[] {
@@ -6556,7 +6546,7 @@ function* generatedCases(
 }
 
 describe('flexMatches', () => {
-  it('flexMatches equals the RE2 flexible pattern on generated cases', () => {
+  it('flexMatches equals the old flexible pattern on generated cases', () => {
     for (const { content, oldText, from } of generatedCases(3000)) {
       const got = take(flexMatches(content, oldText, from), LIMIT);
       assert.deepStrictEqual(
