@@ -420,6 +420,10 @@ function formatEditSummary(
       const quoted = v.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t)));
       return `${basename(v.path)} NO MATCH ${joinRoster(quoted, ', ')}`;
     }
+    // Counts are absent only when the Myers diff hit DIFF_TIMEOUT_MS; the edit still applied.
+    if (v.appliedEdits > 0 && v.linesAdded === undefined) {
+      return `${basename(v.path)} changed (too many lines to diff)`;
+    }
     const added = v.linesAdded ?? 0;
     const removed = v.linesRemoved ?? 0;
     if (added === 0 && removed === 0) return `${basename(v.path)} (no change)`;

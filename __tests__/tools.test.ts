@@ -1194,6 +1194,47 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('edit reports a change it could not diff instead of "(no change)"', async () => {
+    const lines = (prefix: string, n: number): string =>
+      Array.from({ length: n }, (_, i) => `${prefix}${String(i)}`).join('\n') + '\n';
+    const before = lines('a', 20000);
+    const after = lines('b', 20000);
+    // A whole-file rewrite outruns DIFF_TIMEOUT_MS: the edit still applies, so the
+    // summary must not claim "(no change)".
+    const file = await writeTestFile(tmpDir, 'edit-diff-timeout.txt', before);
+    const edits = [{ oldText: before, newText: after }];
+
+    const preview = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits, dryRun: true },
+    });
+    assert.notStrictEqual(preview.isError, true);
+    assert.strictEqual(
+      firstTextBlock(preview).text ?? '',
+      'edit: edit-diff-timeout.txt changed (too many lines to diff) [dry run]',
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), before);
+
+    const applied = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits },
+    });
+    assert.notStrictEqual(applied.isError, true);
+    assert.match(
+      firstTextBlock(applied).text ?? '',
+      /^edit: edit-diff-timeout\.txt changed \(too many lines to diff\) · undo \S+$/u,
+    );
+    assert.strictEqual(await readFile(file, 'utf-8'), after);
+
+    // An identical replacement is still a true no-op in the summary.
+    const same = await harness.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: 'b0\n', newText: 'b0\n' }] },
+    });
+    assert.notStrictEqual(same.isError, true);
+    assert.match(firstTextBlock(same).text ?? '', /^edit: edit-diff-timeout\.txt \(no change\)/u);
+  });
+
   it('edit refuses an empty or blank oldText with one message', async () => {
     const file = join(tmpDir, 'edit-blank-old.txt');
     await writeFile(file, 'original content');
