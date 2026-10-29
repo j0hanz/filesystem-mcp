@@ -4695,9 +4695,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
+    // The shared tmpDir holds more than find_files' default 100 results of *.txt.
     const result = await harness.client.callTool({
       name: 'find_files',
-      arguments: { pattern: '**/*.txt' },
+      arguments: { pattern: '**/findme.txt' },
     });
     assert.notStrictEqual(result.isError, true);
     const sc = result._meta as { results?: { path: string }[] };
