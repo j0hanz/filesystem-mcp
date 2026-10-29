@@ -25,7 +25,14 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
+import {
+  compileRegex,
+  execMatches,
+  freeRegex,
+  MAX_MATCH_LINE_CHARS,
+  RE2_MAX_INPUT_BYTES,
+  searchContent,
+} from '../src/core/search.ts';
 import {
   escapeRegExp,
   getMaxTextFileSize,
@@ -34,6 +41,7 @@ import {
   MAX_TOOL_INPUT_ELEMENTS,
 } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
+import { type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import { keepFirstResults } from '../src/tools/find-files.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import { listPageMetadata } from '../src/tools/list.ts';
@@ -6357,5 +6365,145 @@ describe('High-severity bug-hunt regressions (tools)', () => {
         },
       );
     }
+  });
+});
+
+// The RE2 pattern edit built before #157, kept as the oracle the regex-free
+// matcher must agree with span for span. Its horizontal class is widened from
+// RE2's ASCII-only one to JS `\s` minus the newline, the class oldText is split on.
+const H = '[\\t\\x0b\\f\\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]';
+
+function newlineRunPattern(token: string, edge: { leading: boolean; trailing: boolean }): string {
+  if (!edge.leading && !edge.trailing) return `(?:${H}*\\n)+${H}*`;
+  const count = token.split('\n').length - 1;
+  const lines = `(?:${H}*\\n){${String(count)}}`;
+  return edge.trailing && token.endsWith('\n') ? lines : `${lines}${H}*`;
+}
+
+function oraclePattern(oldText: string): string {
+  const tokens = oldText.split(/(\s+)/u);
+  const last = tokens.length - 1;
+  let pattern = '';
+  for (const [i, token] of tokens.entries()) {
+    if (i % 2 === 0) {
+      pattern += escapeRegExp(token);
+    } else if (token.includes('\n')) {
+      pattern += newlineRunPattern(token, {
+        leading: i === 1 && tokens[0] === '',
+        trailing: i === last - 1 && tokens[last] === '',
+      });
+    } else if (/\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '')) {
+      pattern += `${H}+`;
+    } else {
+      pattern += `${H}*`;
+    }
+  }
+  return pattern;
+}
+
+const LIMIT = 6;
+
+function oracle(content: string, oldText: string, from: number): FlexMatch[] {
+  const regex = compileRegex(oraclePattern(oldText), { caseSensitive: true });
+  try {
+    const found: FlexMatch[] = [];
+    for (const match of execMatches(regex, content.slice(from))) {
+      if (match.text.length === 0) continue;
+      found.push({ start: from + match.start, length: match.text.length });
+      if (found.length === LIMIT) break;
+    }
+    return found;
+  } finally {
+    freeRegex(regex);
+  }
+}
+
+function take<T>(items: Iterable<T>, n: number): T[] {
+  const out: T[] = [];
+  for (const item of items) {
+    if (out.length === n) break;
+    out.push(item);
+  }
+  return out;
+}
+
+const PIECES = [
+  'a',
+  'b',
+  'ab',
+  '(',
+  ';',
+  ' ',
+  '  ',
+  '\t',
+  '\n',
+  '\n\n',
+  ' \n',
+  '\r\n',
+  ' ',
+  '　',
+  ' ',
+  '😀',
+];
+
+function* generatedCases(
+  count: number,
+): Generator<{ content: string; oldText: string; from: number }> {
+  // Seeded LCG, so a failing case reproduces from its printed inputs.
+  let seed = 157;
+  const next = (n: number): number => {
+    // 32-bit integer math: a float product past 2^53 loses its low bits.
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+    return (seed >>> 16) % n;
+  };
+  const pieces = (min: number, max: number): string[] =>
+    Array.from({ length: min + next(max - min + 1) }, () => PIECES[next(PIECES.length)] ?? '');
+  const spaces = PIECES.filter((piece) => /^\s+$/u.test(piece));
+  let made = 0;
+  while (made < count) {
+    const parts = pieces(0, 40);
+    const content = parts.join('');
+    // Random text rarely matches anything, so most oldTexts are a slice of
+    // the content with some whitespace runs swapped for others.
+    const at = next(parts.length + 1);
+    const slice = parts.slice(at, at + 1 + next(8));
+    const oldText =
+      next(4) === 0 || slice.length === 0
+        ? pieces(1, 8).join('')
+        : slice
+            .map((piece) =>
+              /^\s+$/u.test(piece) && next(2) === 0
+                ? (spaces[next(spaces.length)] ?? piece)
+                : piece,
+            )
+            .join('');
+    if (!/\S/u.test(oldText)) continue;
+    made += 1;
+    const first = oracle(content, oldText, 0)[0];
+    // edit resumes only on code-point boundaries; inside a surrogate pair RE2 offsets drift.
+    const second = (content.codePointAt(0) ?? 0) > 0xffff ? 2 : 1;
+    const froms = new Set([0, second, ...(first ? [first.start + first.length] : [])]);
+    for (const from of froms) if (from <= content.length) yield { content, oldText, from };
+  }
+}
+
+describe('flexMatches', () => {
+  it('flexMatches equals the RE2 flexible pattern on generated cases', () => {
+    for (const { content, oldText, from } of generatedCases(3000)) {
+      const got = take(flexMatches(content, oldText, from), LIMIT);
+      assert.deepStrictEqual(
+        got,
+        oracle(content, oldText, from),
+        JSON.stringify({ content, oldText, from }),
+      );
+    }
+  });
+
+  it('flexMatches applies a 5,000-line oldText', () => {
+    const body = `${Array.from({ length: 5000 }, (_, i) => `    line_${String(i)} = value(${String(i)});`).join('\n')}\n`;
+    assert.deepStrictEqual(
+      [...flexMatches(body, body.replaceAll('    ', '  '))],
+      [{ start: 0, length: body.length }],
+    );
   });
 });

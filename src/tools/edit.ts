@@ -150,6 +150,172 @@ interface EditMatches {
   truncated: boolean;
 }
 
+// Whitespace-flexible matching for ignoreWhitespace, without a regex. One RE2
+// pattern built from the whole oldText outgrew re2-wasm's fixed heap at a few
+// thousand lines, and the file itself shares that heap (issue #157); V8's
+// backtracking engine overflows its stack on the same pattern. oldText is
+// literal tokens with no whitespace in them, separated by whitespace gaps, and
+// every gap is followed by a literal or the end, so a greedy walk from each
+// candidate start is exact and never backtracks.
+
+export interface FlexMatch {
+  /** UTF-16 offset into the full content. */
+  start: number;
+  /** UTF-16 length; always > 0, since oldText holds at least one non-whitespace character. */
+  length: number;
+}
+
+/**
+ * A whitespace run of oldText. `horizontal` stays on one line; `required`
+ * keeps two word characters apart. `lines` contains a newline: between two
+ * pieces of text it stays flexible (`count` undefined) — at least one
+ * newline, as many as the file has. At either edge of oldText it matches
+ * exactly `count` newlines: a flexible edge would swallow the blank lines
+ * around the match and, at the trailing edge, the next line's indentation,
+ * all of which newText then replaces. Each newline may carry horizontal
+ * whitespace before it, which covers the `\r` of a CRLF file and a blank
+ * line with stray spaces. `tail` takes the horizontal whitespace after the
+ * last newline; a trailing edge takes none unless the caller wrote
+ * indentation there.
+ */
+type Gap =
+  | { kind: 'horizontal'; required: boolean }
+  | { kind: 'lines'; count: number | undefined; tail: boolean };
+
+interface FlexSpec {
+  lead: Gap | undefined;
+  /** Non-empty, whitespace-free; `gaps[k]` sits between `literals[k]` and `literals[k + 1]`. */
+  literals: string[];
+  gaps: Gap[];
+  trail: Gap | undefined;
+}
+
+// Horizontal whitespace is JS `\s` minus the newline, the class oldText is
+// split on; the RE2 pattern took only ASCII there, so an NBSP oldText could
+// not match the same NBSP in the file.
+const isHorizontal = (ch: string | undefined): boolean =>
+  ch !== undefined && ch !== '\n' && /\s/u.test(ch);
+const HORIZONTAL_RUN = /[^\S\n]*/y;
+const WHITESPACE_RUN = /\s*/y;
+
+function skipRun(run: RegExp, content: string, at: number): number {
+  run.lastIndex = at;
+  run.exec(content);
+  return run.lastIndex;
+}
+
+function buildFlexSpec(oldText: string): FlexSpec {
+  // `split` on whitespace puts text at even indices and whitespace runs at odd ones.
+  const tokens = oldText.split(/(\s+)/u);
+  const last = tokens.length - 1;
+  const spec: FlexSpec = { lead: undefined, literals: [], gaps: [], trail: undefined };
+  for (const [i, token] of tokens.entries()) {
+    if (i % 2 === 0) {
+      if (token !== '') spec.literals.push(token);
+      continue;
+    }
+    const leading = i === 1 && tokens[0] === '';
+    const trailing = i === last - 1 && tokens[last] === '';
+    let gap: Gap;
+    if (token.includes('\n')) {
+      gap =
+        leading || trailing
+          ? {
+              kind: 'lines',
+              count: token.split('\n').length - 1,
+              tail: !(trailing && token.endsWith('\n')),
+            }
+          : { kind: 'lines', count: undefined, tail: true };
+    } else {
+      const required = /\w$/.test(tokens[i - 1] ?? '') && /^\w/.test(tokens[i + 1] ?? '');
+      gap = { kind: 'horizontal', required };
+    }
+    if (leading) spec.lead = gap;
+    else if (trailing) spec.trail = gap;
+    else spec.gaps.push(gap);
+  }
+  return spec;
+}
+
+/** Where a gap starting at `at` ends, or -1 when the content there does not fit it. */
+function walkGap(content: string, at: number, gap: Gap): number {
+  if (gap.kind === 'horizontal') {
+    const end = skipRun(HORIZONTAL_RUN, content, at);
+    return gap.required && end === at ? -1 : end;
+  }
+  if (gap.count === undefined) {
+    const end = skipRun(WHITESPACE_RUN, content, at);
+    const newline = content.indexOf('\n', at);
+    return newline !== -1 && newline < end ? end : -1;
+  }
+  let pos = at;
+  for (let n = 0; n < gap.count; n++) {
+    pos = skipRun(HORIZONTAL_RUN, content, pos);
+    if (content[pos] !== '\n') return -1;
+    pos += 1;
+  }
+  return gap.tail ? skipRun(HORIZONTAL_RUN, content, pos) : pos;
+}
+
+/**
+ * Where the leading gap ending at `at` starts, never below `floor`, or -1.
+ * Walking back as far as it fits gives the leftmost start.
+ */
+function walkLeadBack(content: string, at: number, gap: Gap, floor: number): number {
+  const back = (pos: number): number => {
+    let p = pos;
+    while (p > floor && isHorizontal(content[p - 1])) p -= 1;
+    return p;
+  };
+  if (gap.kind === 'horizontal') return back(at);
+  let pos = back(at);
+  for (let n = 0; n < (gap.count ?? 0); n++) {
+    if (pos <= floor || content[pos - 1] !== '\n') return -1;
+    pos = back(pos - 1);
+  }
+  return pos;
+}
+
+/** Where a match whose first literal sits at `at` ends, or -1. */
+function walkForward(content: string, at: number, spec: FlexSpec): number {
+  let pos = at + (spec.literals[0]?.length ?? 0);
+  for (const [k, gap] of spec.gaps.entries()) {
+    pos = walkGap(content, pos, gap);
+    const literal = spec.literals[k + 1] ?? '';
+    if (pos === -1 || !content.startsWith(literal, pos)) return -1;
+    pos += literal.length;
+  }
+  return spec.trail ? walkGap(content, pos, spec.trail) : pos;
+}
+
+/**
+ * Leftmost non-overlapping matches of oldText's whitespace-flexible form,
+ * scanning content from `from` (default 0) as if `content.slice(from)` were
+ * all there is, with offsets into the full content. Lazy, so a caller can
+ * stop after a few.
+ */
+export function* flexMatches(content: string, oldText: string, from = 0): Generator<FlexMatch> {
+  const spec = buildFlexSpec(oldText);
+  const first = spec.literals[0];
+  if (first === undefined) return;
+  // Every candidate's first literal starts with non-whitespace and a leading
+  // gap walks back over whitespace only, so candidate starts rise with the
+  // literal's offset and the first hit that fits is the leftmost match.
+  let floor = from;
+  let at = content.indexOf(first, floor);
+  while (at !== -1) {
+    const start = spec.lead ? walkLeadBack(content, at, spec.lead, floor) : at;
+    const end = start === -1 ? -1 : walkForward(content, at, spec);
+    if (end === -1) {
+      at = content.indexOf(first, at + 1);
+      continue;
+    }
+    yield { start, length: end - start };
+    floor = end;
+    at = content.indexOf(first, floor);
+  }
+}
+
 /**
  * Pattern for a whitespace run of oldText that contains a newline. Between two
  * pieces of text it stays flexible — at least one newline, as many as the file
