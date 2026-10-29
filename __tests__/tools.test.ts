@@ -3623,6 +3623,80 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
   });
 
+  it('replace_text converts LF literal text to CRLF in a CRLF file', async () => {
+    const call = async (args: Record<string, unknown>) => {
+      const result = await harness.client.callTool({ name: 'replace_text', arguments: args });
+      assert.notStrictEqual(result.isError, true);
+      return (result._meta as { totalMatches: number }).totalMatches;
+    };
+
+    // Case-sensitive literal: the Buffer matcher.
+    const sensitive = await writeTestFile(
+      tmpDir,
+      'rt-crlf/sensitive.txt',
+      'one\r\ntwo\r\nthree\r\n',
+    );
+    assert.strictEqual(
+      await call({
+        path: sensitive,
+        searchPattern: 'one\ntwo',
+        replacement: 'uno\ndos',
+        caseSensitive: true,
+      }),
+      1,
+    );
+    assert.strictEqual(await readFile(sensitive, 'utf-8'), 'uno\r\ndos\r\nthree\r\n');
+
+    // Default caseSensitive: false compiles an RE2 regex from the escaped literal.
+    const insensitive = await writeTestFile(tmpDir, 'rt-crlf/insensitive.txt', 'One\r\nTwo\r\n');
+    assert.strictEqual(
+      await call({ path: insensitive, searchPattern: 'one\ntwo', replacement: 'x\ny' }),
+      1,
+    );
+    assert.strictEqual(await readFile(insensitive, 'utf-8'), 'x\r\ny\r\n');
+
+    // A leading newline must take the \r with it, not leave \r\r\n.
+    const leading = await writeTestFile(tmpDir, 'rt-crlf/leading.txt', 'a\r\nb\r\n');
+    assert.strictEqual(
+      await call({ path: leading, searchPattern: '\nb', replacement: '\nc', caseSensitive: true }),
+      1,
+    );
+    assert.strictEqual(await readFile(leading, 'utf-8'), 'a\r\nc\r\n');
+
+    // A single-line pattern with a multi-line replacement keeps the file all-CRLF.
+    const grow = await writeTestFile(tmpDir, 'rt-crlf/grow.txt', 'one\r\ntwo\r\n');
+    assert.strictEqual(
+      await call({
+        path: grow,
+        searchPattern: 'two',
+        replacement: 'two\nhalf',
+        caseSensitive: true,
+      }),
+      1,
+    );
+    assert.strictEqual(await readFile(grow, 'utf-8'), 'one\r\ntwo\r\nhalf\r\n');
+
+    // Mixed endings have no one ending to convert to: nothing matches, file untouched.
+    const mixed = await writeTestFile(tmpDir, 'rt-crlf/mixed/mixed.txt', 'mixed\r\nlf\n');
+    await call({ path: mixed, searchPattern: 'mixed\nlf', replacement: 'x', caseSensitive: true });
+    assert.strictEqual(await readFile(mixed, 'utf-8'), 'mixed\r\nlf\n');
+
+    // isRegex is taken as written: \n does not match \r\n.
+    const regex = await writeTestFile(tmpDir, 'rt-crlf/regex/regex.txt', 'one\r\ntwo\r\n');
+    await call({ path: regex, searchPattern: 'one\\ntwo', replacement: 'x', isRegex: true });
+    assert.strictEqual(await readFile(regex, 'utf-8'), 'one\r\ntwo\r\n');
+
+    // One directory run picks the ending per file.
+    const crlfFile = await writeTestFile(tmpDir, 'rt-crlf/dir/crlf.txt', 'p\r\nq\r\n');
+    const lfFile = await writeTestFile(tmpDir, 'rt-crlf/dir/lf.txt', 'p\nq\n');
+    assert.strictEqual(
+      await call({ path: join(tmpDir, 'rt-crlf/dir'), searchPattern: 'p\nq', replacement: 'r\ns' }),
+      2,
+    );
+    assert.strictEqual(await readFile(crlfFile, 'utf-8'), 'r\r\ns\r\n');
+    assert.strictEqual(await readFile(lfFile, 'utf-8'), 'r\ns\n');
+  });
+
   it('replace_text refuses a file over the text size limit with the shared TOO_LARGE wording', async () => {
     const limit = 1024 * 1024;
     await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {

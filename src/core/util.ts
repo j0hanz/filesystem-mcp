@@ -121,6 +121,19 @@ export function escapeRegExpFallback(input: string): string {
 export const escapeRegExp: (input: string) => string =
   typeof RegExp.escape === 'function' ? (input) => RegExp.escape(input) : escapeRegExpFallback;
 
+// A file whose every newline is CRLF gets LF-only edit text converted to match
+// — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
+// and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
+// already carries a `\r` is taken as written. Mixed-ending files are not
+// converted: there is no one ending to convert to.
+export function usesCrlf(content: string): boolean {
+  return content.includes('\r\n') && !/(?<!\r)\n/u.test(content);
+}
+
+export function toCrlf(text: string): string {
+  return text.includes('\r') ? text : text.replaceAll('\n', '\r\n');
+}
+
 export const PARALLEL_CONCURRENCY = Math.min(Math.max(availableParallelism(), 4), 32);
 
 /** Memory kept for undo history (saved file contents). 0 turns undo off. */

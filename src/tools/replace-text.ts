@@ -48,6 +48,8 @@ import {
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
+  toCrlf,
+  usesCrlf,
 } from '../core/util.ts';
 import { type BatchResult, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
@@ -405,6 +407,8 @@ interface ReplaceContext {
   remaining: number;
   /** A file had a match left unreplaced because the cap ran out. */
   cut: boolean;
+  /** Literal search whose LF text is CRLF-converted for an all-CRLF file. Present only when that changes the text. */
+  crlf?: { matcher: ReplacementMatcher; replacement: string };
 }
 
 /** Whether a file's patch was refused up front; the patch text itself lives in the DiffBudget. */
@@ -438,16 +442,21 @@ async function processEntry(
     const done = await rewriteEntry(
       { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
       async (bytes) => {
-        if (!matcher.testBuffer(bytes)) return undefined;
+        // Same rule as edit: an all-CRLF file gets its LF literal text converted.
+        const eol =
+          ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
+            ? ctx.crlf
+            : undefined;
+        if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;
         const before = bytes.toString('utf-8');
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount, more } = await matcher.replace(
+        const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
           before,
-          replacement,
+          eol?.replacement ?? replacement,
           signal,
           limits,
         );
@@ -672,6 +681,16 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
+  // Literal text only: a regex and its $-template are taken as written (use \r?\n).
+  const crlfPattern = toCrlf(args.searchPattern);
+  const crlfReplacement = toCrlf(args.replacement);
+  const crlf =
+    !args.isRegex && (crlfPattern !== args.searchPattern || crlfReplacement !== args.replacement)
+      ? {
+          matcher: createReplacementMatcher({ ...args, searchPattern: crlfPattern }),
+          replacement: crlfReplacement,
+        }
+      : undefined;
   // The first changed file in walk order is the one the resource_link points
   // at; keep its report so the link needs no read-back.
   let primary: { index: number; report: Rewritten<number>['report'] } | undefined;
@@ -702,6 +721,7 @@ async function handleSearchAndReplace(
     maxBytes: getMaxTextFileSize(),
     remaining: explicitCap ?? Infinity,
     cut: false,
+    ...(crlf ? { crlf } : {}),
   };
   let outcome: ScanOutcome<ScannedOutcome>;
   try {
@@ -749,6 +769,7 @@ async function handleSearchAndReplace(
     );
   } finally {
     matcher.dispose();
+    crlf?.matcher.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 

@@ -17,7 +17,7 @@ import {
   RequiredPath,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
-import { escapeRegExp } from '../core/util.ts';
+import { escapeRegExp, toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -322,19 +322,6 @@ function ambiguousEditError(
     `edits[${String(editIndex)}]: oldText matches ${count} places${where} ` +
       `(${label} ${lines.join(', ')}${more}). Add surrounding lines so it matches once.`,
   );
-}
-
-// A file whose every newline is CRLF gets LF-only edit text converted to match
-// — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
-// and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
-// already carries a `\r` is taken as written. Mixed-ending files are not
-// converted: there is no one ending to convert to.
-function usesCrlf(content: string): boolean {
-  return content.includes('\r\n') && !/(?<!\r)\n/u.test(content);
-}
-
-function toCrlf(text: string): string {
-  return text.includes('\r') ? text : text.replaceAll('\n', '\r\n');
 }
 
 function applyEdits(
