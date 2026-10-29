@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Path containment no longer folds non-ASCII case.** On Windows and macOS, a sibling folder whose name differs from a root only by a character JavaScript folds but NTFS does not (U+212A Kelvin sign, U+017F long s) passed the containment check, so every tool could read, write and delete outside the root. Containment now folds `A-Z` only.
+- **Paths naming an NTFS alternate data stream are refused on Windows.** Before, `move` with `copy: true` could write a hidden `file.txt:stream`, and `create` failed with a raw `EINVAL` naming its temp file. Now every tool answers `INVALID_INPUT`, including reads of `file.txt::$DATA`, which used to alias `file.txt`.
 
 ### Fixed
 

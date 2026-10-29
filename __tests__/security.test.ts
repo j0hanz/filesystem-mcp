@@ -152,6 +152,40 @@ describe('Security (P0)', () => {
       }
     });
 
+    it('TC-SEC-041: an NTFS alternate data stream path is refused for read, write and delete on Windows', async (t) => {
+      if (process.platform !== 'win32') {
+        t.skip('alternate data streams are an NTFS feature');
+        return;
+      }
+      await writeTestFile(root, 'a.txt', 'x');
+      const adsMatcher = fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /NTFS alternate data streams are not supported/,
+      );
+      for (const name of ['a.txt:hidden', 'a.txt::$DATA', 'new.txt:s', 'dir:x\\f.txt']) {
+        const p = join(root, name);
+        await assert.rejects(guard.validateExistingPath(p), adsMatcher, `read ${name}`);
+        await assert.rejects(guard.validatePathForWrite(p), adsMatcher, `write ${name}`);
+        await assert.rejects(guard.validatePathForDelete(p), adsMatcher, `delete ${name}`);
+      }
+      // The drive colon inside a \\?\ prefix is not a stream; the trailing one is.
+      await assert.rejects(
+        guard.validatePathForWrite(`\\\\?\\${join(root, 'b.txt:s')}`),
+        adsMatcher,
+      );
+      // A plain path under the same root still validates.
+      assert.ok((await guard.validateExistingPath(join(root, 'a.txt'))).endsWith('a.txt'));
+    });
+
+    it('TC-SEC-042: a colon in a file name stays an ordinary name on POSIX', async (t) => {
+      if (process.platform === 'win32') {
+        t.skip('a colon names a stream on Windows');
+        return;
+      }
+      const resolved = await guard.validatePathForWrite(join(root, 'a:b.txt'));
+      assert.ok(resolved.endsWith('a:b.txt'));
+    });
+
     it('TC-SEC-020: a sibling whose name starts with the root name and a backslash stays outside', async (t) => {
       if (process.platform === 'win32') {
         t.skip('backslash is a separator on Windows');

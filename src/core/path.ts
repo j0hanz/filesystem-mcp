@@ -19,6 +19,7 @@ import {
   escapeNonAscii,
   expandHome,
   getReservedDeviceNameForPath,
+  hasAlternateDataStream,
   IS_WINDOWS,
   isPathInsideDirectory,
   isPathWithinDirectories,
@@ -576,6 +577,14 @@ export class PathGuard {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
         'Drive-relative paths are not allowed. Use C:\\path or C:/path instead of C:path.',
+        requestedPath,
+      );
+    }
+    // Streams are a Windows-only syntax; on POSIX `a:b.txt` is an ordinary name.
+    if (IS_WINDOWS && hasAlternateDataStream(requestedPath)) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        "NTFS alternate data streams are not supported. Remove the ':stream' suffix from the path.",
         requestedPath,
       );
     }

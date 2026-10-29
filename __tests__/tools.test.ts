@@ -880,6 +880,49 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(result.isError, true);
   });
 
+  it('TC-FUNC-009s: create on an NTFS stream path is INVALID_INPUT, not a raw EINVAL', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('alternate data streams are an NTFS feature');
+      return;
+    }
+    const target = join(tmpDir, 'ads-create.txt:hidden');
+    const result = await harness.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: target, content: 'secret' }] },
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = (
+      result.structuredContent as { failures?: { error?: { code?: string; message?: string } }[] }
+    ).failures?.[0];
+    assert.strictEqual(failure?.error?.code, 'INVALID_INPUT');
+    assert.match(failure?.error?.message ?? '', /NTFS alternate data streams are not supported/);
+    assert.doesNotMatch(failure?.error?.message ?? '', /EINVAL|\.tmp/);
+  });
+
+  it('TC-FUNC-009t: move copy:true refuses an NTFS stream destination and writes nothing', async (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('alternate data streams are an NTFS feature');
+      return;
+    }
+    const source = join(tmpDir, 'ads-src.txt');
+    await writeFile(source, 'body');
+    const before = await readdir(tmpDir);
+    const result = await harness.client.callTool({
+      name: 'move',
+      arguments: {
+        copy: true,
+        moves: [{ source, destination: join(tmpDir, 'ads-dst.txt:hidden') }],
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = (
+      result._meta as { failures?: { error?: { code?: string; message?: string } }[] } | undefined
+    )?.failures?.[0];
+    assert.strictEqual(failure?.error?.code, 'INVALID_INPUT');
+    assert.match(failure?.error?.message ?? '', /NTFS alternate data streams are not supported/);
+    assert.deepStrictEqual(await readdir(tmpDir), before, 'no ads-dst.txt host file was created');
+  });
+
   it('TC-FUNC-010b: deleting a workspace root names the root, not the parent', async () => {
     // The parent of a root is out-of-root by construction, so the containment
     // check used to answer "Outside allowed directories" for the one directory

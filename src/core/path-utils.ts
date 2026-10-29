@@ -138,6 +138,14 @@ export const isWindowsDrivePath = (requestedPath: string): boolean =>
   /^[A-Za-z]:/u.test(win32.parse(requestedPath).root);
 
 /**
+ * True when a ':' follows the path's root, i.e. an NTFS alternate data stream
+ * (`a.txt:s`, `a.txt::$DATA`). win32.parse keeps the drive colon of `C:\`,
+ * `\\?\C:\` and `\\.\C:\` inside the root, so only stream colons are seen.
+ */
+export const hasAlternateDataStream = (requestedPath: string): boolean =>
+  requestedPath.slice(win32.parse(requestedPath).root.length).includes(':');
+
+/**
  * A drive path this host refuses before resolving it: drive-relative anywhere,
  * and any drive path where the host is not Windows.
  */
