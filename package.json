@@ -73,11 +73,12 @@
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^24",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10",
     "eslint-config-prettier": "^10.1.8",
     "knip": "^6",
     "prettier": "^3.9.10",
-    "typescript": "^6",
+    "typescript": "npm:@typescript/typescript6@~6.0.2",
     "typescript-eslint": "^8.72.0"
   },
   "engines": {
