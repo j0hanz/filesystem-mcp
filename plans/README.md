@@ -32,7 +32,9 @@ abandoned)
 From the 2026-10-13 standard audit at `8deb0d50`:
 
 - TypeScript 7: `typescript-eslint` 8.71.x (latest and canary) still
-  declares `typescript <6.1.0`. Re-check on its next minor.
+  declares `typescript <6.1.0`. Re-check on its next minor. (Superseded
+  2026-10-30: ADR 009 aliases `typescript` to `@typescript/typescript6` so
+  the build and type-check run on 7.0.2 natively.)
 - Routine in-range bumps (express 5.3.0, zod 4.6.7, prettier 3.9.10,
   typescript-eslint 8.71.2): `npm update`-grade, not plans. `@types/node`
   stays on `^24` to match `engines`.
@@ -191,7 +193,8 @@ re-read by the advisor):
 - Duplicate type-check in `check:static` (~3.5 s), pre-commit hooks,
   `.vscode/tasks.json`: not worth it.
 - Dependencies: `@modelcontextprotocol/*` 2.1.0 / express 2.0.1 are latest;
-  `typescript@7` is out but `typescript-eslint@8.70` requires `<6.1`; the
+  `typescript@7` is out but `typescript-eslint@8.70` requires `<6.1`
+  (resolved 2026-10-30: ADR 009); the
   doc-only SDK symbols (`parseListenFilter`, `createListenRouter`,
   `createServerNotifier`) are still unexported. Nothing to do.
   (Superseded 2026-09-28: `server@2.2.0` / `client@2.2.0` are out — plan 047.)
