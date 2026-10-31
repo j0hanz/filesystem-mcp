@@ -35,7 +35,8 @@
     "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
     "test": "node --test --test-timeout=60000",
-    "test:coverage": "node --test --test-timeout=60000 --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=92 --test-coverage-branches=85 --test-coverage-functions=91"
+    "test:coverage": "node --test --test-timeout=60000 --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=92 --test-coverage-branches=85 --test-coverage-functions=91",
+    "test:mutation": "stryker run"
   },
   "keywords": [
     "mcp",
@@ -70,6 +71,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "2.4.0",
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/typescript-checker": "^10.1.1",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^24",

@@ -8,7 +8,7 @@ import { cli } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import { SensitiveMatcher } from '../src/core/sensitive.ts';
+import { describeSensitivePolicy, SensitiveMatcher } from '../src/core/sensitive.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
@@ -61,6 +61,60 @@ describe('Security (P0)', () => {
         fsErrorMatcher(ErrorCode.ACCESS_DENIED),
         'Should reject paths accessed through a symlink escaping the root',
       );
+    });
+
+    it('TC-SEC-006b: delete refuses a link that sits outside the root behind a linked parent', async (t) => {
+      const outside = await createTestRoot();
+      try {
+        await mkdir(join(outside, 'sub'));
+        const skip = (): void => t.skip('symlink not permitted');
+        if (!(await trySymlink(outside, join(root, 'linkdir'), skip))) return;
+        if (!(await trySymlink(join(outside, 'sub'), join(outside, 'victim'), skip))) return;
+        await assert.rejects(
+          guard.validatePathForDelete(join(root, 'linkdir', 'victim')),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+        );
+      } finally {
+        await cleanupTestRoot(outside);
+      }
+    });
+
+    it('TC-SEC-006d: delete applies path patterns through an aliased parent', async (t) => {
+      // `alias/credentials` matches no pattern as typed; `.aws/credentials`
+      // only shows once the parent is resolved, for a file and for a link.
+      const skip = (): void => t.skip('symlink not permitted');
+      await mkdir(join(root, '.aws', 'linked'), { recursive: true });
+      await writeTestFile(root, '.aws/credentials', 'KEY');
+      if (!(await trySymlink(join(root, '.aws'), join(root, 'alias'), skip))) return;
+      await assert.rejects(
+        guard.validatePathForDelete(join(root, 'alias', 'credentials')),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
+      await rm(join(root, '.aws', 'credentials'));
+      if (
+        !(await trySymlink(join(root, '.aws', 'linked'), join(root, '.aws', 'credentials'), skip))
+      )
+        return;
+      await assert.rejects(
+        guard.validatePathForDelete(join(root, 'alias', 'credentials')),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+      );
+    });
+
+    it('TC-SEC-006c: write refuses to follow a dangling link stored outside the root', async (t) => {
+      // The link points back inside, so only its location makes it untrusted.
+      const outside = await createTestRoot();
+      try {
+        const skip = (): void => t.skip('symlink not permitted');
+        if (!(await trySymlink(outside, join(root, 'linkdir'), skip))) return;
+        if (!(await trySymlink(join(root, 'missing'), join(outside, 'dangling'), skip))) return;
+        await assert.rejects(
+          guard.validatePathForWrite(join(root, 'linkdir', 'dangling', 'new.txt')),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+        );
+      } finally {
+        await cleanupTestRoot(outside);
+      }
     });
 
     it('TC-SEC-007: Blocks absolute path outside root', async () => {
@@ -554,6 +608,54 @@ describe('Security (P0)', () => {
       for (const name of allowed) {
         assert.strictEqual(matcher.isSensitive(name), false, `${name} must stay readable`);
       }
+    });
+
+    it('every built-in deny entry is pinned and is the only one denying its fixture', async () => {
+      // One fixture per entry. Mutation testing generates no mutants inside the
+      // `as const` list, so this table is what catches a dropped or edited entry.
+      const fixtures: Record<string, string> = {
+        '.env': '/r/.env',
+        '.env.*': '/r/.env.local',
+        '.npmrc': '/r/.npmrc',
+        '.pypirc': '/r/.pypirc',
+        '.netrc': '/r/.netrc',
+        _netrc: '/r/_netrc',
+        '.git-credentials': '/r/.git-credentials',
+        '.pgpass': '/r/.pgpass',
+        '.aws/credentials': '/home/u/.aws/credentials',
+        '.aws/config': '/home/u/.aws/config',
+        '.docker/config.json': '/home/u/.docker/config.json',
+        '.kube/config': '/home/u/.kube/config',
+        'application_default_credentials.json': '/r/application_default_credentials.json',
+        '.mcpregistry_*_token': '/r/.mcpregistry_github_token',
+        '*.pem': '/r/server.pem',
+        '*.key': '/r/server.key',
+        '*.p12': '/r/cert.p12',
+        '*.pfx': '/r/cert.pfx',
+        '*.crt': '/r/cert.crt',
+        '*.cer': '/r/cert.cer',
+        '*id_rsa*': '/r/.ssh/id_rsa',
+        '*id_dsa*': '/r/.ssh/id_dsa',
+        '*id_ecdsa*': '/r/.ssh/id_ecdsa',
+        '*id_ed25519*': '/r/.ssh/id_ed25519',
+      };
+      await withEnv(
+        { FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined, FS_ALLOWLIST: undefined },
+        () => {
+          const builtin = describeSensitivePolicy().builtinDeny;
+          assert.deepStrictEqual([...builtin].sort(), Object.keys(fixtures).sort());
+          const matcher = new SensitiveMatcher();
+          for (const [entry, fixture] of Object.entries(fixtures)) {
+            assert.strictEqual(matcher.isSensitive(fixture), true, `${entry} must deny ${fixture}`);
+            const without = new SensitiveMatcher(builtin.filter((p) => p !== entry));
+            assert.strictEqual(
+              without.isSensitive(fixture),
+              false,
+              `${fixture} must be denied by ${entry} alone`,
+            );
+          }
+        },
+      );
     });
 
     it('TC-ALLOW-010: wildcard allow relief reaches hidden files', async () => {
