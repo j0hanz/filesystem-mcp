@@ -269,6 +269,29 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
     });
 
+    it('never scans the directory an escaping equivalent link leads to', async (t) => {
+      // Two lookalikes outside: scanning there would answer with an ambiguity
+      // error that lists names outside the roots, not ACCESS_DENIED.
+      const outside = await createTestRoot();
+      try {
+        await writeFile(join(outside, NBSP_NAME), 'nbsp');
+        await writeFile(join(outside, NNBSP_NAME), 'nnbsp');
+        if (
+          !(await trySymlink(outside, join(root, 'out link'), () =>
+            t.skip('symlink not permitted'),
+          ))
+        ) {
+          return;
+        }
+        await assert.rejects(
+          guard.validatePathForWrite(join(root, 'out link', ASCII_NAME)),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED),
+        );
+      } finally {
+        await cleanupTestRoot(outside);
+      }
+    });
+
     it('applies the denylist to the on-disk spelling', async () => {
       await writeFile(join(root, 'secret\u202fnotes.txt'), 'secret');
       const denying = await withEnv({ FS_DENYLIST: 'secret\u202fnotes.txt' }, () =>
