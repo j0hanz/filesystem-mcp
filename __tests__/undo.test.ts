@@ -1545,7 +1545,10 @@ describe('restoreEntry', () => {
         await captureOne((fs) => fs.writeFile(a, 'B')),
         await captureOne((fs) => fs.writeFile(b, 'C')),
       ]);
-      assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
       assert.deepStrictEqual(dry, real);
       assert.strictEqual(await readFile(a, 'utf8'), 'A');
       assert.strictEqual(await readFile(b, 'utf8'), 'A');
@@ -1609,11 +1612,20 @@ describe('restoreEntry', () => {
         await captureOne((fs) => fs.rename(b, c)), // c is still the shared inode
         await captureOne((fs) => fs.writeFile(c, 'v3')),
       ]);
-      assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
       assert.deepStrictEqual(dry, real);
       assert.strictEqual(await readFile(a, 'utf8'), 'v1');
       assert.strictEqual(await readFile(b, 'utf8'), 'v1');
-      assert.strictEqual(await lstat(c).then(() => true, () => false), false);
+      assert.strictEqual(
+        await lstat(c).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
       assert.strictEqual((await lstat(a)).nlink, 2);
     });
 
@@ -1631,11 +1643,20 @@ describe('restoreEntry', () => {
         await captureOne((fs) => fs.rename(b, c)),
         await captureOne((fs) => fs.writeFile(a, 'v2')),
       ]);
-      assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
       assert.deepStrictEqual(dry, real);
       assert.strictEqual(await readFile(a, 'utf8'), 'v1');
       assert.strictEqual(await readFile(b, 'utf8'), 'v1');
-      assert.strictEqual(await lstat(c).then(() => true, () => false), false);
+      assert.strictEqual(
+        await lstat(c).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
       assert.strictEqual((await lstat(a)).nlink, 2);
     });
 
@@ -1651,7 +1672,10 @@ describe('restoreEntry', () => {
       const writeB = await captureOne((fs) => fs.writeFile(b, 'v2')); // in-place capture, both names 'v2'
       const removeA = await captureOne((fs) => fs.rm(a)); // snapshot bytes 'v2', undo recreates a
       const { dry, real } = await previewThenUndo([writeB, removeA]);
-      assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
       assert.deepStrictEqual(dry, real);
       assert.strictEqual(await readFile(a, 'utf8'), 'v2'); // recreated by the newer step
       assert.strictEqual(await readFile(b, 'utf8'), 'v1'); // reverted, on a fresh inode
@@ -1742,9 +1766,7 @@ describe('restoreEntry', () => {
       const live = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
         dryRun: false,
       });
-      assert.ok(
-        live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED),
-      );
+      assert.ok(live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED));
       assert.strictEqual(await readFile(file, 'utf8'), 'B');
     } finally {
       server.disposeRuntimeState();

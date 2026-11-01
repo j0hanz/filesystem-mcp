@@ -20,14 +20,14 @@ Live truth to mirror (`src/core/fs.ts`):
 
 Bug: `UndoPreview.world().writeFile` (`undo.ts:651-658`) always mints a fresh per-path identity and stores the hash only in that name's node. Two names of one inode are two preview paths, so a previewed write through one name is invisible at the other, and identity tracking re-keys (`undo.ts:733`) where live keeps the inode. Six confirmed divergence classes:
 
-| # | Shape | Dry says | Live does |
-|---|-------|----------|-----------|
-| 1 | Issue repro: write via alias, older write via other name | SKIP | restore |
-| 2 | External write between captures (rev-write) | restore (false) | SKIP |
-| 3 | Append record via alias name | SKIP | restore |
-| 4 | Remove record on a linked name | wrong, both directions | opposite |
-| 5 | Rename tracking the inode (`undo.ts:1096-1127`) | "unrestorable" | restore |
-| 6 | Link into a read-only root | restore | FAIL `ACCESS_DENIED` |
+| #   | Shape                                                    | Dry says               | Live does            |
+| --- | -------------------------------------------------------- | ---------------------- | -------------------- |
+| 1   | Issue repro: write via alias, older write via other name | SKIP                   | restore              |
+| 2   | External write between captures (rev-write)              | restore (false)        | SKIP                 |
+| 3   | Append record via alias name                             | SKIP                   | restore              |
+| 4   | Remove record on a linked name                           | wrong, both directions | opposite             |
+| 5   | Rename tracking the inode (`undo.ts:1096-1127`)          | "unrestorable"         | restore              |
+| 6   | Link into a read-only root                               | restore                | FAIL `ACCESS_DENIED` |
 
 Fix (all in `UndoPreview`, `src/core/undo.ts` unless noted):
 
@@ -68,10 +68,12 @@ Input classes and failure modes the mechanism must survive, each pinned by the t
 ### Task 1: inode-aware preview state and parity tests
 
 **Files:**
+
 - Modify: `src/core/undo.ts` — `UndoPreview` fields (after `#alias`, `:626`), helpers (after `#mint`, `:741`), `world().hash` (`:646-650`), `world().writeFile` (`:651-658`), `world().rm` (`:659-662`), `#fromDisk` (after `const kind = kindOf(stats)`, `:887`)
 - Test: `__tests__/undo.test.ts` — `describe('restoreEntry')` (starts `:423`) and its nested oracle describe (starts `:1243`); tool-level test in the `undo` tool describe (after `:1847`)
 
 **Interfaces:**
+
 - Consumes: `FileIdentity`, `identityKey` (`undo.ts:30-34`, `:73-74`), `sha256Hex`, `hashFile`, `ABSENT`, `previewKey`, `#node`, `#put`, `#mint`; test helpers `captureOne` (`:443-451`), `dryRunAll` (`:452-459`), `previewThenUndo` (`:1246-1268`).
 - Produces (private, no public signature changes): `#links: Map<string, bigint>`, `#inPlace: Map<string, string>`, `#linkCount(identity: FileIdentity): bigint`, `#unlink(identity: FileIdentity): void`. `world().rm` becomes `async` — task 2 adds one call inside task 1's in-place branch.
 
@@ -124,7 +126,10 @@ it('two edits through two hard-linked names preview what the real undo does', as
     await captureOne((fs) => fs.writeFile(a, 'B')),
     await captureOne((fs) => fs.writeFile(b, 'C')),
   ]);
-  assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+  assert.ok(
+    real.every((r) => r.endsWith(' ok')),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
   assert.strictEqual(await readFile(a, 'utf8'), 'A');
   assert.strictEqual(await readFile(b, 'utf8'), 'A');
@@ -148,7 +153,10 @@ it('a dry run does not promise a restore the real undo skips', async (t) => {
   await writeFile(b, 'C'); // external in-place write through the twin
   const second = await captureOne((fs) => fs.writeFile(b, 'B'));
   const { dry, real } = await previewThenUndo([first, second]);
-  assert.ok(real.some((r) => r.endsWith(`${a} CANCELLED`)), real.join('\n'));
+  assert.ok(
+    real.some((r) => r.endsWith(`${a} CANCELLED`)),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
 });
 ```
@@ -170,7 +178,10 @@ it('a dry run does not promise removing a file the real undo refuses to remove',
   await writeFile(b, 'B'); // external in-place edit through the twin
   const edited = await captureOne((fs) => fs.writeFile(b, 'A'));
   const { dry, real } = await previewThenUndo([created, edited]);
-  assert.ok(real.some((r) => r.endsWith(`${a} CANCELLED`)), real.join('\n'));
+  assert.ok(
+    real.some((r) => r.endsWith(`${a} CANCELLED`)),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
   assert.strictEqual(await readFile(a, 'utf8'), 'B'); // live refused the removal
 });
@@ -194,11 +205,20 @@ it('an edit through the moved name after a move of its hard-linked twin', async 
     await captureOne((fs) => fs.rename(b, c)), // c is still the shared inode
     await captureOne((fs) => fs.writeFile(c, 'v3')),
   ]);
-  assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+  assert.ok(
+    real.every((r) => r.endsWith(' ok')),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
   assert.strictEqual(await readFile(a, 'utf8'), 'v1');
   assert.strictEqual(await readFile(b, 'utf8'), 'v1');
-  assert.strictEqual(await lstat(c).then(() => true, () => false), false);
+  assert.strictEqual(
+    await lstat(c).then(
+      () => true,
+      () => false,
+    ),
+    false,
+  );
   assert.strictEqual((await lstat(a)).nlink, 2);
 });
 ```
@@ -220,11 +240,20 @@ it('a move of one name, then an edit through its twin', async (t) => {
     await captureOne((fs) => fs.rename(b, c)),
     await captureOne((fs) => fs.writeFile(a, 'v2')),
   ]);
-  assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+  assert.ok(
+    real.every((r) => r.endsWith(' ok')),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
   assert.strictEqual(await readFile(a, 'utf8'), 'v1');
   assert.strictEqual(await readFile(b, 'utf8'), 'v1');
-  assert.strictEqual(await lstat(c).then(() => true, () => false), false);
+  assert.strictEqual(
+    await lstat(c).then(
+      () => true,
+      () => false,
+    ),
+    false,
+  );
   assert.strictEqual((await lstat(a)).nlink, 2);
 });
 ```
@@ -244,9 +273,15 @@ it('dryRun across two hard-linked names previews what the real undo restores', a
     } catch {
       return t.skip('hard links not supported here');
     }
-    const first = await call(pair.client, 'edit', { path: a, edits: [{ oldText: 'A', newText: 'B' }] });
+    const first = await call(pair.client, 'edit', {
+      path: a,
+      edits: [{ oldText: 'A', newText: 'B' }],
+    });
     assert.notStrictEqual(first.isError, true);
-    const second = await call(pair.client, 'edit', { path: b, edits: [{ oldText: 'B', newText: 'C' }] });
+    const second = await call(pair.client, 'edit', {
+      path: b,
+      edits: [{ oldText: 'B', newText: 'C' }],
+    });
     assert.notStrictEqual(second.isError, true);
 
     const dry = await call(pair.client, 'undo', { steps: 2, dryRun: true });
@@ -375,10 +410,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 2: read-only hard-link refusal parity
 
 **Files:**
+
 - Modify: `src/core/fs.ts:132` (one signature line), `src/core/fs.ts:468` and `:556` (drop `#` at the two call sites), `src/core/undo.ts` (one call in task 1's in-place branch)
 - Test: `__tests__/undo.test.ts` — standalone `it` at the end of `describe('restoreEntry')`
 
 **Interfaces:**
+
 - Consumes: task 1's in-place branch and `#linkCount`.
 - Produces: public `GuardedFileSystem.assertNoReadOnlyHardLink(path: string, stats: { nlink: number }): void` (was `#assertNoReadOnlyHardLink(path: string, stats: Stats)`; body unchanged). `Stats` satisfies `{ nlink: number }`, so both existing call sites compile untouched.
 
@@ -421,9 +458,7 @@ it('a dry run refuses a write live undo must refuse on a read-only hard link', a
     const live = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
       dryRun: false,
     });
-    assert.ok(
-      live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED),
-    );
+    assert.ok(live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED));
     assert.strictEqual(await readFile(file, 'utf8'), 'B');
   } finally {
     server.disposeRuntimeState();
@@ -478,10 +513,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 3: parity pin, full gate, cleanup
 
 **Files:**
+
 - Test: `__tests__/undo.test.ts` — one oracle test appended to the oracle describe
 - Delete: `repro-156.ts` (repo root, untracked; superseded by the unit tests)
 
 **Interfaces:**
+
 - Consumes: the landed fix. Produces: nothing.
 
 - [ ] **Step 1: Add the green parity pin**
@@ -501,7 +538,10 @@ it('a write after one link was removed previews the fresh-inode restore', async 
   const writeB = await captureOne((fs) => fs.writeFile(b, 'v2')); // in-place capture, both names 'v2'
   const removeA = await captureOne((fs) => fs.rm(a)); // snapshot bytes 'v2', undo recreates a
   const { dry, real } = await previewThenUndo([writeB, removeA]);
-  assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+  assert.ok(
+    real.every((r) => r.endsWith(' ok')),
+    real.join('\n'),
+  );
   assert.deepStrictEqual(dry, real);
   assert.strictEqual(await readFile(a, 'utf8'), 'v2'); // recreated by the newer step
   assert.strictEqual(await readFile(b, 'utf8'), 'v1'); // reverted, on a fresh inode
