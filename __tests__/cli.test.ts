@@ -323,4 +323,16 @@ describe('CLI (real subprocess)', () => {
     assert.strictEqual(code, 1);
     assert.match(stderr, /drive-relative|Windows-style/u);
   });
+
+  it(
+    'CLI-RO-007: rejects edge whitespace in --read-only-root before normalization',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const refs = join(root, 'refs ');
+      await mkdir(refs);
+      const { code, stderr } = await runCli(['--print-config', '--read-only-root', refs, root]);
+      assert.strictEqual(code, 1);
+      assert.match(stderr, /leading or trailing whitespace/u);
+    },
+  );
 });

@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
@@ -596,7 +596,10 @@ export class PathGuard {
     return kept.length > 0;
   }
 
-  private validateAccess(requestedPath: string): {
+  private validateAccess(
+    requestedPath: string,
+    allowSensitive = false,
+  ): {
     normalizedRequested: string;
     allowedDirs: string[];
     accessDeniedHint: string;
@@ -660,8 +663,10 @@ export class PathGuard {
       // never pre-checked — fail closed.
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
-    this.assertNotSensitiveFile(requestedPath, requestedPath);
-    this.assertNotSensitiveFile(normalizedRequested, requestedPath);
+    if (!allowSensitive) {
+      this.assertNotSensitiveFile(requestedPath, requestedPath);
+      this.assertNotSensitiveFile(normalizedRequested, requestedPath);
+    }
 
     return {
       normalizedRequested,
@@ -1087,6 +1092,7 @@ export class PathGuard {
     accessDeniedHint: string,
     requestedPath: string,
     resolveLast = true,
+    allowSensitive = false,
   ): Promise<string | undefined> {
     const root = this.allowedRootContaining(normalized);
     if (root === undefined || !mayHaveEquivalentSpelling(normalized.slice(root.length))) {
@@ -1115,9 +1121,11 @@ export class PathGuard {
         // The scan must not reveal what the denylist hides: a name it covers
         // under the resolved parent is refused as the exact spelling is, and
         // a directory `list` would refuse is never read.
-        this.assertNotSensitiveFile(join(real, ...missing.slice(index)), requestedPath);
+        if (!allowSensitive) {
+          this.assertNotSensitiveFile(join(real, ...missing.slice(index)), requestedPath);
+        }
         if (this.isSensitive(real)) break;
-        onDisk = await this.findEquivalentEntry(real, name, requestedPath);
+        onDisk = await this.findEquivalentEntry(real, name, requestedPath, allowSensitive);
       }
       if (onDisk === undefined) break;
       spelled.push(onDisk);
@@ -1146,6 +1154,7 @@ export class PathGuard {
     realDir: string,
     name: string,
     requestedPath: string,
+    allowSensitive = false,
   ): Promise<string | undefined> {
     let entries: string[];
     try {
@@ -1158,7 +1167,9 @@ export class PathGuard {
     const matches = entries.filter((entry) => unicodeMatchKey(entry) === key);
     // A match the denylist covers is refused here, as a lone one would be by
     // the caller, so the ambiguity error below never lists a hidden name.
-    for (const match of matches) this.assertNotSensitiveFile(join(realDir, match), requestedPath);
+    if (!allowSensitive) {
+      for (const match of matches) this.assertNotSensitiveFile(join(realDir, match), requestedPath);
+    }
     if (matches.length > 1) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
@@ -1170,8 +1181,19 @@ export class PathGuard {
   }
 
   async validatePathForWrite(requestedPath: string): Promise<string> {
-    const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccess(requestedPath);
+    return this.#validatePathForWrite(requestedPath, false);
+  }
+
+  /** Checks mapped transfer entries without changing the existing treatment of sensitive child names. */
+  async validateTransferPathForWrite(requestedPath: string): Promise<string> {
+    return this.#validatePathForWrite(requestedPath, true);
+  }
+
+  async #validatePathForWrite(requestedPath: string, allowSensitive: boolean): Promise<string> {
+    const { normalizedRequested, allowedDirs, accessDeniedHint } = this.validateAccess(
+      requestedPath,
+      allowSensitive,
+    );
 
     let { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
       requestedPath,
@@ -1193,7 +1215,14 @@ export class PathGuard {
     let candidate = normalizedRequested;
     for (let round = 0; realAncestor !== resolvedTarget && round < MAX_SYMLINK_HOPS; round++) {
       const respelled =
-        (await this.respellMissing(candidate, allowedDirs, accessDeniedHint, requestedPath)) ??
+        (await this.respellMissing(
+          candidate,
+          allowedDirs,
+          accessDeniedHint,
+          requestedPath,
+          true,
+          allowSensitive,
+        )) ??
         (isSamePath(resolvedTarget, candidate)
           ? undefined
           : await this.respellMissing(
@@ -1201,9 +1230,11 @@ export class PathGuard {
               allowedDirs,
               accessDeniedHint,
               requestedPath,
+              true,
+              allowSensitive,
             ));
       if (respelled === undefined) break;
-      this.assertNotSensitiveFile(respelled, requestedPath);
+      if (!allowSensitive) this.assertNotSensitiveFile(respelled, requestedPath);
       ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
         requestedPath,
         respelled,
@@ -1213,7 +1244,7 @@ export class PathGuard {
     }
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.
-    this.assertNotSensitiveFile(resolvedTarget, requestedPath);
+    if (!allowSensitive) this.assertNotSensitiveFile(resolvedTarget, requestedPath);
     this.assertWritable(resolvedTarget);
     return resolvedTarget;
   }
@@ -1444,7 +1475,28 @@ export class PathGuard {
     // a dir outside every boundary denies nothing new, since paths there are
     // already refused.
     const cliReadOnlyDirs = this.options?.readOnlyDirs ?? [];
-    const envReadOnlyDirs = await resolveConfiguredDirs('FS_READ_ONLY_DIRS', { allowMissing });
+    for (const dir of cliReadOnlyDirs) {
+      if (dir.trim() !== dir) {
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `Read-only directory paths must not have leading or trailing whitespace: ${dir}`,
+          dir,
+        );
+      }
+    }
+    const rawEnvReadOnlyDirs = process.env['FS_READ_ONLY_DIRS'];
+    for (const dir of rawEnvReadOnlyDirs?.split(delimiter) ?? []) {
+      if (dir.trim() !== dir) {
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `FS_READ_ONLY_DIRS entries must not have leading or trailing whitespace: ${dir}`,
+          dir,
+        );
+      }
+    }
+    const envReadOnlyDirs = await resolveConfiguredDirs('FS_READ_ONLY_DIRS', {
+      allowMissing: true,
+    });
     const readOnlyCombined = normalizeAllowedDirectories([...cliReadOnlyDirs, ...envReadOnlyDirs]);
     const readOnlySpellings = new Set(
       await resolveAllowedDirectoriesState(readOnlyCombined, signal),

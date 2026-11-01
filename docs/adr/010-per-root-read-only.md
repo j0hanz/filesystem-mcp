@@ -45,16 +45,24 @@ table on roots.
   real move out of a read-only dir stays refused. The read-only refusal is
   skipped for the metadata probes too (`lstat`, `lstatExact`, `readlink`), so
   `stat` on a link inside a read-only dir still reports its target.
-- Four paths a plain target check misses (found in review): `fs.cp` validates
-  the effective landing `join(destination, basename(source))` when the
-  destination is an existing directory, because fsCp's into-dir semantics
-  write deeper than the validated path; `validatePathForDelete` refuses a
-  directory that contains a read-only dir, so removing or moving a parent
-  cannot take the protected tree with it; a missing read-only dir is
-  projected through its nearest existing ancestor (`projectRealPath`), the
-  way roots are, so an alias spelling cannot be bypassed by the real spelling
-  a write resolves to; and `--read-only-root` values pass the same CLI shape
-  validation as positional roots.
+- Recursive copies validate each actual destination passed to `fs.cp`'s
+  filter, including merged directory contents; the caller's filter still runs
+  first, so skipped entries need no write validation. This covers protected
+  descendants regardless of whether the destination already exists.
+- `validatePathForDelete` refuses a directory that contains a read-only dir,
+  so removing or moving a parent cannot take the protected tree with it.
+  Directory moves also validate each mapped descendant before rename and
+  before a cross-device copy.
+- Missing read-only dirs stay configured even when `--allow-missing-roots` is
+  off, and are projected through their nearest existing ancestor
+  (`projectRealPath`), so an alias spelling cannot be bypassed by the real
+  spelling a write resolves to. Edge whitespace is rejected before path
+  normalization.
+- While any read-only dir is configured, in-place mutation of multiply-linked
+  files is refused: a writable hard-link alias cannot reveal whether another
+  name is inside a protected tree.
+- `--read-only-root` values pass the same CLI shape validation as positional
+  roots.
 - The global `--read-only` flag is unchanged: it still gates at registration
   time and removes the mutating tools entirely. Mixed mode keeps every tool
   advertised and refuses at call time, so the advertised surface does not

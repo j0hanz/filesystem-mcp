@@ -215,6 +215,11 @@ export async function parseArgs(): Promise<{
     // different directory than the operator meant.
     for (const raw of v['read-only-root'] ?? []) {
       validateCliPath(raw);
+      if (raw.trim() !== raw) {
+        throw new CliExitError(
+          `Read-only directory paths must not have leading or trailing whitespace: ${raw}`,
+        );
+      }
     }
     const readOnlyDirs = await normalizeAndValidateDirs(
       v['read-only-root'] ?? [],

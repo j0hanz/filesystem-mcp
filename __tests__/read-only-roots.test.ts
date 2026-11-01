@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
@@ -128,6 +129,54 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     assert.equal(guard.isReadOnlyPath(join(alias, 'refs', 'x.txt')), true);
   });
 
+  it('RO-MISSING-001: keeps a missing FS_READ_ONLY_DIRS entry protected across recomputes', async () => {
+    const missing = join(rw, 'future-protected');
+    process.env['FS_READ_ONLY_DIRS'] = missing;
+    try {
+      const guard = new PathGuard({ cliAllowedDirs: [rw] });
+      await guard.recomputeAllowedDirectories();
+      await assert.rejects(
+        guard.validatePathForWrite(join(missing, 'file.txt')),
+        (error: unknown) => {
+          assertReadOnlyDenied(error, missing);
+          return true;
+        },
+      );
+
+      await mkdir(missing);
+      await guard.recomputeAllowedDirectories();
+      await assert.rejects(
+        guard.validatePathForWrite(join(missing, 'file.txt')),
+        (error: unknown) => {
+          assertReadOnlyDenied(error, missing);
+          return true;
+        },
+      );
+    } finally {
+      delete process.env['FS_READ_ONLY_DIRS'];
+    }
+  });
+
+  it(
+    'RO-WHITESPACE-001: rejects edge whitespace before normalizing read-only paths',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [rw], readOnlyDirs: [`${ro} `] });
+      await assert.rejects(guard.recomputeAllowedDirectories(), /leading or trailing whitespace/u);
+
+      process.env['FS_READ_ONLY_DIRS'] = `${ro} `;
+      try {
+        const envGuard = new PathGuard({ cliAllowedDirs: [rw] });
+        await assert.rejects(
+          envGuard.recomputeAllowedDirectories(),
+          /leading or trailing whitespace/u,
+        );
+      } finally {
+        delete process.env['FS_READ_ONLY_DIRS'];
+      }
+    },
+  );
+
   it('RO-PARENT-001: refuses deleting a directory that contains a read-only dir', async () => {
     const parent = join(rw, 'parent');
     const subtree = join(parent, 'protected');
@@ -170,6 +219,89 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
   it('RO-WRITE-002: a write under the writable root is unaffected', async () => {
     const guard = await guardFor([ro]);
     await guard.validatePathForWrite(join(rw, 'new.txt'));
+  });
+
+  it('RO-HARDLINK-001: refuses in-place writes through a hard-link alias', async (t) => {
+    const protectedFile = join(ro, 'hardlink-target.txt');
+    const alias = join(rw, 'hardlink-alias.txt');
+    await writeFile(protectedFile, 'original');
+    try {
+      await link(protectedFile, alias);
+    } catch {
+      return t.skip('hard links are not supported');
+    }
+
+    const guard = await guardFor([ro]);
+    const fs = new GuardedFileSystem(guard);
+    for (const mutate of [
+      () => fs.writeFile(alias, 'overwrite'),
+      () => fs.appendFile(alias, 'append'),
+    ]) {
+      await assert.rejects(mutate(), (error: unknown) => {
+        assert.ok(isFsError(error), String(error));
+        assert.equal(error.code, ErrorCode.ACCESS_DENIED);
+        assert.match(error.message, /multiply-linked/u);
+        return true;
+      });
+    }
+    assert.equal(await readFile(protectedFile, 'utf8'), 'original');
+  });
+
+  it('RO-COPY-FILTER-001: preserves a caller-supplied fs.cp filter', async () => {
+    const source = join(ro, 'filtered-source');
+    const destination = join(rw, 'filtered-destination');
+    await mkdir(source);
+    await writeFile(join(source, 'keep.txt'), 'keep');
+    await writeFile(join(source, 'skip.txt'), 'skip');
+
+    const fs = new GuardedFileSystem(await guardFor([]));
+    await fs.cp(source, destination, {
+      recursive: true,
+      filter: (sourcePath) => !sourcePath.endsWith('skip.txt'),
+    });
+
+    assert.equal(await readFile(join(destination, 'keep.txt'), 'utf8'), 'keep');
+    assert.equal(existsSync(join(destination, 'skip.txt')), false);
+  });
+
+  it('RO-MOVE-DESC-001: refuses directory moves that populate a missing protected subtree', async () => {
+    const source = join(rw, 'move-source');
+    const destination = join(rw, 'move-destination');
+    await mkdir(join(source, 'protected'), { recursive: true });
+    await writeFile(join(source, 'protected', 'f.txt'), 'keep');
+
+    const fs = new GuardedFileSystem(await guardFor([join(destination, 'protected')]));
+    await assert.rejects(fs.rename(source, destination), (error: unknown) => {
+      assertReadOnlyDenied(error, join(destination, 'protected'));
+      return true;
+    });
+    assert.equal(await readFile(join(source, 'protected', 'f.txt'), 'utf8'), 'keep');
+  });
+
+  it('RO-MOVE-DESC-002: rechecks mapped descendants in the cross-device fallback', async () => {
+    const source = join(rw, 'exdev-source');
+    const destination = join(rw, 'exdev-destination');
+    const protectedDir = join(destination, 'protected');
+    await mkdir(join(source, 'protected'), { recursive: true });
+    await writeFile(join(source, 'protected', 'f.txt'), 'keep');
+
+    const guard = await guardFor([]);
+    const fs = new GuardedFileSystem(guard, undefined, {
+      rename: async () => {
+        process.env['FS_READ_ONLY_DIRS'] = protectedDir;
+        await guard.recomputeAllowedDirectories();
+        throw Object.assign(new Error('cross-device'), { code: 'EXDEV' });
+      },
+    });
+    try {
+      await assert.rejects(fs.rename(source, destination), (error: unknown) => {
+        assertReadOnlyDenied(error, protectedDir);
+        return true;
+      });
+      assert.equal(await readFile(join(source, 'protected', 'f.txt'), 'utf8'), 'keep');
+    } finally {
+      delete process.env['FS_READ_ONLY_DIRS'];
+    }
   });
 
   it('RO-DEL-001: refuses a delete under a read-only dir', async () => {
@@ -390,16 +522,15 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
     assert.match(failures[0]?.error?.message ?? '', /Read-only root/u);
   });
 
-  it('RO-INT-006: a recursive copy cannot land onto a read-only dir through a container destination', async () => {
-    // The container destination is writable, but fsCp's into-dir semantics
-    // would land the copy on the read-only dir named after the source.
+  it('RO-INT-006: recursive copies validate the actual destination of every entry', async () => {
     const container = join(rw, 'dest');
-    const nested = join(container, 'refs-dir');
+    const nested = join(container, 'protected');
     await mkdir(nested, { recursive: true });
     await writeFile(join(nested, 'f.txt'), 'PROTECTED');
-    const source = join(ro, 'refs-dir');
+    const source = join(ro, 'source-tree');
     await mkdir(source, { recursive: true });
-    await writeFile(join(source, 'g.txt'), 'G');
+    await mkdir(join(source, 'protected'), { recursive: true });
+    await writeFile(join(source, 'protected', 'f.txt'), 'OVERWRITE');
     const localPair = await createTestClientPair([rw, ro], { readOnlyDirs: [nested] });
     try {
       const denied = await localPair.client.callTool({
@@ -418,6 +549,7 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
       assert.ok(failures, JSON.stringify(denied).slice(0, 600));
       assert.strictEqual(failures[0]?.error?.code, 'ACCESS_DENIED');
       assert.match(failures[0]?.error?.message ?? '', /Read-only root/u);
+      assert.equal(await readFile(join(nested, 'f.txt'), 'utf8'), 'PROTECTED');
 
       // A source named differently still copies under the container.
       const other = join(ro, 'other-dir');
