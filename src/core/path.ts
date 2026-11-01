@@ -1218,7 +1218,17 @@ export class PathGuard {
     return resolvedTarget;
   }
 
-  async validatePathForDelete(requestedPath: string): Promise<string> {
+  async validatePathForDelete(
+    requestedPath: string,
+    /**
+     * `allowReadOnly` skips the read-only-dir refusal: for callers that only
+     * read the source (`cp`), a copy OUT of a read-only dir mutates nothing
+     * under it. Everything else — containment, symlink resolution, the
+     * sensitive denylist — still applies, and a caller that removes the
+     * source (rename, cross-device move, delete) keeps the default.
+     */
+    opts?: { allowReadOnly?: boolean },
+  ): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccess(requestedPath);
 
@@ -1276,7 +1286,9 @@ export class PathGuard {
     // not exist to realpath, so the read-only check spells it through the
     // validated real parent — a symlinked ancestor cannot alias its way past.
     if (stats === undefined) {
-      this.assertWritable(join(normalizedRealParent, basename(target)));
+      if (!opts?.allowReadOnly) {
+        this.assertWritable(join(normalizedRealParent, basename(target)));
+      }
       return target;
     }
     // For deletion, we ONLY block if the real target is outside the sandbox
@@ -1290,7 +1302,7 @@ export class PathGuard {
       const link = join(normalizedRealParent, basename(target));
       this.assertNotSensitiveFile(target, requestedPath);
       this.assertNotSensitiveFile(link, requestedPath);
-      this.assertWritable(link);
+      if (!opts?.allowReadOnly) this.assertWritable(link);
       return link;
     }
 
@@ -1308,7 +1320,7 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
     this.assertNotSensitiveFile(realTarget, requestedPath);
-    this.assertWritable(realTarget);
+    if (!opts?.allowReadOnly) this.assertWritable(realTarget);
     return realTarget;
   }
 

@@ -673,8 +673,13 @@ export class GuardedFileSystem {
     options?: Parameters<typeof fsCp>[2],
   ): Promise<void> {
     // As in rename: keep the link itself so callers passing verbatimSymlinks
-    // actually copy the link rather than a dereferenced target.
-    const validSource = await this.pathGuard.validatePathForDelete(source);
+    // actually copy the link rather than a dereferenced target. A copy reads
+    // its source and writes nothing under it, so the source may sit in a
+    // read-only dir; `#moveAcrossDevices` re-validates the source delete
+    // before removing it, so real moves out of a read-only dir stay refused.
+    const validSource = await this.pathGuard.validatePathForDelete(source, {
+      allowReadOnly: true,
+    });
     const validDest = await this.pathGuard.validatePathForWrite(destination);
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.

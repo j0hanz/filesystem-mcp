@@ -37,6 +37,12 @@ table on roots.
   leave the intended root writable.
 - Access grants stay writable unless they land under a read-only dir; the
   same containment check covers them.
+- Copying OUT of a read-only dir is allowed — a copy reads its source and
+  writes nothing under it, and copying a template from a reference tree into
+  the workspace is the motivating use case. `fs.cp` validates its source with
+  `validatePathForDelete(..., { allowReadOnly: true })`; rename and the
+  cross-device move fallback re-validate the source delete without it, so a
+  real move out of a read-only dir stays refused.
 - The global `--read-only` flag is unchanged: it still gates at registration
   time and removes the mutating tools entirely. Mixed mode keeps every tool
   advertised and refuses at call time, so the advertised surface does not

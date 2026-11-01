@@ -334,4 +334,31 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
     });
     assert.strictEqual(restored.isError, true, 'the restored file must be gone');
   });
+
+  it('RO-COPY-001: copy out of the read-only root is allowed; copy into it is refused', async () => {
+    // A copy writes nothing under the source root, so copying a template out
+    // of the read-only tree into the workspace is the #162 use case itself.
+    const out = await pair.client.callTool({
+      name: 'move',
+      arguments: {
+        moves: [{ source: join(ro, 'readme.txt'), destination: join(rw, 'copied.txt') }],
+        copy: true,
+      },
+    });
+    assert.notStrictEqual(out.isError, true, firstTextBlock(out).text ?? '');
+
+    const into = await pair.client.callTool({
+      name: 'move',
+      arguments: {
+        moves: [{ source: join(rw, 'writable.txt'), destination: join(ro, 'staged.txt') }],
+        copy: true,
+      },
+    });
+    assert.strictEqual(into.isError, true);
+    const failures = structuredOf(into)['failures'] as {
+      error?: { code?: string; message?: string };
+    }[];
+    assert.strictEqual(failures[0]?.error?.code, 'ACCESS_DENIED');
+    assert.match(failures[0]?.error?.message ?? '', /Read-only root/u);
+  });
 });
