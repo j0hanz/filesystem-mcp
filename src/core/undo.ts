@@ -624,6 +624,17 @@ export class UndoPreview {
   readonly #children = new Map<string, Set<string>>();
   /** Emulates `UndoJournal.reidentify`: an identity's key to its replacement. */
   readonly #alias = new Map<string, FileIdentity>();
+  /**
+   * An inode's link count as the preview's own unlinks leave it: seeded once
+   * from disk, never re-seeded (a dry run never unlinks for real, so a later
+   * lstat would undo counts the preview already spent). Never delete entries.
+   */
+  readonly #links = new Map<string, bigint>();
+  /**
+   * sha256 an in-place preview write left on that inode: live writes through
+   * one name of a multiply-linked file change what every name sees.
+   */
+  readonly #inPlace = new Map<string, string>();
   #minted = 0;
 
   constructor(fs: GuardedFileSystem, signal?: AbortSignal) {
@@ -646,19 +657,34 @@ export class UndoPreview {
       hash: async (path) => {
         const node = await this.#node(path);
         if (node.kind !== 'file') throw errnoError('EISDIR', 'open', path);
-        return node.hash ?? (await hashFile(this.#fs, node.disk ?? path, this.#signal));
+        return (
+          node.hash ??
+          this.#inPlace.get(identityKey(node.identity)) ??
+          (await hashFile(this.#fs, node.disk ?? path, this.#signal))
+        );
       },
       writeFile: async (path, bytes) => {
         await this.#parentDir(path, 'open');
-        this.#put(previewKey(path), {
-          kind: 'file',
-          identity: this.#mint(),
-          hash: sha256Hex(bytes),
-        });
+        const node = await this.#node(path);
+        const hash = sha256Hex(bytes);
+        if (node.kind === 'file' && this.#linkCount(node.identity) > 1n) {
+          // Live writeFile keeps a multiply-linked inode in place, so every
+          // name sees the new bytes and the identity survives to later records.
+          // The refusal live writeFile makes must fire before any preview state
+          // changes, so a failed dry run leaves the preview untouched.
+          this.#fs.assertNoReadOnlyHardLink(path, {
+            nlink: Number(this.#linkCount(node.identity)),
+          });
+          this.#inPlace.set(identityKey(node.identity), hash);
+          this.#put(previewKey(path), { kind: 'file', identity: node.identity });
+          return;
+        }
+        this.#put(previewKey(path), { kind: 'file', identity: this.#mint(), hash });
       },
-      rm: (path) => {
+      rm: async (path) => {
+        const node = await this.#node(path);
+        if (node.kind === 'file') this.#unlink(node.identity);
         this.#put(previewKey(path), ABSENT);
-        return Promise.resolve();
       },
       rmdir: async (path) => {
         const node = await this.#node(path);
@@ -738,6 +764,16 @@ export class UndoPreview {
   #mint(): FileIdentity {
     this.#minted += 1;
     return { dev: -1n, ino: BigInt(this.#minted), birthtimeNs: 0n };
+  }
+
+  /** A minted file is its inode's only name; every disk-resolved file is seeded. */
+  #linkCount(identity: FileIdentity): bigint {
+    return this.#links.get(identityKey(identity)) ?? 1n;
+  }
+
+  /** A name left its inode: live unlink drops its link count. */
+  #unlink(identity: FileIdentity): void {
+    this.#links.set(identityKey(identity), (this.#links.get(identityKey(identity)) ?? 1n) - 1n);
   }
 
   /**
@@ -885,6 +921,11 @@ export class UndoPreview {
     const { stats, validPath } = at;
     const identity = identityOf(stats);
     const kind = kindOf(stats);
+    // First sight wins: the dry run's disk is frozen, so a later read of the
+    // same inode would re-report the pre-run count the preview already spent.
+    if (kind === 'file' && !this.#links.has(identityKey(identity))) {
+      this.#links.set(identityKey(identity), stats.nlink);
+    }
     const node: PreviewNode =
       kind === 'file'
         ? { kind, identity, disk: validPath }

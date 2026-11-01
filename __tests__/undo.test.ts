@@ -5,7 +5,7 @@ import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import type { Problem } from '../src/core/errors.ts';
+import { ErrorCode, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
@@ -490,6 +490,31 @@ describe('restoreEntry', () => {
 
     assert.deepStrictEqual(outcome.remaining, []);
     assert.strictEqual(await readFile(twin, 'utf8'), 'before');
+    assert.strictEqual((await lstat(file)).nlink, 2);
+  });
+
+  it('a dry run across two hard-linked names previews both steps and writes nothing', async (t) => {
+    const file = join(tmpDir, 'dry-hardlink.txt');
+    const twin = join(tmpDir, 'dry-hardlink-twin.txt');
+    await writeFile(file, 'A');
+    try {
+      await link(file, twin);
+    } catch {
+      return t.skip('hard links not supported here');
+    }
+    const aEntry = await captureOne((fs) => fs.writeFile(file, 'B'));
+    const bEntry = await captureOne((fs) => fs.writeFile(twin, 'C'));
+    assert.strictEqual(await readFile(twin, 'utf8'), 'C');
+
+    const dry = await dryRunAll([bEntry, aEntry]); // newest first, as undo steps: 2
+
+    assert.deepStrictEqual(
+      dry.filter((r) => 'error' in r),
+      [],
+      dry.map((r) => ('error' in r ? r.error.message : 'ok')).join('\n'),
+    );
+    assert.strictEqual(await readFile(file, 'utf8'), 'C');
+    assert.strictEqual(await readFile(twin, 'utf8'), 'C');
     assert.strictEqual((await lstat(file)).nlink, 2);
   });
 
@@ -1506,6 +1531,156 @@ describe('restoreEntry', () => {
       );
       assert.deepStrictEqual(dry, real);
     });
+
+    it('two edits through two hard-linked names preview what the real undo does', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-a.txt');
+      const b = join(tmpDir, 'oracle-hl-b.txt');
+      await writeFile(a, 'A');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.writeFile(a, 'B')),
+        await captureOne((fs) => fs.writeFile(b, 'C')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'A');
+      assert.strictEqual(await readFile(b, 'utf8'), 'A');
+      assert.strictEqual((await lstat(a)).nlink, 2);
+    });
+
+    it('a dry run does not promise a restore the real undo skips', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-rev-a.txt');
+      const b = join(tmpDir, 'oracle-hl-rev-b.txt');
+      await writeFile(a, 'A');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const first = await captureOne((fs) => fs.writeFile(a, 'B'));
+      await writeFile(b, 'C'); // external in-place write through the twin
+      const second = await captureOne((fs) => fs.writeFile(b, 'B'));
+      const { dry, real } = await previewThenUndo([first, second]);
+      // The journal's paths are validated spellings (lowercase drive letter).
+      assert.ok(
+        real.some((r) => r.toLowerCase().endsWith(`${a.toLowerCase()} cancelled`)),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+    });
+
+    it('a dry run does not promise removing a file the real undo refuses to remove', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-rm-a.txt');
+      const b = join(tmpDir, 'oracle-hl-rm-b.txt');
+      const created = await captureOne((fs) => fs.writeFile(a, 'A')); // create: a remove record
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      await writeFile(b, 'B'); // external in-place edit through the twin
+      const edited = await captureOne((fs) => fs.writeFile(b, 'A'));
+      const { dry, real } = await previewThenUndo([created, edited]);
+      // The journal's paths are validated spellings (lowercase drive letter).
+      assert.ok(
+        real.some((r) => r.toLowerCase().endsWith(`${a.toLowerCase()} cancelled`)),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'B'); // live refused the removal
+    });
+
+    it('an edit through the moved name after a move of its hard-linked twin', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-mv-a.txt');
+      const b = join(tmpDir, 'oracle-hl-mv-b.txt');
+      const c = join(tmpDir, 'oracle-hl-mv-c.txt');
+      await writeFile(a, 'v1');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.writeFile(a, 'v2')),
+        await captureOne((fs) => fs.rename(b, c)), // c is still the shared inode
+        await captureOne((fs) => fs.writeFile(c, 'v3')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+      assert.strictEqual(await readFile(b, 'utf8'), 'v1');
+      assert.strictEqual(
+        await lstat(c).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
+      assert.strictEqual((await lstat(a)).nlink, 2);
+    });
+
+    it('a move of one name, then an edit through its twin', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-ia-a.txt');
+      const b = join(tmpDir, 'oracle-hl-ia-b.txt');
+      const c = join(tmpDir, 'oracle-hl-ia-c.txt');
+      await writeFile(a, 'v1');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const { dry, real } = await previewThenUndo([
+        await captureOne((fs) => fs.rename(b, c)),
+        await captureOne((fs) => fs.writeFile(a, 'v2')),
+      ]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+      assert.strictEqual(await readFile(b, 'utf8'), 'v1');
+      assert.strictEqual(
+        await lstat(c).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
+      assert.strictEqual((await lstat(a)).nlink, 2);
+    });
+
+    it('a write after one link was removed previews the fresh-inode restore', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-drop-a.txt');
+      const b = join(tmpDir, 'oracle-hl-drop-b.txt');
+      await writeFile(a, 'v1');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const writeB = await captureOne((fs) => fs.writeFile(b, 'v2')); // in-place capture, both names 'v2'
+      const removeA = await captureOne((fs) => fs.rm(a)); // snapshot bytes 'v2', undo recreates a
+      const { dry, real } = await previewThenUndo([writeB, removeA]);
+      assert.ok(
+        real.every((r) => r.endsWith(' ok')),
+        real.join('\n'),
+      );
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'v2'); // recreated by the newer step
+      assert.strictEqual(await readFile(b, 'utf8'), 'v1'); // reverted, on a fresh inode
+      assert.strictEqual((await lstat(a)).nlink, 1); // a is a fresh inode now
+    });
   });
 
   it('a dry run waits for a writer that holds the path', async () => {
@@ -1555,6 +1730,73 @@ describe('restoreEntry', () => {
       [],
     );
     assert.deepStrictEqual(dry.remaining, []);
+  });
+
+  it('a dry run refuses a write live undo must refuse on a read-only hard link', async (t) => {
+    const rw = await createTestRoot();
+    const ro = await createTestRoot();
+    const server = await createTestServer([rw], { readOnlyDirs: [ro] });
+    try {
+      const file = join(rw, 'ro-linked.txt');
+      const twin = join(ro, 'ro-linked-twin.txt');
+      await writeFile(file, 'A');
+      const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
+      const guarded = new GuardedFileSystem(server.pathGuard, cap);
+      await guarded.writeFile(file, 'B'); // captured while the file is still single-linked
+      assert.strictEqual(cap.unavailableReason(), undefined);
+      try {
+        await link(file, twin);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const entry = { id: 't', tool: 'test', createdAt: Date.now(), records: cap.records };
+
+      const preview = new UndoPreview(new GuardedFileSystem(server.pathGuard));
+      const dry = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+        dryRun: true,
+        preview,
+      });
+      assert.strictEqual(dry.results.filter((r) => !('error' in r)).length, 0);
+      assert.ok(
+        dry.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED),
+        JSON.stringify(dry.results.map((r) => ('error' in r ? r.error.code : 'ok'))),
+      );
+      assert.strictEqual(await readFile(file, 'utf8'), 'B'); // the dry run wrote nothing
+
+      const live = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+        dryRun: false,
+      });
+      assert.ok(live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED));
+      assert.strictEqual(await readFile(file, 'utf8'), 'B');
+    } finally {
+      server.disposeRuntimeState();
+      await server.mcp.close();
+      await cleanupTestRoot(rw);
+      await cleanupTestRoot(ro);
+    }
+  });
+
+  it('a previewed unlink drops the modeled link count for later writes', async (t) => {
+    const a = join(tmpDir, 'direct-world-a.txt');
+    const b = join(tmpDir, 'direct-world-b.txt');
+    await writeFile(a, 'v1');
+    try {
+      await link(a, b);
+    } catch {
+      return t.skip('hard links not supported here');
+    }
+    // The record grammar cannot reach this shape: a remove record exists only
+    // for a file the call created, every hard link to it appears after that
+    // create entry, and undo runs newest-first, so a previewed removal always
+    // runs after every write. The world interface reaches it directly.
+    const world = new UndoPreview(newFs()).world();
+    const inode = await world.identity(a);
+    await world.rm(b); // a successful previewed removal through one name
+    await world.writeFile(a, Buffer.from('v2'), 0o644);
+    // The remaining name must get a fresh identity, as live writeFile does once
+    // the unlink left one name; a missing decrement or a reseed from the
+    // unchanged disk count keeps the inode and fails here.
+    assert.notDeepStrictEqual(await world.identity(a), inode);
   });
 });
 
@@ -1840,6 +2082,46 @@ describe('undo tool', () => {
         'v1',
         'reverting edit, create, then delete puts v1 back',
       );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('dryRun across two hard-linked names previews what the real undo restores', async (t) => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const a = join(tmp, 'linked-a.txt');
+      const b = join(tmp, 'linked-b.txt');
+      await writeFile(a, 'A');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const first = await call(pair.client, 'edit', {
+        path: a,
+        edits: [{ oldText: 'A', newText: 'B' }],
+      });
+      assert.notStrictEqual(first.isError, true);
+      const second = await call(pair.client, 'edit', {
+        path: b,
+        edits: [{ oldText: 'B', newText: 'C' }],
+      });
+      assert.notStrictEqual(second.isError, true);
+
+      const dry = await call(pair.client, 'undo', { steps: 2, dryRun: true });
+      assert.notStrictEqual(dry.isError, true);
+      const dryText = firstTextBlock(dry) ?? '';
+      assert.ok(!dryText.includes('SKIPPED') && !dryText.includes('FAILED'), dryText);
+      assert.strictEqual(await readFile(a, 'utf8'), 'C');
+      assert.strictEqual((await lstat(a)).nlink, 2);
+
+      const undone = await call(pair.client, 'undo', { steps: 2 });
+      assert.notStrictEqual(undone.isError, true);
+      assert.strictEqual(await readFile(a, 'utf8'), 'A');
+      assert.strictEqual(await readFile(b, 'utf8'), 'A');
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
