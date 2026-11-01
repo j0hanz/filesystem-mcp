@@ -6071,9 +6071,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // review flagged; measured 20397 / 9668.
   // Raised 2026-10-28 to 20750 full (read-only unchanged): replace_text
   // gains maxMatches beside the deprecated maxResults alias; measured 20673.
+  // Raised 2026-11-01 to 20900 full and 9900 read-only: list_roots names
+  // readOnlyDirs (#162); measured 20849 / 9863.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_750;
-    const BUDGET_CHARS_READ_ONLY = 9_850;
+    const BUDGET_CHARS = 20_900;
+    const BUDGET_CHARS_READ_ONLY = 9_900;
 
     const full = await createTestClientPair([tmpDir]);
     try {

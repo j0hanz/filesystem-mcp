@@ -26,6 +26,10 @@ const OPTIONS_HELP: HelpRow[] = [
     flags: '--read-only',
     desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')} (env: FS_READ_ONLY)`,
   },
+  {
+    flags: '--read-only-root <dir>',
+    desc: 'Refuse writes, moves, and deletes under this directory; repeatable, any directory including a subtree of a writable root (env: FS_READ_ONLY_DIRS)',
+  },
   { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
     flags: '--log-level <level>',
@@ -114,6 +118,10 @@ const ENV_HELP: HelpRow[] = [
   },
   { flags: 'FS_READ_ONLY', desc: 'Disable write tools ("true" or "1" enables this)' },
   {
+    flags: 'FS_READ_ONLY_DIRS',
+    desc: 'Read-only dirs: colon-separated (Unix), semicolon-separated (Windows); writes, moves, and deletes under them are refused',
+  },
+  {
     flags: 'FS_ALLOWED_HOSTS',
     desc: 'Comma-separated Host header values to accept (HTTP transport)',
   },
@@ -151,6 +159,7 @@ const EXAMPLES_HELP = [
   '$ filesystem-mcp /project/src /project/tests --allow-cwd',
   '$ filesystem-mcp --port 3000 /path/to/allowed/dir',
   '$ filesystem-mcp --read-only /data/readonly',
+  '$ filesystem-mcp --read-only-root /data/refs /workspace',
   '$ filesystem-mcp --print-config /project',
 ];
 

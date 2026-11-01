@@ -9,6 +9,7 @@ import {
   mkdir as fsMkdir,
   open as fsOpen,
   opendir as fsOpendir,
+  readdir as fsReaddir,
   readFile as fsReadFile,
   readlink as fsReadlink,
   rename as fsRename,
@@ -126,6 +127,34 @@ export class GuardedFileSystem {
       );
     }
     return normalizePath(fdPath);
+  }
+
+  #assertNoReadOnlyHardLink(path: string, stats: Stats): void {
+    if (stats.nlink > 1 && this.pathGuard.getReadOnlyDirs().length > 0) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        `Cannot modify multiply-linked file ${path} while read-only directories are configured.`,
+        path,
+      );
+    }
+  }
+
+  async #validateMappedDescendants(source: string, destination: string): Promise<void> {
+    if (!(await fsLstat(source)).isDirectory()) return;
+
+    const pending = [{ source, destination }];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) continue;
+      for (const entry of await fsReaddir(current.source, { withFileTypes: true })) {
+        const sourcePath = join(current.source, entry.name);
+        const destinationPath = join(current.destination, entry.name);
+        await this.pathGuard.validateTransferPathForWrite(destinationPath);
+        if (entry.isDirectory()) {
+          pending.push({ source: sourcePath, destination: destinationPath });
+        }
+      }
+    }
   }
 
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
@@ -272,14 +301,16 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    // Metadata probes read the entry; a link inside a read-only dir stays
+    // stat-able, so its refusal is skipped (reads are allowed there).
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     const stats = await withAbort(fsLstat(validPath), options?.signal);
     return { stats, validPath };
   }
 
   /** As `lstat`, with exact (bigint) fields: what undo identities are built from. */
   async lstatExact(filePath: string): Promise<{ stats: BigIntStats; validPath: string }> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     return { stats: await fsLstat(validPath, { bigint: true }), validPath };
   }
 
@@ -290,7 +321,8 @@ export class GuardedFileSystem {
     // validateExistingPath resolves through the symlink, so readlink would always
     // be handed the final target — a regular file — and fail EINVAL. This guard
     // keeps the link itself while still enforcing containment and the denylist.
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    // The read-only refusal is skipped too: reading a link mutates nothing.
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     const raw = await fsReadlink(validPath, options);
     const linkString = Buffer.isBuffer(raw) ? raw.toString('utf-8') : raw;
     return { linkString, validPath };
@@ -338,6 +370,7 @@ export class GuardedFileSystem {
       return;
     }
     const spellingOnly = kind === 'respelling';
+    await this.#validateMappedDescendants(validOld, validNew);
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;
@@ -401,9 +434,11 @@ export class GuardedFileSystem {
     let inPlace = false;
     // Names of one inode share its bytes, so in-place writes through any of them serialize on this key.
     let inodeKey = '';
+    let existingStats: Stats | undefined;
     let saved: SavedFile | undefined;
     try {
       const existing = await fsStat(validPath);
+      existingStats = existing;
       existingMode = existing.mode & 0o777;
       inPlace = existing.isFile() && existing.nlink > 1;
       inodeKey = `inode:${existing.dev}:${existing.ino}`;
@@ -430,6 +465,7 @@ export class GuardedFileSystem {
         this.#capture?.abandon('could not read the old content');
       }
     }
+    if (existingStats) this.#assertNoReadOnlyHardLink(validPath, existingStats);
     const mode = existingMode ?? options.mode;
 
     if (inPlace) {
@@ -517,6 +553,7 @@ export class GuardedFileSystem {
     try {
       existing = await fsLstat(validPath);
       assertFileStats(validPath, existing);
+      this.#assertNoReadOnlyHardLink(validPath, existing);
     } catch (error) {
       if (!isNotFoundErrno(error)) throw error;
     }
@@ -673,15 +710,28 @@ export class GuardedFileSystem {
     options?: Parameters<typeof fsCp>[2],
   ): Promise<void> {
     // As in rename: keep the link itself so callers passing verbatimSymlinks
-    // actually copy the link rather than a dereferenced target.
-    const validSource = await this.pathGuard.validatePathForDelete(source);
+    // actually copy the link rather than a dereferenced target. A copy reads
+    // its source and writes nothing under it, so the source may sit in a
+    // read-only dir; `#moveAcrossDevices` re-validates the source delete
+    // before removing it, so real moves out of a read-only dir stay refused.
+    const validSource = await this.pathGuard.validatePathForDelete(source, {
+      allowReadOnly: true,
+    });
     const validDest = await this.pathGuard.validatePathForWrite(destination);
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.
     // ponytail: upgrade path is snapshotting destination entries here before
     // fsCp, the way snapshotTree does.
     this.#capture?.abandon('copies are not undoable yet');
-    await fsCp(validSource, validDest, options);
+    const callerFilter = options?.filter;
+    await fsCp(validSource, validDest, {
+      ...options,
+      filter: async (sourcePath, destinationPath) => {
+        if (callerFilter && !(await callerFilter(sourcePath, destinationPath))) return false;
+        await this.pathGuard.validateTransferPathForWrite(destinationPath);
+        return true;
+      },
+    });
   }
 
   /**
@@ -694,6 +744,7 @@ export class GuardedFileSystem {
     // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
+    await this.#validateMappedDescendants(validSource, validDest);
     let copied = false;
     try {
       await this.#copyIntoPlace(validSource, validDest);

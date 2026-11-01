@@ -41,12 +41,27 @@
           "description": "Disable all write, edit, move, and delete tools.",
           "format": "boolean",
           "isRequired": false
+        },
+        {
+          "type": "named",
+          "name": "--read-only-root",
+          "description": "Mark a directory read-only: writes, moves, and deletes under it are refused. Repeat for multiple.",
+          "format": "filepath",
+          "isRequired": false,
+          "isRepeated": true
         }
       ],
       "environmentVariables": [
         {
           "name": "FS_ALLOWED_DIRS",
           "description": "Allowed directories; ':'-separated on Unix, ';'-separated on Windows. Alternative to positional arguments.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "FS_READ_ONLY_DIRS",
+          "description": "Read-only directories; ':'-separated on Unix, ';'-separated on Windows. Writes, moves, and deletes under them are refused.",
           "isRequired": false,
           "isSecret": false,
           "format": "string"
@@ -104,6 +119,13 @@
         {
           "name": "FS_ALLOWED_DIRS",
           "description": "Allowed directories inside the container, ':'-separated. Alternative to positional arguments.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "FS_READ_ONLY_DIRS",
+          "description": "Read-only directories inside the container, ':'-separated. Writes, moves, and deletes under them are refused.",
           "isRequired": false,
           "isSecret": false,
           "format": "string"

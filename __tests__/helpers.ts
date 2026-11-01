@@ -185,7 +185,7 @@ export async function makeGuard(dirs: readonly string[]): Promise<PathGuard> {
 /** Create an MCP server context pointed at the given allowed dirs. */
 export async function createTestServer(
   allowedDirs: string[],
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; readOnlyDirs?: string[] } = {},
 ): Promise<FilesystemServerContext> {
   return createServer({ cliAllowedDirs: allowedDirs, ...options });
 }
@@ -199,7 +199,7 @@ export interface TestClientContext {
 /** Create an in-memory client-server linked pair (zero-mocking direct pairing). */
 export async function createTestClientPair(
   allowedDirs: string[],
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; readOnlyDirs?: string[] } = {},
 ): Promise<TestClientContext> {
   const serverCtx = await createTestServer(allowedDirs, options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
