@@ -210,7 +210,12 @@ export async function parseArgs(): Promise<{
 
     // A read-only dir need not be an allowed root — the guard unions these
     // with FS_READ_ONLY_DIRS and matches by containment, so an out-of-root
-    // entry denies nothing new.
+    // entry denies nothing new. The same shape rules as positional roots
+    // apply: a drive-relative or reserved-name value would silently name a
+    // different directory than the operator meant.
+    for (const raw of v['read-only-root'] ?? []) {
+      validateCliPath(raw);
+    }
     const readOnlyDirs = await normalizeAndValidateDirs(
       v['read-only-root'] ?? [],
       allowMissingRoots,

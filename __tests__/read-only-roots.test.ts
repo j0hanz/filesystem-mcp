@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -113,6 +114,33 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     await guard.recomputeAllowedDirectories();
     assert.equal(guard.isReadOnlyPath(join(subtree, 'file.txt')), true);
     assert.equal(guard.isReadOnlyPath(join(rw, 'other.txt')), false);
+  });
+
+  it('RO-PROJ-001: a missing read-only dir is projected through a symlinked ancestor', async (t) => {
+    const real = join(base, 'proj-real');
+    await mkdir(real);
+    const alias = join(base, 'proj-alias');
+    if (!(await trySymlink(real, alias, () => undefined))) return t.skip('symlink not permitted');
+    // refs does not exist yet; only the alias spelling names where it will be.
+    const guard = new PathGuard({ cliAllowedDirs: [rw], readOnlyDirs: [join(alias, 'refs')] });
+    await guard.recomputeAllowedDirectories();
+    assert.equal(guard.isReadOnlyPath(join(real, 'refs', 'x.txt')), true);
+    assert.equal(guard.isReadOnlyPath(join(alias, 'refs', 'x.txt')), true);
+  });
+
+  it('RO-PARENT-001: refuses deleting a directory that contains a read-only dir', async () => {
+    const parent = join(rw, 'parent');
+    const subtree = join(parent, 'protected');
+    await mkdir(subtree, { recursive: true });
+    const guard = await guardFor([subtree]);
+    await assert.rejects(guard.validatePathForDelete(parent), (error: unknown) => {
+      assertReadOnlyDenied(error, subtree);
+      return true;
+    });
+    // A copy reads its source without removing it, so the parent stays readable.
+    await guard.validatePathForDelete(parent, { allowReadOnly: true });
+    // A file beside the subtree is unaffected: the check is dir-scoped.
+    await guard.validatePathForDelete(join(parent, 'plain.txt'));
   });
 
   // Both roots allowed, one read-only: the shape issue #162 asks for. Without
@@ -360,5 +388,71 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
     }[];
     assert.strictEqual(failures[0]?.error?.code, 'ACCESS_DENIED');
     assert.match(failures[0]?.error?.message ?? '', /Read-only root/u);
+  });
+
+  it('RO-INT-006: a recursive copy cannot land onto a read-only dir through a container destination', async () => {
+    // The container destination is writable, but fsCp's into-dir semantics
+    // would land the copy on the read-only dir named after the source.
+    const container = join(rw, 'dest');
+    const nested = join(container, 'refs-dir');
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, 'f.txt'), 'PROTECTED');
+    const source = join(ro, 'refs-dir');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, 'g.txt'), 'G');
+    const localPair = await createTestClientPair([rw, ro], { readOnlyDirs: [nested] });
+    try {
+      const denied = await localPair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [{ source, destination: container }],
+          copy: true,
+          overwrite: true,
+        },
+      });
+      assert.strictEqual(denied.isError, true);
+      const meta = (denied.structuredContent ?? denied._meta) as Record<string, unknown>;
+      const failures = meta['failures'] as {
+        error?: { code?: string; message?: string };
+      }[];
+      assert.ok(failures, JSON.stringify(denied).slice(0, 600));
+      assert.strictEqual(failures[0]?.error?.code, 'ACCESS_DENIED');
+      assert.match(failures[0]?.error?.message ?? '', /Read-only root/u);
+
+      // A source named differently still copies under the container.
+      const other = join(ro, 'other-dir');
+      await mkdir(other, { recursive: true });
+      const fine = await localPair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [{ source: other, destination: join(container, 'other-dir') }],
+          copy: true,
+        },
+      });
+      assert.notStrictEqual(fine.isError, true, firstTextBlock(fine).text ?? '');
+    } finally {
+      await localPair.close();
+    }
+  });
+
+  it('RO-STAT-001: stat on a symlink inside the read-only root reports its target', async (t) => {
+    const target = join(rw, 'link-target.txt');
+    await writeFile(target, 'T');
+    const link = join(ro, 'to-rw.txt');
+    if (!(await trySymlink(target, link, () => undefined, 'file'))) {
+      return t.skip('symlink not permitted');
+    }
+    const result = await pair.client.callTool({ name: 'stat', arguments: { path: link } });
+    assert.notStrictEqual(
+      result.isError,
+      true,
+      `${String(existsSync(link))}: ${JSON.stringify(result).slice(0, 600)}`,
+    );
+    const value = structuredOf(result) as {
+      results?: { value?: { type?: string; symlinkTarget?: string } }[];
+    };
+    const entry = value.results?.[0]?.value;
+    assert.equal(entry?.type, 'symlink', JSON.stringify(value));
+    assert.equal(typeof entry?.symlinkTarget, 'string', JSON.stringify(value));
   });
 });

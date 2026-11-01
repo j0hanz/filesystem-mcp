@@ -272,14 +272,16 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    // Metadata probes read the entry; a link inside a read-only dir stays
+    // stat-able, so its refusal is skipped (reads are allowed there).
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     const stats = await withAbort(fsLstat(validPath), options?.signal);
     return { stats, validPath };
   }
 
   /** As `lstat`, with exact (bigint) fields: what undo identities are built from. */
   async lstatExact(filePath: string): Promise<{ stats: BigIntStats; validPath: string }> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     return { stats: await fsLstat(validPath, { bigint: true }), validPath };
   }
 
@@ -290,7 +292,8 @@ export class GuardedFileSystem {
     // validateExistingPath resolves through the symlink, so readlink would always
     // be handed the final target — a regular file — and fail EINVAL. This guard
     // keeps the link itself while still enforcing containment and the denylist.
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    // The read-only refusal is skipped too: reading a link mutates nothing.
+    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
     const raw = await fsReadlink(validPath, options);
     const linkString = Buffer.isBuffer(raw) ? raw.toString('utf-8') : raw;
     return { linkString, validPath };
@@ -681,6 +684,19 @@ export class GuardedFileSystem {
       allowReadOnly: true,
     });
     const validDest = await this.pathGuard.validatePathForWrite(destination);
+    // fsCp's into-dir semantics write deeper than the validated destination:
+    // copying `refs` onto an existing directory lands at `dest/refs`, which
+    // may sit inside a read-only dir the container itself is not in. Validate
+    // the effective landing, so the tree the copy overwrites is judged.
+    let destStats: Stats | undefined;
+    try {
+      destStats = await fsStat(validDest);
+    } catch {
+      // Missing destination: the copy creates it, no container to land inside.
+    }
+    if (destStats?.isDirectory()) {
+      await this.pathGuard.validatePathForWrite(join(validDest, basename(validSource)));
+    }
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.
     // ponytail: upgrade path is snapshotting destination entries here before

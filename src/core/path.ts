@@ -1320,7 +1320,23 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
     this.assertNotSensitiveFile(realTarget, requestedPath);
-    if (!opts?.allowReadOnly) this.assertWritable(realTarget);
+    if (!opts?.allowReadOnly) {
+      this.assertWritable(realTarget);
+      // Deleting a directory removes every read-only dir inside it without any
+      // single path landing in one; the same goes for moving it (a move is a
+      // delete of its source). Dir-scoped: a plain file beside a read-only
+      // subtree is unaffected.
+      if (stats.isDirectory()) {
+        const inside = this.readOnlySpellings.find((dir) => isPathInsideDirectory(realTarget, dir));
+        if (inside !== undefined) {
+          throw new FsError(
+            ErrorCode.ACCESS_DENIED,
+            `Read-only root inside: ${realTarget} contains ${inside} (--read-only-root / FS_READ_ONLY_DIRS). Deletes and moves of a parent directory are refused there.`,
+            requestedPath,
+          );
+        }
+      }
+    }
     return realTarget;
   }
 
@@ -1430,7 +1446,17 @@ export class PathGuard {
     const cliReadOnlyDirs = this.options?.readOnlyDirs ?? [];
     const envReadOnlyDirs = await resolveConfiguredDirs('FS_READ_ONLY_DIRS', { allowMissing });
     const readOnlyCombined = normalizeAllowedDirectories([...cliReadOnlyDirs, ...envReadOnlyDirs]);
-    const readOnlySpellings = await resolveAllowedDirectoriesState(readOnlyCombined, signal);
+    const readOnlySpellings = new Set(
+      await resolveAllowedDirectoriesState(readOnlyCombined, signal),
+    );
+    // A missing read-only dir keeps only its configured spelling unless it is
+    // projected through its nearest existing ancestor, the way roots are
+    // (`projectRealPath`): with `/alias -> /workspace`, the configured
+    // `/alias/refs` must also cover the `/workspace/refs` a write resolves to.
+    for (const readOnlyDir of readOnlyCombined) {
+      const projected = await projectRealPath(readOnlyDir, signal);
+      if (projected !== undefined) readOnlySpellings.add(projected);
+    }
     // A read-only dir that is not an allowed root, inside one, or containing
     // one denies nothing: every path it could refuse is already out of root.
     // That is almost always a typo — warn, so the root the operator meant
@@ -1459,7 +1485,7 @@ export class PathGuard {
     // consistent view intact.
     this.rootBoundaries = boundaries;
     this.readOnlyDirsState = readOnlyCombined;
-    this.readOnlySpellings = readOnlySpellings;
+    this.readOnlySpellings = [...readOnlySpellings];
     this.initialize(nextState, combined, bases);
   }
 }

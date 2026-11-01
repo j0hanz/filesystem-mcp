@@ -68,10 +68,9 @@
       "required": false
     },
     "read_only_dirs": {
-      "type": "directory",
+      "type": "string",
       "title": "Read-only directories",
-      "description": "Directories the AI may read but never change. Writes, moves, and deletes under them are refused.",
-      "multiple": true,
+      "description": "Directories the AI may read but never change, `:`-separated on macOS and Linux, `;`-separated on Windows. Writes, moves, and deletes under them are refused. The directories must also be allowed; this setting grants no access.",
       "default": "",
       "required": false
     },

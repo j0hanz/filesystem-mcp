@@ -317,4 +317,10 @@ describe('CLI (real subprocess)', () => {
     const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
     assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(refs)]);
   });
+
+  it('CLI-RO-006: rejects a drive-relative --read-only-root value', async () => {
+    const { code, stderr } = await runCli(['--print-config', '--read-only-root', 'C:refs', root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /drive-relative|Windows-style/u);
+  });
 });
