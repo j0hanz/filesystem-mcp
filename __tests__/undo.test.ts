@@ -1638,6 +1638,25 @@ describe('restoreEntry', () => {
       assert.strictEqual(await lstat(c).then(() => true, () => false), false);
       assert.strictEqual((await lstat(a)).nlink, 2);
     });
+
+    it('a write after one link was removed previews the fresh-inode restore', async (t) => {
+      const a = join(tmpDir, 'oracle-hl-drop-a.txt');
+      const b = join(tmpDir, 'oracle-hl-drop-b.txt');
+      await writeFile(a, 'v1');
+      try {
+        await link(a, b);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const writeB = await captureOne((fs) => fs.writeFile(b, 'v2')); // in-place capture, both names 'v2'
+      const removeA = await captureOne((fs) => fs.rm(a)); // snapshot bytes 'v2', undo recreates a
+      const { dry, real } = await previewThenUndo([writeB, removeA]);
+      assert.ok(real.every((r) => r.endsWith(' ok')), real.join('\n'));
+      assert.deepStrictEqual(dry, real);
+      assert.strictEqual(await readFile(a, 'utf8'), 'v2'); // recreated by the newer step
+      assert.strictEqual(await readFile(b, 'utf8'), 'v1'); // reverted, on a fresh inode
+      assert.strictEqual((await lstat(a)).nlink, 1); // a is a fresh inode now
+    });
   });
 
   it('a dry run waits for a writer that holds the path', async () => {
