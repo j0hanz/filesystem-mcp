@@ -5,15 +5,15 @@ import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { Logger } from '../src/core/observability.ts';
-import { PathGuard } from '../src/core/path.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
+import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
-  trySymlink,
   type TestClientContext,
+  trySymlink,
 } from './helpers.ts';
 
 // Per-root read-only (#162): PathGuard holds a configured list of read-only
@@ -147,10 +147,13 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
   it('RO-DEL-001: refuses a delete under a read-only dir', async () => {
     await writeFile(join(ro, 'existing.txt'), 'x');
     const guard = await guardFor([ro]);
-    await assert.rejects(guard.validatePathForDelete(join(ro, 'existing.txt')), (error: unknown) => {
-      assertReadOnlyDenied(error, ro);
-      return true;
-    });
+    await assert.rejects(
+      guard.validatePathForDelete(join(ro, 'existing.txt')),
+      (error: unknown) => {
+        assertReadOnlyDenied(error, ro);
+        return true;
+      },
+    );
   });
 
   it('RO-DEL-002: refuses a delete of a missing file under a read-only dir', async () => {
@@ -224,9 +227,10 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
   let ro: string;
   let pair: TestClientContext;
 
-  const structuredOf = (
-    result: { structuredContent?: unknown; _meta?: unknown },
-  ): Record<string, unknown> => {
+  const structuredOf = (result: {
+    structuredContent?: unknown;
+    _meta?: unknown;
+  }): Record<string, unknown> => {
     const value = result.structuredContent ?? result._meta;
     assert.ok(value, 'tool must publish structured metadata');
     return value as Record<string, unknown>;

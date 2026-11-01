@@ -4,7 +4,7 @@
 
 **Goal:** Let one server instance mark specific directories read-only (`--read-only-root`, `FS_READ_ONLY_DIRS`) while other roots stay writable, refusing writes/moves/deletes under them at call time (issue #162).
 
-**Architecture:** The mode is a plain containment check, not a per-root table: PathGuard holds a list of read-only directories (all spellings, realpath aliases included) and denies any *resolved* write/delete path inside one. Enforcement lives in the three existing validation chokepoints (`validatePathForWrite`, `validatePathForDelete`); reads never check it. The global `--read-only` flag keeps its registration-time tool gate unchanged.
+**Architecture:** The mode is a plain containment check, not a per-root table: PathGuard holds a list of read-only directories (all spellings, realpath aliases included) and denies any _resolved_ write/delete path inside one. Enforcement lives in the three existing validation chokepoints (`validatePathForWrite`, `validatePathForDelete`); reads never check it. The global `--read-only` flag keeps its registration-time tool gate unchanged.
 
 **Tech Stack:** TypeScript 7 (native), Node 24 test runner, Zod 4, existing MCP SDK. No new dependencies.
 
@@ -27,7 +27,7 @@ Inputs the issue implies but no task's happy path covers — each line is pinned
 1. **Symlink alias:** a link in a writable root pointing into a read-only dir — edit through it denied (resolved-path check), read through it allowed, deleting the link itself allowed. → `RO-LINK-001` (Task 2).
 2. **Move, every direction:** ro→rw, rw→ro, ro→ro all refused (the source side is a delete); rw→rw unaffected. → `RO-INT-003` (Task 4).
 3. **Reads unaffected:** list/read/search_text/stat under a read-only root keep working — read-only means read-only, not invisible. → `RO-INT-002` (Task 4).
-4. **Nested subtree:** a read-only dir *inside* a writable root denies writes under it while sibling writes succeed. → `RO-NEST-001` (Task 2).
+4. **Nested subtree:** a read-only dir _inside_ a writable root denies writes under it while sibling writes succeed. → `RO-NEST-001` (Task 2).
 5. **Operator typo:** a read-only dir matching no allowed root warns (footgun: the root they meant stays writable) but changes nothing else. → `RO-STATE-005` (Task 1).
 
 ---
@@ -35,10 +35,12 @@ Inputs the issue implies but no task's happy path covers — each line is pinned
 ### Task 1: PathGuard read-only state
 
 **Files:**
+
 - Modify: `src/core/path.ts` (ServerOptions ~:106, PathGuard fields ~:227-260, `recomputeAllowedDirectories` :1308-1372)
 - Test: `__tests__/read-only-roots.test.ts` (new)
 
 **Interfaces:**
+
 - Produces: `ServerOptions.readOnlyDirs?: string[]`; `PathGuard.getReadOnlyDirs(): string[]` (normalized configured dirs, deduped); `PathGuard.isReadOnlyPath(normalizedPath: string): boolean`. Task 2 consumes `isReadOnlyPath`; Task 3 feeds `readOnlyDirs`.
 - Consumes: existing `resolveConfiguredDirs`, `resolveAllowedDirectoriesState`, `normalizeAllowedDirectories`, `isPathWithinDirectories`, `isPathInsideDirectory`, `isSamePath`, `Logger` — all already imported or local in `path.ts`.
 
@@ -107,10 +109,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 2: Deny writes and deletes under read-only dirs
 
 **Files:**
+
 - Modify: `src/core/path.ts` (`validatePathForWrite` :1124-1170, `validatePathForDelete` :1172-1257)
 - Test: `__tests__/read-only-roots.test.ts`
 
 **Interfaces:**
+
 - Consumes: `isReadOnlyPath` from Task 1.
 - Produces: denial behavior every mutating tool inherits (`create`, `edit`, `patch`, `replace_text`, `move`, `delete`, `undo` restore) because `src/core/fs.ts` funnels every mutation through these validators. Error copy is fixed below — later surfaces quote it.
 
@@ -159,7 +163,8 @@ private assertWritable(path: string): void {
 }
 ```
 
-Call sites — always on a *resolved* spelling, never the raw request:
+Call sites — always on a _resolved_ spelling, never the raw request:
+
 1. `validatePathForWrite`: `this.assertWritable(resolvedTarget);` immediately before `return resolvedTarget;` (after the sensitive-file check).
 2. `validatePathForDelete`, missing-target branch: `this.assertWritable(join(normalizedRealParent, basename(target)));` before `return target;` — the target does not exist to realpath, so spell it through the validated real parent, closing the symlinked-ancestor alias hole.
 3. `validatePathForDelete`, symlink branch: `this.assertWritable(link);` before `return link;`.
@@ -184,12 +189,14 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 3: CLI flag, startup log, print-config, manifests, help
 
 **Files:**
+
 - Modify: `src/cli.ts` (`CLI_PARSER_CONFIG` :125-147, `parseArgs` :149-228, `runPrintConfig` :234-288)
 - Modify: `src/index.ts` (:87-102), `src/cli-help.ts` (:26, :153)
 - Modify: `server.json` (packageArguments :22-45, environmentVariables :46-54), `mcpb/manifest.json` (:20-27, :54-76)
 - Test: `__tests__/cli.test.ts` (extend)
 
 **Interfaces:**
+
 - Consumes: `ServerOptions.readOnlyDirs` (Task 1), `PathGuard.getReadOnlyDirs()` (Task 1).
 - Produces: `parseArgs()` return gains `readOnlyDirs: string[]`; `--read-only-root <dir>` repeatable flag; `FS_READ_ONLY_DIRS` env (':' Unix / ';' Windows list, like `FS_ALLOWED_DIRS`); `--print-config` JSON gains `readOnlyDirs: string[]`.
 
@@ -223,7 +230,8 @@ if (readOnlyDirs.length > 0) {
 }
 ```
 
-  and add `readOnlyDirs` to `serverOptions`.
+and add `readOnlyDirs` to `serverOptions`.
+
 - `runPrintConfig`: pass `readOnlyDirs` into its `PathGuard`, and add `readOnlyDirs: pathGuard.getReadOnlyDirs(),` right after `readOnly` in the JSON — the guard recompute already ran there, so env-sourced dirs appear too.
 - `cli-help.ts`: add a `--read-only-root <dir>` row next to `--read-only` (flag, env var, repeatable, containment semantics: applies to any directory, including subtrees of writable roots), and extend the `--read-only` example to show mixed mode (`filesystem-mcp --read-only-root /data/refs /workspace`).
 - `server.json`: packageArguments gains `{"type": "named", "name": "--read-only-root", "description": "Mark a directory read-only: writes, moves, and deletes under it are refused. Repeat for multiple.", "format": "filepath", "isRequired": false, "isRepeated": true}` after `--read-only`; environmentVariables gains an `FS_READ_ONLY_DIRS` entry mirroring the `FS_ALLOWED_DIRS` copy with the separator note. **Do not touch any version field.**
@@ -246,11 +254,13 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 4: list_roots surface, end-to-end enforcement, contract snapshot
 
 **Files:**
+
 - Modify: `src/tools/list-roots.ts`, `__tests__/helpers.ts` (:186-191, :199-204)
 - Test: `__tests__/read-only-roots.test.ts` (extend)
 - Regenerate: `__tests__/contract.test.ts.snapshot`
 
 **Interfaces:**
+
 - Consumes: `getReadOnlyDirs()` (Task 1); denial behavior (Task 2); `readOnlyDirs` option (Task 3).
 - Produces: `RootsOutput` gains `readOnlyDirs: string[]` (always present, `[]` when none); `createTestServer`/`createTestClientPair` options gain `readOnlyDirs?: string[]` (the spread already forwards into `createServer`).
 
@@ -305,6 +315,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 5: Docs, ADR, full check
 
 **Files:**
+
 - Modify: `README.md` (read-only section), `docs/configuration.md`
 - Create: `docs/adr/010-per-root-read-only.md`
 

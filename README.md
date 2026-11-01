@@ -67,6 +67,7 @@ checked against its README on 2026-10-11:
 | Delete files              | `delete`; asks before deleting a non-empty folder  | None                                    |
 | `.gitignore`              | Respected by listing and search tools              | Not supported                           |
 | Read-only mode            | `--read-only` removes every tool that writes       | Docker `ro` mounts only                 |
+| Per-folder read-only      | `--read-only-root` guards chosen folders           | Docker `ro` mounts only                 |
 | Apply a unified diff      | `patch`                                            | None                                    |
 | Compare two files         | `diff`                                             | None                                    |
 | Replace across many files | `replace_text` over a folder or glob               | None                                    |
@@ -273,7 +274,11 @@ npm install -g @j0hanz/filesystem-mcp
 | `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                           |
 | `undo` ✎         | Reverts earlier changes by undo id or the last N calls, while the server runs. Skips files changed since.     |
 
-✎ changes files. `--read-only` removes these tools.
+✎ changes files. `--read-only` removes these tools. To refuse changes under
+one folder while the rest stay writable, pass `--read-only-root <dir>`
+(repeatable, or `FS_READ_ONLY_DIRS`): those tools still exist, but a call
+that writes, moves, or deletes under the folder fails with
+`Read-only root: ...`, while listing, searching, and reading keep working.
 
 Search and listing tools skip hidden files, `.gitignore`d files, and folders
 like `node_modules`, `dist`, and `.git` unless the AI asks for them.
@@ -283,15 +288,16 @@ like `node_modules`, `dist`, and `.git` unless the AI asks for them.
 Most people only need the folder argument. These options cover the common
 cases:
 
-| Option                | What it does                                                                 |
-| :-------------------- | :--------------------------------------------------------------------------- |
-| `--read-only`         | Removes every tool that changes files.                                       |
-| `--deny '<pattern>'`  | Blocks more files, for example `--deny 'private/**'` or `--deny '*.sqlite'`. |
-| `--allow '<pattern>'` | Unblocks one built-in secret pattern, for example `--allow '.env.example'`.  |
-| `--allow-cwd`         | Also allows the folder the server was started from.                          |
-| `--max-file-size <n>` | Largest file `read` will load, in bytes. Default 10 MiB.                     |
-| `--port <n>`          | Serves over HTTP at `http://127.0.0.1:<n>/mcp` instead of stdio.             |
-| `--print-config`      | Prints the settings the server would use, then exits.                        |
+| Option                   | What it does                                                                            |
+| :----------------------- | :-------------------------------------------------------------------------------------- |
+| `--read-only`            | Removes every tool that changes files.                                                  |
+| `--read-only-root <dir>` | Refuses writes, moves, and deletes under this folder, which stays readable. Repeatable. |
+| `--deny '<pattern>'`     | Blocks more files, for example `--deny 'private/**'` or `--deny '*.sqlite'`.            |
+| `--allow '<pattern>'`    | Unblocks one built-in secret pattern, for example `--allow '.env.example'`.             |
+| `--allow-cwd`            | Also allows the folder the server was started from.                                     |
+| `--max-file-size <n>`    | Largest file `read` will load, in bytes. Default 10 MiB.                                |
+| `--port <n>`             | Serves over HTTP at `http://127.0.0.1:<n>/mcp` instead of stdio.                        |
+| `--print-config`         | Prints the settings the server would use, then exits.                                   |
 
 Flags go in `args` after the package name, for example
 `["-y", "@j0hanz/filesystem-mcp@latest", "--read-only", "/path/to/project"]`.

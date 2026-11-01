@@ -132,7 +132,10 @@ async function lifecycle(client: Client, root: string, outside: string) {
     assert.equal(tool.inputSchema.type, 'object', `${tool.name} accepts object arguments`);
     assert.equal(tool.annotations?.readOnlyHint, READ_ONLY_NAMES.includes(tool.name));
   }
-  assert.deepEqual(metadata(await call(client, 'list_roots', {})), { roots: [root], readOnlyDirs: [] });
+  assert.deepEqual(metadata(await call(client, 'list_roots', {})), {
+    roots: [root],
+    readOnlyDirs: [],
+  });
 
   const path = join(root, 'project', 'notes.txt');
   const target = join(root, 'project', 'target.txt');
@@ -342,7 +345,10 @@ async function lifecycle(client: Client, root: string, outside: string) {
   }
   await assertBytes(outside, 'synthetic outside sentinel\n');
   await assertBytes(sensitive, 'synthetic sensitive sentinel\n');
-  assert.deepEqual(metadata(await call(client, 'list_roots', {})), { roots: [root], readOnlyDirs: [] });
+  assert.deepEqual(metadata(await call(client, 'list_roots', {})), {
+    roots: [root],
+    readOnlyDirs: [],
+  });
 }
 
 async function stress(client: Client, root: string) {

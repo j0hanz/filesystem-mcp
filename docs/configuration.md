@@ -119,6 +119,23 @@ Set `FS_READ_ONLY=true` to do the same from the environment, for example in a cl
 For the strongest setup in Docker, combine it with a read-only mount
 (`-v /path:/workspace:ro`), so the operating system also refuses writes.
 
+### Read-only folders
+
+`--read-only` is all or nothing. To let the AI write to one folder while
+another stays read-only, pass `--read-only-root <dir>`, repeatable, or set
+`FS_READ_ONLY_DIRS` (`:`-separated on macOS and Linux, `;` on Windows):
+
+```bash
+filesystem-mcp --read-only-root /data/refs /workspace
+```
+
+Writes, moves, and deletes under a read-only folder are refused with
+`Read-only root: ...`; listing, searching, and reading still work. The folder
+can be any directory, including a subtree of a writable one. All tools stay
+available — only calls that touch a read-only folder fail — and `list_roots`
+reports the read-only folders in `readOnlyDirs`. Directories a user grants
+during the session are writable unless they sit under a read-only folder.
+
 ## Command-line flags
 
 When a flag and its environment variable are both set, the flag wins, with two
@@ -135,6 +152,7 @@ exceptions:
 | :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
 | `[folders...]`            |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
 | `--read-only`             | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
+| `--read-only-root <dir>`  |             | Refuse writes, moves, and deletes under this folder. Repeatable. Env: `FS_READ_ONLY_DIRS`.                                       |
 | `--deny <pattern>`        |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
 | `--allow <pattern>`       |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
 | `--allow-sensitive`       | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
@@ -159,16 +177,17 @@ to turn off. Any other value logs a warning and counts as off.
 
 These variables control folders and access:
 
-| Variable                 | What it does                                                              |
-| :----------------------- | :------------------------------------------------------------------------ |
-| `FS_ALLOWED_DIRS`        | Allowed folders, `:`-separated (macOS, Linux) or `;`-separated (Windows). |
-| `FS_ALLOW_CWD_WALK`      | Same as `--walk-cwd`.                                                     |
-| `FS_ALLOW_MISSING_ROOTS` | Same as `--allow-missing-roots`.                                          |
-| `FS_ROOT_BOUNDARY`       | Same as `--root-boundary`.                                                |
-| `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.          |
-| `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.   |
-| `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                              |
-| `FS_READ_ONLY`           | Same as `--read-only`.                                                    |
+| Variable                 | What it does                                                                                                  |
+| :----------------------- | :------------------------------------------------------------------------------------------------------------ |
+| `FS_ALLOWED_DIRS`        | Allowed folders, `:`-separated (macOS, Linux) or `;`-separated (Windows).                                     |
+| `FS_ALLOW_CWD_WALK`      | Same as `--walk-cwd`.                                                                                         |
+| `FS_ALLOW_MISSING_ROOTS` | Same as `--allow-missing-roots`.                                                                              |
+| `FS_ROOT_BOUNDARY`       | Same as `--root-boundary`.                                                                                    |
+| `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.                                              |
+| `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.                                       |
+| `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                                                                  |
+| `FS_READ_ONLY`           | Same as `--read-only`.                                                                                        |
+| `FS_READ_ONLY_DIRS`      | Read-only folders, `:`-separated (macOS, Linux) or `;`-separated (Windows). Combined with `--read-only-root`. |
 
 These variables control limits and logging:
 
