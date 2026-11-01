@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-11-01
+
+A feature release. Read-only roots let one folder stay readable while the rest
+of a root stays writable, and `list_roots` reports them. The dry-run preview
+of `undo` now matches the live run for hard-linked files. Nothing in this
+release requires action when upgrading: read-only roots are opt-in. Under
+Fixed: an `undo` dry run over a hard-linked file under a read-only directory
+now fails with `ACCESS_DENIED`, as the live undo already did.
+
+### Added
+
+- **Per-root read-only mode.** `--read-only-root <dir>` (repeatable) or `FS_READ_ONLY_DIRS` (`:`-separated on macOS and Linux, `;` on Windows) marks a folder, including a subtree of a writable root, as read-only. Writes, moves, and deletes under it are refused, and the folder stays readable. Copying out of it is allowed; moving out of it, deleting a parent that contains one, and copying onto one are refused. The mcpb bundle takes the list as a delimited string setting.
+- **`list_roots` reports read-only directories.** The result carries `readOnlyDirs`, and the tool description now says so.
+
+### Fixed
+
+- **The `undo` dry run models hard links by shared inode.** The preview treated each path as its own file, so a previewed write through one hard-linked name was invisible at the other names and minted an identity the live undo keeps. In-place writes now keep the identity, as the live run does. (#156)
+- **The `undo` dry run previews the read-only hard-link refusal.** A multiply-linked file under read-only directories now reports `ACCESS_DENIED` in the preview, matching the live undo.
+
 ## [2.13.0] - 2026-10-29
 
 A correctness release. Path containment and NTFS stream paths close two
