@@ -955,6 +955,27 @@ export class PathGuard {
     return this.getAllowedDirectories().some((dir) => isSamePath(dir, normalizedPath));
   }
 
+  /**
+   * Refuse a mutation of a path inside a configured read-only directory
+   * (--read-only-root / FS_READ_ONLY_DIRS). Called on a RESOLVED spelling
+   * only, never the raw request, so a symlink in a writable root cannot
+   * smuggle a write into a read-only one. Throws from
+   * `validatePathForDelete` are swallowed where it serves as a probe
+   * (`resolveTransferDestination`'s `.catch(() => undefined)`,
+   * `entryLockKey`) — by design; the write-side validation still denies
+   * those calls.
+   */
+  private assertWritable(path: string): void {
+    const normalized = normalizePath(path);
+    if (!this.isReadOnlyPath(normalized)) return;
+    const ro = this.readOnlySpellings.find((dir) => isPathInsideDirectory(dir, normalized));
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `Read-only root: ${path} is inside ${ro ?? 'a read-only root'} (--read-only-root / FS_READ_ONLY_DIRS). Writes, moves, and deletes are refused there.`,
+      path,
+    );
+  }
+
   // Checks ONLY the sensitive-file denylist. Root containment and symlink
   // resolution must be verified separately (e.g. via validateExistingPath).
   private assertNotSensitiveFile(checkPath: string, requestedPath: string): void {
@@ -1193,6 +1214,7 @@ export class PathGuard {
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.
     this.assertNotSensitiveFile(resolvedTarget, requestedPath);
+    this.assertWritable(resolvedTarget);
     return resolvedTarget;
   }
 
@@ -1250,8 +1272,13 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
-    // A target that does not exist needs only the parent check above.
-    if (stats === undefined) return target;
+    // A target that does not exist needs only the parent check above. It does
+    // not exist to realpath, so the read-only check spells it through the
+    // validated real parent — a symlinked ancestor cannot alias its way past.
+    if (stats === undefined) {
+      this.assertWritable(join(normalizedRealParent, basename(target)));
+      return target;
+    }
     // For deletion, we ONLY block if the real target is outside the sandbox
     // IF the target is NOT a symlink. Deleting a symlink is safe even if it
     // points outside.
@@ -1263,6 +1290,7 @@ export class PathGuard {
       const link = join(normalizedRealParent, basename(target));
       this.assertNotSensitiveFile(target, requestedPath);
       this.assertNotSensitiveFile(link, requestedPath);
+      this.assertWritable(link);
       return link;
     }
 
@@ -1280,6 +1308,7 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
     this.assertNotSensitiveFile(realTarget, requestedPath);
+    this.assertWritable(realTarget);
     return realTarget;
   }
 

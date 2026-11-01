@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { Logger } from '../src/core/observability.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -100,10 +101,110 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
 
   it('RO-STATE-006: a read-only subtree inside a writable root', async () => {
     const subtree = join(rw, 'protected');
-    await mkdir(subtree);
+    await mkdir(subtree, { recursive: true });
     const guard = new PathGuard({ cliAllowedDirs: [rw], readOnlyDirs: [subtree] });
     await guard.recomputeAllowedDirectories();
     assert.equal(guard.isReadOnlyPath(join(subtree, 'file.txt')), true);
     assert.equal(guard.isReadOnlyPath(join(rw, 'other.txt')), false);
   });
+
+  // Both roots allowed, one read-only: the shape issue #162 asks for. Without
+  // ro inside the allowed set, out-of-root ACCESS_DENIED would mask the
+  // read-only check these tests pin.
+  const guardFor = async (readOnlyDirs: string[]): Promise<PathGuard> => {
+    const guard = new PathGuard({ cliAllowedDirs: [rw, ro], readOnlyDirs });
+    await guard.recomputeAllowedDirectories();
+    return guard;
+  };
+
+  const assertReadOnlyDenied = (error: unknown, dir: string): void => {
+    assert.ok(isFsError(error), String(error));
+    assert.equal(error.code, ErrorCode.ACCESS_DENIED);
+    assert.match(error.message, /Read-only root/u);
+    assert.ok(error.message.includes(normalizePath(dir)), error.message);
+  };
+
+  it('RO-WRITE-001: refuses a write under a read-only dir', async () => {
+    const guard = await guardFor([ro]);
+    await assert.rejects(guard.validatePathForWrite(join(ro, 'new.txt')), (error: unknown) => {
+      assertReadOnlyDenied(error, ro);
+      return true;
+    });
+  });
+
+  it('RO-WRITE-002: a write under the writable root is unaffected', async () => {
+    const guard = await guardFor([ro]);
+    await guard.validatePathForWrite(join(rw, 'new.txt'));
+  });
+
+  it('RO-DEL-001: refuses a delete under a read-only dir', async () => {
+    await writeFile(join(ro, 'existing.txt'), 'x');
+    const guard = await guardFor([ro]);
+    await assert.rejects(guard.validatePathForDelete(join(ro, 'existing.txt')), (error: unknown) => {
+      assertReadOnlyDenied(error, ro);
+      return true;
+    });
+  });
+
+  it('RO-DEL-002: refuses a delete of a missing file under a read-only dir', async () => {
+    const guard = await guardFor([ro]);
+    await assert.rejects(guard.validatePathForDelete(join(ro, 'missing.txt')), (error: unknown) => {
+      assertReadOnlyDenied(error, ro);
+      return true;
+    });
+  });
+
+  it('RO-LINK-001: a symlink from the writable root into a read-only dir', async (t) => {
+    await writeFile(join(ro, 'linked.txt'), 'x');
+    const link = join(rw, 'to-ro.txt');
+    if (!(await trySymlink(join(ro, 'linked.txt'), link, () => undefined, 'file'))) {
+      return t.skip('symlink not permitted');
+    }
+    const guard = await guardFor([ro]);
+    // Reads follow the link into the read-only dir.
+    await guard.validateExistingPath(link);
+    // Writing through the link resolves to the read-only target.
+    await assert.rejects(guard.validatePathForWrite(link), (error: unknown) => {
+      assertReadOnlyDenied(error, ro);
+      return true;
+    });
+    // Deleting the link itself touches only the writable root.
+    await guard.validatePathForDelete(link);
+  });
+
+  it('RO-NEST-001: a read-only subtree denies writes under it, not beside it', async () => {
+    const subtree = join(rw, 'protected');
+    await mkdir(subtree, { recursive: true });
+    const guard = await guardFor([subtree]);
+    await assert.rejects(
+      guard.validatePathForWrite(join(subtree, 'file.txt')),
+      (error: unknown) => {
+        assertReadOnlyDenied(error, subtree);
+        return true;
+      },
+    );
+    await guard.validatePathForWrite(join(rw, 'sibling.txt'));
+  });
+
+  it('RO-GRANT-001: grants stay writable unless inside a read-only dir', async () => {
+    const granted = join(base, 'granted');
+    await mkdir(granted);
+    const guard = await guardFor([ro]);
+    assert.equal(await guard.applyGrant(granted, 'access'), true);
+    await guard.validatePathForWrite(join(granted, 'f.txt'));
+    assert.equal(await guard.applyGrant(join(ro, 'inside'), 'access'), true);
+    await assert.rejects(
+      guard.validatePathForWrite(join(ro, 'inside', 'f.txt')),
+      (error: unknown) => {
+        assertReadOnlyDenied(error, ro);
+        return true;
+      },
+    );
+  });
+
+  // No undo test on purpose: read-only dirs are fixed per process, so a
+  // journal entry can only target a writable root unless it sat under a
+  // read-only dir all along — which these checks then refuse during restore,
+  // because undo revalidates through the same guard methods
+  // (src/core/undo.ts restoreEntry -> validatePathForWrite / entryLockKey).
 });
