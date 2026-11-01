@@ -126,6 +126,7 @@ const CLI_PARSER_CONFIG = {
   options: {
     'allow-cwd': { type: 'boolean', default: false },
     'read-only': { type: 'boolean', default: false },
+    'read-only-root': { type: 'string', multiple: true },
     'print-config': { type: 'boolean', default: false },
     port: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
@@ -151,6 +152,7 @@ export async function parseArgs(): Promise<{
   allowCwd: boolean;
   port: number | undefined;
   readOnly: boolean;
+  readOnlyDirs: string[];
   printConfig: boolean;
   httpHost: string | undefined;
   apiKey: string | undefined;
@@ -206,6 +208,14 @@ export async function parseArgs(): Promise<{
       v['allow-missing-roots'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
 
+    // A read-only dir need not be an allowed root — the guard unions these
+    // with FS_READ_ONLY_DIRS and matches by containment, so an out-of-root
+    // entry denies nothing new.
+    const readOnlyDirs = await normalizeAndValidateDirs(
+      v['read-only-root'] ?? [],
+      allowMissingRoots,
+    );
+
     const allowedDirs =
       positionals.length > 0 ? await normalizeAndValidateDirs(positionals, allowMissingRoots) : [];
 
@@ -214,6 +224,7 @@ export async function parseArgs(): Promise<{
       allowCwd,
       port,
       readOnly,
+      readOnlyDirs,
       printConfig,
       httpHost,
       apiKey,
@@ -237,6 +248,7 @@ export async function runPrintConfig(
   const pathGuard = new PathGuard({
     allowCwd: options.allowCwd,
     cliAllowedDirs: options.allowedDirs,
+    readOnlyDirs: options.readOnlyDirs,
   });
   await pathGuard.recomputeAllowedDirectories();
   const allowedRoots = pathGuard.getRoots();
@@ -251,6 +263,7 @@ export async function runPrintConfig(
         ? `http://${options.httpHost ?? '127.0.0.1'}:${String(options.port)}`
         : 'stdio',
     readOnly: options.readOnly,
+    readOnlyDirs: pathGuard.getReadOnlyDirs(),
     allowedRoots,
     tools,
     apiKey: options.apiKey ? '***' : null,

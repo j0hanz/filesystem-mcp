@@ -6,7 +6,7 @@ import {
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -246,5 +246,75 @@ describe('CLI (real subprocess)', () => {
     assert.ok(off.tools.includes('create'));
 
     assert.strictEqual((await printed(['--read-only'])).readOnly, true);
+  });
+
+  it('CLI-RO-001: --read-only-root repeats and normalizes', async () => {
+    const a = join(root, 'refs');
+    const b = join(root, 'archive');
+    await mkdir(a);
+    await mkdir(b);
+    const { code, stdout, stderr } = await runCli([
+      '--print-config',
+      '--read-only-root',
+      a,
+      '--read-only-root',
+      b,
+      root,
+    ]);
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
+    assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(a), normalizePath(b)]);
+  });
+
+  it('CLI-RO-002: readOnlyDirs is empty without the flag', async () => {
+    const { code, stdout, stderr } = await runCli(['--print-config', root]);
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
+    assert.deepStrictEqual(config.readOnlyDirs, []);
+  });
+
+  it('CLI-RO-003: --read-only and --read-only-root combine', async () => {
+    const refs = join(root, 'refs');
+    await mkdir(refs, { recursive: true });
+    const { code, stdout, stderr } = await runCli([
+      '--print-config',
+      '--read-only',
+      '--read-only-root',
+      refs,
+      root,
+    ]);
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { readOnly: boolean; readOnlyDirs: string[] };
+    assert.strictEqual(config.readOnly, true);
+    assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(refs)]);
+  });
+
+  it('CLI-RO-004: --read-only-root needs an existing dir unless --allow-missing-roots', async () => {
+    const missing = join(root, 'no-such-dir');
+    const refused = await runCli(['--print-config', '--read-only-root', missing, root]);
+    assert.strictEqual(refused.code, 1);
+    assert.match(refused.stderr, /no-such-dir/u);
+
+    const allowed = await runCli([
+      '--print-config',
+      '--allow-missing-roots',
+      '--read-only-root',
+      missing,
+      root,
+    ]);
+    assert.strictEqual(allowed.code, 0, allowed.stderr);
+    const config = JSON.parse(allowed.stdout) as { readOnlyDirs: string[] };
+    assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(missing)]);
+  });
+
+  it('CLI-RO-005: FS_READ_ONLY_DIRS feeds readOnlyDirs too', async () => {
+    const refs = join(root, 'refs');
+    await mkdir(refs, { recursive: true });
+    const { code, stdout, stderr } = await runCli(['--print-config', root], {
+      FS_READ_ONLY_DIRS: refs,
+    });
+    assert.strictEqual(code, 0, stderr);
+    const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
+    assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(refs)]);
   });
 });

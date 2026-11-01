@@ -22,6 +22,7 @@
       "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"],
       "env": {
         "FS_READ_ONLY": "${user_config.read_only}",
+        "FS_READ_ONLY_DIRS": "${user_config.read_only_dirs}",
         "FS_DENYLIST": "${user_config.deny_patterns}"
       }
     }
@@ -64,6 +65,14 @@
       "title": "Read-only mode",
       "description": "Remove every tool that changes files. The AI can still list, search, and read.",
       "default": false,
+      "required": false
+    },
+    "read_only_dirs": {
+      "type": "directory",
+      "title": "Read-only directories",
+      "description": "Directories the AI may read but never change. Writes, moves, and deletes under them are refused.",
+      "multiple": true,
+      "default": "",
       "required": false
     },
     "deny_patterns": {

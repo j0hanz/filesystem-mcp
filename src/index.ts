@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     await runPrintConfig(parsed);
     return;
   }
-  const { allowedDirs, allowCwd, port, readOnly } = parsed;
+  const { allowedDirs, allowCwd, port, readOnly, readOnlyDirs } = parsed;
 
   if (allowedDirs.length > 0) {
     console.error('Allowed directories (from CLI):');
@@ -99,7 +99,14 @@ async function main(): Promise<void> {
     console.error('Read-only mode: mutating tools disabled.');
   }
 
-  const serverOptions = { allowCwd, cliAllowedDirs: allowedDirs, readOnly };
+  if (readOnlyDirs.length > 0) {
+    console.error('Read-only directories (writes, moves, deletes refused):');
+    for (const dir of readOnlyDirs) {
+      console.error(`- ${dir}`);
+    }
+  }
+
+  const serverOptions = { allowCwd, cliAllowedDirs: allowedDirs, readOnly, readOnlyDirs };
 
   if (port !== undefined) {
     activeHttpServer = await startHttpServer(port, serverOptions, parsed);
