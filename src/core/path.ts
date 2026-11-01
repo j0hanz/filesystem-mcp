@@ -107,6 +107,8 @@ export interface ServerOptions {
   allowCwd?: boolean;
   cliAllowedDirs?: string[];
   readOnly?: boolean;
+  /** Directories to treat as read-only regardless of the allowed roots. */
+  readOnlyDirs?: string[];
 }
 
 /**
@@ -258,6 +260,13 @@ export class PathGuard {
   private relativeBases:
     { entries: readonly RootSpellings[]; roots: string[]; expanded: string[] } | undefined;
   private rootBoundaries: string[] = [];
+  /**
+   * The configured read-only directories (--read-only-root / FS_READ_ONLY_DIRS),
+   * as configured, and every spelling that names them (realpath aliases too) —
+   * writes, moves, and deletes under any spelling are refused.
+   */
+  private readOnlyDirsState: string[] = [];
+  private readOnlySpellings: string[] = [];
 
   private readonly options: ServerOptions | undefined;
 
@@ -331,6 +340,24 @@ export class PathGuard {
    */
   getRoots(): string[] {
     return this.rootsState ? [...this.rootsState] : [];
+  }
+
+  /**
+   * The configured read-only directories, normalized. Empty when none are
+   * configured; see `isReadOnlyPath` for the per-path check.
+   */
+  getReadOnlyDirs(): string[] {
+    return [...this.readOnlyDirsState];
+  }
+
+  /**
+   * True when `path` sits inside (or equals) a configured read-only directory,
+   * matched on every spelling — the configured one and its realpath alias —
+   * so a symlinked read-only dir cannot be dodged. Containment only: it says
+   * nothing about reads, which are unaffected.
+   */
+  isReadOnlyPath(path: string): boolean {
+    return isPathWithinDirectories(normalizePath(path), this.readOnlySpellings);
   }
 
   isSensitive(filePath: string): boolean {
@@ -1354,6 +1381,28 @@ export class PathGuard {
     }
 
     const combined = [...baseline, ...grantsToInclude];
+    // Read-only dirs (--read-only-root / FS_READ_ONLY_DIRS): CLI values and
+    // the environment are unioned, like the allowed roots, and realpathed so
+    // every spelling names them. Deliberately NOT filtered by FS_ROOT_BOUNDARY:
+    // a dir outside every boundary denies nothing new, since paths there are
+    // already refused.
+    const cliReadOnlyDirs = this.options?.readOnlyDirs ?? [];
+    const envReadOnlyDirs = await resolveConfiguredDirs('FS_READ_ONLY_DIRS', { allowMissing });
+    const readOnlyCombined = normalizeAllowedDirectories([...cliReadOnlyDirs, ...envReadOnlyDirs]);
+    const readOnlySpellings = await resolveAllowedDirectoriesState(readOnlyCombined, signal);
+    // A read-only dir that is not an allowed root, inside one, or containing
+    // one denies nothing: every path it could refuse is already out of root.
+    // That is almost always a typo — warn, so the root the operator meant
+    // does not silently stay writable.
+    for (const readOnlyDir of readOnlyCombined) {
+      const covered = combined.some(
+        (root) =>
+          isSamePath(root, readOnlyDir) ||
+          isPathInsideDirectory(root, readOnlyDir) ||
+          isPathInsideDirectory(readOnlyDir, root),
+      );
+      if (!covered) Logger.warn(`Read-only root matches no allowed root: ${readOnlyDir}`);
+    }
     const spellings = await resolveRootSpellings(combined, signal);
     const nextState = [...new Set(spellings.flatMap((entry) => entry.spellings))];
     // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
@@ -1368,6 +1417,8 @@ export class PathGuard {
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
     this.rootBoundaries = boundaries;
+    this.readOnlyDirsState = readOnlyCombined;
+    this.readOnlySpellings = readOnlySpellings;
     this.initialize(nextState, combined, bases);
   }
 }
