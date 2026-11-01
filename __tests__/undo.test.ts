@@ -1775,6 +1775,29 @@ describe('restoreEntry', () => {
       await cleanupTestRoot(ro);
     }
   });
+
+  it('a previewed unlink drops the modeled link count for later writes', async (t) => {
+    const a = join(tmpDir, 'direct-world-a.txt');
+    const b = join(tmpDir, 'direct-world-b.txt');
+    await writeFile(a, 'v1');
+    try {
+      await link(a, b);
+    } catch {
+      return t.skip('hard links not supported here');
+    }
+    // The record grammar cannot reach this shape: a remove record exists only
+    // for a file the call created, every hard link to it appears after that
+    // create entry, and undo runs newest-first, so a previewed removal always
+    // runs after every write. The world interface reaches it directly.
+    const world = new UndoPreview(newFs()).world();
+    const inode = await world.identity(a);
+    await world.rm(b); // a successful previewed removal through one name
+    await world.writeFile(a, Buffer.from('v2'), 0o644);
+    // The remaining name must get a fresh identity, as live writeFile does once
+    // the unlink left one name; a missing decrement or a reseed from the
+    // unchanged disk count keeps the inode and fails here.
+    assert.notDeepStrictEqual(await world.identity(a), inode);
+  });
 });
 
 describe('undo id on results', () => {
