@@ -7,7 +7,14 @@ import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { Logger } from '../src/core/observability.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import { cleanupTestRoot, createTestRoot, trySymlink } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestClientPair,
+  createTestRoot,
+  firstTextBlock,
+  trySymlink,
+  type TestClientContext,
+} from './helpers.ts';
 
 // Per-root read-only (#162): PathGuard holds a configured list of read-only
 // directories (CLI --read-only-root / env FS_READ_ONLY_DIRS) and answers
@@ -207,4 +214,120 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
   // read-only dir all along — which these checks then refuse during restore,
   // because undo revalidates through the same guard methods
   // (src/core/undo.ts restoreEntry -> validatePathForWrite / entryLockKey).
+});
+
+// End to end over the tool surface: both roots allowed, ro also read-only —
+// the shape issue #162 asks for.
+describe('read-only roots over the MCP surface', { concurrency: false }, () => {
+  let base: string;
+  let rw: string;
+  let ro: string;
+  let pair: TestClientContext;
+
+  const structuredOf = (
+    result: { structuredContent?: unknown; _meta?: unknown },
+  ): Record<string, unknown> => {
+    const value = result.structuredContent ?? result._meta;
+    assert.ok(value, 'tool must publish structured metadata');
+    return value as Record<string, unknown>;
+  };
+
+  before(async () => {
+    base = await createTestRoot();
+    rw = join(base, 'rw');
+    ro = join(base, 'ro');
+    await mkdir(rw);
+    await mkdir(ro);
+    await writeFile(join(ro, 'readme.txt'), 'RONEEDLE\n');
+    pair = await createTestClientPair([rw, ro], { readOnlyDirs: [ro] });
+  });
+
+  after(async () => {
+    await pair.close();
+    await cleanupTestRoot(base);
+  });
+
+  it('RO-INT-001: create is refused under the read-only root, not the writable one', async () => {
+    const denied = await pair.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: join(ro, 'new.txt'), content: 'nope' }] },
+    });
+    assert.strictEqual(denied.isError, true);
+    assert.match(firstTextBlock(denied).text ?? '', /Read-only root/u);
+
+    const allowed = await pair.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: join(rw, 'writable.txt'), content: 'yes' }] },
+    });
+    assert.notStrictEqual(allowed.isError, true, firstTextBlock(allowed).text ?? '');
+  });
+
+  it('RO-INT-002: reads under the read-only root still work', async () => {
+    for (const [name, args] of [
+      ['read', { path: join(ro, 'readme.txt') }],
+      ['list', { path: ro }],
+      ['search_text', { searchPattern: 'RONEEDLE', path: ro }],
+      ['stat', { path: join(ro, 'readme.txt') }],
+    ] as const) {
+      const result = await pair.client.callTool({ name, arguments: { ...args } });
+      assert.notStrictEqual(result.isError, true, `${name}: ${firstTextBlock(result).text ?? ''}`);
+    }
+  });
+
+  it('RO-INT-003: move is refused in every direction involving the read-only root', async () => {
+    await writeFile(join(rw, 'src.txt'), 'S');
+    await writeFile(join(ro, 'victim.txt'), 'V');
+    for (const [label, source, destination] of [
+      ['rw to ro', join(rw, 'src.txt'), join(ro, 'moved.txt')],
+      ['ro to rw', join(ro, 'victim.txt'), join(rw, 'moved.txt')],
+      ['ro to ro', join(ro, 'victim.txt'), join(ro, 'moved-victim.txt')],
+    ] as const) {
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: { moves: [{ source, destination }] },
+      });
+      assert.strictEqual(result.isError, true, label);
+      // The refusal rides per-item in the metadata's failures; the text line
+      // is a summary.
+      const failures = structuredOf(result)['failures'] as {
+        error?: { code?: string; message?: string };
+      }[];
+      const error = failures[0]?.error;
+      assert.strictEqual(error?.code, 'ACCESS_DENIED', label);
+      assert.match(error?.message ?? '', /Read-only root/u, label);
+    }
+    const fine = await pair.client.callTool({
+      name: 'move',
+      arguments: {
+        moves: [{ source: join(rw, 'src.txt'), destination: join(rw, 'src-moved.txt') }],
+      },
+    });
+    assert.notStrictEqual(fine.isError, true, firstTextBlock(fine).text ?? '');
+  });
+
+  it('RO-INT-004: list_roots reports the read-only directories', async () => {
+    const result = await pair.client.callTool({ name: 'list_roots', arguments: {} });
+    const value = structuredOf(result) as { roots: string[]; readOnlyDirs: string[] };
+    assert.deepEqual(value.roots, [normalizePath(rw), normalizePath(ro)]);
+    assert.deepEqual(value.readOnlyDirs, [normalizePath(ro)]);
+  });
+
+  it('RO-INT-005: undo of a writable-root create still restores', async () => {
+    const created = await pair.client.callTool({
+      name: 'create',
+      arguments: { files: [{ path: join(rw, 'undo-me.txt'), content: 'UNDO' }] },
+    });
+    assert.notStrictEqual(created.isError, true, firstTextBlock(created).text ?? '');
+    const id = structuredOf(created)['undo'];
+    assert.equal(typeof id, 'string');
+
+    const undone = await pair.client.callTool({ name: 'undo', arguments: { id } });
+    assert.notStrictEqual(undone.isError, true, firstTextBlock(undone).text ?? '');
+
+    const restored = await pair.client.callTool({
+      name: 'read',
+      arguments: { path: join(rw, 'undo-me.txt') },
+    });
+    assert.strictEqual(restored.isError, true, 'the restored file must be gone');
+  });
 });

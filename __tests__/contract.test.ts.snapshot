@@ -627,7 +627,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -1122,7 +1122,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
       "inputSchema": {
         "type": "object",
         "properties": {},

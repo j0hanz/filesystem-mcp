@@ -7,6 +7,8 @@ const RootsInputSchema = z.strictObject({});
 
 interface RootsOutput {
   roots: string[];
+  /** Configured read-only directories; writes, moves, and deletes under them are refused. */
+  readOnlyDirs: string[];
   hint?: string;
 }
 
@@ -15,6 +17,7 @@ export const LIST_ROOTS = defineTool<typeof RootsInputSchema, RootsOutput>({
   title: 'Workspace Roots',
   description:
     'List the directories this server can access, as absolute paths, including any the user granted during this session. ' +
+    'Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. ' +
     'Other tools can ask the user to grant access to a path outside them.',
   input: RootsInputSchema,
   readOnlyHint: true,
@@ -32,6 +35,7 @@ export const LIST_ROOTS = defineTool<typeof RootsInputSchema, RootsOutput>({
     return Promise.resolve({
       structured: {
         roots: [...dirs],
+        readOnlyDirs: ctx.fs.pathGuard.getReadOnlyDirs(),
         ...(dirs.length === 0 ? { hint: NO_POSITIONAL_ROOTS_GUIDANCE } : {}),
       },
     });
