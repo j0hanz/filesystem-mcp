@@ -5,7 +5,7 @@ import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import type { Problem } from '../src/core/errors.ts';
+import { ErrorCode, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
@@ -1687,6 +1687,52 @@ describe('restoreEntry', () => {
       [],
     );
     assert.deepStrictEqual(dry.remaining, []);
+  });
+
+  it('a dry run refuses a write live undo must refuse on a read-only hard link', async (t) => {
+    const rw = await createTestRoot();
+    const ro = await createTestRoot();
+    const server = await createTestServer([rw], { readOnlyDirs: [ro] });
+    try {
+      const file = join(rw, 'ro-linked.txt');
+      const twin = join(ro, 'ro-linked-twin.txt');
+      await writeFile(file, 'A');
+      const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
+      const guarded = new GuardedFileSystem(server.pathGuard, cap);
+      await guarded.writeFile(file, 'B'); // captured while the file is still single-linked
+      assert.strictEqual(cap.unavailableReason(), undefined);
+      try {
+        await link(file, twin);
+      } catch {
+        return t.skip('hard links not supported here');
+      }
+      const entry = { id: 't', tool: 'test', createdAt: Date.now(), records: cap.records };
+
+      const preview = new UndoPreview(new GuardedFileSystem(server.pathGuard));
+      const dry = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+        dryRun: true,
+        preview,
+      });
+      assert.strictEqual(dry.results.filter((r) => !('error' in r)).length, 0);
+      assert.ok(
+        dry.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED),
+        JSON.stringify(dry.results.map((r) => ('error' in r ? r.error.code : 'ok'))),
+      );
+      assert.strictEqual(await readFile(file, 'utf8'), 'B'); // the dry run wrote nothing
+
+      const live = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+        dryRun: false,
+      });
+      assert.ok(
+        live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED),
+      );
+      assert.strictEqual(await readFile(file, 'utf8'), 'B');
+    } finally {
+      server.disposeRuntimeState();
+      await server.mcp.close();
+      await cleanupTestRoot(rw);
+      await cleanupTestRoot(ro);
+    }
   });
 });
 

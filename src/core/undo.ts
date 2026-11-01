@@ -670,6 +670,11 @@ export class UndoPreview {
         if (node.kind === 'file' && this.#linkCount(node.identity) > 1n) {
           // Live writeFile keeps a multiply-linked inode in place, so every
           // name sees the new bytes and the identity survives to later records.
+          // The refusal live writeFile makes must fire before any preview state
+          // changes, so a failed dry run leaves the preview untouched.
+          this.#fs.assertNoReadOnlyHardLink(path, {
+            nlink: Number(this.#linkCount(node.identity)),
+          });
           this.#inPlace.set(identityKey(node.identity), hash);
           this.#put(previewKey(path), { kind: 'file', identity: node.identity });
           return;

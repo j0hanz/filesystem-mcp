@@ -129,7 +129,7 @@ export class GuardedFileSystem {
     return normalizePath(fdPath);
   }
 
-  #assertNoReadOnlyHardLink(path: string, stats: Stats): void {
+  assertNoReadOnlyHardLink(path: string, stats: { nlink: number }): void {
     if (stats.nlink > 1 && this.pathGuard.getReadOnlyDirs().length > 0) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -465,7 +465,7 @@ export class GuardedFileSystem {
         this.#capture?.abandon('could not read the old content');
       }
     }
-    if (existingStats) this.#assertNoReadOnlyHardLink(validPath, existingStats);
+    if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
     const mode = existingMode ?? options.mode;
 
     if (inPlace) {
@@ -553,7 +553,7 @@ export class GuardedFileSystem {
     try {
       existing = await fsLstat(validPath);
       assertFileStats(validPath, existing);
-      this.#assertNoReadOnlyHardLink(validPath, existing);
+      this.assertNoReadOnlyHardLink(validPath, existing);
     } catch (error) {
       if (!isNotFoundErrno(error)) throw error;
     }
