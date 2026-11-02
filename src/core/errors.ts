@@ -73,6 +73,8 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.TOO_LARGE]: 'Use head/tail or line ranges to read partially.',
   [ErrorCode.TIMEOUT]: 'Reduce scope, depth, or maxResults.',
   [ErrorCode.INVALID_PATTERN]: 'Check syntax and escape special characters.',
+  [ErrorCode.BINARY_FILE]:
+    'Text tools refuse binary files; read returns one whole with binary: true.',
   [ErrorCode.PERMISSION_DENIED]: 'Check OS file permissions.',
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',
 };
