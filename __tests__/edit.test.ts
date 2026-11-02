@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, utimes, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -16,7 +16,7 @@ import {
   trySymlink,
   writeTestFile,
 } from './helpers.ts';
-import { runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
+import { runToolBodyResult, schemaIssues, type ToolBodyOptions } from './tool-harness.ts';
 
 type EditArgs = z.input<typeof EDIT.def.input>;
 type EditRun = Awaited<ReturnType<typeof runToolBodyResult<typeof EDIT.def.input, object>>> & {
@@ -58,6 +58,49 @@ describe('edit body', () => {
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(await readFile(file, 'utf-8'), 'modified content');
     }
+  });
+
+  it('refuses an empty or blank oldText with one message', async () => {
+    const file = await writeTestFile(root, 'edit-blank-old.txt', 'original content');
+    for (const oldText of ['', '   ']) {
+      assert.deepStrictEqual(
+        await schemaIssues(edit({ path: file, edits: [{ oldText, newText: 'x' }] })),
+        ['oldText cannot be empty or whitespace-only'],
+        JSON.stringify(oldText),
+      );
+    }
+    assert.strictEqual(await readFile(file, 'utf-8'), 'original content');
+  });
+
+  it('refuses a batch that names the same file twice', async () => {
+    const original = 'alpha\nbeta\n';
+    const file = await writeTestFile(root, 'dup-batch/dup.txt', original);
+    const caseless = process.platform === 'win32' || process.platform === 'darwin';
+    for (const twin of caseless ? [file, join(dirname(file), 'DUP.TXT')] : [file]) {
+      const issues = await schemaIssues(
+        edit({
+          files: [
+            { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
+            { path: twin, edits: [{ oldText: 'beta', newText: 'B' }] },
+          ],
+        }),
+      );
+      assert.ok(
+        issues.some((m) => m.startsWith('duplicate of files[0].path')),
+        issues.join('; '),
+      );
+    }
+    assert.strictEqual(await readFile(file, 'utf-8'), original);
+  });
+
+  it('refuses path with edits and files in one call', async () => {
+    const f = await writeTestFile(root, 'edit_both_forms.txt', 'one\n');
+    const spec = [{ oldText: 'one', newText: 'two' }];
+    const issues = await schemaIssues(
+      edit({ path: f, edits: spec, files: [{ path: f, edits: spec }] }),
+    );
+    assert.ok(issues.includes("Provide exactly one of 'path' or 'files'"), issues.join('; '));
+    assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
   });
 
   it('reports a change it could not diff instead of "(no change)"', async () => {

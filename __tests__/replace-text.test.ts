@@ -13,7 +13,7 @@ import { escapeRegExp, MIB } from '../src/core/util.ts';
 import { SEARCH_TEXT } from '../src/tools/index.ts';
 import { REPLACE_TEXT } from '../src/tools/replace-text.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard, withEnv, writeTestFile } from './helpers.ts';
-import { runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
+import { runToolBodyResult, schemaIssues, type ToolBodyOptions } from './tool-harness.ts';
 
 type ReplaceArgs = z.input<typeof REPLACE_TEXT.def.input>;
 interface Row {
@@ -896,6 +896,23 @@ describe('replace_text body', () => {
       });
       assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
       assert.strictEqual(result.structured.totalMatches, 1);
+    });
+
+    it('refuses maxMatches together with maxResults', async () => {
+      const issues = await schemaIssues(
+        replace({
+          path: root,
+          searchPattern: 'x',
+          replacement: 'y',
+          dryRun: true,
+          maxMatches: 1,
+          maxResults: 1,
+        }),
+      );
+      assert.ok(
+        issues.includes("Cannot use both 'maxMatches' and 'maxResults'"),
+        issues.join('; '),
+      );
     });
 
     // replace_text authors its own text, so the structured half ships under
