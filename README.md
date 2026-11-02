@@ -259,22 +259,22 @@ npm install -g @j0hanz/filesystem-mcp
 
 ## Tools
 
-| Tool             | What it does                                                                                                  |
-| :--------------- | :------------------------------------------------------------------------------------------------------------ |
-| `list_roots`     | Shows the folders the server may use.                                                                         |
-| `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                |
-| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                          |
-| `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                          |
-| `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                           |
-| `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`. |
-| `diff`           | Compares two files and returns a unified diff.                                                                |
-| `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file, unless `overwrite: true`.    |
-| `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.           |
-| `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do.                                                |
-| `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                       |
-| `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting, unless a copy passes `overwrite: true`. |
-| `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                           |
-| `undo` ✎         | Reverts earlier changes by undo id or the last N calls, while the server runs. Skips files changed since.     |
+| Tool             | What it does                                                                                                            |
+| :--------------- | :---------------------------------------------------------------------------------------------------------------------- |
+| `list_roots`     | Shows the folders the server may use.                                                                                   |
+| `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                          |
+| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                                    |
+| `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                                    |
+| `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                                     |
+| `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`.           |
+| `diff`           | Compares two files and returns a unified diff.                                                                          |
+| `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file, unless `overwrite: true`.              |
+| `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.                     |
+| `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do.                                                          |
+| `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                                 |
+| `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting, unless a copy passes `overwrite: true`.           |
+| `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                                     |
+| `undo` ✎         | Reverts recent changes by undo id or the last N calls, for 30 minutes while the server runs. Skips files changed since. |
 
 ✎ changes files. `--read-only` removes these tools. To refuse changes under
 one folder while the rest stay writable, pass `--read-only-root <dir>`

@@ -36,6 +36,8 @@
 
 ### Task 1: Report CI scans to HOL
 
+> **Blocked, 2026-11-02:** action v1.2.814 accepts `report_to_hol`, but the newest `plugin-scanner` wheel (3.58.0) has no report code, so the job would pass and send nothing. Only the `ci.yml` pin bump ships now. Add `plugin-report.yml` once an action release bundles a wheel containing `send_ci_report`, and confirm the `HOL CI report:` line in the first run's log, because a green job proves nothing. Add `persist-credentials: false` to its checkout and `if: github.ref == 'refs/heads/main'` to its job. Until then, ask HOL to rescan.
+
 **Files:**
 
 - Create: `.github/workflows/plugin-report.yml`
@@ -330,7 +332,7 @@ File tools for AI assistants, limited to the folders you choose. Secret files st
 Long:
 
 ```text
-Filesystem MCP gives your AI client tools to read, search, edit, and patch files in folders you allow. .env files, private keys, and cloud credentials are blocked by default. The server asks before overwriting a file with create or move, deleting a non-empty folder, or opening a new folder. In-place edits can be previewed with dryRun and reverted with undo while the server runs. --read-only removes every tool that writes. It runs locally with no telemetry. Install: npx -y @j0hanz/filesystem-mcp@latest
+Filesystem MCP gives your AI client tools to read, search, edit, and patch files in folders you allow. .env files, private keys, and cloud credentials are blocked by default. The server asks before overwriting a file with create or move, deleting a non-empty folder, or opening a new folder. In-place edits can be previewed with dryRun and reverted with undo for 30 minutes while the server runs. --read-only removes every tool that writes. It runs locally with no telemetry. Install: npx -y @j0hanz/filesystem-mcp@latest
 ```
 
 - [ ] **Step 2: Bump the two stalled PRs, once each**

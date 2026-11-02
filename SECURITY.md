@@ -54,12 +54,14 @@ allowing a folder that holds secrets, are not.
 - **Secrets under ordinary names.** The secret-file list matches paths and
   names, not contents. An API key in `notes.txt` is readable if its folder is
   allowed.
-- **Anything the AI can read leaving your machine.** The server makes no network
-  calls, but your AI client may send what it reads to its model provider.
+- **Anything the AI can read leaving your machine.** The server makes no
+  outbound network requests, but your AI client may send what it reads to its
+  model provider.
 - **Instructions hidden in files.** File contents reach the AI unfiltered, so
   allow only folders whose contents you trust the AI to read.
 - **In-place edits.** `edit`, `patch`, and `replace_text` apply without asking.
-  `dryRun` previews them, and `undo` reverts them only while the server runs.
+  `dryRun` previews them. `undo` can revert them for 30 minutes while the server
+  runs, within its limit of 64 calls and 32 MiB, and skips files changed since.
 - **Other software on your machine.** This is a check inside the server, not an
   operating system sandbox. Other tools and processes keep their own access.
 
