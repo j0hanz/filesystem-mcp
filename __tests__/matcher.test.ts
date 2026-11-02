@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isFsError } from '../src/core/errors.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import {
-  compileRegex,
-  createCaseInsensitiveLiteralMatcher,
-  createCaseSensitiveLiteralMatcher,
-  createRegexReplacementMatcher,
+  createLineMatcher,
+  createReplacementMatcher,
   planMatch,
+  RE2_MAX_INPUT_BYTES,
   type ReplaceLimits,
 } from '../src/core/matcher.ts';
 import { escapeRegExp } from '../src/core/util.ts';
@@ -77,44 +76,48 @@ const limits = (maxMatches = Number.POSITIVE_INFINITY): ReplaceLimits => ({
 
 describe('replacement matchers', () => {
   it('MTCH-001: dollar tokens follow RegExp precedence', async () => {
-    const twelve = createRegexReplacementMatcher(
-      compileRegex('(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)', { caseSensitive: true }),
-      true,
-      false,
-    );
+    const twelve = createReplacementMatcher({
+      searchPattern: '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.strictEqual(
       (await twelve.replace('abcdefghijkl', '$12', undefined, limits())).content,
       'l',
       '$12 prefers group 12',
     );
 
-    const two = createRegexReplacementMatcher(
-      compileRegex('(a)(b)', { caseSensitive: true }),
-      true,
-      false,
-    );
+    const two = createReplacementMatcher({
+      searchPattern: '(a)(b)',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.strictEqual(
       (await two.replace('ab', '$12', undefined, limits())).content,
       'a2',
       '$12 with two groups falls back to group 1 plus a literal 2',
     );
 
-    const one = createRegexReplacementMatcher(
-      compileRegex('(a)', { caseSensitive: true }),
-      true,
-      false,
-    );
+    const one = createReplacementMatcher({
+      searchPattern: '(a)',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.strictEqual(
       (await one.replace('a', '$2', undefined, limits())).content,
       '$2',
       'an out-of-range group stays literal',
     );
 
-    const named = createRegexReplacementMatcher(
-      compileRegex('(?<x>a)', { caseSensitive: true }),
-      true,
-      false,
-    );
+    const named = createReplacementMatcher({
+      searchPattern: '(?<x>a)',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.strictEqual((await named.replace('a', '$<x>', undefined, limits())).content, 'a');
     assert.strictEqual(
       (await named.replace('a', '$<y>', undefined, limits())).content,
@@ -122,11 +125,12 @@ describe('replacement matchers', () => {
       'an absent named group renders literally',
     );
 
-    const whole = createRegexReplacementMatcher(
-      compileRegex('b', { caseSensitive: true }),
-      true,
-      false,
-    );
+    const whole = createReplacementMatcher({
+      searchPattern: 'b',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.strictEqual(
       (await whole.replace('abc', "$&$`$'", undefined, limits())).content,
       'abacc',
@@ -140,12 +144,12 @@ describe('replacement matchers', () => {
   });
 
   it('MTCH-002: wholeWord resumes over the trail and finds a match at text start', async () => {
-    const plan = planMatch('foo', { isRegex: false, caseSensitive: false, wholeWord: true });
-    const matcher = createRegexReplacementMatcher(
-      compileRegex(plan.source, { caseSensitive: false }),
-      false,
-      true,
-    );
+    const matcher = createReplacementMatcher({
+      searchPattern: 'foo',
+      isRegex: false,
+      caseSensitive: false,
+      wholeWord: true,
+    });
     const done = await matcher.replace('foo foo foo', 'X', undefined, limits());
     assert.strictEqual(done.content, 'X X X');
     assert.strictEqual(done.matchCount, 3);
@@ -162,12 +166,12 @@ describe('replacement matchers', () => {
     // A consumed text ending in a non-word char backs up, so its last char may
     // lead the next match: the needle's final '-' leads here (the wire twin is
     // tools.test.ts 'wholeWord lets a needle trailing non-word char lead the next match').
-    const trailPlan = planMatch('-x-', { isRegex: false, caseSensitive: false, wholeWord: true });
-    const trailMatcher = createRegexReplacementMatcher(
-      compileRegex(trailPlan.source, { caseSensitive: false }),
-      false,
-      true,
-    );
+    const trailMatcher = createReplacementMatcher({
+      searchPattern: '-x-',
+      isRegex: false,
+      caseSensitive: false,
+      wholeWord: true,
+    });
     const trail = await trailMatcher.replace('-x--x-', 'X', undefined, limits());
     assert.strictEqual(trail.content, 'XX');
     assert.strictEqual(trail.matchCount, 2);
@@ -177,46 +181,38 @@ describe('replacement matchers', () => {
   });
 
   it('MTCH-003: the case-sensitive literal splices once and honours the cap', async () => {
-    const matcher = createCaseSensitiveLiteralMatcher('foo');
+    const matcher = createReplacementMatcher({
+      searchPattern: 'foo',
+      isRegex: false,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.ok(matcher);
     const done = await matcher.replace('foo foo foo', 'X', undefined, limits(2));
     assert.strictEqual(done.content, 'X X foo');
     assert.strictEqual(done.matchCount, 2);
     assert.strictEqual(done.more, true);
 
-    assert.strictEqual(createCaseSensitiveLiteralMatcher('�'), undefined);
-    assert.strictEqual(createCaseSensitiveLiteralMatcher('\uD800'), undefined);
-
     matcher.dispose();
   });
 
   it('MTCH-004: the case-insensitive literal folds and delegates fold characters to RE2', async () => {
-    const plan = planMatch('foo', { isRegex: false, caseSensitive: false });
-    assert.ok(plan.literal);
-    const matcher = createCaseInsensitiveLiteralMatcher(
-      'foo',
-      plan.literal,
-      createRegexReplacementMatcher(
-        compileRegex(plan.source, { caseSensitive: false }),
-        false,
-        false,
-      ),
-    );
+    const matcher = createReplacementMatcher({
+      searchPattern: 'foo',
+      isRegex: false,
+      caseSensitive: false,
+      wholeWord: false,
+    });
     const done = await matcher.replace('FOO foo FOO', 'X', undefined, limits());
     assert.strictEqual(done.content, 'X X X');
     assert.strictEqual(done.matchCount, 3);
 
-    const kelvinPlan = planMatch('k', { isRegex: false, caseSensitive: false });
-    assert.ok(kelvinPlan.literal);
-    const kelvin = createCaseInsensitiveLiteralMatcher(
-      'k',
-      kelvinPlan.literal,
-      createRegexReplacementMatcher(
-        compileRegex(kelvinPlan.source, { caseSensitive: false }),
-        false,
-        false,
-      ),
-    );
+    const kelvin = createReplacementMatcher({
+      searchPattern: 'k',
+      isRegex: false,
+      caseSensitive: false,
+      wholeWord: false,
+    });
     const judged = await kelvin.replace('aKb', 'X', undefined, limits());
     assert.strictEqual(judged.content, 'aXb');
     assert.strictEqual(judged.matchCount, 1);
@@ -226,17 +222,23 @@ describe('replacement matchers', () => {
   });
 
   it('MTCH-005: dispose is idempotent', () => {
-    const matcher = createRegexReplacementMatcher(
-      compileRegex('a', { caseSensitive: true }),
-      false,
-      false,
-    );
+    const matcher = createReplacementMatcher({
+      searchPattern: 'a',
+      isRegex: true,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     matcher.dispose();
     matcher.dispose();
   });
 
   it('MTCH-006: a replacement past the byte cap refuses', async () => {
-    const matcher = createCaseSensitiveLiteralMatcher('foo');
+    const matcher = createReplacementMatcher({
+      searchPattern: 'foo',
+      isRegex: false,
+      caseSensitive: true,
+      wholeWord: false,
+    });
     assert.ok(matcher);
     await assert.rejects(
       async () =>
@@ -249,5 +251,80 @@ describe('replacement matchers', () => {
     );
 
     matcher.dispose();
+  });
+});
+
+describe('createLineMatcher', () => {
+  it('LINE-001: literal needle matches lines and yields column offset', async () => {
+    const matcher = createLineMatcher({ pattern: 'hello', isRegex: false, caseSensitive: true });
+    try {
+      const fileMatcher = matcher.forFile(Buffer.from('hello world\nno match\nhello again hello'));
+      assert.ok(fileMatcher);
+      assert.deepStrictEqual(await fileMatcher.matchLine('hello world'), { count: 1, column: 0 });
+      assert.strictEqual(await fileMatcher.matchLine('no match'), undefined);
+      assert.deepStrictEqual(await fileMatcher.matchLine('hello again hello'), {
+        count: 2,
+        column: 0,
+      });
+    } finally {
+      matcher.dispose();
+    }
+  });
+
+  it('LINE-002: case-insensitive literal falls back to RE2 on Kelvin sign', async () => {
+    const matcher = createLineMatcher({ pattern: 'kelvin', isRegex: false, caseSensitive: false });
+    try {
+      const kelvinBuffer = Buffer.from('temperature: \u212Aelvin', 'utf8');
+      const fileMatcher = matcher.forFile(kelvinBuffer);
+      assert.ok(fileMatcher);
+      const hit = await fileMatcher.matchLine('temperature: \u212Aelvin');
+      assert.ok(hit);
+      assert.strictEqual(hit.count, 1);
+    } finally {
+      matcher.dispose();
+    }
+  });
+
+  it('LINE-003: rules out non-matching buffers via prefilter', () => {
+    const matcher = createLineMatcher({ pattern: 'xyz[0-9]+', isRegex: true, caseSensitive: true });
+    try {
+      const buffer = Buffer.from('abc def ghi');
+      const fileMatcher = matcher.forFile(buffer);
+      assert.strictEqual(fileMatcher, undefined);
+    } finally {
+      matcher.dispose();
+    }
+  });
+
+  it('LINE-004: throws TOO_LARGE when regex line exceeds RE2_MAX_INPUT_BYTES', async () => {
+    const matcher = createLineMatcher({ pattern: 'needle', isRegex: true, caseSensitive: true });
+    try {
+      const fileMatcher = matcher.forFile(Buffer.from('needle'));
+      assert.ok(fileMatcher);
+      const hugeLine = 'a'.repeat(RE2_MAX_INPUT_BYTES + 1);
+      await assert.rejects(
+        async () => fileMatcher.matchLine(hugeLine),
+        (err: unknown) => isFsError(err) && err.code === ErrorCode.TOO_LARGE,
+      );
+    } finally {
+      matcher.dispose();
+    }
+  });
+
+  it('LINE-005: tick yields cooperative macrotask and observes abort signal', async () => {
+    const controller = new AbortController();
+    const matcher = createLineMatcher({
+      pattern: 'a',
+      isRegex: false,
+      caseSensitive: true,
+      signal: controller.signal,
+    });
+    try {
+      assert.strictEqual(await matcher.tick(), false);
+      controller.abort();
+      assert.strictEqual(await matcher.tick(), true);
+    } finally {
+      matcher.dispose();
+    }
   });
 });

@@ -11,16 +11,16 @@ import { RE2 } from '@adguard/re2-wasm';
 import { ErrorCode, FsError } from './errors.ts';
 import { escapeRegExp, MIB } from './util.ts';
 
-export type Regex = RE2;
+type Regex = RE2;
 /** Occurrence-counting bound, so one pathological line cannot spin forever. */
-export const MAX_MATCHES_PER_LINE = 100_000;
+const MAX_MATCHES_PER_LINE = 100_000;
 /**
  * re2-wasm copies the whole input on every exec, so draining a dense pattern is
  * O(matches x input) and fully synchronous: the loop pins and the tool's
  * AbortSignal.timeout (a timer) can never fire. The returned `tick` yields a
  * macrotask every ~10ms and reports whether `signal` has aborted.
  */
-export function createYielder(signal: AbortSignal | undefined): () => Promise<boolean> {
+function createYielder(signal: AbortSignal | undefined): () => Promise<boolean> {
   let last = Date.now();
   return async () => {
     if (Date.now() - last > 10) {
@@ -50,7 +50,7 @@ export interface LineHit {
  * copy is most of what a search costs: once per file to rule it out, then once
  * per line of every file it could not rule out.
  */
-export interface LiteralMatcher {
+interface LiteralMatcher {
   /** True when this file holds a character RE2 folds onto one of the needle's letters. */
   needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
@@ -132,7 +132,7 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
  * the rest of the process. Every caller MUST pass the result to
  * {@link freeRegex} when it is done with it.
  */
-export function compileRegex(
+function compileRegex(
   pattern: string,
   options: { caseSensitive?: boolean; multiline?: boolean } = {},
 ): Regex {
@@ -156,7 +156,7 @@ export function compileRegex(
  * {@link Regex} after freeing it is undefined behaviour in the wasm heap, so
  * free only in a `finally` that owns the compile.
  */
-export function freeRegex(regex: Regex | undefined): void {
+function freeRegex(regex: Regex | undefined): void {
   const handle = (regex as unknown as { wrapper?: { delete?: () => void } } | undefined)?.wrapper;
   try {
     handle?.delete?.();
@@ -165,7 +165,7 @@ export function freeRegex(regex: Regex | undefined): void {
   }
 }
 
-export interface RegexMatch {
+interface RegexMatch {
   /** The matched text. */
   text: string;
   /** Capture groups, 1-indexed in the pattern, 0-indexed here. */
@@ -204,7 +204,7 @@ const codePointLength = (text: string): number =>
  * matches, the next search starts on that character instead, so it can lead the
  * next match. A resume point never moves back to or before the current search start.
  */
-export function* execMatches(
+function* execMatches(
   regex: Regex,
   text: string,
   keepLast = false,
@@ -349,7 +349,7 @@ function expandDollarTokens(
     return token;
   });
 }
-export function createRegexReplacementMatcher(
+function createRegexReplacementMatcher(
   regex: Regex,
   expandReplacement: boolean,
   wholeWord: boolean,
@@ -435,7 +435,7 @@ export function createRegexReplacementMatcher(
   };
 }
 /** An ASCII needle matched case-insensitively in native code, as RE2 would match it; `fallback` judges the files RE2 must. */
-export function createCaseInsensitiveLiteralMatcher(
+function createCaseInsensitiveLiteralMatcher(
   searchPattern: string,
   literal: LiteralMatcher,
   fallback: ReplacementMatcher,
@@ -474,9 +474,7 @@ export function createCaseInsensitiveLiteralMatcher(
     },
   };
 }
-export function createCaseSensitiveLiteralMatcher(
-  searchPattern: string,
-): ReplacementMatcher | undefined {
+function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher | undefined {
   // Same bail as createLiteralMatcher (core/search.ts): a needle containing
   // U+FFFD or a lone surrogate is judged over decoded text by RE2 — raw-byte
   // indexOf would claim a file the replace pass cannot transform.
@@ -536,4 +534,111 @@ export function createReplacementMatcher(args: {
   return !args.isRegex && !args.wholeWord && plan.literal
     ? createCaseInsensitiveLiteralMatcher(args.searchPattern, plan.literal, matcher)
     : matcher;
+}
+
+const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
+/** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
+const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
+const CR = 13;
+
+/** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
+function canPrefilter(source: string, buffer: Buffer): boolean {
+  if (buffer.length > RE2_MAX_INPUT_BYTES) return false;
+  if (BUFFER_ANCHOR_RE.test(source)) return false;
+  if (INLINE_FLAGS_RE.test(source)) return false;
+  if (source.includes('$') && buffer.includes(CR)) return false;
+  return true;
+}
+
+export interface LineMatcherOptions {
+  pattern: string;
+  isRegex: boolean;
+  caseSensitive: boolean;
+  signal?: AbortSignal | undefined;
+}
+
+interface FileLineMatcher {
+  matchLine(line: string): Promise<LineHit | undefined>;
+}
+
+export interface LineMatcher {
+  forFile(buffer: Buffer): FileLineMatcher | undefined;
+  tick(): Promise<boolean>;
+  dispose(): void;
+}
+
+export function createLineMatcher(args: LineMatcherOptions): LineMatcher {
+  const plan = planMatch(args.pattern, {
+    isRegex: args.isRegex,
+    caseSensitive: args.caseSensitive,
+  });
+  const source = plan.source;
+  const tick = createYielder(args.signal);
+
+  let regex: Regex | undefined;
+  let prefilter: Regex | undefined;
+  try {
+    regex = compileRegex(source, {
+      caseSensitive: args.caseSensitive,
+    });
+    // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
+    // buffer hit (the converse can be false — a false positive just falls through
+    // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
+    // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
+    // the prefilter (see canPrefilter).
+    prefilter = compileRegex(source, {
+      caseSensitive: args.caseSensitive,
+      multiline: true,
+    });
+  } catch (error) {
+    freeRegex(prefilter);
+    freeRegex(regex);
+    throw error;
+  }
+
+  return {
+    forFile(buffer: Buffer): FileLineMatcher | undefined {
+      const literal = plan.literal?.needsRe2(buffer) ? undefined : plan.literal;
+      if (literal) {
+        if (!literal.mayMatch(buffer)) return undefined;
+        return {
+          matchLine(line: string): Promise<LineHit | undefined> {
+            return Promise.resolve(literal.matchLine(line));
+          },
+        };
+      }
+
+      if (canPrefilter(source, buffer)) {
+        prefilter.lastIndex = 0;
+        const text = buffer.toString('utf-8');
+        if (prefilter.exec(text) === null) return undefined;
+      }
+
+      return {
+        async matchLine(line: string): Promise<LineHit | undefined> {
+          if (Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
+            throw new FsError(
+              ErrorCode.TOO_LARGE,
+              `Line too large for a regex scan (${String(Buffer.byteLength(line, 'utf8'))} > ${String(RE2_MAX_INPUT_BYTES)} bytes)`,
+            );
+          }
+          let count = 0;
+          let column = -1;
+          for (const match of execMatches(regex, line)) {
+            if (column === -1) column = match.start;
+            count++;
+            if (count >= MAX_MATCHES_PER_LINE || (await tick())) break;
+          }
+          return count > 0 ? { count, column } : undefined;
+        },
+      };
+    },
+    tick(): Promise<boolean> {
+      return tick();
+    },
+    dispose(): void {
+      freeRegex(prefilter);
+      freeRegex(regex);
+    },
+  };
 }

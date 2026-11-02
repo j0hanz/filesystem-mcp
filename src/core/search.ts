@@ -1,17 +1,7 @@
 import type { StoppedReason } from './concurrency.ts';
+import { ErrorCode, isFsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
-import {
-  compileRegex,
-  createYielder,
-  execMatches,
-  freeRegex,
-  type LineHit,
-  type LiteralMatcher,
-  MAX_MATCHES_PER_LINE,
-  planMatch,
-  RE2_MAX_INPUT_BYTES,
-  type Regex,
-} from './matcher.ts';
+import { createLineMatcher, type LineHit, type LineMatcher } from './matcher.ts';
 import type { PathGuard } from './path.ts';
 import type { ScanScope } from './scan.ts';
 import { readText, scan } from './scan.ts';
@@ -68,32 +58,6 @@ interface SearchResult {
   after?: string[];
 }
 
-const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
-/** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
-const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
-const CR = 13;
-
-/**
- * Find non-overlapping occurrences of a global regex in a single line, reporting
- * the first match's column alongside the count.
- */
-async function findLineMatches(
-  regex: Regex,
-  line: string,
-  tick: () => Promise<boolean>,
-): Promise<LineHit | undefined> {
-  let count = 0;
-  let column = -1;
-  // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
-  // lastIndex from its own match before every exec, with no await inside.
-  for (const match of execMatches(regex, line)) {
-    if (column === -1) column = match.start;
-    count++;
-    if (count >= MAX_MATCHES_PER_LINE || (await tick())) break;
-  }
-  return count > 0 ? { count, column } : undefined;
-}
-
 export interface SearchContentOptions {
   caseSensitive?: boolean;
   isRegex?: boolean;
@@ -140,11 +104,7 @@ interface ScanContext {
   fs: GuardedFileSystem;
   signal: AbortSignal | undefined;
   maxResults: number;
-  regex: Regex;
-  prefilter: Regex;
-  /** Set for a literal needle it can match; RE2 then judges only the files it hands back. */
-  literal: LiteralMatcher | undefined;
-  source: string;
+  matcher: LineMatcher;
   context: number;
 }
 
@@ -158,42 +118,35 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // only affects the bytes a pattern could not have matched anyway.
   if (verdict.kind === 'undecodable' && buffer.includes(0)) return { kind: 'binary' };
 
-  const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
-  if (literal && !literal.mayMatch(buffer)) return { kind: 'scanned', matches: [] };
-  const content = buffer.toString('utf-8');
-  if (!literal && canPrefilter(scanCtx.source, buffer)) {
-    scanCtx.prefilter.lastIndex = 0;
-    if (scanCtx.prefilter.exec(content) === null) return { kind: 'scanned', matches: [] };
-  }
+  const fileMatcher = scanCtx.matcher.forFile(buffer);
+  if (!fileMatcher) return { kind: 'scanned', matches: [] };
 
+  const content = buffer.toString('utf-8');
   const lines = content.split(/\r?\n/u);
   // A trailing newline splits into a phantom empty last element, and an
   // empty file splits into one empty element: neither is a line the
   // file has, for matching or for context.
   const lineCount =
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-  // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
-  // the process; report the file tooLarge instead. Only a buffer over the bound
-  // can hold such a line, so ordinary files skip the per-line measure, and a
-  // literal match never hands a line to RE2.
-  const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
-  const yielder = createYielder(scanCtx.signal);
   let cut = false;
-  const tick = async (): Promise<boolean> => (cut ||= await yielder());
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
-    if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
-      return { kind: 'tooLarge' };
-    }
     // Yield between lines too: millions of short lines never yield per-match.
-    if (await tick()) break;
-    // One scan per line: the helper resets lastIndex itself, so it
-    // doubles as the "does this line match" test.
-    const found = literal
-      ? literal.matchLine(line)
-      : await findLineMatches(scanCtx.regex, line, tick);
+    if (await scanCtx.matcher.tick()) {
+      cut = true;
+      break;
+    }
+    let found: LineHit | undefined;
+    try {
+      found = await fileMatcher.matchLine(line);
+    } catch (err) {
+      if (isFsError(err) && err.code === ErrorCode.TOO_LARGE) {
+        return { kind: 'tooLarge' };
+      }
+      throw err;
+    }
     if (found) {
       matches.push({
         file: entryPath,
@@ -225,28 +178,13 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const plan = planMatch(pattern, {
+  const matcher = createLineMatcher({
+    pattern,
     isRegex: Boolean(options.isRegex),
     caseSensitive: Boolean(options.caseSensitive),
+    signal: options.signal,
   });
-  const source = plan.source;
-  // Compiles live inside the try so a failing second compile does not leak the
-  // first's wasm memory; freeRegex is null-safe.
-  let regex: Regex | undefined;
-  let prefilter: Regex | undefined;
   try {
-    regex = compileRegex(source, {
-      caseSensitive: Boolean(options.caseSensitive),
-    });
-    // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
-    // buffer hit (the converse can be false — a false positive just falls through
-    // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
-    // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
-    // the prefilter (see canPrefilter).
-    prefilter = compileRegex(source, {
-      caseSensitive: Boolean(options.caseSensitive),
-      multiline: true,
-    });
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const context = options.context ?? 0;
@@ -261,10 +199,7 @@ export async function searchContent(
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
       maxResults,
-      regex,
-      prefilter,
-      literal: plan.literal,
-      source,
+      matcher,
       context,
     };
     const outcome = await scan<FileScan>(
@@ -332,16 +267,6 @@ export async function searchContent(
       },
     };
   } finally {
-    freeRegex(prefilter);
-    freeRegex(regex);
+    matcher.dispose();
   }
-}
-
-/** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
-function canPrefilter(source: string, buffer: Buffer): boolean {
-  if (buffer.length > RE2_MAX_INPUT_BYTES) return false;
-  if (BUFFER_ANCHOR_RE.test(source)) return false;
-  if (INLINE_FLAGS_RE.test(source)) return false;
-  if (source.includes('$') && buffer.includes(CR)) return false;
-  return true;
 }

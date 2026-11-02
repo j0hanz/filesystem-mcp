@@ -50,8 +50,9 @@ What a text search or a replacement settles about its needle before any text
 is read: which engine judges it — a native literal pass or the regex engine —
 under the flags, and the per-text bails that hand judgment to the regex
 engine (a fold character in the text; U+FFFD or a lone surrogate in the
-needle). Search and replace ask one module for their plans, so a preview
-judges exactly what its replacement will touch.
+needle). The module produces symmetrical, polymorphic matchers —
+`LineMatcher` for line-oriented search and `ReplacementMatcher` for rewrites —
+so a preview judges exactly what its replacement will touch.
 _Avoid_: matcher selection, dispatch, engine choice, fast path
 
 ## Writes
