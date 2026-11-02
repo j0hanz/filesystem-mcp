@@ -82,8 +82,8 @@ export interface PendingCtx {
   /** `ctx.mcpReq.droppedInputResponseKeys` for this round; see `ToolCtx`. */
   readonly droppedInputResponseKeys?: readonly string[] | undefined;
   readonly inputResponses?: Record<string, unknown> | undefined;
-  /** The live handler context; the codec binds the minted state to its method and caller. */
-  readonly serverCtx: ServerContext;
+  /** The facts a minted state is sealed to; see {@link RoundBind}. */
+  readonly roundBind: RoundBind;
 }
 
 /** One embedded form-mode confirmation, keyed within the call. */
@@ -137,6 +137,34 @@ function requestStateBinding(ctx: ServerContext): string {
 }
 
 /**
+ * The Round bind: the two request facts a minted `requestState` is sealed to,
+ * and all of the request context a tool body sees. `caller` is the
+ * authenticated HTTP client id, absent on stdio.
+ */
+export interface RoundBind {
+  readonly method: string;
+  readonly caller?: string | undefined;
+}
+
+/** The Round bind of a live request context. */
+export function roundBindOf(ctx: ServerContext): RoundBind {
+  const caller = ctx.http?.authInfo?.clientId;
+  return { method: ctx.mcpReq.method, ...(caller === undefined ? {} : { caller }) };
+}
+
+/**
+ * Maps a Round bind back to the SDK context shape the codec's `bind` reads, so
+ * `requestStateBinding` yields the same value it would for the request itself.
+ */
+export function bindContextOf(bind: RoundBind): ServerContext {
+  // Only the fields `requestStateBinding` reads are present; the codec reads nothing else.
+  return {
+    mcpReq: { method: bind.method },
+    ...(bind.caller === undefined ? {} : { http: { authInfo: { clientId: bind.caller } } }),
+  } as unknown as ServerContext;
+}
+
+/**
  * The codec: `mint` seals a `PendingState` into the opaque wire string a
  * handler returns from `inputRequired({ requestState })`; `verify` drops into
  * `ServerOptions.requestState.verify` and throws on tamper, expiry, or bind
@@ -183,7 +211,7 @@ function requestedSchemaFor(input: PendingInput): z.ZodObject {
 export async function buildInputRequired(
   pending: PendingState,
   inputs: readonly PendingInput[],
-  ctx: ServerContext,
+  bind: RoundBind,
 ): Promise<InputRequiredResult> {
   const inputRequests: Record<string, InputRequest> = {};
   for (const input of inputs) {
@@ -200,7 +228,7 @@ export async function buildInputRequired(
       ...(pending.reprompted ? { reprompted: true as const } : {}),
       ...(pending.reissued ? { reissued: true as const } : {}),
     },
-    ctx,
+    bindContextOf(bind),
   );
   return inputRequired({ inputRequests, requestState });
 }
@@ -288,7 +316,7 @@ export async function pendingRoundTrip(
     return buildInputRequired(
       { op: opts.op, paths: opts.pending },
       opts.buildInputs(opts.pending),
-      ctx.serverCtx,
+      ctx.roundBind,
     );
   }
   // Retry for THIS op (R9): the verified state must bind the same pending set.
@@ -306,7 +334,7 @@ export async function pendingRoundTrip(
     const dropped = new Set(ctx.droppedInputResponseKeys);
     const inputs = opts.buildInputs(opts.pending);
     if (inputs.some((input) => dropped.has(input.key))) {
-      return buildInputRequired({ ...state, reissued: true }, inputs, ctx.serverCtx);
+      return buildInputRequired({ ...state, reissued: true }, inputs, ctx.roundBind);
     }
   }
   return undefined;

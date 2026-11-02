@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import {
+  bindContextOf,
   buildInputRequired,
   describeRefusal,
   pendingRoundTrip,
@@ -21,6 +22,7 @@ import {
   readAcceptedConfirm,
   readAcceptedMultiChoice,
   requestStateCodec,
+  type RoundBind,
 } from '../src/core/input-required.ts';
 import { createServer } from '../src/server.ts';
 import {
@@ -32,12 +34,11 @@ import {
   writeTestFile,
 } from './helpers.ts';
 
-/** The two fields `requestStateBinding` reads; everything else is unused. */
-function bindContext(method = 'tools/call', clientId?: string): ServerContext {
-  return {
-    mcpReq: { method },
-    ...(clientId === undefined ? {} : { http: { authInfo: { clientId } } }),
-  } as unknown as ServerContext;
+const ROUND_BIND: RoundBind = { method: 'tools/call' };
+
+/** The codec's view of a request with this method and caller. */
+function bindContext(method = 'tools/call', caller?: string): ServerContext {
+  return bindContextOf({ method, ...(caller === undefined ? {} : { caller }) });
 }
 
 /** The converted `requestedSchema` an embedded elicitation carries, keyed by its one field. */
@@ -78,7 +79,7 @@ describe('input_required multi-round-trip infrastructure', () => {
           {
             requestState: undefined,
             clientCapabilities: mode.capabilities,
-            serverCtx: bindContext(),
+            roundBind: ROUND_BIND,
           },
           {
             op,
@@ -188,7 +189,7 @@ describe('input_required multi-round-trip infrastructure', () => {
 
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
     const result = await pendingRoundTrip(
-      { requestState: undefined, serverCtx: bindContext() },
+      { requestState: undefined, roundBind: ROUND_BIND },
       {
         op: 'delete',
         pending: ['/a'],
@@ -204,7 +205,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     const wire = await requestStateCodec.mint({ op: 'move', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
     const result = await pendingRoundTrip(
-      { requestState: () => decoded, serverCtx: bindContext() },
+      { requestState: () => decoded, roundBind: ROUND_BIND },
       {
         op: 'move',
         pending: ['/x'],
@@ -220,7 +221,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(async () => {
       await pendingRoundTrip(
-        { requestState: () => decoded, serverCtx: bindContext() },
+        { requestState: () => decoded, roundBind: ROUND_BIND },
         {
           op: 'move',
           pending: ['/y'],
@@ -238,7 +239,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     const decoded = await requestStateCodec.verify(wire, bindContext());
     await assert.rejects(async () => {
       await pendingRoundTrip(
-        { requestState: () => decoded, serverCtx: bindContext() },
+        { requestState: () => decoded, roundBind: ROUND_BIND },
         {
           op: 'delete',
           pending: ['/x', '/y'],
@@ -253,7 +254,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     const wire = await requestStateCodec.mint({ op: 'grant', paths: ['/x'] }, bindContext());
     const decoded = await requestStateCodec.verify(wire, bindContext());
     const result = await pendingRoundTrip(
-      { requestState: () => decoded, serverCtx: bindContext() },
+      { requestState: () => decoded, roundBind: ROUND_BIND },
       {
         op: 'delete',
         pending: ['/x'],
@@ -275,7 +276,7 @@ describe('input_required multi-round-trip infrastructure', () => {
       {
         requestState: () => decoded,
         droppedInputResponseKeys: ['confirm_0'],
-        serverCtx: bindContext(),
+        roundBind: ROUND_BIND,
       },
       { op: 'delete', pending: ['/x'], buildInputs },
     );
@@ -290,7 +291,7 @@ describe('input_required multi-round-trip infrastructure', () => {
       {
         requestState: () => second,
         droppedInputResponseKeys: ['confirm_0'],
-        serverCtx: bindContext(),
+        roundBind: ROUND_BIND,
       },
       { op: 'delete', pending: ['/x'], buildInputs },
     );
@@ -304,7 +305,7 @@ describe('input_required multi-round-trip infrastructure', () => {
       {
         requestState: () => decoded,
         droppedInputResponseKeys: ['unrelated'],
-        serverCtx: bindContext(),
+        roundBind: ROUND_BIND,
       },
       {
         op: 'delete',
@@ -323,7 +324,7 @@ describe('input_required multi-round-trip infrastructure', () => {
         {
           requestState: () => decoded,
           droppedInputResponseKeys: ['confirm_0'],
-          serverCtx: bindContext(),
+          roundBind: ROUND_BIND,
         },
         {
           op: 'delete',
@@ -339,7 +340,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     const r = await buildInputRequired(
       { op: 'delete', paths: ['/a'] },
       [{ key: 'confirm_0', message: 'Delete /a?' }],
-      bindContext(),
+      ROUND_BIND,
     );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
@@ -393,7 +394,7 @@ describe('input_required multi-round-trip infrastructure', () => {
           choices: overwriteSkipChoices,
         },
       ],
-      bindContext(),
+      ROUND_BIND,
     );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
@@ -462,7 +463,7 @@ describe('input_required multi-round-trip infrastructure', () => {
           multi: true,
         },
       ],
-      bindContext(),
+      ROUND_BIND,
     );
     assert.strictEqual(isInputRequiredResult(r), true);
     assert.ok(r.inputRequests);
@@ -554,7 +555,10 @@ describe('wrapped inputResponses over the modern wire', () => {
     handler: ReturnType<typeof createMcpHandler>,
     id: number,
     params: Record<string, unknown>,
+    caller?: string,
   ): Promise<{ result?: Record<string, unknown>; error?: { message?: string } }> {
+    const authInfo =
+      caller === undefined ? undefined : { token: caller, clientId: caller, scopes: [] };
     const res = await handler.fetch(
       new Request('http://test.local/mcp', {
         method: 'POST',
@@ -571,6 +575,7 @@ describe('wrapped inputResponses over the modern wire', () => {
         },
         body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params }),
       }),
+      authInfo ? { authInfo } : undefined,
     );
     const text = await res.text();
     // Tolerate an SSE-framed reply by taking the last `data:` line.
@@ -584,6 +589,42 @@ describe('wrapped inputResponses over the modern wire', () => {
       : text;
     return JSON.parse(json) as { result?: Record<string, unknown>; error?: { message?: string } };
   }
+
+  it('a round minted under the mapped Round bind verifies under the real request context', async () => {
+    const root = await createTestRoot();
+    const handler = createMcpHandler(
+      async ({ era }) => (await createServer({ cliAllowedDirs: [root] }, { era })).mcp,
+      { legacy: 'reject' },
+    );
+    try {
+      const dir = join(root, 'victim');
+      await writeTestFile(root, 'victim/f.txt', 'x');
+      const args = { paths: [dir], recursive: true };
+      const first = await post(handler, 1, { name: 'delete', arguments: args, _meta: META }, 'k');
+      assert.strictEqual(first.result?.['resultType'], 'input_required');
+      const retry = (id: number, caller: string) =>
+        post(
+          handler,
+          id,
+          {
+            name: 'delete',
+            arguments: args,
+            _meta: META,
+            requestState: first.result?.['requestState'],
+            inputResponses: { confirm_0: { action: 'accept', content: { choice: 'delete' } } },
+          },
+          caller,
+        );
+      assert.ok((await retry(2, 'other')).error, 'another caller must be refused');
+      await access(dir);
+      const same = await retry(3, 'k');
+      assert.strictEqual(same.error, undefined, JSON.stringify(same));
+      await assert.rejects(access(dir), { code: 'ENOENT' });
+    } finally {
+      await handler.close();
+      await cleanupTestRoot(root);
+    }
+  });
 
   for (const missing of ['legacy', 'empty', 'wrong path']) {
     it(`delete does not accept ${missing} identity state after the original becomes empty`, async () => {

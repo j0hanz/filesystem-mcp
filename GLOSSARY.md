@@ -91,6 +91,14 @@ not asked about again. An entry that vanished needs no approval.
 _Avoid_: prompt, elicitation (the protocol mechanism), access grant (widening
 the allowed roots is a different question)
 
+**Round bind**:
+What a minted `requestState` is sealed to: the request's JSON-RPC method
+and its authenticated caller. A retried call whose context yields a
+different value is refused, so a round minted for one request cannot be
+replayed onto another.
+_Avoid_: request context (the whole SDK shape a tool body never sees),
+bind context
+
 ## Transport
 
 **Message limit**:

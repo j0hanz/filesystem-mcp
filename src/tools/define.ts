@@ -29,6 +29,8 @@ import {
   pendingRoundTrip,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
+  type RoundBind,
+  roundBindOf,
 } from '../core/input-required.ts';
 import { Logger, sanitizeLogField } from '../core/observability.ts';
 import type { LoggingLevel } from '../core/observability.ts';
@@ -86,8 +88,8 @@ export interface ToolCtx {
    * all. `undefined` means "cannot tell" — never "no capabilities".
    */
   readonly clientCapabilities?: ClientCapabilities | undefined;
-  /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
-  readonly serverCtx: ServerContext;
+  /** What a minted `requestState` is sealed to; the only request facts a tool body sees. */
+  readonly roundBind: RoundBind;
   /** `stdio` alone has a 10 MiB frame limit; `http` on HTTP, unset on the in-memory test pair. */
   readonly transport?: 'stdio' | 'http' | undefined;
 }
@@ -204,7 +206,7 @@ function toToolCtx(
     inputResponses: ctx.mcpReq.inputResponses,
     droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
     requestState: ctx.mcpReq.requestState,
-    serverCtx: ctx,
+    roundBind: roundBindOf(ctx),
     ...(clientCapabilities ? { clientCapabilities } : {}),
     ...(deps.transport ? { transport: deps.transport } : {}),
   };
@@ -244,6 +246,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
 
   constructor(
     toolName: string,
+    serverCtx: ServerContext,
     ctx: Omit<ToolCtx, 'log' | 'onProgress'>,
     def: ToolDef<I, O>,
     parsedArgs: z.infer<I>,
@@ -256,7 +259,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(getToolTimeoutMs())])
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
-    const { mcpReq } = ctx.serverCtx;
+    const { mcpReq } = serverCtx;
     const token = mcpReq._meta?.progressToken;
     const notify = async (notification: Notification): Promise<void> => mcpReq.notify(notification);
     this.#progressSession = new ProgressSession({
@@ -569,6 +572,7 @@ export function defineTool<I extends z.ZodType, O extends object>(
             : undefined;
         return new ToolExecutor<I, O>(
           def.name,
+          ctx,
           toToolCtx(ctx, deps, capture),
           def,
           args,

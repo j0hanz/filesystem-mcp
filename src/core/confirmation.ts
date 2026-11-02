@@ -58,7 +58,7 @@ export async function confirm(
   if (pending.length === 0) return { verdict: () => 'proceed' };
 
   const ask = (next: PendingState, inputs: readonly PendingInput[]) =>
-    buildInputRequired(next, inputs, ctx.serverCtx);
+    buildInputRequired(next, inputs, ctx.roundBind);
   const input = (item: ConfirmItem, key: string): PendingInput => ({
     key,
     message: item.message,
