@@ -375,7 +375,10 @@
                 onclick: () => remove(info.path, true),
               }),
             ),
-            make('p', { textContent: `modified ${info.modified} · ${info.permissions}` }),
+            make('p', {
+              // Windows reports readOnly instead of permissions.
+              textContent: `modified ${info.modified} · ${info.permissions ?? (info.readOnly ? 'read-only' : 'writable')}`,
+            }),
           );
         } catch (error) {
           status(error.message, true);
