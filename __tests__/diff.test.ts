@@ -5,7 +5,15 @@ import { after, before, describe, it } from 'node:test';
 import { diffStatsFromPatch, unifiedPatch } from '../src/core/diff.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { DIFF } from '../src/tools/diff.ts';
-import { cleanupTestRoot, createTestRoot, makeGuard, writeTestFile } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestClientPair,
+  createTestRoot,
+  firstTextBlock,
+  makeGuard,
+  type TestClientContext,
+  writeTestFile,
+} from './helpers.ts';
 import { runToolBodyResult } from './tool-harness.ts';
 
 const lines = (prefix: string, n: number): string =>
@@ -91,5 +99,37 @@ describe('diff body', () => {
       (err) => err instanceof FsError && err.code === ErrorCode.INVALID_INPUT,
     );
     assert.deepStrictEqual(await readFile(path), bytes);
+  });
+});
+
+// Wire tier: the executor's placement for a successful diff. The text is the
+// one copy of the diff; the counts ship under `_meta`, which a client that
+// keys on structuredContent would otherwise hide (`TC-FUNC-073` pins the
+// same split for read and stat only).
+describe('diff over the wire', () => {
+  let root: string;
+  let harness: TestClientContext;
+
+  before(async () => {
+    root = await createTestRoot();
+    harness = await createTestClientPair([root]);
+  });
+
+  after(async () => {
+    await harness.close();
+    await cleanupTestRoot(root);
+  });
+
+  it('ships the diff as the text block and the counts under _meta', async () => {
+    const a = await writeTestFile(root, 'wire_a.txt', 'x\ny\nz\n');
+    const b = await writeTestFile(root, 'wire_b.txt', 'x\nY\nz\n');
+    const result = await harness.client.callTool({ name: 'diff', arguments: { a, b } });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structuredContent, undefined, 'diff authors text, so no JSON view');
+    const meta = result._meta as { linesAdded?: number; linesRemoved?: number };
+    assert.strictEqual(meta.linesAdded, 1);
+    assert.strictEqual(meta.linesRemoved, 1);
+    const diffText = firstTextBlock(result).text ?? '';
+    assert.ok(diffText.includes('-y') && diffText.includes('+Y'));
   });
 });

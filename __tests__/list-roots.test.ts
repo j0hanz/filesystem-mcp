@@ -66,4 +66,21 @@ describe('list_roots over the wire', () => {
     assert.ok((structured?.roots?.length ?? 0) > 0, 'Should have at least one allowed directory');
     assert.strictEqual(structured?.hint, undefined, 'a configured server pays for no hint');
   });
+
+  it('an unconfigured server lists no roots and says how to configure them', async () => {
+    // The body tier reads a fresh guard; only a server pair proves the
+    // unconfigured case reaches the client as structuredContent.
+    const bare = await createTestClientPair([]);
+    try {
+      const result = await bare.client.callTool({ name: 'list_roots' });
+      assert.notStrictEqual(result.isError, true);
+      const structured = result.structuredContent as { roots?: string[]; hint?: string };
+      assert.deepStrictEqual(structured.roots, []);
+      assert.match(structured.hint ?? '', /FS_ALLOWED_DIRS/);
+      assert.match(structured.hint ?? '', /--allow-cwd/);
+      assert.match(structured.hint ?? '', /approve the requested grant/);
+    } finally {
+      await bare.close();
+    }
+  });
 });

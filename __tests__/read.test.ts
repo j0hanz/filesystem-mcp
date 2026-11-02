@@ -9,7 +9,16 @@ import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { READ } from '../src/tools/index.ts';
-import { cleanupTestRoot, createTestRoot, makeGuard, withEnv, writeTestFile } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestClientPair,
+  createTestRoot,
+  firstTextBlock,
+  makeGuard,
+  type TestClientContext,
+  withEnv,
+  writeTestFile,
+} from './helpers.ts';
 import { runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
 
 type ReadArgs = z.input<typeof READ.def.input>;
@@ -498,5 +507,67 @@ describe('read body', () => {
       },
       'one endLine issue, not one per bound',
     );
+  });
+});
+
+// Wire tier: the response the client receives. The body builds the blocks and
+// the metadata; this pins the executor's placement of both (content blocks and
+// `_meta`), which the body tier cannot see.
+describe('read over the wire', () => {
+  let root: string;
+  let harness: TestClientContext;
+
+  before(async () => {
+    root = await createTestRoot();
+    harness = await createTestClientPair([root]);
+  });
+
+  after(async () => {
+    await harness.close();
+    await cleanupTestRoot(root);
+  });
+
+  it('ships a PNG as an image block whose base64 decodes to the file', async () => {
+    const pngBytes = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4' +
+        '890000000d49444154789c63f8cf00000001000100000005defb0a00000000' +
+        '49454e44ae426082',
+      'hex',
+    );
+    const file = join(root, 'wire-pixel.png');
+    await writeFile(file, pngBytes);
+    const result = await harness.client.callTool({ name: 'read', arguments: { path: file } });
+    assert.notStrictEqual(result.isError, true);
+    const imageBlock = (
+      result.content as readonly { type: string; data?: string; mimeType?: string }[]
+    ).find((b) => b.type === 'image');
+    assert.ok(imageBlock, 'expected an image content block on the wire');
+    assert.strictEqual(imageBlock.mimeType, 'image/png');
+    assert.ok(typeof imageBlock.data === 'string');
+    assert.strictEqual(Buffer.from(imageBlock.data, 'base64').equals(pngBytes), true);
+    const structured = result._meta as { results?: { value?: { kind?: string } }[] } | undefined;
+    assert.strictEqual(structured?.results?.[0]?.value?.kind, 'image');
+  });
+
+  it('ships a binary read as an embedded resource block, not a link', async () => {
+    const bytes = Buffer.from([0x50, 0x4b, 3, 4, 0, 0, 0, 0]);
+    const file = join(root, 'wire.zip');
+    await writeFile(file, bytes);
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: file, binary: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    const blocks = result.content as readonly {
+      type: string;
+      resource?: { uri?: string; mimeType?: string; blob?: string };
+    }[];
+    assert.strictEqual(blocks.filter((b) => b.type === 'resource_link').length, 0);
+    const block = blocks.find((b) => b.type === 'resource');
+    assert.ok(block?.resource, 'expected an embedded resource on the wire');
+    assert.strictEqual(block.resource.mimeType, 'application/zip');
+    assert.ok(Buffer.from(block.resource.blob ?? '', 'base64').equals(bytes));
+    assert.strictEqual(block.resource.uri, buildFileResourceUri(normalizePath(file)));
+    assert.ok(firstTextBlock(result).text?.includes('returned as an embedded resource block'));
   });
 });
