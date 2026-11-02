@@ -121,6 +121,8 @@ export interface TransferPlan {
   readonly destination: string;
   /** What sat at the destination when planned; undefined when absent or a Respelling. */
   readonly existing: EntryIdentity | undefined;
+  /** Copy only: extra `fs.cp` options over the fixed copy defaults; the walks honour its filter. */
+  readonly copy?: Parameters<typeof fsCp>[2];
 }
 
 export interface ExecuteTransferOptions {
@@ -128,10 +130,10 @@ export interface ExecuteTransferOptions {
   readonly createParents?: boolean;
   /** Move only: false rethrows EXDEV instead of copying across devices. */
   readonly crossDevice?: boolean;
-  /** Copy only: extra `fs.cp` options over the fixed copy defaults. */
-  readonly copy?: Parameters<typeof fsCp>[2];
   readonly signal?: AbortSignal;
 }
+
+type CopyFilter = NonNullable<NonNullable<Parameters<typeof fsCp>[2]>['filter']>;
 
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
@@ -195,7 +197,8 @@ export class GuardedFileSystem {
    * write check (read-only dirs, the denylist), and every entry must keep its
    * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
    * any other non-directory, has nothing under it to relocate. A directory
-   * that cannot be listed fails closed.
+   * that cannot be listed fails closed. A copy's `filter` prunes what it
+   * would not copy, as `fs.cp` does: a refused directory takes its subtree.
    */
   async #relocationWalk(
     op: TransferOp,
@@ -203,8 +206,10 @@ export class GuardedFileSystem {
     requestedFrom: string,
     destination: string,
     signal?: AbortSignal,
+    filter?: CopyFilter,
   ): Promise<void> {
     if (!(await fsLstat(entry)).isDirectory()) return;
+    if (filter && !(await filter(entry, destination))) return;
     const guard = this.pathGuard;
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
@@ -224,6 +229,7 @@ export class GuardedFileSystem {
         for (const dirent of dirents) {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
+          if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
           await guard.validateTransferPathForWrite(join(destination, name));
           yield name;
           if (dirent.isDirectory()) pending.push(name);
@@ -444,7 +450,7 @@ export class GuardedFileSystem {
   async planTransfer(
     op: TransferOp,
     pair: { source: string; destination: string },
-    { signal }: { signal?: AbortSignal } = {},
+    { signal, copy }: { signal?: AbortSignal; copy?: Parameters<typeof fsCp>[2] } = {},
   ): Promise<TransferPlan> {
     const { entry, landing } = await this.#transferSource(op, pair.source, signal);
     const { destination, kind } = await this.pathGuard.resolveTransferDestination(
@@ -452,7 +458,14 @@ export class GuardedFileSystem {
       { entry, landing },
     );
     const respelling = kind === 'respelling';
-    const base = { op, request: pair, entry, landing, destination };
+    const base = {
+      op,
+      request: pair,
+      entry,
+      landing,
+      destination,
+      ...(op === 'copy' && copy ? { copy } : {}),
+    };
     // A copy onto its own Respelling is the same file; the same rename is
     // real work for a move and proceeds.
     if (kind === 'self' || (respelling && op === 'copy')) {
@@ -467,7 +480,7 @@ export class GuardedFileSystem {
     }
     // On the final destination spelling: a re-spelled directory moves its
     // entries in or out of a spelling-specific allow or deny rule.
-    await this.#relocationWalk(op, entry, pair.source, destination, signal);
+    await this.#relocationWalk(op, entry, pair.source, destination, signal, copy?.filter);
     const existing = respelling ? undefined : await destIdentity(this, destination, op);
     return { ...base, noop: false, respelling, existing };
   }
@@ -477,13 +490,15 @@ export class GuardedFileSystem {
    * destination must still be what the plan saw, so nothing that changed
    * while a Confirmation was open is acted on: a destination that appeared
    * fails as created, and one replaced by another entry fails as replaced.
+   * A move's source must still name what the plan saw: a link retargeted
+   * since could otherwise be renamed over the very file it now points at.
    * A move renames, falling back on EXDEV to a staged copy and removal
    * unless `crossDevice` is false: a copy gives every descendant a new
    * identity, which undo's records cannot follow, so a restore rethrows.
    */
   async executeTransfer(
     plan: TransferPlan,
-    { createParents = false, crossDevice = true, copy, signal }: ExecuteTransferOptions = {},
+    { createParents = false, crossDevice = true, signal }: ExecuteTransferOptions = {},
   ): Promise<{ from: string; to: string }> {
     const { op, entry, destination, request } = plan;
     const done = { from: entry, to: destination };
@@ -493,7 +508,17 @@ export class GuardedFileSystem {
       await fsLstat(entry);
       return done;
     }
-    await this.#relocationWalk(op, entry, request.source, destination, signal);
+    if (op === 'move') {
+      const now = await this.#transferSource(op, request.source, signal);
+      if (!isSamePath(now.entry, entry) || !isSamePath(now.landing, plan.landing)) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `Move cancelled: source "${request.source}" changed after it was planned.`,
+          request.source,
+        );
+      }
+    }
+    await this.#relocationWalk(op, entry, request.source, destination, signal, plan.copy?.filter);
     if (!plan.respelling) {
       const now = await destIdentity(this, destination, op);
       if (plan.existing === undefined && now !== undefined) {
@@ -513,7 +538,7 @@ export class GuardedFileSystem {
       }
     }
     if (createParents) await this.mkdir(dirname(destination), { recursive: true });
-    if (op === 'copy') await this.#copy(entry, destination, copy);
+    if (op === 'copy') await this.#copy(entry, destination, plan.copy);
     else await this.#move(plan, crossDevice);
     return done;
   }
@@ -917,8 +942,12 @@ export class GuardedFileSystem {
     destination: string,
     options?: Parameters<typeof fsCp>[2],
   ): Promise<void> {
-    const plan = await this.planTransfer('copy', { source, destination });
-    await this.executeTransfer(plan, options ? { copy: options } : {});
+    const plan = await this.planTransfer(
+      'copy',
+      { source, destination },
+      options ? { copy: options } : {},
+    );
+    await this.executeTransfer(plan);
   }
 
   /** The copy half of `executeTransfer`. */

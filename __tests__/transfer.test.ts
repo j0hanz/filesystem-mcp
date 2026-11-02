@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -132,6 +133,40 @@ describe('GuardedFileSystem Transfer', { concurrency: false }, () => {
       rejectsWith(ErrorCode.CANCELLED, /replaced after the overwrite was approved/u),
     );
     assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'swapped');
+  });
+
+  it('cancels a move whose source link was retargeted after the plan', async (t) => {
+    const { root, fs } = await setup();
+    await writeFile(join(root, 'a.txt'), 'a');
+    await writeFile(join(root, 'b.txt'), 'b');
+    const link = join(root, 'link');
+    try {
+      await symlink(join(root, 'a.txt'), link, 'file');
+    } catch {
+      return t.skip('cannot create symlinks here');
+    }
+    const plan = await fs.planTransfer('move', { source: link, destination: join(root, 'b.txt') });
+    await rm(link);
+    await symlink(join(root, 'b.txt'), link, 'file');
+    await assert.rejects(
+      fs.executeTransfer(plan),
+      rejectsWith(ErrorCode.CANCELLED, /changed after it was planned/u),
+    );
+    assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'b');
+  });
+
+  it('a copy filter prunes the Relocation walk', async () => {
+    await withEnv({ FS_DENYLIST: 'vault/*.dat', FS_ALLOW_SENSITIVE: '1' }, async () => {
+      const { root, fs } = await setup();
+      await mkdir(join(root, 'src'));
+      await writeFile(join(root, 'src', 'keep.txt'), 'keep');
+      await writeFile(join(root, 'src', 'skip.dat'), 'skip');
+      await fs.cp(join(root, 'src'), join(root, 'vault'), {
+        filter: (sourcePath) => !sourcePath.endsWith('skip.dat'),
+      });
+      assert.equal(await readFile(join(root, 'vault', 'keep.txt'), 'utf8'), 'keep');
+      assert.equal(existsSync(join(root, 'vault', 'skip.dat')), false);
+    });
   });
 
   it('walks again at execute: a protected entry added after the plan is refused', async () => {
