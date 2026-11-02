@@ -1252,11 +1252,10 @@ export class PathGuard {
   async validatePathForDelete(
     requestedPath: string,
     /**
-     * `allowReadOnly` skips the read-only-dir refusal: for callers that only
-     * read the source (`cp`), a copy OUT of a read-only dir mutates nothing
-     * under it. Everything else — containment, symlink resolution, the
-     * sensitive denylist — still applies, and a caller that removes the
-     * source (rename, cross-device move, delete) keeps the default.
+     * `allowReadOnly` skips the read-only-dir refusal. Callers reach it only
+     * through GuardedFileSystem's `probe` kind (the read-only-probe rule in
+     * `GUARD_REGIME`, src/core/fs.ts): everything else — containment, symlink
+     * resolution, the sensitive denylist — still applies.
      */
     opts?: { allowReadOnly?: boolean },
   ): Promise<string> {

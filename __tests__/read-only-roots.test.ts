@@ -304,6 +304,48 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     }
   });
 
+  it('RO-REGIME-001: every GuardedFileSystem op honours its read-only rule', async (t) => {
+    const dir = join(ro, 'regime');
+    const file = join(dir, 'f.txt');
+    await mkdir(join(dir, 'empty'), { recursive: true });
+    await writeFile(file, 'keep');
+    await writeFile(join(rw, 'src.txt'), 'src');
+    const fs = new GuardedFileSystem(await guardFor([ro]));
+
+    // Reads and metadata probes are allowed inside the read-only dir.
+    assert.equal((await fs.lstat(file)).stats.isFile(), true);
+    assert.equal((await fs.lstatExact(file)).stats.isFile(), true);
+    assert.equal((await fs.stat(file)).stats.isFile(), true);
+    assert.equal((await fs.statDetailed(file)).stats.isFile(), true);
+    assert.equal(await fs.countEntries(dir), 2);
+    assert.equal((await fs.readRaw(file)).content.toString(), 'keep');
+    const link = join(dir, 'link.txt');
+    if (await trySymlink('f.txt', link, () => undefined, 'file')) {
+      assert.equal((await fs.readlink(link)).linkString, 'f.txt');
+    } else {
+      t.diagnostic('symlink not permitted; readlink unchecked');
+    }
+
+    // Every mutation is refused, including a move OUT of it.
+    for (const mutate of [
+      () => fs.writeFile(file, 'x'),
+      () => fs.appendFile(file, 'x'),
+      () => fs.mkdir(join(dir, 'new')),
+      () => fs.symlink('f.txt', join(dir, 'new-link'), 'file'),
+      () => fs.rm(file),
+      () => fs.rmdir(join(dir, 'empty')),
+      () => fs.rename(file, join(rw, 'moved.txt')),
+      () => fs.cp(join(rw, 'src.txt'), join(dir, 'copied.txt')),
+      () => fs.lockForWrite(file, () => Promise.resolve()),
+    ]) {
+      await assert.rejects(mutate(), (error: unknown) => {
+        assertReadOnlyDenied(error, ro);
+        return true;
+      });
+    }
+    assert.equal(await readFile(file, 'utf8'), 'keep');
+  });
+
   it('RO-DEL-001: refuses a delete under a read-only dir', async () => {
     await writeFile(join(ro, 'existing.txt'), 'x');
     const guard = await guardFor([ro]);
