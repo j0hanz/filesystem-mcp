@@ -75,6 +75,8 @@ Pass test runner flags after `--`, for example
 
 `__tests__/contract.test.ts` snapshots the tools, prompts, resource templates, capabilities, and instructions the server advertises. When you change any of them on purpose, regenerate the snapshot with `node --test --test-update-snapshots __tests__/contract.test.ts` (no `FS_*` variables set), and review the snapshot diff in your PR.
 
+To test a tool's payload without the MCP wire, drive its `run` through `__tests__/tool-harness.ts` (see `__tests__/stat.test.ts`). Keep in-memory client tests for what the executor adds: response shape, deadlines, access grants, undo.
+
 CI runs the same checks as separate steps on Ubuntu, Windows and macOS, plus Ubuntu on Node 26, and all four are required. The Ubuntu leg on the pinned Node runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
 
 ## Isolated capability lab

@@ -155,6 +155,15 @@ export interface DefinedTool {
   register(deps: ToolDeps): RegisteredTool;
 }
 
+/**
+ * A `DefinedTool` that still carries its `ToolDef`. `register` is the wire
+ * adapter; `def.run` is the tool-body seam a test harness drives directly
+ * (`__tests__/tool-harness.ts`), with no MCP pair and no executor wrapping.
+ */
+export interface DefinedToolOf<I extends z.ZodType, O extends object> extends DefinedTool {
+  readonly def: ToolDef<I, O>;
+}
+
 function toToolCtx(
   ctx: ServerContext,
   deps: ToolDeps,
@@ -511,7 +520,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   }
 }
 
-export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I, O>): DefinedTool {
+export function defineTool<I extends z.ZodType, O extends object>(
+  def: ToolDef<I, O>,
+): DefinedToolOf<I, O> {
   // Nothing here depends on `deps`, so it is built once per tool definition
   // rather than once per `register` — the HTTP leg registers every tool afresh
   // on each request.
@@ -546,6 +557,7 @@ export function defineTool<I extends z.ZodType, O extends object>(def: ToolDef<I
   return {
     name: def.name,
     readOnlyHint: def.readOnlyHint,
+    def,
 
     register(deps: ToolDeps): RegisteredTool {
       return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) => {
