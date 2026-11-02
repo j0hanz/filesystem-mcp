@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { planMatch } from '../src/core/matcher.ts';
+import { isFsError } from '../src/core/errors.ts';
+import {
+  compileRegex,
+  createCaseInsensitiveLiteralMatcher,
+  createCaseSensitiveLiteralMatcher,
+  createRegexReplacementMatcher,
+  planMatch,
+  type ReplaceLimits,
+} from '../src/core/matcher.ts';
 import { escapeRegExp } from '../src/core/util.ts';
 
 // planMatch is the single Match plan entry (GLOSSARY.md): what a search or a
@@ -58,5 +66,160 @@ describe('planMatch', () => {
       'the Buffer form of the same text',
     );
     assert.strictEqual(plan.literal.needsRe2('abc'), false);
+  });
+});
+
+const limits = (maxMatches = Number.POSITIVE_INFINITY): ReplaceLimits => ({
+  maxMatches,
+  maxBytes: 10 * 1024 * 1024,
+  path: 'matcher-test',
+});
+
+describe('replacement matchers', () => {
+  it('MTCH-001: dollar tokens follow RegExp precedence', async () => {
+    const twelve = createRegexReplacementMatcher(
+      compileRegex('(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)', { caseSensitive: true }),
+      true,
+      false,
+    );
+    assert.strictEqual(
+      (await twelve.replace('abcdefghijkl', '$12', undefined, limits())).content,
+      'l',
+      '$12 prefers group 12',
+    );
+
+    const two = createRegexReplacementMatcher(
+      compileRegex('(a)(b)', { caseSensitive: true }),
+      true,
+      false,
+    );
+    assert.strictEqual(
+      (await two.replace('ab', '$12', undefined, limits())).content,
+      'a2',
+      '$12 with two groups falls back to group 1 plus a literal 2',
+    );
+
+    const one = createRegexReplacementMatcher(
+      compileRegex('(a)', { caseSensitive: true }),
+      true,
+      false,
+    );
+    assert.strictEqual(
+      (await one.replace('a', '$2', undefined, limits())).content,
+      '$2',
+      'an out-of-range group stays literal',
+    );
+
+    const named = createRegexReplacementMatcher(
+      compileRegex('(?<x>a)', { caseSensitive: true }),
+      true,
+      false,
+    );
+    assert.strictEqual((await named.replace('a', '$<x>', undefined, limits())).content, 'a');
+    assert.strictEqual(
+      (await named.replace('a', '$<y>', undefined, limits())).content,
+      '$<y>',
+      'an absent named group renders literally',
+    );
+
+    const whole = createRegexReplacementMatcher(
+      compileRegex('b', { caseSensitive: true }),
+      true,
+      false,
+    );
+    assert.strictEqual(
+      (await whole.replace('abc', "$&$`$'", undefined, limits())).content,
+      'abacc',
+      'whole match, before, and after',
+    );
+  });
+
+  it('MTCH-002: wholeWord resumes over the trail and finds a match at text start', async () => {
+    const plan = planMatch('foo', { isRegex: false, caseSensitive: false, wholeWord: true });
+    const matcher = createRegexReplacementMatcher(
+      compileRegex(plan.source, { caseSensitive: false }),
+      false,
+      true,
+    );
+    const done = await matcher.replace('foo foo foo', 'X', undefined, limits());
+    assert.strictEqual(done.content, 'X X X');
+    assert.strictEqual(done.matchCount, 3);
+
+    const atStart = await matcher.replace('foo bar', 'X', undefined, limits());
+    assert.strictEqual(atStart.content, 'X bar', 'a match right after TEXT_START is found (#158)');
+
+    const lead = await matcher.replace('afoo foo', 'X', undefined, limits());
+    assert.strictEqual(lead.content, 'afoo X', 'a word-char lead is no boundary');
+
+    const verbatim = await matcher.replace('foo', '$&', undefined, limits());
+    assert.strictEqual(verbatim.content, '$&', 'a literal replacement is inserted verbatim');
+  });
+
+  it('MTCH-003: the case-sensitive literal splices once and honours the cap', async () => {
+    const matcher = createCaseSensitiveLiteralMatcher('foo');
+    assert.ok(matcher);
+    const done = await matcher.replace('foo foo foo', 'X', undefined, limits(2));
+    assert.strictEqual(done.content, 'X X foo');
+    assert.strictEqual(done.matchCount, 2);
+    assert.strictEqual(done.more, true);
+
+    assert.strictEqual(createCaseSensitiveLiteralMatcher('�'), undefined);
+    assert.strictEqual(createCaseSensitiveLiteralMatcher('\uD800'), undefined);
+  });
+
+  it('MTCH-004: the case-insensitive literal folds and delegates fold characters to RE2', async () => {
+    const plan = planMatch('foo', { isRegex: false, caseSensitive: false });
+    assert.ok(plan.literal);
+    const matcher = createCaseInsensitiveLiteralMatcher(
+      'foo',
+      plan.literal,
+      createRegexReplacementMatcher(
+        compileRegex(plan.source, { caseSensitive: false }),
+        false,
+        false,
+      ),
+    );
+    const done = await matcher.replace('FOO foo FOO', 'X', undefined, limits());
+    assert.strictEqual(done.content, 'X X X');
+    assert.strictEqual(done.matchCount, 3);
+
+    const kelvinPlan = planMatch('k', { isRegex: false, caseSensitive: false });
+    assert.ok(kelvinPlan.literal);
+    const kelvin = createCaseInsensitiveLiteralMatcher(
+      'k',
+      kelvinPlan.literal,
+      createRegexReplacementMatcher(
+        compileRegex(kelvinPlan.source, { caseSensitive: false }),
+        false,
+        false,
+      ),
+    );
+    const judged = await kelvin.replace('aKb', 'X', undefined, limits());
+    assert.strictEqual(judged.content, 'aXb');
+    assert.strictEqual(judged.matchCount, 1);
+  });
+
+  it('MTCH-005: dispose is idempotent', () => {
+    const matcher = createRegexReplacementMatcher(
+      compileRegex('a', { caseSensitive: true }),
+      false,
+      false,
+    );
+    matcher.dispose();
+    matcher.dispose();
+  });
+
+  it('MTCH-006: a replacement past the byte cap refuses', async () => {
+    const matcher = createCaseSensitiveLiteralMatcher('foo');
+    assert.ok(matcher);
+    await assert.rejects(
+      async () =>
+        matcher.replace('foofoo', 'way-too-long-replacement', undefined, {
+          maxMatches: Number.POSITIVE_INFINITY,
+          maxBytes: 4,
+          path: 'matcher-test',
+        }),
+      (error: unknown) => isFsError(error),
+    );
   });
 });

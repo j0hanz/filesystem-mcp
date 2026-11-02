@@ -8,6 +8,7 @@
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
+import { ErrorCode, FsError } from './errors.ts';
 import { escapeRegExp, MIB } from './util.ts';
 
 export type Regex = RE2;
@@ -61,7 +62,7 @@ const KELVIN_SIGN = '\u212A'; // folds onto k
 const LONG_S = '\u017F'; // folds onto s
 const ASCII_UPPER_RE = /[A-Z]+/gu;
 /** Folds A-Z only, so every UTF-16 offset in the result matches the input. */
-export function foldAsciiCase(text: string): string {
+function foldAsciiCase(text: string): string {
   // String#toLowerCase turns U+0130 into two code units, which shifts every
   // later column and spells an `i` RE2 does not match.
   return text.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase());
@@ -79,10 +80,7 @@ function countOccurrences(line: string, needle: string): LineHit | undefined {
   return { count, column };
 }
 /** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
-export function createLiteralMatcher(
-  needle: string,
-  caseSensitive: boolean,
-): LiteralMatcher | undefined {
+function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
   // The file is decoded with U+FFFD for every invalid byte, and a lone
   // surrogate reaches RE2 as U+FFFD, so a needle holding either can match
   // decoded text that the raw bytes, or indexOf, do not.
@@ -252,7 +250,7 @@ export function* execMatches(
 }
 
 // RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
-export const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
+const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
 
 /** The settled judgment: the literal pass a needle allows, and its RE2 source. */
 export interface MatchPlan {
@@ -271,4 +269,271 @@ export function planMatch(
   // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
   const source = flags.wholeWord ? `([^${WORD_CLASS}])(?:${pattern})([^${WORD_CLASS}]|$)` : pattern;
   return { literal, source };
+}
+export interface ReplacementMatcher {
+  /**
+   * Yields periodically and throws on abort: a partial splice must never be written.
+   * Throws TOO_LARGE once the result is known to exceed `limits.maxBytes` UTF-8 bytes.
+   */
+  replace(
+    content: string,
+    replacement: string,
+    signal: AbortSignal | undefined,
+    limits: ReplaceLimits,
+  ): Promise<{ content: string; matchCount: number; more: boolean }>;
+  testBuffer(buffer: Buffer): boolean;
+  /** Releases any compiled pattern this matcher owns. Idempotent. */
+  dispose(): void;
+}
+const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
+
+// Matches a consumed text that ends in a non-word char: its last char may lead the next match.
+const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
+// wholeWord scans behind this non-word char instead of a `^` lead: an empty lead
+// cannot be backed up onto, so a match right after one at text start was missed (#158).
+const TEXT_START = '\n';
+
+export interface ReplaceLimits {
+  maxMatches: number;
+  maxBytes: number;
+  path: string;
+}
+
+const OUTPUT_TOO_LARGE_SUGGESTION =
+  "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
+
+export function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
+    limits.path,
+    cause,
+    OUTPUT_TOO_LARGE_SUGGESTION,
+  );
+}
+/**
+ * Expand `$`-substitutions in a replacement template the way `RegExp` does.
+ *
+ * We cannot hand the template to RE2's own string replacer: it throws
+ * `Invalid replacement string` on any `$` not followed by a substitution it
+ * recognises (so a replacement of `$100` or a trailing `$` fails outright,
+ * where `RegExp` inserts the `$` literally), and it renders an out-of-range
+ * `$5` as `$4`. The matcher splices matches itself, so this is the single owner
+ * of the syntax.
+ */
+function expandDollarTokens(
+  template: string,
+  match: string,
+  groups: (string | undefined)[],
+  offset: number,
+  input: string,
+  named: Record<string, string> | undefined,
+): string {
+  return template.replace(DOLLAR_TOKEN, (token: string, kind: string, name?: string) => {
+    if (kind === '$') return '$';
+    if (kind === '&') return match;
+    if (kind === '`') return input.slice(0, offset);
+    if (kind === "'") return input.slice(offset + match.length);
+    if (name !== undefined) {
+      if (named && Object.hasOwn(named, name)) return named[name] ?? '';
+      return token;
+    }
+    // `$12` prefers group 12, then falls back to group 1 followed by a literal
+    // `2`, and stays literal when neither exists — RegExp's own precedence.
+    const two = Number.parseInt(kind, 10);
+    if (kind.length === 2 && two >= 1 && two <= groups.length) return groups[two - 1] ?? '';
+    const one = Number.parseInt(kind.slice(0, 1), 10);
+    if (one >= 1 && one <= groups.length) {
+      return (groups[one - 1] ?? '') + (kind.length === 2 ? kind.slice(1) : '');
+    }
+    return token;
+  });
+}
+export function createRegexReplacementMatcher(
+  regex: Regex,
+  expandReplacement: boolean,
+  wholeWord: boolean,
+): ReplacementMatcher {
+  return {
+    testBuffer(buffer: Buffer): boolean {
+      if (buffer.length > RE2_MAX_INPUT_BYTES) {
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          `File too large for a regex replace (${String(buffer.length)} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Regex mode is used for isRegex, wholeWord, or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern, or split the file.`,
+        );
+      }
+      // The regex is global and shared across every file in the batch, so a
+      // previous file's match would otherwise start this scan mid-string.
+      regex.lastIndex = 0;
+      const text = buffer.toString('utf-8');
+      return regex.test(wholeWord ? TEXT_START + text : text);
+    },
+    async replace(content, replacement, signal, limits) {
+      // Splicing by hand rather than through `String.replace(regex, …)`: RE2's
+      // own replacer indexes the JS string with the code-point offsets it
+      // reports, which lands the replacement short by one per astral character
+      // (most emoji) earlier in the file. execMatches reports UTF-16 offsets.
+      let matchCount = 0;
+      let more = false;
+      let updated = '';
+      let cursor = 0;
+      const tick = createYielder(signal);
+      try {
+        // wholeWord's lead and trailing groups are boundary characters: the lead is
+        // spliced around, and the trailing one is left for the next match to use.
+        // The scanned text starts with TEXT_START, so offsets shift back by one.
+        const scanned = wholeWord ? TEXT_START + content : content;
+        for (const found of execMatches(regex, scanned, wholeWord, ENDS_NON_WORD)) {
+          const lead = wholeWord ? (found.groups[0] ?? '') : '';
+          const trail = wholeWord ? (found.groups[found.groups.length - 1] ?? '') : '';
+          const match = wholeWord
+            ? {
+                ...found,
+                start: found.start + lead.length - TEXT_START.length,
+                end: found.end - trail.length - TEXT_START.length,
+                text: found.text.slice(lead.length, found.text.length - trail.length),
+                groups: found.groups.slice(1, -1),
+              }
+            : found;
+          // The resume point never precedes the previous needle end; guard the splice against it.
+          if (match.start < cursor) continue;
+          if (matchCount === limits.maxMatches) {
+            more = true;
+            break;
+          }
+          matchCount++;
+          // Only isRegex=true opts into $1/$& substitution. A literal search
+          // reaches this matcher too (wholeWord, or a case-insensitive needle
+          // RE2 must judge), and there the replacement must be inserted verbatim.
+          updated +=
+            content.slice(cursor, match.start) +
+            (expandReplacement
+              ? expandDollarTokens(
+                  replacement,
+                  match.text,
+                  match.groups,
+                  match.start,
+                  content,
+                  match.named,
+                )
+              : replacement);
+          // `updated` only grows, and each UTF-16 unit is at least one UTF-8 byte.
+          if (updated.length > limits.maxBytes) throw outputTooLarge(limits);
+          cursor = match.end;
+          if (await tick()) signal?.throwIfAborted();
+        }
+      } catch (error) {
+        // V8 throws RangeError once one expansion overruns its maximum string length.
+        if (error instanceof RangeError) throw outputTooLarge(limits, error);
+        throw error;
+      }
+      return { content: updated + content.slice(cursor), matchCount, more };
+    },
+    dispose(): void {
+      freeRegex(regex);
+    },
+  };
+}
+/** An ASCII needle matched case-insensitively in native code, as RE2 would match it; `fallback` judges the files RE2 must. */
+export function createCaseInsensitiveLiteralMatcher(
+  searchPattern: string,
+  literal: LiteralMatcher,
+  fallback: ReplacementMatcher,
+): ReplacementMatcher {
+  const lower = searchPattern.toLowerCase();
+  return {
+    testBuffer(buffer) {
+      return literal.needsRe2(buffer) ? fallback.testBuffer(buffer) : literal.mayMatch(buffer);
+    },
+    // One native O(n) pass, like the case-sensitive matcher; nothing to yield for.
+    replace(content, replacement, signal, limits) {
+      if (literal.needsRe2(content)) return fallback.replace(content, replacement, signal, limits);
+      // foldAsciiCase keeps every UTF-16 offset, so a hit in `folded` splices `content`.
+      const folded = foldAsciiCase(content);
+      let matchCount = 0;
+      let more = false;
+      let updated = '';
+      let cursor = 0;
+      let size = content.length;
+      const delta = replacement.length - lower.length;
+      for (let at = folded.indexOf(lower); at !== -1; at = folded.indexOf(lower, cursor)) {
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          break;
+        }
+        updated += content.slice(cursor, at) + replacement;
+        cursor = at + lower.length;
+        matchCount++;
+        size += delta;
+        if (size > limits.maxBytes) throw outputTooLarge(limits);
+      }
+      return Promise.resolve({ content: updated + content.slice(cursor), matchCount, more });
+    },
+    dispose(): void {
+      fallback.dispose();
+    },
+  };
+}
+export function createCaseSensitiveLiteralMatcher(
+  searchPattern: string,
+): ReplacementMatcher | undefined {
+  // Same bail as createLiteralMatcher (core/search.ts): a needle containing
+  // U+FFFD or a lone surrogate is judged over decoded text by RE2 — raw-byte
+  // indexOf would claim a file the replace pass cannot transform.
+  if (searchPattern.includes('�') || Buffer.from(searchPattern).toString() !== searchPattern) {
+    return undefined;
+  }
+  const searchBuffer = Buffer.from(searchPattern, 'utf8');
+
+  return {
+    testBuffer(buffer: Buffer): boolean {
+      return buffer.indexOf(searchBuffer) !== -1;
+    },
+    // One native O(n) pass; nothing to yield for.
+    replace(content, replacement, _signal, limits) {
+      let matchCount = 0;
+      let more = false;
+      // Each match is searchPattern long, so the result's UTF-16 length moves by a fixed delta.
+      let size = content.length;
+      const delta = replacement.length - searchPattern.length;
+      const updated = content.replaceAll(searchPattern, (match) => {
+        // Past the cap, the match is kept as it was.
+        if (matchCount === limits.maxMatches) {
+          more = true;
+          return match;
+        }
+        matchCount++;
+        size += delta;
+        if (size > limits.maxBytes) throw outputTooLarge(limits);
+        return replacement;
+      });
+      return Promise.resolve({ content: updated, matchCount, more });
+    },
+    dispose(): void {
+      // no compiled pattern to release
+    },
+  };
+}
+export function createReplacementMatcher(args: {
+  searchPattern: string;
+  isRegex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}): ReplacementMatcher {
+  const plan = planMatch(args.searchPattern, {
+    isRegex: args.isRegex,
+    caseSensitive: args.caseSensitive,
+    wholeWord: args.wholeWord,
+  });
+  if (!args.isRegex && !args.wholeWord && args.caseSensitive) {
+    // undefined means the bail handed this needle to the RE2 path below.
+    const fast = createCaseSensitiveLiteralMatcher(args.searchPattern);
+    if (fast) return fast;
+  }
+  const regex = compileRegex(plan.source, { caseSensitive: args.caseSensitive });
+  const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);
+  // A case-insensitive literal is matched natively unless RE2 must judge the needle.
+  return !args.isRegex && !args.wholeWord && plan.literal
+    ? createCaseInsensitiveLiteralMatcher(args.searchPattern, plan.literal, matcher)
+    : matcher;
 }
