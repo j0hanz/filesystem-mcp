@@ -1,0 +1,174 @@
+import assert from 'node:assert/strict';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
+
+import type * as z from 'zod/v4';
+
+import { GuardedFileSystem } from '../src/core/fs.ts';
+import { DELETE } from '../src/tools/delete.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  makeGuard,
+  trySymlink,
+  writeTestFile,
+} from './helpers.ts';
+import { choose, runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
+
+type DeleteArgs = z.input<typeof DELETE.def.input>;
+interface DeleteStructured {
+  readonly results: readonly {
+    path: string;
+    value?: { deleted: boolean };
+    error?: { code: string; message: string };
+  }[];
+  readonly summary: { total: number; succeeded: number; failed: number };
+}
+type DeleteRun = Awaited<ReturnType<typeof runToolBodyResult<typeof DELETE.def.input, object>>> & {
+  readonly structured: DeleteStructured;
+};
+
+function only(result: DeleteRun): DeleteStructured['results'][number] {
+  assert.strictEqual(result.structured.results.length, 1);
+  const [entry] = result.structured.results;
+  assert.ok(entry);
+  return entry;
+}
+
+describe('delete body', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  before(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  after(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const del = async (
+    args: DeleteArgs,
+    options: Partial<ToolBodyOptions> = {},
+  ): Promise<DeleteRun> => runToolBodyResult(DELETE, args, { fs, ...options });
+
+  /** A recursive delete of a non-empty directory is what asks for approval. */
+  const nonEmptyDir = async (name: string): Promise<string> => {
+    const dir = join(root, name);
+    await mkdir(join(dir, 'sub'), { recursive: true });
+    await writeFile(join(dir, 'sub', 'f.txt'), 'x');
+    return dir;
+  };
+
+  it('refuses a workspace root, naming the root rather than the parent', async () => {
+    // The parent of a root is out-of-root by construction, so the containment
+    // check used to answer "Outside allowed directories" for the one directory
+    // list_roots reports as allowed.
+    const result = await del({ paths: [root], recursive: true });
+
+    assert.strictEqual(result.isError, true);
+    assert.match(result.text ?? '', /workspace root/i);
+    await access(root);
+  });
+
+  it('refuses an allowed root reached through an aliasing junction', async (t) => {
+    const top = await createTestRoot();
+    const a = join(top, 'a');
+    const b = join(a, 'b');
+    try {
+      await mkdir(b, { recursive: true });
+      await writeFile(join(b, 'keep.txt'), 'keep');
+      if (!(await trySymlink(a, join(a, 'j'), () => t.skip('symlink creation not permitted')))) {
+        return;
+      }
+      const result = await del(
+        { paths: [join(a, 'j', 'b')], recursive: true },
+        { fs: new GuardedFileSystem(await makeGuard([a, b])) },
+      );
+      assert.strictEqual(result.isError, true);
+      assert.match(result.text ?? '', /workspace root/i);
+      await access(join(b, 'keep.txt'));
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
+  it('leaves the directory in place when the user picks Skip', async () => {
+    const dir = await nonEmptyDir('del_skip_dir');
+    const asked: string[] = [];
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        confirm: (prompt) => {
+          asked.push(prompt.message);
+          assert.deepStrictEqual(prompt.choices, ['delete', 'skip']);
+          return { action: 'accept', content: { choice: 'skip' } };
+        },
+      },
+    );
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(asked.length, 1);
+    assert.match(asked[0] ?? '', /^Delete ".*del_skip_dir" and all its contents\?$/);
+    assert.strictEqual(result.structured.summary.failed, 0);
+    // Skip is a successful outcome with `deleted: false`, not a failure.
+    assert.strictEqual(only(result).path.toLowerCase(), dir.toLowerCase());
+    assert.deepStrictEqual(only(result).value, { deleted: false });
+    assert.match(result.text ?? '', /SKIPPED/);
+    await access(dir);
+  });
+
+  it('removes the directory once the delete is approved', async () => {
+    const dir = await nonEmptyDir('del_choice_dir');
+    const result = await del({ paths: [dir], recursive: true }, { confirm: choose('delete') });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.rounds, 1);
+    assert.strictEqual(result.structured.summary.failed, 0);
+    assert.strictEqual(only(result).path.toLowerCase(), dir.toLowerCase());
+    assert.deepStrictEqual(only(result).value, { deleted: true });
+    await assert.rejects(access(dir));
+  });
+
+  it('deletes nothing until answered, then runs the non-pending paths alongside', async () => {
+    const dir = await nonEmptyDir('del_atomic_dir');
+    const plain = await writeTestFile(root, 'del_atomic_plain.txt', 'x');
+    const result = await del(
+      { paths: [plain, dir], recursive: true },
+      {
+        confirm: async (prompt) => {
+          // R14: the round is atomic, so the plain file waits for the answer too.
+          await access(plain);
+          assert.match(prompt.message, /del_atomic_dir/);
+          return { action: 'accept', content: { choice: 'delete' } };
+        },
+      },
+    );
+
+    assert.notStrictEqual(result.isError, true);
+    assert.deepStrictEqual(
+      result.structured.results.map((r) => r.value?.deleted),
+      [true, true],
+      'results keep the caller order',
+    );
+    await assert.rejects(access(plain));
+    await assert.rejects(access(dir));
+  });
+
+  it('reports a declined delete as CANCELLED and keeps the directory', async () => {
+    const dir = await nonEmptyDir('del_declined_dir');
+    const result = await del(
+      { paths: [dir], recursive: true },
+      { confirm: () => ({ action: 'decline' }) },
+    );
+
+    assert.strictEqual(result.isError, true);
+    const error = result.structured.results[0]?.error;
+    assert.strictEqual(error?.code, 'CANCELLED');
+    assert.match(error?.message ?? '', /declined by the user/);
+    assert.match(result.text ?? '', /FAILED — Delete cancelled/);
+    await access(join(dir, 'sub', 'f.txt'));
+  });
+});
