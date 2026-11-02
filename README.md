@@ -13,6 +13,8 @@ Secret files stay hidden, and risky changes wait for your OK.
 
 [![filesystem-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp/badges/card.svg)](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp)
 
+![The example web client lists a folder with .env hidden, the server refuses to open .env, then asks before overwriting README.md and keeps the file when told to skip](assets/demo.gif)
+
 ## What is this?
 
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is how AI apps
