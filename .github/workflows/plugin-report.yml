@@ -1,0 +1,26 @@
+# Sends the scan summary to HOL so listings show the latest CI result. Holds
+# id-token: write, so it must never run on pull_request; ci.yml stays read-only.
+name: Plugin report
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Report plugin scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashgraph-online/ai-plugin-scanner-action@6d8ae026ae24ed2f2e9099c391cd9b62cd869d30 # v1.2.814
+        with:
+          plugin_dir: .
+          report_to_hol: true
