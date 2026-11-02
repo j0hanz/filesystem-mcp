@@ -1,4 +1,3 @@
-import type { StoppedReason } from './concurrency.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
   compileRegex,
@@ -13,7 +12,7 @@ import {
   type Regex,
 } from './matcher.ts';
 import type { PathGuard } from './path.ts';
-import type { ScanScope } from './scan.ts';
+import type { ScanScope, StoppedReason } from './scan.ts';
 import { readText, scan } from './scan.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 

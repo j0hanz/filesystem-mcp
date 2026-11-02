@@ -3,7 +3,6 @@ import type { Stats } from 'node:fs';
 import { opendir, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import type { StoppedReason } from './concurrency.ts';
 import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
@@ -198,6 +197,12 @@ export interface ScanEntry {
   readonly index: number;
 }
 
+/**
+ * Why a scan stopped early, in the caller's own words: each cap is named after
+ * the argument that sets it, so no tool renames a reason at output.
+ */
+export type StoppedReason = 'maxResults' | 'maxMatches' | 'maxFiles' | 'timeout';
+
 export interface ScanOptions<R> {
   readonly pathGuard: PathGuard;
   readonly pattern: string;
@@ -209,6 +214,13 @@ export interface ScanOptions<R> {
   readonly maxDepth?: number;
   readonly concurrency: number;
   readonly cap?: number;
+  /** The stop reason `cap` (or `keep`) reports. Default: 'maxResults'. */
+  readonly capReason?: 'maxResults' | 'maxMatches';
+  /**
+   * onEntry retains at most this many entries itself: the walk runs on to count
+   * the rest, and the outcome reports `capReason` once more were scanned.
+   */
+  readonly keep?: number;
   /** Default: 1 per defined result. */
   readonly weigh?: (result: R) => number;
   readonly maxEntries?: number;
@@ -252,7 +264,8 @@ export async function scan<R>(
     return scanNamedFile(scope.explicitFile, options, onEntry);
   }
 
-  const { pathGuard, cap, maxEntries, onScanned, window } = options;
+  const { pathGuard, cap, maxEntries, onScanned, window, keep } = options;
+  const capReason = options.capReason ?? 'maxResults';
   const weigh = options.weigh ?? (() => 1);
   const results = new Map<number, R>();
   let scanned = 0;
@@ -267,7 +280,7 @@ export async function scan<R>(
   };
   let total = 0;
   let started = 0;
-  let capped: 'maxResults' | 'maxFiles' | undefined;
+  let capped: StoppedReason | undefined;
   let fatal: { error: unknown } | undefined;
   // The signal stopped work that had not finished: only then is it a 'timeout'.
   let cut = false;
@@ -348,7 +361,7 @@ export async function scan<R>(
           return undefined;
         }
         if (cap !== undefined && total >= cap) {
-          capped ??= 'maxResults';
+          capped ??= capReason;
           return undefined;
         }
         if (maxEntries !== undefined && started >= maxEntries) {
@@ -477,7 +490,9 @@ export async function scan<R>(
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
-  const stoppedReason: StoppedReason | undefined = cut ? 'timeout' : capped;
+  const stoppedReason: StoppedReason | undefined = cut
+    ? 'timeout'
+    : (capped ?? (keep !== undefined && scanned > keep ? capReason : undefined));
   return {
     results: [...results.entries()].sort(([a], [b]) => a - b).map(([, result]) => result),
     scanned,
