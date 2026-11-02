@@ -217,7 +217,12 @@ export interface ScanOptions<R> {
   readonly onScanned?: (scanned: number) => void;
   /** Called once per walk index when it is done: onEntry settled, or it was never admitted. */
   readonly onSettled?: (index: number) => void;
-  /** Walk index i is admitted only once every index below `i - window` has settled. */
+  /**
+   * Walk index i is admitted only once every index below `i - window` has settled. This pair
+   * is scan's admission seam: a consumer bounds how far the walk may run ahead of its
+   * settled prefix, and every dispatched index settles, admitted or refused, so a refusal
+   * never stalls the prefix. The sole consumer today is the diff budget (core/diff-budget.ts).
+   */
   readonly window?: number;
 }
 
