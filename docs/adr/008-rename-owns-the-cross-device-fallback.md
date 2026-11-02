@@ -58,6 +58,51 @@ has no fake-based test of the fallback any more.
 - A separate `fs.move` beside `rename` would split the fallback again. Do not
   add one; extend `rename`.
 
+## Amendment, 2026-11-02: the guarded filesystem owns the whole Transfer
+
+**Deciders**: j0hanz, in the grilling of the transfer candidate from that day's
+architecture review.
+
+The decision above left the planning half of a move in `src/tools/move.ts`.
+`planTransfer` resolved the source views and the destination, and its
+`assertTreeHasNoProtectedEntries` walked the tree for the Relocation rule.
+`fs.rename` then resolved both ends again, and `#validateMappedDescendants`
+walked the tree a second time for the descendant write check. Read-only
+bypasses (`e143203b`, `15906452`, `c6d1f2c1`) got in through the gaps
+between those copies.
+
+`GuardedFileSystem` now owns the whole **Transfer** (see `GLOSSARY.md`) for
+both move and copy, in two phases:
+
+- **Plan** (`planTransfer`) makes no changes. It runs on every round, because
+  a Confirmation ends the call and the client re-sends it. No callback is
+  held open across the Confirmation (ADR-007).
+- **Execute** (`executeTransfer`) re-checks the destination against what the
+  plan saw, then renames or copies.
+- **One Relocation walk** checks both rules: every entry keeps its protection,
+  and every mapped destination passes the write check. It runs at plan, so a
+  refusal comes before the Confirmation, and again at execute, which covers
+  the gap while the Confirmation was open.
+- **No approval flag.** Execute always compares the destination with the plan,
+  so no caller can skip the check.
+- **`rename` and `cp`** stay as one-shot plan-then-execute calls.
+- **The move tool** keeps only batch policy (duplicate and overlapping pairs),
+  the Confirmation, and its report.
+- **A link source whose target is gone or fails validation stands for
+  itself.** The move renames the link and never touches its target. The move
+  tool used to refuse a link whose target was outside the roots; it now moves
+  the link, as the guarded rename (and undo's restore through it) always did.
+
+Out of scope, not reversed:
+
+- Undo's restore keeps its own Relocation check (`assertTreeKeepsPolicy`),
+  because a dry run must walk the preview's tree, not the disk.
+- Transfers still take no write lock.
+- Read-only stays a containment check in the PathGuard (ADR-010).
+
+The consequence above still holds, now for the Transfer as a whole: do not add
+a second module beside it; extend `planTransfer` and `executeTransfer`.
+
 [`36253c19`]: https://github.com/j0hanz/filesystem-mcp/commit/36253c19
 [`b42a063a`]: https://github.com/j0hanz/filesystem-mcp/commit/b42a063a
 [`297392b6`]: https://github.com/j0hanz/filesystem-mcp/commit/297392b6
