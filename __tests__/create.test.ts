@@ -1,20 +1,22 @@
 import assert from 'node:assert/strict';
-import { access, chmod, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { getMaxTextFileSize } from '../src/core/util.ts';
 import { CREATE } from '../src/tools/create.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
-import { choose, runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
+import { choose, runToolBodyResult, schemaIssues, type ToolBodyOptions } from './tool-harness.ts';
 
 type CreateArgs = z.input<typeof CREATE.def.input>;
 interface CreateStructured {
@@ -54,6 +56,89 @@ describe('create body', () => {
     args: CreateArgs,
     options: Partial<ToolBodyOptions> = {},
   ): Promise<CreateRun> => (await runToolBodyResult(CREATE, args, { fs, ...options })) as CreateRun;
+
+  it('refuses a batch whose combined content exceeds the file limit', async () => {
+    const half = 'x'.repeat(Math.ceil(getMaxTextFileSize() / 2) + 1);
+    const issues = await schemaIssues(
+      create({
+        files: [
+          { path: join(root, 'batch-a.txt'), content: half },
+          { path: join(root, 'batch-b.txt'), content: half },
+        ],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => /^combined content .* Split the batch\.$/u.test(m)),
+      issues.join('; '),
+    );
+  });
+
+  it('counts the per-file size cap in UTF-8 bytes, not UTF-16 units', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      assert.strictEqual(limit, 1048576);
+      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 units, 1048578 bytes.
+      const over = '€'.repeat(Math.floor(limit / 3) + 1);
+      assert.ok(over.length < limit);
+      assert.strictEqual(Buffer.byteLength(over, 'utf8'), 1048578);
+      const overPath = join(root, 'bytes-cap-over.txt');
+      const issues = await schemaIssues(create({ files: [{ path: overPath, content: over }] }));
+      assert.ok(
+        issues.includes('Content exceeds maximum allowed text file size'),
+        issues.join('; '),
+      );
+      await assert.rejects(stat(overPath), { code: 'ENOENT' });
+
+      // Exactly at the limit in bytes is accepted.
+      const exact = '€'.repeat(Math.floor(limit / 3)) + 'x'.repeat(limit % 3);
+      assert.strictEqual(Buffer.byteLength(exact, 'utf8'), limit);
+      const exactPath = join(root, 'bytes-cap-exact.txt');
+      const ok = await create({ files: [{ path: exactPath, content: exact }] });
+      assert.notStrictEqual(ok.isError, true);
+      assert.strictEqual((await stat(exactPath)).size, limit);
+    });
+  });
+
+  it('counts the combined batch cap in UTF-8 bytes', async () => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const limit = getMaxTextFileSize();
+      // Each entry is under the per-file cap. Together they are over it in bytes (1048584) but not in units (349528).
+      const part = '€'.repeat(Math.ceil(limit / 6) + 1);
+      assert.ok(2 * part.length < limit);
+      assert.strictEqual(2 * Buffer.byteLength(part, 'utf8'), 1048584);
+      const issues = await schemaIssues(
+        create({
+          files: [
+            { path: join(root, 'bytes-batch-a.txt'), content: part },
+            { path: join(root, 'bytes-batch-b.txt'), content: part },
+          ],
+        }),
+      );
+      assert.deepStrictEqual(issues, [
+        'combined content is 1048584 bytes; one create call carries at most 1048576 (FS_MAX_FILE_SIZE). Split the batch.',
+      ]);
+    });
+  });
+
+  it('refuses a batch that names the same file twice', async () => {
+    const file = join(root, 'dup-create', 'dup.txt');
+    const caseless = process.platform === 'win32' || process.platform === 'darwin';
+    for (const twin of caseless ? [file, join(root, 'dup-create', 'DUP.TXT')] : [file]) {
+      const issues = await schemaIssues(
+        create({
+          files: [
+            { path: file, content: 'AAAA' },
+            { path: twin, content: 'BBBB' },
+          ],
+        }),
+      );
+      assert.ok(
+        issues.some((m) => m.startsWith('duplicate of files[0].path')),
+        issues.join('; '),
+      );
+    }
+    await assert.rejects(access(file), 'nothing may be written when the batch is refused');
+  });
 
   it('is a total failure when every requested file was denied', async () => {
     // create publishes {files, failures} with no `summary`; the total-failure

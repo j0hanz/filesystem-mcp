@@ -3,16 +3,24 @@ import type { Client } from '@modelcontextprotocol/client';
 import assert from 'node:assert/strict';
 import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+
+import type * as z from 'zod/v4';
 
 import { ErrorCode, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import type { PathGuard } from '../src/core/path.ts';
 import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
 import { restoreEntry, UndoJournal, UndoPreview } from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
+import { CREATE } from '../src/tools/create.ts';
+import type { DefinedToolOf } from '../src/tools/define.ts';
+import { DELETE } from '../src/tools/delete.ts';
+import { EDIT } from '../src/tools/edit.ts';
+import { UNDO } from '../src/tools/undo.ts';
 import {
   cleanupTestRoot,
   createStdioClient,
@@ -20,9 +28,24 @@ import {
   createTestHttpHarness,
   createTestRoot,
   createTestServer,
+  fsErrorMatcher,
+  makeGuard,
   trySymlink,
   withEnv,
 } from './helpers.ts';
+import { runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
+
+type UndoArgs = z.input<typeof UNDO.def.input>;
+interface UndoStep {
+  readonly id: string;
+  readonly tool: string;
+  readonly results: readonly { path: string; error?: { code: string; message: string } }[];
+  readonly truncated?: true;
+  readonly totalResults?: number;
+}
+type UndoRun = Awaited<ReturnType<typeof runToolBodyResult<typeof UNDO.def.input, object>>> & {
+  readonly structured: { readonly steps: readonly UndoStep[] };
+};
 
 const writeRecord = (size: number): UndoRecord => ({
   op: 'write',
@@ -1931,7 +1954,343 @@ describe('undo id on results', () => {
   });
 });
 
-describe('undo tool', () => {
+describe('undo body', () => {
+  let root: string;
+  let guard: PathGuard;
+  let fs: GuardedFileSystem;
+  let journal: UndoJournal;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+    fs = new GuardedFileSystem(guard);
+    journal = new UndoJournal();
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  /** Run a mutating body under an undo capture and journal it, as the executor does; returns its undo id. */
+  const journaled = async <I extends z.ZodType, O extends object>(
+    tool: DefinedToolOf<I, O>,
+    args: z.input<I>,
+  ): Promise<string> => {
+    const capture = journal.beginCapture();
+    try {
+      const result = await runToolBodyResult(tool, args, {
+        fs: new GuardedFileSystem(guard, capture),
+      });
+      assert.notStrictEqual(result.isError, true, result.text);
+      assert.ok(capture.records.length > 0, `${tool.name} recorded nothing`);
+      return journal.add(tool.name, capture.records);
+    } finally {
+      capture.release();
+    }
+  };
+
+  const undo = async (args: UndoArgs, options: Partial<ToolBodyOptions> = {}): Promise<UndoRun> =>
+    await runToolBodyResult(UNDO, args, { fs, undoJournal: journal, ...options });
+
+  const onlyStep = (result: UndoRun): UndoStep => {
+    assert.strictEqual(result.structured.steps.length, 1);
+    const [step] = result.structured.steps;
+    assert.ok(step);
+    return step;
+  };
+
+  it('a fresh journal has nothing to undo', async () => {
+    const result = await undo({});
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.text, 'undo: nothing to undo');
+    assert.deepStrictEqual(result.structured.steps, []);
+  });
+
+  it('a second concurrent undo of one id does not bring restored records back', async () => {
+    const x = join(root, 'tx.txt');
+    const y = join(root, 'ty.txt');
+    await writeFile(x, 'X0');
+    await writeFile(y, 'Y0');
+    const id = await journaled(CREATE, {
+      files: [
+        { path: x, content: 'X1', overwrite: true },
+        { path: y, content: 'Y1', overwrite: true },
+      ],
+    });
+    await writeFile(y, 'Y-external');
+    await Promise.all([undo({ id }), undo({ id })]);
+    const third = (await undo({ id })).text ?? '';
+    assert.match(third, /ty\.txt SKIPPED/u);
+    assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
+  });
+
+  it('a second concurrent undo of a fully restored id reports it gone', async () => {
+    const x = join(root, 'full.txt');
+    await writeFile(x, 'X0');
+    const id = await journaled(CREATE, { files: [{ path: x, content: 'X1', overwrite: true }] });
+    const settled = await Promise.allSettled([undo({ id }), undo({ id })]);
+    assert.strictEqual(settled.filter((s) => s.status === 'fulfilled').length, 1);
+    const failed = settled.find((s) => s.status === 'rejected');
+    assert.ok(fsErrorMatcher(ErrorCode.NOT_FOUND, /Unknown or expired undo id/u)(failed?.reason));
+    assert.strictEqual(await readFile(x, 'utf8'), 'X0');
+  });
+
+  it('the issue example: edit, delete, create-overwrite, then undo them in order', async () => {
+    await writeFile(join(root, 'a.ts'), 'original\n');
+    await writeFile(join(root, 'old.log'), 'log-data\n');
+    await writeFile(join(root, 'config.json'), '{"v":1}\n');
+    await journaled(EDIT, {
+      path: join(root, 'a.ts'),
+      edits: [{ oldText: 'original', newText: 'changed' }],
+    });
+    await journaled(DELETE, { paths: [join(root, 'old.log')] });
+    await journaled(CREATE, {
+      files: [{ path: join(root, 'config.json'), content: '{"v":2}\n', overwrite: true }],
+    });
+
+    const undoOne = await undo({});
+    assert.notStrictEqual(undoOne.isError, true);
+    assert.strictEqual(await readFile(join(root, 'config.json'), 'utf8'), '{"v":1}\n');
+
+    const undoTwo = await undo({ steps: 2 });
+    assert.notStrictEqual(undoTwo.isError, true);
+    assert.deepStrictEqual(
+      undoTwo.structured.steps.map((s) => s.tool),
+      ['delete', 'edit'],
+      'newest first',
+    );
+    assert.strictEqual(await readFile(join(root, 'a.ts'), 'utf8'), 'original\n');
+    assert.strictEqual(await readFile(join(root, 'old.log'), 'utf8'), 'log-data\n');
+
+    assert.strictEqual((await undo({})).text, 'undo: nothing to undo');
+  });
+
+  it('dryRun of three steps previews what the real undo restores', async () => {
+    const file = join(root, 'two-step.txt');
+    await writeFile(file, 'v1');
+    await journaled(DELETE, { paths: [file] });
+    await journaled(CREATE, { files: [{ path: file, content: 'v2' }] });
+    await journaled(EDIT, { path: file, edits: [{ oldText: 'v2', newText: 'v3' }] });
+
+    const dry = await undo({ steps: 3, dryRun: true });
+    assert.notStrictEqual(dry.isError, true);
+    const dryText = dry.text ?? '';
+    assert.ok(
+      !dryText.includes('SKIPPED') && !dryText.includes('FAILED'),
+      `the preview must show all three steps restoring: ${dryText}`,
+    );
+    assert.strictEqual(await readFile(file, 'utf8'), 'v3', 'dry run must not touch bytes');
+
+    const undone = await undo({ steps: 3 });
+    assert.notStrictEqual(undone.isError, true);
+    assert.strictEqual(
+      await readFile(file, 'utf8'),
+      'v1',
+      'reverting edit, create, then delete puts v1 back',
+    );
+  });
+
+  it('dryRun across two hard-linked names previews what the real undo restores', async (t) => {
+    const a = join(root, 'linked-a.txt');
+    const b = join(root, 'linked-b.txt');
+    await writeFile(a, 'A');
+    try {
+      await link(a, b);
+    } catch {
+      return t.skip('hard links not supported here');
+    }
+    await journaled(EDIT, { path: a, edits: [{ oldText: 'A', newText: 'B' }] });
+    await journaled(EDIT, { path: b, edits: [{ oldText: 'B', newText: 'C' }] });
+
+    const dry = await undo({ steps: 2, dryRun: true });
+    assert.notStrictEqual(dry.isError, true);
+    const dryText = dry.text ?? '';
+    assert.ok(!dryText.includes('SKIPPED') && !dryText.includes('FAILED'), dryText);
+    assert.strictEqual(await readFile(a, 'utf8'), 'C');
+    assert.strictEqual((await lstat(a)).nlink, 2);
+
+    const undone = await undo({ steps: 2 });
+    assert.notStrictEqual(undone.isError, true);
+    assert.strictEqual(await readFile(a, 'utf8'), 'A');
+    assert.strictEqual(await readFile(b, 'utf8'), 'A');
+  });
+
+  it('batch create in a new folder undoes all files and removes the folder', async () => {
+    const dir = join(root, 'batch-new', 'sub');
+    await journaled(CREATE, {
+      files: [
+        { path: join(dir, 'a.txt'), content: 'a' },
+        { path: join(dir, 'b.txt'), content: 'b' },
+      ],
+    });
+    const undone = await undo({});
+    assert.notStrictEqual(undone.isError, true);
+    const text = undone.text ?? '';
+    assert.ok(!text.includes('SKIPPED') && !text.includes('FAILED'), text);
+    const step = onlyStep(undone);
+    assert.deepStrictEqual([step.truncated, step.totalResults], [undefined, undefined]);
+    await assert.rejects(lstat(join(root, 'batch-new')), { code: 'ENOENT' });
+  });
+
+  it('a large step lists 100 paths, skipped ones first, and reports the total', async () => {
+    const files = Array.from({ length: 100 }, (_, i) =>
+      join(root, 'wide', `d${String(i)}`, 'f.txt'),
+    );
+    await journaled(CREATE, { files: files.map((path) => ({ path, content: 'x' })) });
+    // Three changed files: their removes and folders skip, and so does the shared parent.
+    for (const path of files.slice(-3)) await writeFile(path, 'changed');
+    const step = onlyStep(await undo({}));
+    assert.strictEqual(step.results.length, 100);
+    assert.strictEqual(step.truncated, true);
+    assert.ok((step.totalResults ?? 0) > 200, `totalResults: ${String(step.totalResults)}`);
+    assert.strictEqual(step.results.filter((r) => r.error !== undefined).length, 7);
+  });
+
+  it(
+    'listed paths share one byte budget across steps',
+    // The test needs ~2.5 KB paths; macOS caps a path at 1024 bytes (PATH_MAX).
+    { skip: process.platform === 'darwin' && 'macOS PATH_MAX is below the paths this needs' },
+    async () => {
+      // ~2.5 KB paths, listed twice per skipped result: five 100-path steps outgrow the budget.
+      const deep = join(
+        root,
+        ...Array.from({ length: 12 }, (_, i) => `${String(i)}${'d'.repeat(199)}`),
+      );
+      await mkdir(deep, { recursive: true });
+      const files: string[] = [];
+      for (let k = 0; k < 5; k++) {
+        const batch = Array.from({ length: 100 }, (_, i) =>
+          join(deep, `f${String(k)}-${String(i)}.txt`),
+        );
+        await journaled(CREATE, { files: batch.map((path) => ({ path, content: 'x' })) });
+        files.push(...batch);
+      }
+      for (const path of files) await writeFile(path, 'changed');
+      const { steps } = (await undo({ steps: 5 })).structured;
+      const listed = steps.flatMap((s) => s.results);
+      assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 2 * 1024 * 1024);
+      assert.ok(listed.length < 500, `listed: ${String(listed.length)}`);
+      assert.ok(steps.some((s) => s.truncated === true && s.totalResults === 100));
+    },
+  );
+
+  it('a restore reports progress per record while it runs', async () => {
+    const files = Array.from({ length: 100 }, (_, i) => join(root, 'ticks', `f${String(i)}.txt`));
+    await journaled(CREATE, { files: files.map((path) => ({ path, content: 'x' })) });
+    const frames: { current: number; total?: number }[] = [];
+    const undone = await undo(
+      {},
+      {
+        onProgress: (p) => {
+          frames.push(p);
+        },
+      },
+    );
+    // Each folder the batch created is recorded once per file but removed once.
+    const total = onlyStep(undone).totalResults;
+    assert.ok(total !== undefined && total > 100, `totalResults: ${String(total)}`);
+    assert.deepStrictEqual(
+      frames,
+      Array.from({ length: total }, (_, i) => ({ current: i + 1, total })),
+    );
+  });
+
+  it('undo by id reverts only that call', async () => {
+    const one = join(root, 'one.txt');
+    const two = join(root, 'two.txt');
+    await writeFile(one, 'one-old\n');
+    await writeFile(two, 'two-old\n');
+    const olderId = await journaled(EDIT, {
+      path: one,
+      edits: [{ oldText: 'one-old', newText: 'one-new' }],
+    });
+    const newerId = await journaled(EDIT, {
+      path: two,
+      edits: [{ oldText: 'two-old', newText: 'two-new' }],
+    });
+    assert.notStrictEqual(newerId, olderId);
+    const undone = await undo({ id: olderId });
+    assert.notStrictEqual(undone.isError, true);
+    assert.strictEqual(onlyStep(undone).id, olderId);
+    assert.strictEqual(await readFile(one, 'utf8'), 'one-old\n');
+    assert.strictEqual(await readFile(two, 'utf8'), 'two-new\n');
+  });
+
+  it('an older id on a file edited again is skipped, and dryRun still lists it', async () => {
+    const file = join(root, 'twice.txt');
+    await writeFile(file, 'v1\n');
+    const olderId = await journaled(EDIT, {
+      path: file,
+      edits: [{ oldText: 'v1', newText: 'v2' }],
+    });
+    await journaled(EDIT, { path: file, edits: [{ oldText: 'v2', newText: 'v3' }] });
+    const undone = await undo({ id: olderId });
+    // Every record was skipped, so the call reports isError — and the older
+    // entry is still listed by a later dry run.
+    assert.strictEqual(undone.isError, true);
+    assert.match(undone.text ?? '', /SKIPPED/u);
+    assert.strictEqual(await readFile(file, 'utf8'), 'v3\n');
+    const dry = await undo({ dryRun: true });
+    assert.ok(dry.structured.steps.some((s) => s.id === olderId));
+  });
+
+  it('id plus steps is INVALID_INPUT', async () => {
+    await assert.rejects(
+      undo({ id: 'aaaa', steps: 2 }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, 'Pass id or steps, not both.'),
+    );
+  });
+
+  it('an unknown id is NOT_FOUND', async () => {
+    await assert.rejects(
+      undo({ id: 'zzzz' }),
+      fsErrorMatcher(ErrorCode.NOT_FOUND, 'Unknown or expired undo id "zzzz".'),
+    );
+  });
+
+  it('dryRun lists ids, tools and paths without changing bytes', async () => {
+    const file = join(root, 'dry.txt');
+    await writeFile(file, 'a\n');
+    const id = await journaled(EDIT, { path: file, edits: [{ oldText: 'a', newText: 'b' }] });
+    const dry = await undo({ dryRun: true });
+    assert.notStrictEqual(dry.isError, true);
+    const text = dry.text ?? '';
+    assert.ok(text.startsWith(`undo: ${id} (edit)`), text);
+    assert.ok(text.includes(pathLabel(file)));
+    assert.strictEqual(await readFile(file, 'utf8'), 'b\n');
+    // The entry is still there: a real undo still works.
+    const real = await undo({ id });
+    assert.notStrictEqual(real.isError, true);
+    assert.strictEqual(await readFile(file, 'utf8'), 'a\n');
+  });
+
+  it('over HTTP, only an undo id or a dry run is accepted', async () => {
+    for (const args of [{}, { steps: 2 }]) {
+      await assert.rejects(
+        undo(args, { transport: 'http' }),
+        fsErrorMatcher(
+          ErrorCode.INVALID_INPUT,
+          /Over HTTP, pass the undo id from the tool result/u,
+        ),
+        JSON.stringify(args),
+      );
+    }
+    assert.deepStrictEqual((await undo({ dryRun: true }, { transport: 'http' })).structured, {
+      steps: [],
+    });
+  });
+
+  it('a disabled journal refuses every undo', async () => {
+    await assert.rejects(
+      undo({ dryRun: true }, { undoJournal: new UndoJournal(0) }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, 'Undo is disabled (FS_MAX_UNDO_BYTES=0).'),
+    );
+  });
+});
+
+// What the executor and the hosting legs add around the body: capture
+// wiring, registration, and the transports' shared journal.
+describe('undo tool over the wire', () => {
   const firstTextBlock = (result: unknown): string | undefined => {
     const blocks = (result as { content?: { type: string; text?: string }[] }).content;
     return blocks?.find((b) => b.type === 'text')?.text;
@@ -1957,310 +2316,6 @@ describe('undo tool', () => {
     }
   });
 
-  it('a second concurrent undo of one id does not bring restored records back', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const x = join(tmp, 'tx.txt');
-      const y = join(tmp, 'ty.txt');
-      await writeFile(x, 'X0');
-      await writeFile(y, 'Y0');
-      const made = await call(pair.client, 'create', {
-        files: [
-          { path: x, content: 'X1', overwrite: true },
-          { path: y, content: 'Y1', overwrite: true },
-        ],
-      });
-      const id = (made.structuredContent as { undo?: string }).undo ?? '';
-      await writeFile(y, 'Y-external');
-      await Promise.all([call(pair.client, 'undo', { id }), call(pair.client, 'undo', { id })]);
-      const third = firstTextBlock(await call(pair.client, 'undo', { id })) ?? '';
-      assert.match(third, /ty\.txt SKIPPED/u);
-      assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('a second concurrent undo of a fully restored id reports it gone', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const x = join(tmp, 'full.txt');
-      await writeFile(x, 'X0');
-      const made = await call(pair.client, 'create', {
-        files: [{ path: x, content: 'X1', overwrite: true }],
-      });
-      const id = (made.structuredContent as { undo?: string }).undo ?? '';
-      const results = await Promise.all([
-        call(pair.client, 'undo', { id }),
-        call(pair.client, 'undo', { id }),
-      ]);
-      assert.strictEqual(results.filter((r) => r.isError !== true).length, 1);
-      const failed = results.find((r) => r.isError === true);
-      assert.match(firstTextBlock(failed) ?? '', /Unknown or expired undo id/u);
-      assert.strictEqual(await import('node:fs/promises').then((m) => m.readFile(x, 'utf8')), 'X0');
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('the issue example: edit, delete, create-overwrite, then undo them in order', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      await writeFile(join(tmp, 'a.ts'), 'original\n');
-      await writeFile(join(tmp, 'old.log'), 'log-data\n');
-      await writeFile(join(tmp, 'config.json'), '{"v":1}\n');
-      const editRes = await call(pair.client, 'edit', {
-        path: join(tmp, 'a.ts'),
-        edits: [{ oldText: 'original', newText: 'changed' }],
-      });
-      assert.notStrictEqual(editRes.isError, true);
-      const deleteRes = await call(pair.client, 'delete', { paths: [join(tmp, 'old.log')] });
-      assert.notStrictEqual(deleteRes.isError, true);
-      const createRes = await call(pair.client, 'create', {
-        files: [{ path: join(tmp, 'config.json'), content: '{"v":2}\n', overwrite: true }],
-      });
-      assert.notStrictEqual(createRes.isError, true);
-
-      const undoOne = await call(pair.client, 'undo', {});
-      assert.notStrictEqual(undoOne.isError, true);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(await fsPromises.readFile(join(tmp, 'config.json'), 'utf8'), '{"v":1}\n');
-
-      const undoTwo = await call(pair.client, 'undo', { steps: 2 });
-      assert.notStrictEqual(undoTwo.isError, true);
-      assert.strictEqual(await fsPromises.readFile(join(tmp, 'a.ts'), 'utf8'), 'original\n');
-      assert.strictEqual(await fsPromises.readFile(join(tmp, 'old.log'), 'utf8'), 'log-data\n');
-
-      const undoEmpty = await call(pair.client, 'undo', {});
-      assert.strictEqual(firstTextBlock(undoEmpty), 'undo: nothing to undo');
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('dryRun of two steps previews what the real undo restores', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const file = join(tmp, 'two-step.txt');
-      await writeFile(file, 'v1');
-      const del = await call(pair.client, 'delete', { paths: [file] });
-      assert.notStrictEqual(del.isError, true);
-      const mk = await call(pair.client, 'create', {
-        files: [{ path: file, content: 'v2' }],
-      });
-      assert.notStrictEqual(mk.isError, true);
-      const ed = await call(pair.client, 'edit', {
-        path: file,
-        edits: [{ oldText: 'v2', newText: 'v3' }],
-      });
-      assert.notStrictEqual(ed.isError, true);
-
-      const dry = await call(pair.client, 'undo', { steps: 3, dryRun: true });
-      assert.notStrictEqual(dry.isError, true);
-      const dryText = firstTextBlock(dry) ?? '';
-      assert.ok(
-        !dryText.includes('SKIPPED') && !dryText.includes('FAILED'),
-        `the preview must show all three steps restoring: ${dryText}`,
-      );
-      assert.strictEqual(
-        await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
-        'v3',
-        'dry run must not touch bytes',
-      );
-
-      const undone = await call(pair.client, 'undo', { steps: 3 });
-      assert.notStrictEqual(undone.isError, true);
-      assert.strictEqual(
-        await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
-        'v1',
-        'reverting edit, create, then delete puts v1 back',
-      );
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('dryRun across two hard-linked names previews what the real undo restores', async (t) => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const a = join(tmp, 'linked-a.txt');
-      const b = join(tmp, 'linked-b.txt');
-      await writeFile(a, 'A');
-      try {
-        await link(a, b);
-      } catch {
-        return t.skip('hard links not supported here');
-      }
-      const first = await call(pair.client, 'edit', {
-        path: a,
-        edits: [{ oldText: 'A', newText: 'B' }],
-      });
-      assert.notStrictEqual(first.isError, true);
-      const second = await call(pair.client, 'edit', {
-        path: b,
-        edits: [{ oldText: 'B', newText: 'C' }],
-      });
-      assert.notStrictEqual(second.isError, true);
-
-      const dry = await call(pair.client, 'undo', { steps: 2, dryRun: true });
-      assert.notStrictEqual(dry.isError, true);
-      const dryText = firstTextBlock(dry) ?? '';
-      assert.ok(!dryText.includes('SKIPPED') && !dryText.includes('FAILED'), dryText);
-      assert.strictEqual(await readFile(a, 'utf8'), 'C');
-      assert.strictEqual((await lstat(a)).nlink, 2);
-
-      const undone = await call(pair.client, 'undo', { steps: 2 });
-      assert.notStrictEqual(undone.isError, true);
-      assert.strictEqual(await readFile(a, 'utf8'), 'A');
-      assert.strictEqual(await readFile(b, 'utf8'), 'A');
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('batch create in a new folder undoes all files and removes the folder', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const dir = join(tmp, 'batch-new', 'sub');
-      const created = await call(pair.client, 'create', {
-        files: [
-          { path: join(dir, 'a.txt'), content: 'a' },
-          { path: join(dir, 'b.txt'), content: 'b' },
-        ],
-      });
-      assert.notStrictEqual(created.isError, true);
-      const undone = await call(pair.client, 'undo', {});
-      assert.notStrictEqual(undone.isError, true);
-      const text = firstTextBlock(undone) ?? '';
-      assert.ok(!text.includes('SKIPPED') && !text.includes('FAILED'), text);
-      const [step] = (undone._meta as { steps: { truncated?: true; totalResults?: number }[] })
-        .steps;
-      assert.deepStrictEqual([step?.truncated, step?.totalResults], [undefined, undefined]);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(
-        await fsPromises.stat(join(tmp, 'batch-new')).then(
-          () => true,
-          () => false,
-        ),
-        false,
-      );
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('a large step lists 100 paths, skipped ones first, and reports the total', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const files = Array.from({ length: 100 }, (_, i) =>
-        join(tmp, 'wide', `d${String(i)}`, 'f.txt'),
-      );
-      const created = await call(pair.client, 'create', {
-        files: files.map((path) => ({ path, content: 'x' })),
-      });
-      assert.notStrictEqual(created.isError, true);
-      // Three changed files: their removes and folders skip, and so does the shared parent.
-      for (const path of files.slice(-3)) await writeFile(path, 'changed');
-      const undone = await call(pair.client, 'undo', {});
-      const [step] = (
-        undone._meta as {
-          steps: { results: { error?: unknown }[]; truncated?: true; totalResults?: number }[];
-        }
-      ).steps;
-      assert.ok(step);
-      assert.strictEqual(step.results.length, 100);
-      assert.strictEqual(step.truncated, true);
-      assert.ok((step.totalResults ?? 0) > 200, `totalResults: ${String(step.totalResults)}`);
-      assert.strictEqual(step.results.filter((r) => r.error !== undefined).length, 7);
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it(
-    'listed paths share one byte budget across steps',
-    // The test needs ~2.5 KB paths; macOS caps a path at 1024 bytes (PATH_MAX).
-    { skip: process.platform === 'darwin' && 'macOS PATH_MAX is below the paths this needs' },
-    async () => {
-      const tmp = await createTestRoot();
-      const pair = await createTestClientPair([tmp]);
-      try {
-        // ~2.5 KB paths, listed twice per skipped result: five 100-path steps outgrow the budget.
-        const deep = join(
-          tmp,
-          ...Array.from({ length: 12 }, (_, i) => `${String(i)}${'d'.repeat(199)}`),
-        );
-        await mkdir(deep, { recursive: true });
-        const files: string[] = [];
-        for (let k = 0; k < 5; k++) {
-          const batch = Array.from({ length: 100 }, (_, i) =>
-            join(deep, `f${String(k)}-${String(i)}.txt`),
-          );
-          await call(pair.client, 'create', {
-            files: batch.map((path) => ({ path, content: 'x' })),
-          });
-          files.push(...batch);
-        }
-        for (const path of files) await writeFile(path, 'changed');
-        const undone = await call(pair.client, 'undo', { steps: 5 });
-        const { steps } = undone._meta as {
-          steps: { results: unknown[]; truncated?: true; totalResults?: number }[];
-        };
-        const listed = steps.flatMap((s) => s.results);
-        assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 2 * 1024 * 1024);
-        assert.ok(listed.length < 500, `listed: ${String(listed.length)}`);
-        assert.ok(steps.some((s) => s.truncated === true && s.totalResults === 100));
-      } finally {
-        await pair.close();
-        await cleanupTestRoot(tmp);
-      }
-    },
-  );
-
-  it('a restore reports progress per record while it runs', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const files = Array.from({ length: 100 }, (_, i) => join(tmp, 'ticks', `f${String(i)}.txt`));
-      await call(pair.client, 'create', { files: files.map((path) => ({ path, content: 'x' })) });
-      const frames: { progress: number; total?: number | undefined }[] = [];
-      const undone = await pair.client.callTool(
-        { name: 'undo', arguments: {} },
-        {
-          onprogress: (p) => {
-            frames.push(p);
-          },
-        },
-      );
-      // The first tick always clears the rate limit; the complete frame alone has progress === total.
-      const ticks = frames.filter((p) => p.total !== undefined && p.progress < p.total);
-      assert.ok(ticks.length > 0, JSON.stringify(frames));
-      // Each folder the batch created is recorded once per file but removed once.
-      const [step] = (undone._meta as { steps: { totalResults?: number }[] }).steps;
-      assert.ok(
-        ticks.every((p) => p.total === step?.totalResults),
-        JSON.stringify(frames),
-      );
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
   it('non-recursive delete on a non-empty folder records no undo step', async () => {
     const tmp = await createTestRoot();
     const pair = await createTestClientPair([tmp]);
@@ -2273,117 +2328,6 @@ describe('undo tool', () => {
       assert.ok(!(firstTextBlock(del) ?? '').includes('undo'));
       const undoRes = await call(pair.client, 'undo', {});
       assert.strictEqual(firstTextBlock(undoRes), 'undo: nothing to undo');
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('undo by id reverts only that call', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const one = join(tmp, 'one.txt');
-      const two = join(tmp, 'two.txt');
-      await writeFile(one, 'one-old\n');
-      await writeFile(two, 'two-old\n');
-      const first = await call(pair.client, 'edit', {
-        path: one,
-        edits: [{ oldText: 'one-old', newText: 'one-new' }],
-      });
-      const second = await call(pair.client, 'edit', {
-        path: two,
-        edits: [{ oldText: 'two-old', newText: 'two-new' }],
-      });
-      const olderId = undoId(first);
-      assert.notStrictEqual(undoId(second), olderId);
-      const undone = await call(pair.client, 'undo', { id: olderId });
-      assert.notStrictEqual(undone.isError, true);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(await fsPromises.readFile(one, 'utf8'), 'one-old\n');
-      assert.strictEqual(await fsPromises.readFile(two, 'utf8'), 'two-new\n');
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('an older id on a file edited again is skipped, and dryRun still lists it', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const file = join(tmp, 'twice.txt');
-      await writeFile(file, 'v1\n');
-      const first = await call(pair.client, 'edit', {
-        path: file,
-        edits: [{ oldText: 'v1', newText: 'v2' }],
-      });
-      await call(pair.client, 'edit', { path: file, edits: [{ oldText: 'v2', newText: 'v3' }] });
-      const olderId = undoId(first);
-      const undone = await call(pair.client, 'undo', { id: olderId });
-      // Every record was skipped, so the call reports isError — and the older
-      // entry is still listed by a later dry run.
-      assert.strictEqual(undone.isError, true);
-      assert.match(firstTextBlock(undone) ?? '', /SKIPPED/u);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'v3\n');
-      const dry = await call(pair.client, 'undo', { dryRun: true });
-      assert.match(firstTextBlock(dry) ?? '', /undo: [a-z0-9]{4}/u);
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('id plus steps is INVALID_INPUT', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const result = await call(pair.client, 'undo', { id: 'aaaa', steps: 2 });
-      assert.strictEqual(result.isError, true);
-      assert.match(firstTextBlock(result) ?? '', /Pass id or steps, not both\./u);
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('an unknown id is NOT_FOUND', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const result = await call(pair.client, 'undo', { id: 'zzzz' });
-      assert.strictEqual(result.isError, true);
-      assert.match(firstTextBlock(result) ?? '', /Unknown or expired undo id "zzzz"\./u);
-    } finally {
-      await pair.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
-  it('dryRun lists ids, tools and paths without changing bytes', async () => {
-    const tmp = await createTestRoot();
-    const pair = await createTestClientPair([tmp]);
-    try {
-      const file = join(tmp, 'dry.txt');
-      await writeFile(file, 'a\n');
-      const editRes = await call(pair.client, 'edit', {
-        path: file,
-        edits: [{ oldText: 'a', newText: 'b' }],
-      });
-      const id = undoId(editRes);
-      const before = await (await import('node:fs/promises')).readFile(file, 'utf8');
-      const dry = await call(pair.client, 'undo', { dryRun: true });
-      assert.notStrictEqual(dry.isError, true);
-      const text = firstTextBlock(dry) ?? '';
-      assert.match(text, /undo: [a-z0-9]{4} \(edit\)/u);
-      assert.ok(text.includes(pathLabel(file)));
-      const fsPromises2 = await import('node:fs/promises');
-      const after = await fsPromises2.readFile(file, 'utf8');
-      assert.strictEqual(after, before);
-      // The entry is still there: a real undo still works.
-      const real = await call(pair.client, 'undo', { id });
-      assert.notStrictEqual(real.isError, true);
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
@@ -2418,22 +2362,6 @@ describe('undo tool', () => {
     }
   });
 
-  it('over HTTP, undo with steps is INVALID_INPUT', async () => {
-    const tmp = await createTestRoot();
-    const harness = await createTestHttpHarness([tmp]);
-    try {
-      const result = await call(harness.client, 'undo', { steps: 2 });
-      assert.strictEqual(result.isError, true);
-      assert.match(
-        firstTextBlock(result) ?? '',
-        /Over HTTP, pass the undo id from the tool result/u,
-      );
-    } finally {
-      await harness.close();
-      await cleanupTestRoot(tmp);
-    }
-  });
-
   it('over HTTP, undo by id in a separate request reverts the edit', async () => {
     const tmp = await createTestRoot();
     const harness = await createTestHttpHarness([tmp]);
@@ -2448,8 +2376,7 @@ describe('undo tool', () => {
       const id = undoId(editRes);
       const undone = await call(harness.client, 'undo', { id });
       assert.notStrictEqual(undone.isError, true);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'before\n');
+      assert.strictEqual(await readFile(file, 'utf8'), 'before\n');
     } finally {
       await harness.close();
       await cleanupTestRoot(tmp);
@@ -2470,8 +2397,7 @@ describe('undo tool', () => {
       assert.match(firstTextBlock(editRes) ?? '', / · undo [a-z0-9]{4}$/u);
       const undone = await call(stdio.client, 'undo', {});
       assert.notStrictEqual(undone.isError, true);
-      const fsPromises = await import('node:fs/promises');
-      assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'before\n');
+      assert.strictEqual(await readFile(file, 'utf8'), 'before\n');
     } finally {
       await stdio.close();
       await cleanupTestRoot(tmp);

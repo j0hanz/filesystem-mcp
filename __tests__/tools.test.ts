@@ -2,12 +2,12 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { getMaxTextFileSize, MAX_TOOL_INPUT_ELEMENTS } from '../src/core/util.ts';
+import { MAX_TOOL_INPUT_ELEMENTS } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import { ProgressSession } from '../src/tools/progress.ts';
@@ -23,7 +23,6 @@ import {
   type TestClientContext,
   trySymlink,
   withBoundary,
-  withEnv,
   writeTestFile,
 } from './helpers.ts';
 
@@ -311,22 +310,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
-  it('edit refuses an empty or blank oldText with one message', async () => {
-    const file = join(tmpDir, 'edit-blank-old.txt');
-    await writeFile(file, 'original content');
-    for (const oldText of ['', '   ']) {
-      const result = await harness.client.callTool({
-        name: 'edit',
-        arguments: { path: file, edits: [{ oldText, newText: 'x' }] },
-      });
-      assert.strictEqual(result.isError, true, JSON.stringify(oldText));
-      const text = firstTextBlock(result).text ?? '';
-      assert.match(text, /oldText cannot be empty or whitespace-only/u);
-      assert.doesNotMatch(text, /oldText required/u);
-    }
-    assert.strictEqual(await readFile(file, 'utf-8'), 'original content');
-  });
-
   it('recovers arguments a client serialized and spread into indexed keys (issue #51)', async () => {
     const file = join(tmpDir, 'edit-split-args.txt');
     await writeFile(file, 'original content');
@@ -354,155 +337,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         new RegExp(`arrived as a ${String(encoded.length)}-character string`, 'u'),
       );
       assert.doesNotMatch(text, /Unrecognized keys/u);
-    }
-  });
-
-  it('edit refuses a batch that names the same file twice', async () => {
-    const original = 'alpha\nbeta\n';
-    const file = await writeTestFile(tmpDir, 'dup-batch/dup.txt', original);
-    const result = await harness.client.callTool({
-      name: 'edit',
-      arguments: {
-        files: [
-          { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
-          { path: file, edits: [{ oldText: 'beta', newText: 'B' }] },
-        ],
-      },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(firstTextBlock(result).text ?? '', /duplicate of files\[0\]\.path/u);
-    assert.strictEqual(await readFile(file, 'utf-8'), original);
-
-    if (process.platform === 'win32' || process.platform === 'darwin') {
-      const upper = join(dirname(file), 'DUP.TXT');
-      const caseResult = await harness.client.callTool({
-        name: 'edit',
-        arguments: {
-          files: [
-            { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
-            { path: upper, edits: [{ oldText: 'beta', newText: 'B' }] },
-          ],
-        },
-      });
-      assert.strictEqual(caseResult.isError, true);
-      assert.match(firstTextBlock(caseResult).text ?? '', /duplicate of files\[0\]\.path/u);
-      assert.strictEqual(await readFile(file, 'utf-8'), original);
-    }
-  });
-
-  it('edit refuses path with edits and files in one call, writing nothing', async () => {
-    const f = await writeTestFile(tmpDir, 'edit_both_forms.txt', 'one\n');
-    const spec = [{ oldText: 'one', newText: 'two' }];
-    const result = await harness.client.callTool({
-      name: 'edit',
-      arguments: { path: f, edits: spec, files: [{ path: f, edits: spec }] },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(firstTextBlock(result).text ?? '', /Provide exactly one of 'path' or 'files'/u);
-    assert.strictEqual(await readFile(f, 'utf-8'), 'one\n');
-  });
-
-  it('create refuses a batch whose combined content exceeds the file limit', async () => {
-    const limit = getMaxTextFileSize();
-    const half = 'x'.repeat(Math.ceil(limit / 2) + 1);
-    const result = await harness.client.callTool({
-      name: 'create',
-      arguments: {
-        files: [
-          { path: join(tmpDir, 'batch-a.txt'), content: half },
-          { path: join(tmpDir, 'batch-b.txt'), content: half },
-        ],
-      },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(firstTextBlock(result).text ?? '', /combined content .* Split the batch/);
-  });
-
-  it('create counts the per-file size cap in UTF-8 bytes, not UTF-16 units', async () => {
-    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
-      const limit = getMaxTextFileSize();
-      assert.strictEqual(limit, 1048576);
-      // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: 349526 units, 1048578 bytes.
-      const over = '€'.repeat(Math.floor(limit / 3) + 1);
-      assert.ok(over.length < limit);
-      assert.strictEqual(Buffer.byteLength(over, 'utf8'), 1048578);
-      const overPath = join(tmpDir, 'bytes-cap-over.txt');
-      const refused = await harness.client.callTool({
-        name: 'create',
-        arguments: { files: [{ path: overPath, content: over }] },
-      });
-      assert.strictEqual(refused.isError, true);
-      assert.match(
-        firstTextBlock(refused).text ?? '',
-        /Content exceeds maximum allowed text file size/u,
-      );
-      await assert.rejects(stat(overPath), { code: 'ENOENT' });
-
-      // Exactly at the limit in bytes is accepted.
-      const exact = '€'.repeat(Math.floor(limit / 3)) + 'x'.repeat(limit % 3);
-      assert.strictEqual(Buffer.byteLength(exact, 'utf8'), limit);
-      const exactPath = join(tmpDir, 'bytes-cap-exact.txt');
-      const ok = await harness.client.callTool({
-        name: 'create',
-        arguments: { files: [{ path: exactPath, content: exact }] },
-      });
-      assert.notStrictEqual(ok.isError, true);
-      assert.strictEqual((await stat(exactPath)).size, limit);
-    });
-  });
-
-  it('create counts the combined batch cap in UTF-8 bytes', async () => {
-    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
-      const limit = getMaxTextFileSize();
-      // Each entry is under the per-file cap. Together they are over it in bytes (1048584) but not in units (349528).
-      const part = '€'.repeat(Math.ceil(limit / 6) + 1);
-      const totalBytes = 2 * Buffer.byteLength(part, 'utf8');
-      assert.ok(2 * part.length < limit);
-      assert.strictEqual(totalBytes, 1048584);
-      const result = await harness.client.callTool({
-        name: 'create',
-        arguments: {
-          files: [
-            { path: join(tmpDir, 'bytes-batch-a.txt'), content: part },
-            { path: join(tmpDir, 'bytes-batch-b.txt'), content: part },
-          ],
-        },
-      });
-      assert.strictEqual(result.isError, true);
-      assert.match(
-        firstTextBlock(result).text ?? '',
-        /combined content is 1048584 bytes; one create call carries at most 1048576 \(FS_MAX_FILE_SIZE\)\. Split the batch\./u,
-      );
-    });
-  });
-
-  it('create refuses a batch that names the same file twice', async () => {
-    const file = join(tmpDir, 'dup-create', 'dup.txt');
-    const result = await harness.client.callTool({
-      name: 'create',
-      arguments: {
-        files: [
-          { path: file, content: 'AAAA' },
-          { path: file, content: 'BBBB' },
-        ],
-      },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(firstTextBlock(result).text ?? '', /duplicate of files\[0\]\.path/u);
-    await assert.rejects(access(file), 'nothing may be written when the batch is refused');
-
-    if (process.platform === 'win32' || process.platform === 'darwin') {
-      const caseResult = await harness.client.callTool({
-        name: 'create',
-        arguments: {
-          files: [
-            { path: file, content: 'AAAA' },
-            { path: join(tmpDir, 'dup-create', 'DUP.TXT'), content: 'BBBB' },
-          ],
-        },
-      });
-      assert.strictEqual(caseResult.isError, true);
-      assert.match(firstTextBlock(caseResult).text ?? '', /duplicate of files\[0\]\.path/u);
     }
   });
 
@@ -972,25 +806,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual((result._meta as { totalMatches?: number }).totalMatches, 2);
     const content = await readFile(file, 'utf-8');
     assert.strictEqual(content, 'QUX bar QUX\n');
-  });
-
-  it('replace_text rejects maxMatches with maxResults', async () => {
-    const result = await harness.client.callTool({
-      name: 'replace_text',
-      arguments: {
-        path: tmpDir,
-        searchPattern: 'x',
-        replacement: 'y',
-        dryRun: true,
-        maxMatches: 1,
-        maxResults: 1,
-      },
-    });
-    assert.strictEqual(result.isError, true);
-    assert.match(
-      firstTextBlock(result).text ?? '',
-      /Cannot use both 'maxMatches' and 'maxResults'/u,
-    );
   });
 
   it('replace_text publishes maxResults as deprecated', async () => {

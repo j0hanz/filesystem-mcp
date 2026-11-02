@@ -6,7 +6,7 @@ import type {
 } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import type * as z from 'zod/v4';
+import * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { type PendingState, requestStateCodec } from '../src/core/input-required.ts';
@@ -53,6 +53,10 @@ export interface ToolBodyOptions {
   readonly signal?: AbortSignal;
   readonly pageStore?: PageSnapshotStore;
   readonly resourceStore?: ResourceStore;
+  /** The journal `ctx.undoJournal` reads; `undo` needs one shared across calls. */
+  readonly undoJournal?: UndoJournal;
+  /** `ctx.transport`, which the executor sets from the hosting leg; unset is the in-memory pair. */
+  readonly transport?: ToolCtx['transport'];
   readonly onProgress?: ToolCtx['onProgress'];
   /**
    * The fake client's answer to each Confirmation prompt. When set, an
@@ -121,8 +125,9 @@ async function runToolBody<I extends z.ZodType, O extends object>(
     requestId: 'tool-harness',
     fs,
     pageStore: options.pageStore ?? new PageSnapshotStore(),
-    undoJournal: new UndoJournal(),
+    undoJournal: options.undoJournal ?? new UndoJournal(),
     resourceStore: options.resourceStore ?? new ResourceStore(),
+    transport: options.transport,
     log: (level: LoggingLevel, data: unknown, logger?: string) => {
       logs.push({ level, data, logger });
     },
@@ -173,4 +178,18 @@ export async function runToolBodyResult<I extends z.ZodType, O extends object>(
     throw new Error(`tool-harness: ${tool.name} asked for input`);
   }
   return { ...result, logs, rounds };
+}
+
+/**
+ * The issue messages of a body run whose arguments the tool's own input
+ * schema refuses; the run never reaches `run`. Fails if the schema accepts.
+ */
+export async function schemaIssues(run: Promise<unknown>): Promise<string[]> {
+  try {
+    await run;
+  } catch (error) {
+    if (error instanceof z.ZodError) return error.issues.map((issue) => issue.message);
+    throw error;
+  }
+  throw new Error('tool-harness: the input schema accepted the call');
 }
