@@ -24,8 +24,9 @@ import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
-import { MAX_MATCH_LINE_CHARS, RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS, searchContent } from '../src/core/search.ts';
 import {
   escapeRegExp,
   getMaxTextFileSize,
