@@ -2,7 +2,7 @@ import { Client, type McpSubscription } from '@modelcontextprotocol/client';
 import { LATEST_PROTOCOL_VERSION, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -541,6 +541,68 @@ describe('HTTP re-listen after full release', () => {
 
     sub = await client.listen({ resourceSubscriptions: [uri] });
     await waitForResourceUpdate(client, uri, () => writeFile(filePath, 'changed-after-relisten'));
+  });
+});
+
+// Undo restore visibility: the restore path writes through diskWorld's real
+// fs ops, and the watcher is writer-agnostic (parent-dir watch + basename
+// filter, watcher-registry.ts attach), so a subscriber must hear an undo the
+// same way it hears an external write. Pin it end to end — no other test
+// drives undo through a live subscription. Catches: restore switching to a
+// write path that bypasses parent-dir events, or notifyAll dropped from the
+// watcher callback.
+describe('HTTP undo restore notifies subscribers', () => {
+  let tmpDir: string;
+  let http: HttpTestContext;
+  let client: Client;
+  let subscription: McpSubscription | undefined;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    await writeTestFile(tmpDir, 'undo-watch.txt', 'initial');
+    http = await bootHttpTest([tmpDir]);
+    client = await http.makeClient('http-undo-notify');
+  });
+
+  after(async () => {
+    try {
+      await subscription?.close();
+    } catch {
+      /* subscription may already be torn down */
+    }
+    await http.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('a watched file restored by undo sends notifications/resources/updated', async () => {
+    const filePath = join(tmpDir, 'undo-watch.txt');
+    const uri = buildFileResourceUri(filePath);
+
+    subscription = await client.listen({ resourceSubscriptions: [uri] });
+
+    // Edit through the tool so the journal records an undo step, and wait for
+    // THAT write's notification to land before undoing: the second wait below
+    // must then be satisfied by the restore alone, not by the edit's own
+    // debounced event.
+    let undoId: string | undefined;
+    await waitForResourceUpdate(client, uri, async () => {
+      const edited = (await client.callTool({
+        name: 'edit',
+        arguments: {
+          path: filePath,
+          edits: [{ oldText: 'initial', newText: 'changed' }],
+        },
+      })) as { _meta?: { undo?: string } };
+      undoId = edited._meta?.undo;
+    });
+    assert.ok(undoId, 'edit result must carry the undo id in _meta.undo');
+
+    await waitForResourceUpdate(client, uri, () =>
+      client.callTool({ name: 'undo', arguments: { id: undoId } }),
+    );
+
+    // The notification must belong to a real restore, not a spurious event.
+    assert.strictEqual(await readFile(filePath, 'utf8'), 'initial');
   });
 });
 
