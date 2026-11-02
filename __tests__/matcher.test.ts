@@ -132,6 +132,11 @@ describe('replacement matchers', () => {
       'abacc',
       'whole match, before, and after',
     );
+    twelve.dispose();
+    two.dispose();
+    one.dispose();
+    named.dispose();
+    whole.dispose();
   });
 
   it('MTCH-002: wholeWord resumes over the trail and finds a match at text start', async () => {
@@ -153,6 +158,22 @@ describe('replacement matchers', () => {
 
     const verbatim = await matcher.replace('foo', '$&', undefined, limits());
     assert.strictEqual(verbatim.content, '$&', 'a literal replacement is inserted verbatim');
+
+    // A consumed text ending in a non-word char backs up, so its last char may
+    // lead the next match: the needle's final '-' leads here (the wire twin is
+    // tools.test.ts 'wholeWord lets a needle trailing non-word char lead the next match').
+    const trailPlan = planMatch('-x-', { isRegex: false, caseSensitive: false, wholeWord: true });
+    const trailMatcher = createRegexReplacementMatcher(
+      compileRegex(trailPlan.source, { caseSensitive: false }),
+      false,
+      true,
+    );
+    const trail = await trailMatcher.replace('-x--x-', 'X', undefined, limits());
+    assert.strictEqual(trail.content, 'XX');
+    assert.strictEqual(trail.matchCount, 2);
+
+    trailMatcher.dispose();
+    matcher.dispose();
   });
 
   it('MTCH-003: the case-sensitive literal splices once and honours the cap', async () => {
@@ -165,6 +186,8 @@ describe('replacement matchers', () => {
 
     assert.strictEqual(createCaseSensitiveLiteralMatcher('�'), undefined);
     assert.strictEqual(createCaseSensitiveLiteralMatcher('\uD800'), undefined);
+
+    matcher.dispose();
   });
 
   it('MTCH-004: the case-insensitive literal folds and delegates fold characters to RE2', async () => {
@@ -197,6 +220,9 @@ describe('replacement matchers', () => {
     const judged = await kelvin.replace('aKb', 'X', undefined, limits());
     assert.strictEqual(judged.content, 'aXb');
     assert.strictEqual(judged.matchCount, 1);
+
+    matcher.dispose();
+    kelvin.dispose();
   });
 
   it('MTCH-005: dispose is idempotent', () => {
@@ -221,5 +247,7 @@ describe('replacement matchers', () => {
         }),
       (error: unknown) => isFsError(error),
     );
+
+    matcher.dispose();
   });
 });
