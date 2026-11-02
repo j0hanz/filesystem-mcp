@@ -337,7 +337,7 @@ async function readOnePath(
   ctx: ToolCtx,
 ): Promise<PerPathReadValue> {
   // Image/audio full read: return a media content block instead of throwing
-  // INVALID_INPUT ("Binary file detected."). Line-range reads are
+  // BINARY_FILE ("Binary file detected."). Line-range reads are
   // text-oriented and stay rejected. `readRaw` enforces the same size cap as
   // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
   // rather than blowing memory. svg is kind 'image' in EXT_MAP, so readRaw
@@ -380,7 +380,7 @@ async function readOnePath(
     // The schema refuses binary with a range, so this is always a full read.
     if (args.binary) return await readBinaryResource(filePath, args, ctx);
     throw new FsError(
-      ErrorCode.INVALID_INPUT,
+      ErrorCode.BINARY_FILE,
       isRangeRead
         ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
         : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,

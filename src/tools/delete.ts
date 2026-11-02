@@ -8,10 +8,9 @@ import * as z from 'zod/v4';
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
+  DELETE_ERRNOS,
   ErrorCode,
-  FsError,
   isMissing,
-  isNodeError,
   isNotFoundErrno,
   type PerPathResult,
   Problem,
@@ -50,23 +49,7 @@ interface DeleteFailure {
 }
 
 function toDeleteFailure(path: string, error: unknown): DeleteFailure {
-  // A missing path reached here as the raw errno text ("ENOENT: no such file or
-  // directory, lstat 'c:\...'"), while `stat` reported the same condition as
-  // "Path not found". One condition, one message — and the syscall name stays
-  // off the wire.
-  if (isNotFoundErrno(error)) {
-    return { path, error: new FsError(ErrorCode.NOT_FOUND, 'Path not found', path).problem };
-  }
-  if (
-    isNodeError(error) &&
-    (error.code === 'ENOTEMPTY' || error.code === 'EISDIR' || error.code === 'EEXIST')
-  ) {
-    return {
-      path,
-      error: Problem.invalidInput('Directory not empty. Set recursive: true.', { path }),
-    };
-  }
-  return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path) };
+  return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path, DELETE_ERRNOS) };
 }
 
 type LstatResult = Awaited<ReturnType<GuardedFileSystem['lstat']>>;

@@ -80,6 +80,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       `TOO_LARGE: Over the file size limit, use ${READ.name} with head/tail or startLine/endLine. Over the stdio message limit, request a smaller slice or page, or connect over HTTP; media and binary files need HTTP.`,
       'TIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.',
       'INVALID_INPUT: Re-read the tool schema in tools/list.',
+      `BINARY_FILE: Text tools refuse binary files; ${READ.name} returns one whole with binary: true.`,
       '```',
     ].join('\n'),
   };

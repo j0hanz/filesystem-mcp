@@ -169,7 +169,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeFile(file, Buffer.from([0x50, 0x4b, 3, 4, 0, 0, 0, 0]));
     const whole = await harness.client.callTool({ name: 'read', arguments: { path: file } });
     assert.strictEqual(whole.isError, true);
-    assert.strictEqual(failedSummary(whole)?.results?.[0]?.error?.code, 'INVALID_INPUT');
+    assert.strictEqual(failedSummary(whole)?.results?.[0]?.error?.code, 'BINARY_FILE');
     assert.match(firstTextBlock(whole).text ?? '', /^Binary file detected\. Pass binary: true/);
 
     const ranged = await harness.client.callTool({

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file and `replace_text`'s `Binary or non-UTF-8 file detected.` still answer `INVALID_INPUT`.
+
 ## [2.15.0] - 2026-11-02
 
 A correctness release. Directory transfers recheck the sensitive-file policy

@@ -339,7 +339,7 @@ Notes on individual tools:
   `_meta.results[].value.continuation` holds the arguments for the next
   chunk. `includeHash: true` adds `contentHash` (SHA-256). Images and audio
   come back as `image` and `audio` content blocks; other binary files fail
-  with `Binary file detected.` unless the call passes `binary: true`. Then a
+  with `BINARY_FILE` (`Binary file detected.`) unless the call passes `binary: true`. Then a
   full read returns the file as a `resource` block (`resource.blob` is base64,
   `resource.mimeType` the type), and `_meta.results[].value` holds `size` and
   `kind`. Line ranges are refused for binary files.
@@ -371,8 +371,10 @@ There are three kinds of failure:
 
 Error codes in tool results: `ACCESS_DENIED`, `NOT_FOUND`, `NOT_FILE`,
 `NOT_DIRECTORY`, `TOO_LARGE`, `TIMEOUT`, `CANCELLED`, `INVALID_PATTERN`,
-`INVALID_INPUT`, `PERMISSION_DENIED`, `SYMLINK_NOT_ALLOWED`, `IO_ERROR`,
-`UNKNOWN`. A declined confirmation is `CANCELLED`. The `suggestion` field and
+`INVALID_INPUT`, `BINARY_FILE`, `PERMISSION_DENIED`, `SYMLINK_NOT_ALLOWED`, `IO_ERROR`,
+`UNKNOWN`. A declined confirmation is `CANCELLED`. `BINARY_FILE` is a text
+tool (`read`, `edit`, `patch`, `diff`) refusing a binary file; `read` accepts
+it with `binary: true`. The `suggestion` field and
 the server's guide (below) say how to recover from each.
 
 ## Pagination and cached results

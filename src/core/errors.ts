@@ -8,6 +8,7 @@ export const ErrorCode = {
   CANCELLED: 'CANCELLED',
   INVALID_PATTERN: 'INVALID_PATTERN',
   INVALID_INPUT: 'INVALID_INPUT',
+  BINARY_FILE: 'BINARY_FILE',
   PERMISSION_DENIED: 'PERMISSION_DENIED',
   SYMLINK_NOT_ALLOWED: 'SYMLINK_NOT_ALLOWED',
   IO_ERROR: 'IO_ERROR',
@@ -44,8 +45,9 @@ export const Problem = {
     build(ErrorCode.ACCESS_DENIED, msg, o),
   cancelled: (msg: string, o?: ProblemFactoryOptions): Problem =>
     build(ErrorCode.CANCELLED, msg, o),
-  fromUnknown(error: unknown, defaultCode: ErrorCode, path?: string): Problem {
-    const problem = classify(error);
+  /** `rows` lets an operation read some errnos its own way (e.g. `DELETE_ERRNOS`). */
+  fromUnknown(error: unknown, defaultCode: ErrorCode, path?: string, rows?: ErrnoRows): Problem {
+    const problem = classify(error, rows);
     const shouldOverride =
       problem.code === ErrorCode.UNKNOWN || problem.code === ErrorCode.IO_ERROR;
     const code = shouldOverride ? defaultCode : problem.code;
@@ -71,6 +73,8 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.TOO_LARGE]: 'Use head/tail or line ranges to read partially.',
   [ErrorCode.TIMEOUT]: 'Reduce scope, depth, or maxResults.',
   [ErrorCode.INVALID_PATTERN]: 'Check syntax and escape special characters.',
+  [ErrorCode.BINARY_FILE]:
+    'Text tools refuse binary files; read returns one whole with binary: true.',
   [ErrorCode.PERMISSION_DENIED]: 'Check OS file permissions.',
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',
 };
@@ -92,12 +96,38 @@ const ERRNO_MAP: Readonly<Record<string, ErrorCode>> = {
   EINVAL: ErrorCode.INVALID_INPUT,
 };
 
+/** An errno's reading for one operation: its code and the message that replaces the raw errno text. */
+interface ErrnoRow {
+  readonly code: ErrorCode;
+  readonly message: string;
+}
+
+/** Rows an operation declares over ERRNO_MAP, applied by `Problem.fromUnknown`. */
+export type ErrnoRows = Readonly<Record<string, ErrnoRow>>;
+
+const DIRECTORY_NOT_EMPTY: ErrnoRow = {
+  code: ErrorCode.INVALID_INPUT,
+  message: 'Directory not empty. Set recursive: true.',
+};
+
+/**
+ * `delete`'s reading: a missing path says so as `stat` does, without the
+ * syscall text, and every way the OS refuses a non-recursive directory removal
+ * (ENOTEMPTY, EISDIR on unlink, EEXIST on some platforms) names `recursive`.
+ */
+export const DELETE_ERRNOS: ErrnoRows = {
+  ENOENT: { code: ErrorCode.NOT_FOUND, message: 'Path not found' },
+  ENOTEMPTY: DIRECTORY_NOT_EMPTY,
+  EISDIR: DIRECTORY_NOT_EMPTY,
+  EEXIST: DIRECTORY_NOT_EMPTY,
+};
+
 const ERRNO_RE = /^E[A-Z]+$/;
 
 // NOT_FOUND is in here (not just ENOENT) because a dangling symlink whose
 // target sits inside an allowed root surfaces as an FsError NOT_FOUND. Skipping
 // the entry is the point of a listing; rethrowing would fail the whole listing.
-export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
+const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
   ErrorCode.ACCESS_DENIED,
   ErrorCode.NOT_FOUND,
   // OS-level EACCES/EPERM on a symlink target during a listing is exactly as
@@ -155,12 +185,14 @@ function scanCauseChain(error: unknown): {
 }
 
 /** The scan's facts as a Problem: an abort wins, then a timeout, then errno. */
-export function classifyCauseChain(error: unknown): Problem {
+export function classifyCauseChain(error: unknown, rows?: ErrnoRows): Problem {
   const message = formatUnknownErrorMessage(error);
   const { aborted, timedOut, errno } = scanCauseChain(error);
   if (aborted) return Problem.cancelled(message);
   if (timedOut) return build(ErrorCode.TIMEOUT, message);
   if (errno !== undefined) {
+    const row = rows?.[errno.code];
+    if (row !== undefined) return build(row.code, row.message, { path: errno.path });
     return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, { path: errno.path });
   }
   return build(ErrorCode.UNKNOWN, message);
@@ -170,7 +202,7 @@ export function isFsError(error: unknown): error is FsError {
   return error instanceof FsError;
 }
 
-function classify(error: unknown): Problem {
+function classify(error: unknown, rows?: ErrnoRows): Problem {
   if (error === null || error === undefined) {
     return build(ErrorCode.UNKNOWN, 'Unknown error');
   }
@@ -185,7 +217,7 @@ function classify(error: unknown): Problem {
   if (!(error instanceof Error)) {
     return build(ErrorCode.UNKNOWN, typeof error === 'string' ? error : '[non-Error thrown]');
   }
-  return classifyCauseChain(error);
+  return classifyCauseChain(error, rows);
 }
 
 export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -214,6 +246,11 @@ export const unlessMissing = <T>(promise: Promise<T>): Promise<T | undefined> =>
 /** True when `error` is a Node errno error whose code is in `SKIPPABLE_ERRNOS`. */
 export function isSkippableErrno(error: unknown): error is NodeJS.ErrnoException {
   return isNodeError(error) && error.code !== undefined && SKIPPABLE_ERRNOS.has(error.code);
+}
+
+/** True when a walk may skip the entry `error` stopped: a skippable FsError code or errno. */
+export function isSkippable(error: unknown): boolean {
+  return isFsError(error) ? SKIPPABLE_FS_CODES.has(error.code) : isSkippableErrno(error);
 }
 
 /**
