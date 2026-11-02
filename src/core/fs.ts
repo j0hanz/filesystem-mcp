@@ -135,6 +135,40 @@ export interface ExecuteTransferOptions {
 
 type CopyFilter = NonNullable<NonNullable<Parameters<typeof fsCp>[2]>['filter']>;
 
+/**
+ * The validation regime: what an operation does to a path decides which
+ * PathGuard check it gets. Every GuardedFileSystem method declares its kind
+ * through `#guard`; none picks a validator itself, so a new method adds a call
+ * of an existing kind, or one row here.
+ *
+ * The read-only-probe rule (ADR-010): a `probe` names the entry itself, as a
+ * delete does (a link stays a link; containment, the denylist and symlink
+ * resolution of its parent all apply), but it mutates nothing, so the
+ * read-only-dir refusal is skipped. That keeps `stat` on a link inside a
+ * read-only dir working and lets a copy read its source out of one. Anything
+ * that removes or replaces its entry is `delete`, which keeps the refusal, so a
+ * real move out of a read-only dir stays refused.
+ */
+const GUARD_REGIME = {
+  /** Read through links: the resolved target must exist and be allowed. */
+  read: (guard: PathGuard, path: string) => guard.validateExistingPath(path),
+  /** As `read`, also reporting the requested spelling and whether it was a link. */
+  inspect: (guard: PathGuard, path: string) => guard.validateExistingPathDetailed(path),
+  /** The entry itself, read-only: lstat, readlink, a copy's source. */
+  probe: (guard: PathGuard, path: string) =>
+    guard.validatePathForDelete(path, { allowReadOnly: true }),
+  /** Create or replace at the resolved target. */
+  write: (guard: PathGuard, path: string) => guard.validatePathForWrite(path),
+  /** Remove or move the entry itself. */
+  delete: (guard: PathGuard, path: string) => guard.validatePathForDelete(path),
+  /** A transfer's mapped descendant: a write whose sensitive-name rule the Relocation walk owns. */
+  relocate: (guard: PathGuard, path: string) => guard.validateTransferPathForWrite(path),
+} as const satisfies Record<string, (guard: PathGuard, path: string) => Promise<unknown>>;
+
+type GuardKind = keyof typeof GUARD_REGIME;
+
+type Guarded<K extends GuardKind> = Awaited<ReturnType<(typeof GUARD_REGIME)[K]>>;
+
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
   readonly #capture: UndoCapture | undefined;
@@ -146,6 +180,11 @@ export class GuardedFileSystem {
     this.#capture = capture;
     this.#rawRename = raw.rename ?? fsRename;
     this.#rawRm = raw.rm ?? fsRm;
+  }
+
+  /** Validate `path` for an operation of `kind`; see GUARD_REGIME. */
+  #guard<K extends GuardKind>(kind: K, path: string): Promise<Guarded<K>> {
+    return GUARD_REGIME[kind](this.pathGuard, path) as Promise<Guarded<K>>;
   }
 
   /**
@@ -210,7 +249,7 @@ export class GuardedFileSystem {
   ): Promise<void> {
     if (!(await fsLstat(entry)).isDirectory()) return;
     if (filter && !(await filter(entry, destination))) return;
-    const guard = this.pathGuard;
+    const relocate = (path: string) => this.#guard('relocate', path);
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
       for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
@@ -230,13 +269,13 @@ export class GuardedFileSystem {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
           if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
-          await guard.validateTransferPathForWrite(join(destination, name));
+          await relocate(join(destination, name));
           yield name;
           if (dirent.isDirectory()) pending.push(name);
         }
       }
     }
-    const keeps = await guard.relocationKeepsProtection(
+    const keeps = await this.pathGuard.relocationKeepsProtection(
       names(),
       { from: entry, requestedFrom },
       destination,
@@ -302,7 +341,7 @@ export class GuardedFileSystem {
    * do not take the lock, so `fn` may call them.
    */
   async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
-    const key = await this.pathGuard.validatePathForWrite(filePath);
+    const key = await this.#guard('write', filePath);
     return runExclusive(key, () => fn(key));
   }
 
@@ -315,7 +354,7 @@ export class GuardedFileSystem {
   async lockPairForWrite<T>(a: string, b: string, fn: () => Promise<T>): Promise<T> {
     // `a` is where a rename lands (resolved like the move tool's destination);
     // `b` is the entry being moved.
-    const keyA = await this.pathGuard.validatePathForWrite(a);
+    const keyA = await this.#guard('write', a);
     const keyB = await this.pathGuard.entryLockKey(b);
     if (keyA === keyB) return runExclusive(keyA, fn);
     const [first, second] = keyA < keyB ? [keyA, keyB] : [keyB, keyA];
@@ -337,10 +376,7 @@ export class GuardedFileSystem {
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     // A late validation result is a plain string, so a stalled realpath needs no release.
-    const validPath = await withAbort(
-      this.pathGuard.validateExistingPath(filePath),
-      options?.signal,
-    );
+    const validPath = await withAbort(this.#guard('read', filePath), options?.signal);
     return { stats: await this.#statVerified(validPath, filePath, options?.signal), validPath };
   }
 
@@ -394,16 +430,14 @@ export class GuardedFileSystem {
     filePath: string,
     options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
-    // Metadata probes read the entry; a link inside a read-only dir stays
-    // stat-able, so its refusal is skipped (reads are allowed there).
-    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
+    const validPath = await this.#guard('probe', filePath);
     const stats = await withAbort(fsLstat(validPath), options?.signal);
     return { stats, validPath };
   }
 
   /** As `lstat`, with exact (bigint) fields: what undo identities are built from. */
   async lstatExact(filePath: string): Promise<{ stats: BigIntStats; validPath: string }> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
+    const validPath = await this.#guard('probe', filePath);
     return { stats: await fsLstat(validPath, { bigint: true }), validPath };
   }
 
@@ -411,18 +445,17 @@ export class GuardedFileSystem {
     filePath: string,
     options?: Parameters<typeof fsReadlink>[1],
   ): Promise<{ linkString: string; validPath: string }> {
-    // validateExistingPath resolves through the symlink, so readlink would always
-    // be handed the final target — a regular file — and fail EINVAL. This guard
-    // keeps the link itself while still enforcing containment and the denylist.
-    // The read-only refusal is skipped too: reading a link mutates nothing.
-    const validPath = await this.pathGuard.validatePathForDelete(filePath, { allowReadOnly: true });
+    // A `read` resolves through the symlink, so readlink would always be handed
+    // the final target — a regular file — and fail EINVAL. A `probe` keeps the
+    // link itself.
+    const validPath = await this.#guard('probe', filePath);
     const raw = await fsReadlink(validPath, options);
     const linkString = Buffer.isBuffer(raw) ? raw.toString('utf-8') : raw;
     return { linkString, validPath };
   }
 
   async mkdir(filePath: string, options?: Parameters<typeof fsMkdir>[1]): Promise<void> {
-    const validPath = await this.pathGuard.validatePathForWrite(filePath);
+    const validPath = await this.#guard('write', filePath);
     // Undo capture: collect the chain of directories this call is about to
     // create (each one currently absent), outermost first.
     const capture = this.#capture;
@@ -570,7 +603,7 @@ export class GuardedFileSystem {
   ): Promise<{ entry: string; landing: string }> {
     try {
       if (op === 'move') {
-        const entry = await this.pathGuard.validatePathForDelete(source);
+        const entry = await this.#guard('delete', source);
         try {
           const { validPath: landing } = await this.stat(source, { signal });
           return { entry, landing };
@@ -596,10 +629,10 @@ export class GuardedFileSystem {
   /** The move half of `executeTransfer`: Capture, raw rename, cross-device fallback. */
   async #move(plan: TransferPlan, crossDevice: boolean): Promise<void> {
     // Validated again right before the rename, as every mutation is.
-    const validOld = await this.pathGuard.validatePathForDelete(plan.entry);
+    const validOld = await this.#guard('delete', plan.entry);
     const validNew = plan.respelling
       ? plan.destination
-      : await this.pathGuard.validatePathForWrite(plan.destination);
+      : await this.#guard('write', plan.destination);
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;
@@ -651,7 +684,7 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined; mode?: number | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await this.pathGuard.validatePathForWrite(filePath);
+    const validPath = await this.#guard('write', filePath);
 
     const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -771,12 +804,12 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await this.pathGuard.validatePathForWrite(filePath);
+    const validPath = await this.#guard('write', filePath);
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
     // the call would hang unabortable and pin its concurrency slot. The
     // overwrite path can't hang — it writes a temp file and renames over.
-    // resolveForWrite has already resolved any symlink to its target, so the
+    // The `write` guard has already resolved any symlink to its target, so the
     // lstat here doubles as the new-vs-existing probe for the cleanup below.
     let existing: Stats | undefined;
     try {
@@ -904,7 +937,7 @@ export class GuardedFileSystem {
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    const validPath = await this.#guard('delete', filePath);
     // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
     // recursive rm can fail halfway with files already gone.
     const capture = this.#capture;
@@ -915,7 +948,7 @@ export class GuardedFileSystem {
   }
 
   async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
-    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    const validPath = await this.#guard('delete', filePath);
     const before = this.#capture
       ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
       : undefined;
@@ -929,7 +962,7 @@ export class GuardedFileSystem {
   }
 
   async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {
-    const validPath = await this.pathGuard.validatePathForWrite(linkPath);
+    const validPath = await this.#guard('write', linkPath);
     await fsSymlink(target, validPath, type);
   }
 
@@ -956,14 +989,8 @@ export class GuardedFileSystem {
     destination: string,
     options: Parameters<typeof fsCp>[2] | undefined,
   ): Promise<void> {
-    // A copy reads its source and writes nothing under it, so the source may
-    // sit in a read-only dir; `#moveAcrossDevices` re-validates the source
-    // delete before removing it, so real moves out of a read-only dir stay
-    // refused.
-    const validSource = await this.pathGuard.validatePathForDelete(source, {
-      allowReadOnly: true,
-    });
-    const validDest = await this.pathGuard.validatePathForWrite(destination);
+    const validSource = await this.#guard('probe', source);
+    const validDest = await this.#guard('write', destination);
     // Undoing a forced cp means telling new files apart from overwritten ones
     // across a merged tree.
     // ponytail: upgrade path is snapshotting destination entries here before
@@ -975,7 +1002,7 @@ export class GuardedFileSystem {
       ...options,
       filter: async (sourcePath, destinationPath) => {
         if (callerFilter && !(await callerFilter(sourcePath, destinationPath))) return false;
-        await this.pathGuard.validateTransferPathForWrite(destinationPath);
+        await this.#guard('relocate', destinationPath);
         return true;
       },
     });
@@ -989,8 +1016,8 @@ export class GuardedFileSystem {
   async #moveAcrossDevices(source: string, destination: string, label: string): Promise<void> {
     // Validated again after the failed rename, as the public copy helper did:
     // an ancestor swapped for a link in between must not steer the copy.
-    const validSource = await this.pathGuard.validatePathForDelete(source);
-    const validDest = await this.pathGuard.validatePathForWrite(destination);
+    const validSource = await this.#guard('delete', source);
+    const validDest = await this.#guard('write', destination);
     await this.#relocationWalk('move', validSource, label, validDest);
     let copied = false;
     try {
@@ -998,7 +1025,7 @@ export class GuardedFileSystem {
       copied = true;
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
-      await this.pathGuard.validatePathForDelete(validSource);
+      await this.#guard('delete', validSource);
       await this.#rawRm(validSource, { recursive: true, force: true });
     } catch (copyOrRemoveError: unknown) {
       rethrowIfAborted(copyOrRemoveError);
@@ -1056,7 +1083,7 @@ export class GuardedFileSystem {
 
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
     spec.signal?.throwIfAborted();
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    const validPath = await this.#guard('read', filePath);
     const stats = await this.#statVerified(validPath, filePath, spec.signal);
     return readFileWithStats(filePath, validPath, stats, spec, () =>
       this.#openVerified(validPath, filePath, spec.signal),
@@ -1075,7 +1102,7 @@ export class GuardedFileSystem {
     modified: string;
   }> {
     options?.signal?.throwIfAborted();
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    const validPath = await this.#guard('read', filePath);
     options?.signal?.throwIfAborted();
     const stats = await this.#statVerified(validPath, filePath, options?.signal);
     assertFileStats(filePath, stats);
@@ -1117,22 +1144,19 @@ export class GuardedFileSystem {
   ): Promise<FileHandle> {
     return this.#openVerified(
       // A late validation result is a plain string, so a stalled realpath needs no release.
-      await withAbort(this.pathGuard.validateExistingPath(filePath), options?.signal),
+      await withAbort(this.#guard('read', filePath), options?.signal),
       options?.requestedPath ?? filePath,
       options?.signal,
     );
   }
 
-  // Single resolution + stat: validateExistingPathDetailed resolves the real
-  // path (following symlinks, re-checking sensitivity) once, then we stat the
-  // resolved target. Replaces the tool-side validateExistingPathDetailed +
-  // fs.stat pair that re-validated through the free stat() guard.
+  // Single resolution + stat: an `inspect` resolves the real path (following
+  // symlinks, re-checking sensitivity) once, then we stat the resolved target.
   async statDetailed(
     filePath: string,
     options?: { signal?: AbortSignal },
   ): Promise<{ requestedPath: string; isSymlink: boolean; stats: Stats }> {
-    const { requestedPath, resolvedPath, isSymlink } =
-      await this.pathGuard.validateExistingPathDetailed(filePath);
+    const { requestedPath, resolvedPath, isSymlink } = await this.#guard('inspect', filePath);
     const stats = await this.#statVerified(resolvedPath, filePath, options?.signal);
     return { requestedPath, isSymlink, stats };
   }
@@ -1164,10 +1188,7 @@ export class GuardedFileSystem {
     // Refuse an already-cancelled call before any validation or I/O.
     signal?.throwIfAborted();
     // A late validation result is a plain object, so a stalled realpath needs no release.
-    const { resolvedPath } = await withAbort(
-      this.pathGuard.validateExistingPathDetailed(dirPath),
-      signal,
-    );
+    const { resolvedPath } = await withAbort(this.#guard('inspect', dirPath), signal);
     // With procfs (COUNT_THROUGH_FD), open the directory itself with O_NOFOLLOW and check where
     // the open descriptor really is, so a directory or ancestor swapped for a symlink after
     // validation is refused. Then read entries through the descriptor, which a later swap cannot

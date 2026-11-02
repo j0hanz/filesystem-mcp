@@ -39,12 +39,14 @@ table on roots.
   same containment check covers them.
 - Copying OUT of a read-only dir is allowed — a copy reads its source and
   writes nothing under it, and copying a template from a reference tree into
-  the workspace is the motivating use case. `fs.cp` validates its source with
-  `validatePathForDelete(..., { allowReadOnly: true })`; rename and the
-  cross-device move fallback re-validate the source delete without it, so a
-  real move out of a read-only dir stays refused. The read-only refusal is
-  skipped for the metadata probes too (`lstat`, `lstatExact`, `readlink`), so
-  `stat` on a link inside a read-only dir still reports its target.
+  the workspace is the motivating use case. Each `GuardedFileSystem` operation
+  declares a validation kind, and one table (`GUARD_REGIME` in
+  `src/core/fs.ts`) maps the kind to its PathGuard check. The read-only escape
+  is the `probe` kind (`validatePathForDelete(..., { allowReadOnly: true })`),
+  used by `fs.cp`'s source and the metadata probes (`lstat`, `lstatExact`,
+  `readlink`), so `stat` on a link inside a read-only dir still reports its
+  target; rename and the cross-device move fallback re-validate the source as
+  `delete`, so a real move out of a read-only dir stays refused.
 - Recursive copies validate each actual destination passed to `fs.cp`'s
   filter, including merged directory contents; the caller's filter still runs
   first, so skipped entries need no write validation. This covers protected
