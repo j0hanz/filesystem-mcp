@@ -375,7 +375,10 @@
                 onclick: () => remove(info.path, true),
               }),
             ),
-            make('p', { textContent: `modified ${info.modified} · ${info.permissions}` }),
+            make('p', {
+              // Windows reports the DOS read-only attribute instead of permissions; ACLs are not checked.
+              textContent: `modified ${info.modified} · ${info.permissions ?? `read-only attribute ${info.readOnly ? 'set' : 'not set'}`}`,
+            }),
           );
         } catch (error) {
           status(error.message, true);
