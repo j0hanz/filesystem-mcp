@@ -4,7 +4,6 @@ import { Buffer } from 'node:buffer';
 
 import * as z from 'zod/v4';
 
-import type { StoppedReason } from '../core/concurrency.ts';
 import {
   type DiffBudget,
   finishDiff,
@@ -26,7 +25,7 @@ import type { ResultPaths } from '../core/path.ts';
 import { createTooLargeError, NOT_UTF8_MESSAGE } from '../core/read.ts';
 import type { Rewritten } from '../core/rewrite.ts';
 import { rewriteEntry } from '../core/rewrite.ts';
-import type { ScanOutcome } from '../core/scan.ts';
+import type { ScanOutcome, StoppedReason } from '../core/scan.ts';
 import { resolveScanScope, scan } from '../core/scan.ts';
 import {
   defaultFalseBoolean,
@@ -341,7 +340,8 @@ function buildSearchAndReplaceStructuredResult(
   args: SearchAndReplaceArgs,
   cut: boolean,
 ): SearchAndReplaceOutput {
-  const stop = outcome.stoppedReason ?? (cut ? 'maxResults' : undefined);
+  // A cut inside a file stops the run even when the scan itself did not reach its cap.
+  const stop = outcome.stoppedReason ?? (cut ? 'maxMatches' : undefined);
   const results = [
     ...summary.changedFiles.map((f) => ({
       index: f.index,
@@ -376,9 +376,7 @@ function buildSearchAndReplaceStructuredResult(
       : {}),
     ...((args.dryRun || args.returnDiff) && summary.diff ? { diff: summary.diff } : {}),
     ...(summary.diffTruncated ? { diffTruncated: true } : {}),
-    // The scan names its cap `maxResults`; replace_text's argument is `maxMatches`.
-    // A cut inside a file stops the run even when the scan itself did not reach its cap.
-    ...(stop ? { stoppedReason: stop === 'maxResults' ? 'maxMatches' : stop } : {}),
+    ...(stop ? { stoppedReason: stop } : {}),
   };
 }
 
@@ -452,6 +450,7 @@ async function handleSearchAndReplace(
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
         concurrency: explicitCap !== undefined ? 1 : REPLACE_CONCURRENCY,
         cap: explicitCap ?? DEFAULT_SEARCH_RESULTS,
+        capReason: 'maxMatches',
         weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
         // Bounds the patches held above an unsettled prefix.
@@ -568,8 +567,8 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     // model, so the stop state and the diff preview must ride the text.
     const lines = [summaryText];
     const stop = structured.stoppedReason;
+    if (stop !== undefined) lines.push(stoppedEarlyLine(stop));
     if (stop === 'timeout') {
-      lines.push(stoppedEarlyLine(stop));
       // A live run writes as it scans, so a timeout leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name
       // them here, or a re-run of a self-matching replacement applies it twice.
@@ -586,14 +585,6 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
             'Re-running the same replacement applies it to them again; exclude them, or use dryRun first.',
         );
       }
-    } else if (stop !== undefined) {
-      // maxMatches/maxFiles here are the caller's own caps, so raising one is
-      // what reaches the rest; the search engine's advice to narrow is not.
-      const rest =
-        stop === 'maxMatches' ? 'later matches were not replaced' : 'later files were not scanned';
-      lines.push(
-        `// scan stopped early: hit the ${stop} limit; ${rest}. A higher ${stop} reaches them.`,
-      );
     }
     const hint =
       structured.totalMatches === 0

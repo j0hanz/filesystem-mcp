@@ -30,7 +30,6 @@ import { MAX_MATCH_LINE_CHARS, searchContent } from '../src/core/search.ts';
 import {
   escapeRegExp,
   getMaxTextFileSize,
-  MAX_LIST_ENTRIES,
   MAX_SEARCH_RESULTS,
   MAX_TOOL_INPUT_ELEMENTS,
 } from '../src/core/util.ts';
@@ -38,7 +37,6 @@ import { createRuntimeState, createServer } from '../src/server.ts';
 import { type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import { keepFirstResults } from '../src/tools/find-files.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
-import { listPageMetadata } from '../src/tools/list.ts';
 import { ProgressSession } from '../src/tools/progress.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -3130,21 +3128,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
     assert.match(firstTextBlock(result).text ?? '', /scan stopped early: hit the time limit/);
-  });
-
-  it('list past its entry cap reports maxResults in its metadata', () => {
-    const collected = {
-      entries: [],
-      totalEntries: MAX_LIST_ENTRIES + 1,
-      totalFiles: MAX_LIST_ENTRIES + 1,
-      totalDirectories: 0,
-      skippedInaccessible: 0,
-    };
-    assert.strictEqual(listPageMetadata('root', collected).stoppedReason, 'maxResults');
-    const timedOut = { ...collected, stoppedReason: 'timeout' as const };
-    assert.strictEqual(listPageMetadata('root', timedOut).stoppedReason, 'timeout');
-    const exact = { ...collected, totalEntries: MAX_LIST_ENTRIES };
-    assert.strictEqual(listPageMetadata('root', exact).stoppedReason, undefined);
   });
 
   it('list reports a deadline that fires during a size stat', async (t) => {

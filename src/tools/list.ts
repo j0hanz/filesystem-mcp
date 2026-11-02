@@ -9,7 +9,7 @@ import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
-import { resolveScanScope, scan, type ScanScope } from '../core/scan.ts';
+import { resolveScanScope, scan, type ScanScope, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -57,7 +57,7 @@ export interface CollectResult {
   totalDirectories: number;
   totalBytes?: number;
   skippedInaccessible: number;
-  stoppedReason?: 'timeout';
+  stoppedReason?: StoppedReason;
 }
 
 /** The entry's parent folder, relative like the entry; '' at the top level. */
@@ -111,6 +111,8 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       // 0-based. options.maxDepth is >= 1 by its PositiveInt schema.
       maxDepth: options.maxDepth - 1,
       concurrency: PARALLEL_CONCURRENCY,
+      // The walk runs on past the kept entries, so the totals stay exact.
+      keep: MAX_LIST_ENTRIES,
       signal: options.signal,
       onScanned: (n) => {
         options.onProgress({ current: n });
@@ -168,7 +170,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
     totalDirectories,
     ...(wantSizes ? { totalBytes } : {}),
     skippedInaccessible: outcome.skippedInaccessible,
-    ...(outcome.stoppedReason === 'timeout' ? { stoppedReason: 'timeout' as const } : {}),
+    ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
   };
 }
 
@@ -278,13 +280,11 @@ interface ListPageMetadata {
   readonly totalDirectories: number;
   readonly totalBytes?: number;
   readonly skippedInaccessible?: number;
-  readonly stoppedReason?: 'timeout' | 'maxResults';
+  readonly stoppedReason?: StoppedReason;
 }
 
-/** Past MAX_LIST_ENTRIES the list stopped at its own cap; a timeout outranks that. */
-export function listPageMetadata(path: string, result: CollectResult): ListPageMetadata {
-  const stoppedReason =
-    result.stoppedReason ?? (result.totalEntries > MAX_LIST_ENTRIES ? 'maxResults' : undefined);
+function listPageMetadata(path: string, result: CollectResult): ListPageMetadata {
+  const { stoppedReason } = result;
   return {
     path,
     totalEntries: result.totalEntries,

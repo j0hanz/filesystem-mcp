@@ -258,6 +258,25 @@ describe('scan', () => {
     assert.equal(over.stoppedReason, 'maxResults');
   });
 
+  it('capReason names the cap the caller set', async () => {
+    await files('a.txt', 'b.txt');
+    const out = await scan(
+      { root },
+      base({ cap: 1, concurrency: 1, capReason: 'maxMatches' }),
+      byPath,
+    );
+    assert.equal(out.stoppedReason, 'maxMatches');
+  });
+
+  it('keep walks on past the kept entries and reports the cap', async () => {
+    await files('a.txt', 'b.txt', 'c.txt');
+    const exact = await scan({ root }, base({ keep: 3 }), byPath);
+    assert.equal(exact.stoppedReason, undefined);
+    const over = await scan({ root }, base({ keep: 2 }), byPath);
+    assert.equal(over.scanned, 3);
+    assert.equal(over.stoppedReason, 'maxResults');
+  });
+
   it('weight past the cap alone is not truncation', async () => {
     await files('a.txt');
     const out = await scan({ root }, base({ cap: 2, weigh: () => 3 }), byPath);

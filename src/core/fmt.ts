@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 
+import type { StoppedReason } from './scan.ts';
 import { MAX_SEARCH_RESULTS } from './util.ts';
 
 export interface ProgressCtx {
@@ -102,14 +103,21 @@ export function truncateProgressPattern(pattern: string): string {
   return pattern.length <= 40 ? pattern : `${pattern.slice(0, 40)}…`;
 }
 
+const NARROW = 'That total is a floor, not the count. Narrow path or pattern for the rest.';
+
 /**
- * `stoppedReason` names the engine's own cap, and `maxResults` is also the name
- * of the caller's page-size argument — spelling the cap out keeps a caller who
- * passed `maxResults: 5` from reading their own argument back.
+ * `maxResults` names the engine's own cap, and is also the name of the
+ * caller's page-size argument — spelling the cap out keeps a caller who passed
+ * `maxResults: 5` from reading their own argument back. `maxMatches` and
+ * `maxFiles` are the caller's own caps, so raising one is what reaches the
+ * rest; the advice to narrow is not.
  */
-const STOP_REASON_TEXT: Record<string, string> = {
-  maxResults: `hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults`,
-  timeout: 'hit the time limit, or the request was cancelled',
+const STOP_REASON_TEXT: Record<StoppedReason, string> = {
+  maxResults: `hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults. ${NARROW}`,
+  timeout: `hit the time limit, or the request was cancelled. ${NARROW}`,
+  maxMatches:
+    'hit the maxMatches limit; later matches were not replaced. A higher maxMatches reaches them.',
+  maxFiles: 'hit the maxFiles limit; later files were not scanned. A higher maxFiles reaches them.',
 };
 
 /**
@@ -132,7 +140,7 @@ export function pageTrailer(p: {
   nextCursor?: string | undefined;
   /** The call's own arguments; printed merged with the cursor so the hint is sendable as-is. */
   nextArgs?: Record<string, unknown> | undefined;
-  stoppedReason?: string | undefined;
+  stoppedReason?: StoppedReason | undefined;
   skippedTooLarge?: number | undefined;
   skippedInaccessible?: number | undefined;
 }): string {
@@ -162,9 +170,8 @@ export function pageTrailer(p: {
 }
 
 /** The `//` line saying a scan was cut short. */
-export function stoppedEarlyLine(stoppedReason: string): string {
-  const why = STOP_REASON_TEXT[stoppedReason] ?? `stopped (${stoppedReason})`;
-  return `// scan stopped early: ${why}. That total is a floor, not the count. Narrow path or pattern for the rest.`;
+export function stoppedEarlyLine(stoppedReason: StoppedReason): string {
+  return `// scan stopped early: ${STOP_REASON_TEXT[stoppedReason]}`;
 }
 
 // Regex syntax literal code rarely holds: unspaced alternation (`a|b`, not

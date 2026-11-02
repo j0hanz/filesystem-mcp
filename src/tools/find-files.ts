@@ -2,10 +2,9 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import type { StoppedReason } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import { resolveScanScope, scan, type ScanOutcome } from '../core/scan.ts';
+import { resolveScanScope, scan, type ScanOutcome, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   IncludeHidden,

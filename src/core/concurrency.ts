@@ -1,8 +1,6 @@
 import { normalizeUnknownError } from './errors.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
-export type StoppedReason = 'maxResults' | 'maxMatches' | 'maxFiles' | 'timeout';
-
 const exclusiveChains = new Map<unknown, Promise<unknown>>();
 
 /**
