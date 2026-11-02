@@ -27,6 +27,9 @@ export interface ToolBodyOptions {
   /** A prepared filesystem (e.g. a subclass that fails one call); wins over `guard`/`roots`. */
   readonly fs?: GuardedFileSystem;
   readonly signal?: AbortSignal;
+  readonly pageStore?: PageSnapshotStore;
+  readonly resourceStore?: ResourceStore;
+  readonly onProgress?: ToolCtx['onProgress'];
 }
 
 interface ToolBodyRun<O extends object> {
@@ -64,14 +67,15 @@ async function runToolBody<I extends z.ZodType, O extends object>(
     signal: options.signal ?? new AbortController().signal,
     requestId: 'tool-harness',
     fs,
-    pageStore: new PageSnapshotStore(),
+    pageStore: options.pageStore ?? new PageSnapshotStore(),
     undoJournal: new UndoJournal(),
-    resourceStore: new ResourceStore(),
+    resourceStore: options.resourceStore ?? new ResourceStore(),
     log: (level, data, logger) => {
       logs.push({ level, data, logger });
     },
     onProgress: (p) => {
       progress.push(p);
+      options.onProgress?.(p);
     },
     serverCtx: NO_SERVER_CTX,
   };

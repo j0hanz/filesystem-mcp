@@ -11,31 +11,21 @@ import {
   readdir,
   readFile,
   readlink,
-  rm,
   stat,
   utimes,
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { setImmediate as setImmediatePromise, setTimeout as sleep } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
-import { normalizePath } from '../src/core/path-utils.ts';
-import { MAX_MATCH_LINE_CHARS, searchContent } from '../src/core/search.ts';
-import {
-  escapeRegExp,
-  getMaxTextFileSize,
-  MAX_SEARCH_RESULTS,
-  MAX_TOOL_INPUT_ELEMENTS,
-} from '../src/core/util.ts';
+import { escapeRegExp, getMaxTextFileSize, MAX_TOOL_INPUT_ELEMENTS } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import { type FlexMatch, flexMatches } from '../src/tools/edit.ts';
-import { keepFirstResults } from '../src/tools/find-files.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
 import { ProgressSession } from '../src/tools/progress.ts';
 import {
@@ -47,7 +37,6 @@ import {
   createTestRoot,
   failedSummary,
   firstTextBlock,
-  makeGuard,
   type TestClientContext,
   trySymlink,
   withBoundary,
@@ -137,86 +126,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(envPath, 'utf-8'), 'SECRET=1\n');
   });
 
-  it('sensitive files never surface through search_text, find_files, list, replace_text or resources/read', async () => {
+  it('replace_text and resources/read refuse sensitive files', async () => {
     const token = 'example-sentinel-9f3c1e';
     const dir = join(tmpDir, 'boundary_walk');
     const envFile = await writeTestFile(tmpDir, 'boundary_walk/.env', `SECRET=${token}\n`);
     await writeTestFile(tmpDir, 'boundary_walk/vault.key/inner.txt', `note ${token}\n`);
     const plain = await writeTestFile(tmpDir, 'boundary_walk/plain.txt', `note ${token}\n`);
-
-    const search = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: token, includeHidden: true },
-    });
-    const searchMeta = search._meta as {
-      matches?: { file: string }[];
-      skippedInaccessible?: number;
-    };
-    assert.deepStrictEqual(
-      (searchMeta.matches ?? []).map((m) => m.file),
-      ['boundary_walk/plain.txt'],
-      'search_text must not match inside .env',
-    );
-    assert.strictEqual(searchMeta.skippedInaccessible, undefined);
-    assert.doesNotMatch(firstTextBlock(search).text ?? '', /inaccessible|\.env/);
-
-    const found = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '*.txt', includeHidden: true },
-    });
-    const foundMeta = found._meta as {
-      results?: { path: string }[];
-      skippedInaccessible?: number;
-    };
-    const paths = foundMeta.results?.map((r) => r.path) ?? [];
-    assert.ok(paths.includes('boundary_walk/plain.txt'));
-    assert.ok(
-      !paths.some((path) => path.endsWith('.env')),
-      `find_files must not list .env: ${paths.join(',')}`,
-    );
-    assert.ok(
-      !paths.some((path) => path.includes('vault.key')),
-      `find_files must not list inside a sensitive-named directory: ${paths.join(',')}`,
-    );
-    assert.strictEqual(foundMeta.skippedInaccessible, undefined);
-    assert.doesNotMatch(firstTextBlock(found).text ?? '', /inaccessible|\.env/);
-
-    // A literal pattern prefix names the sensitive directory directly, so the
-    // glob never asks the walk filter about it; the yielded entries' own
-    // ancestors must still hide the subtree.
-    const prefixed = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: 'vault.key/*.txt', includeHidden: true },
-    });
-    assert.deepStrictEqual(
-      (prefixed._meta as { results?: { path: string }[] }).results ?? [],
-      [],
-      'find_files must not enter a sensitive-named directory through a literal pattern prefix',
-    );
-
-    const prefixedSearch = await harness.client.callTool({
-      name: 'search_text',
-      arguments: {
-        path: dir,
-        searchPattern: token,
-        pattern: 'vault.key/*.txt',
-        includeHidden: true,
-      },
-    });
-    assert.deepStrictEqual(
-      (prefixedSearch._meta as { matches?: { file: string }[] }).matches ?? [],
-      [],
-      'search_text must not match through a literal pattern prefix into a sensitive-named directory',
-    );
-
-    const listed = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: dir, maxDepth: 2, includeHidden: true },
-    });
-    const names =
-      (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
-    assert.deepStrictEqual(names, ['plain.txt']);
-    assert.doesNotMatch(firstTextBlock(listed).text ?? '', /\.env|vault\.key|inner\.txt/);
 
     const replaced = await harness.client.callTool({
       name: 'replace_text',
@@ -248,52 +163,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await assert.rejects(
       harness.client.readResource({ uri: buildFileResourceUri(envFile) }),
       'resources/read of a sensitive file must be refused',
-    );
-  });
-
-  it('a sensitive-named symlink directory never surfaces its subtree', async (t) => {
-    const dir = join(tmpDir, 'sensitive_link_walk');
-    await mkdir(join(dir, 'clean'), { recursive: true });
-    await writeTestFile(dir, 'clean/deep.txt', 'note needle\n');
-    // A junction works on Windows without developer mode; a dir symlink elsewhere.
-    if (
-      !(await trySymlink(join(dir, 'clean'), join(dir, 'alias.key'), () =>
-        t.skip('symlink creation not permitted'),
-      ))
-    ) {
-      return;
-    }
-
-    const found = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '**/*.txt' },
-    });
-    const paths =
-      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.ok(
-      !paths.some((path) => path.includes('alias.key')),
-      `find_files must not follow a sensitive-named symlink: ${paths.join(',')}`,
-    );
-
-    const searched = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: 'needle' },
-    });
-    const files =
-      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
-    assert.ok(
-      !files.some((file) => file.includes('alias.key')),
-      `search_text must not match inside a sensitive-named symlink: ${files.join(',')}`,
-    );
-
-    const listed = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: dir, maxDepth: 3 },
-    });
-    assert.doesNotMatch(
-      firstTextBlock(listed).text ?? '',
-      /alias\.key/,
-      'list must not draw a sensitive-named symlink (its target appears under its own name)',
     );
   });
 
@@ -2085,7 +1954,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(repeated, 'utf-8'), 'x\nONE\n2\n3\nX\n5\n');
   });
 
-  it('TC-FUNC-063: list paginates entries via nextCursor', async () => {
+  it('TC-FUNC-063: list sends text, metadata and its resource link over MCP', async () => {
     const sub = join(tmpDir, 'page_dir');
     await mkdir(sub, { recursive: true });
     for (let i = 0; i < 4; i++) await writeFile(join(sub, `f${i}.txt`), 'x');
@@ -2101,6 +1970,13 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(s1.entryCount, 2);
     assert.ok(s1.nextCursor, 'first page should yield a nextCursor');
     assert.ok(s1.resourceUri, 'an incomplete first page carries the URI of the full entry list');
+    assert.strictEqual(r1.structuredContent, undefined);
+    assert.match(firstTextBlock(r1).text ?? '', /showing 1-2 of 4 entries/);
+    assert.ok(
+      (r1.content as { type: string; uri?: string }[]).some(
+        (block) => block.type === 'resource_link' && block.uri === s1.resourceUri,
+      ),
+    );
     const r2 = await harness.client.callTool({
       name: 'list',
       arguments: { path: sub, maxEntries: 2, cursor: s1.nextCursor },
@@ -2109,304 +1985,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(s2.entryCount, 2);
     assert.ok(!s2.nextCursor, 'second page is the last');
     assert.strictEqual(s2.resourceUri, undefined, 'later pages never carry the URI');
+    const invalid = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxEntries: 2, includeHidden: true, cursor: s1.nextCursor },
+    });
+    assert.strictEqual(invalid.isError, true);
+    assert.match(firstTextBlock(invalid).text ?? '', /INVALID_INPUT/);
   });
 
-  it('TC-FUNC-063c: a later list page draws its entries under their ancestors', async () => {
-    const sub = join(tmpDir, 'tree_page_dir');
-    for (const dir of ['a', 'b']) {
-      await mkdir(join(sub, dir), { recursive: true });
-      for (let i = 0; i < 3; i++) await writeFile(join(sub, dir, `${dir}${String(i)}.txt`), 'x');
-    }
-    const first = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxDepth: 2, maxEntries: 4 },
-    });
-    // `b/` holds nothing on this page; the slash still says it is a directory.
-    assert.match(
-      firstTextBlock(first).text ?? '',
-      /^tree_page_dir\n├── a\/\n│ {3}├── a0\.txt\n│ {3}└── a1\.txt\n└── b\/\n\n\/\/ showing 1-4 of 8/,
-    );
-    const second = await harness.client.callTool({
-      name: 'list',
-      arguments: {
-        path: sub,
-        maxDepth: 2,
-        maxEntries: 4,
-        cursor: (first._meta as { nextCursor?: string }).nextCursor,
-      },
-    });
-    // `a/` and `b/` sat on page one; without them as context this page's
-    // entries have no path back to the root and the tree renders empty.
-    assert.match(
-      firstTextBlock(second).text ?? '',
-      /^tree_page_dir\n├── a\/\n│ {3}└── a2\.txt\n└── b\/\n {4}├── b0\.txt\n {4}├── b1\.txt\n {4}└── b2\.txt\n\n\/\/ showing 5-8 of 8/,
-    );
-  });
-
-  it('TC-FUNC-075b: list prunes an ignored directory and everything under it', async () => {
-    const sub = join(tmpDir, 'gitignore_walk_dir');
-    // Nested one level on purpose: fs.glob's function `exclude` drops a
-    // rejected entry at the top level but not below it, so a top-level fixture
-    // passes even when the walk leaks the ignored directory itself.
-    await mkdir(join(sub, 'a', 'skipme', 'deep'), { recursive: true });
-    await writeFile(join(sub, '.gitignore'), 'skipme/\n');
-    await writeFile(join(sub, 'kept.txt'), 'k');
-    await writeFile(join(sub, 'a', 'skipme', 'deep', 'buried.txt'), 'b');
-
-    // maxDepth must reach the nested file: the tool's default is 1, top-level only.
-    const pruned = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxDepth: 4 },
-    });
-    const prunedText = firstTextBlock(pruned).text ?? '';
-    assert.match(prunedText, /kept\.txt/);
-    // The directory AND its children stay out: the walk prunes, it does not
-    // enumerate then filter, so `buried.txt` is never visited.
-    assert.doesNotMatch(prunedText, /skipme/);
-    assert.doesNotMatch(prunedText, /buried\.txt/);
-
-    const all = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxDepth: 4, includeIgnored: true },
-    });
-    const allText = firstTextBlock(all).text ?? '';
-    assert.match(allText, /kept\.txt/);
-    assert.match(allText, /buried\.txt/);
-  });
-
-  it('list includeSizes shows sizes and a totals line (#99)', async () => {
-    const sub = join(tmpDir, 'sizes_dir');
-    await mkdir(join(sub, 'dir1'), { recursive: true });
-    await writeFile(join(sub, 'a.txt'), '12345');
-    await writeFile(join(sub, 'b.txt'), 'x'.repeat(1024));
-    await writeFile(join(sub, 'c.txt'), 'x'.repeat(1536));
-
-    const result = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, includeSizes: true },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.match(text, /a\.txt \(5 B\)/);
-    assert.match(text, /b\.txt \(1 KiB\)/);
-    assert.match(text, /c\.txt \(1\.5 KiB\)/);
-    assert.match(text, /dir1\/$/m);
-    assert.match(text, /^\/\/ 3 files, 1 directory, 2\.5 KiB total$/m);
-
-    const meta = result._meta as {
-      totalFiles?: number;
-      totalDirectories?: number;
-      totalBytes?: number;
-      entries?: { name: string; type: string; size?: number }[];
-    };
-    assert.strictEqual(meta.totalFiles, 3);
-    assert.strictEqual(meta.totalDirectories, 1);
-    assert.strictEqual(meta.totalBytes, 2565);
-    const fileSizes = meta.entries
-      ?.filter((e) => e.type === 'file')
-      .map((e) => ({ name: e.name, size: e.size }));
-    assert.deepStrictEqual(fileSizes, [
-      { name: 'a.txt', size: 5 },
-      { name: 'b.txt', size: 1024 },
-      { name: 'c.txt', size: 1536 },
-    ]);
-    assert.strictEqual(formatByteSize(1024 * 1024 - 1), '1 MiB');
-  });
-
-  it('list includeSizes pluralizes directories in the totals line', async () => {
-    const many = join(tmpDir, 'sizes_many_dirs');
-    await mkdir(join(many, 'd1'), { recursive: true });
-    await mkdir(join(many, 'd2'), { recursive: true });
-    await writeFile(join(many, 'a.txt'), '12345');
-    const manyText =
-      firstTextBlock(
-        await harness.client.callTool({
-          name: 'list',
-          arguments: { path: many, includeSizes: true },
-        }),
-      ).text ?? '';
-    assert.match(manyText, /^\/\/ 1 file, 2 directories, 5 B total$/m);
-
-    const flat = join(tmpDir, 'sizes_no_dirs');
-    await mkdir(flat, { recursive: true });
-    await writeFile(join(flat, 'a.txt'), '12345');
-    const flatText =
-      firstTextBlock(
-        await harness.client.callTool({
-          name: 'list',
-          arguments: { path: flat, includeSizes: true },
-        }),
-      ).text ?? '';
-    assert.match(flatText, /^\/\/ 1 file, 0 directories, 5 B total$/m);
-  });
-
-  it('list sortBy size orders files largest first within each directory (#99)', async () => {
-    const sub = join(tmpDir, 'sort_dir');
-    await mkdir(join(sub, 'mid'), { recursive: true });
-    await writeFile(join(sub, 'big.txt'), 'x'.repeat(2000));
-    await writeFile(join(sub, 'small.txt'), 'x'.repeat(10));
-    await writeFile(join(sub, 'zero.txt'), '');
-    await writeFile(join(sub, 'mid', 'mid.txt'), 'x'.repeat(100));
-
-    const result = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxDepth: 2, includeSizes: true, sortBy: 'size' },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.match(text, /mid\/\n│ {3}└── mid\.txt \(100 B\)/);
-    assert.match(text, /big\.txt \(2 KiB\)[\s\S]*small\.txt \(10 B\)[\s\S]*zero\.txt \(0 B\)/);
-  });
-
-  it('list default output carries no sizes and no totals line (#99)', async () => {
-    const sub = join(tmpDir, 'default_dir');
-    await mkdir(join(sub, 'dir1'), { recursive: true });
-    await writeFile(join(sub, 'a.txt'), '12345');
-
-    const result = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.doesNotMatch(text, /\(\d/);
-    assert.doesNotMatch(text, /\/\//);
-
-    const meta = result._meta as {
-      totalBytes?: number;
-      entries?: { name: string; size?: number }[];
-    };
-    assert.strictEqual('totalBytes' in meta, false);
-    assert.strictEqual(meta.entries?.[0]?.size, undefined);
-  });
-
-  it('list includeSizes leaves secret files out of the totals (#99)', async () => {
-    const sub = join(tmpDir, 'secrets_dir');
-    await mkdir(sub, { recursive: true });
-    await writeFile(join(sub, '.env'), 'SECRET=1');
-    await writeFile(join(sub, 'plain.txt'), 'x');
-
-    const result = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, includeHidden: true, includeSizes: true },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.doesNotMatch(text, /\.env/);
-
-    const meta = result._meta as {
-      totalFiles?: number;
-      totalBytes?: number;
-      entries?: { name: string }[];
-    };
-    assert.strictEqual(meta.totalFiles, 1);
-    assert.strictEqual(meta.totalBytes, 1);
-    assert.deepStrictEqual(
-      meta.entries?.map((e) => e.name),
-      ['plain.txt'],
-    );
-  });
-
-  it('list includeSizes pages with sizes intact (#99)', async () => {
-    const sub = join(tmpDir, 'pages_dir');
-    await mkdir(sub, { recursive: true });
-    for (let i = 0; i < 4; i++) {
-      await writeFile(join(sub, `f${String(i)}.txt`), 'x'.repeat(i + 1));
-    }
-
-    const first = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxEntries: 2, includeSizes: true, sortBy: 'size' },
-    });
-    const m1 = first._meta as {
-      totalBytes?: number;
-      entryCount?: number;
-      nextCursor?: string;
-      entries?: { name: string; size?: number }[];
-    };
-    assert.strictEqual(m1.totalBytes, 10);
-    assert.strictEqual(m1.entryCount, 2);
-    assert.deepStrictEqual(
-      m1.entries?.map((e) => e.name),
-      ['f3.txt', 'f2.txt'],
-    );
-    assert.match(firstTextBlock(first).text ?? '', /f3\.txt \(4 B\)[\s\S]*f2\.txt \(3 B\)/);
-
-    const second = await harness.client.callTool({
-      name: 'list',
-      arguments: {
-        path: sub,
-        maxEntries: 2,
-        includeSizes: true,
-        sortBy: 'size',
-        cursor: m1.nextCursor,
-      },
-    });
-    const m2 = second._meta as {
-      totalBytes?: number;
-      entries?: { name: string; size?: number }[];
-    };
-    assert.deepStrictEqual(
-      m2.entries?.map((e) => e.name),
-      ['f1.txt', 'f0.txt'],
-    );
-    assert.match(firstTextBlock(second).text ?? '', /f1\.txt \(2 B\)[\s\S]*f0\.txt \(1 B\)/);
-    assert.strictEqual(m2.totalBytes, 10);
-
-    const replay = await harness.client.callTool({
-      name: 'list',
-      arguments: {
-        path: sub,
-        maxEntries: 2,
-        includeSizes: false,
-        sortBy: 'size',
-        cursor: m1.nextCursor,
-      },
-    });
-    assert.strictEqual(replay.isError, true);
-    assert.match(firstTextBlock(replay).text ?? '', /Invalid cursor/);
-  });
-
-  it('TC-FUNC-075c: find_files drops a gitignored file below the top level', async () => {
-    const sub = join(tmpDir, 'gitignore_file_dir');
-    await mkdir(join(sub, 'nested'), { recursive: true });
-    await writeFile(join(sub, '.gitignore'), '*.log\n');
-    await writeFile(join(sub, 'nested', 'keep.txt'), 'k');
-    await writeFile(join(sub, 'nested', 'drop.log'), 'd');
-
-    const result = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: sub, pattern: '**/*' },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.match(text, /keep\.txt/);
-    // A nested match the exclude predicate rejects must not survive the walk.
-    assert.doesNotMatch(text, /drop\.log/);
-  });
-
-  it("find_files, search_text, list and replace_text honor the allowed root's .gitignore below it", async () => {
+  it("replace_text honors the allowed root's .gitignore below it", async () => {
     // tmpDir is the allowed root; the walk is scoped to a subdirectory.
     await writeFile(join(tmpDir, '.gitignore'), 'scoped_ignored/*.log\n');
     const sub = join(tmpDir, 'scoped_ignored');
     await writeTestFile(tmpDir, 'scoped_ignored/keep.txt', 'NEEDLE_G\n');
     const dropped = await writeTestFile(tmpDir, 'scoped_ignored/drop.log', 'NEEDLE_G\n');
-
-    const found = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: sub, pattern: '**/*' },
-    });
-    const paths =
-      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(paths, ['scoped_ignored/keep.txt']);
-
-    const searched = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: sub, searchPattern: 'NEEDLE_G' },
-    });
-    const files =
-      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
-    assert.deepStrictEqual(files, ['scoped_ignored/keep.txt']);
-
-    const listed = await harness.client.callTool({ name: 'list', arguments: { path: sub } });
-    const names =
-      (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
-    assert.deepStrictEqual(names, ['keep.txt']);
 
     const replaced = await harness.client.callTool({
       name: 'replace_text',
@@ -2414,90 +2006,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(replaced.isError, true);
     assert.strictEqual(await readFile(dropped, 'utf-8'), 'NEEDLE_G\n', 'ignored file untouched');
-
-    // includeIgnored lifts it, as before.
-    const all = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: sub, pattern: '**/*', includeIgnored: true },
-    });
-    const allPaths =
-      (all._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(allPaths.sort(), ['scoped_ignored/drop.log', 'scoped_ignored/keep.txt']);
-  });
-
-  it('TC-FUNC-075: list text carries nextCursor', async () => {
-    const sub = join(tmpDir, 'cursor_text_dir');
-    await mkdir(sub, { recursive: true });
-    for (let i = 0; i < 4; i++) await writeFile(join(sub, `g${String(i)}.txt`), 'x');
-
-    const first = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxEntries: 2 },
-    });
-    const firstText = firstTextBlock(first).text ?? '';
-    const match =
-      /^\/\/ showing 1-2 of 4 entries\. Next page: list (\{.*"cursor":"([^"]+)".*\})$/m.exec(
-        firstText,
-      );
-    assert.ok(match, `first page text should carry its position and cursor: ${firstText}`);
-    const cursor = match[2];
-    // The model passes back verbatim what it read, so the two must agree.
-    assert.strictEqual(cursor, (first._meta as { nextCursor?: string }).nextCursor);
-
-    // The printed call must be sendable as-is.
-    const printed = JSON.parse(match[1] ?? '{}') as Record<string, unknown>;
-    const literal = await harness.client.callTool({ name: 'list', arguments: printed });
-    assert.notStrictEqual(literal.isError, true, 'the trailer must print a callable request');
-
-    const second = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxEntries: 2, cursor },
-    });
-    const secondText = firstTextBlock(second).text ?? '';
-    // The last page carries no cursor and still owes its position, or a
-    // two-row tail reads as the whole answer.
-    assert.match(secondText, /^\/\/ showing 3-4 of 4 entries\.$/m);
-    assert.doesNotMatch(secondText, /Next page/);
-  });
-
-  it('TC-FUNC-063b: list pages are stable and query-bound', async () => {
-    const sub = join(tmpDir, 'stable_page_dir');
-    await mkdir(sub, { recursive: true });
-    for (const name of ['bravo.txt', 'charlie.txt']) {
-      await writeFile(join(sub, name), 'x');
-    }
-    const first = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxEntries: 1 },
-    });
-    const firstStructured = first._meta as {
-      entries?: { name: string }[];
-      nextCursor?: string;
-    };
-    const cursor = firstStructured.nextCursor;
-    assert.ok(cursor);
-
-    await rm(sub, { recursive: true, force: true });
-    const second = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: sub, maxEntries: 10, cursor },
-    });
-    assert.notStrictEqual(second.isError, true);
-    const secondStructured = second._meta as { entries?: { name: string }[] };
-    assert.deepStrictEqual(
-      [...(firstStructured.entries ?? []), ...(secondStructured.entries ?? [])].map(
-        (entry) => entry.name,
-      ),
-      ['bravo.txt', 'charlie.txt'],
-      'page two must read the first-page snapshot after the directory is removed',
-    );
-
-    const replay = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: tmpDir, maxEntries: 10, cursor },
-    });
-    assert.strictEqual(replay.isError, true);
-    assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
   });
 
   it('TC-FUNC-063a: list returns a partial result after a timeout', async (t) => {
@@ -2512,33 +2020,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
     assert.match(firstTextBlock(result).text ?? '', /scan stopped early: hit the time limit/);
-  });
-
-  it('list reports a deadline that fires during a size stat', async (t) => {
-    const dir = join(tmpDir, 'list_timeout_stat');
-    await writeTestFile(dir, 'a.txt', 'x');
-    const controller = new AbortController();
-    t.mock.method(AbortSignal, 'timeout', () => controller.signal);
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
-    const realStat = GuardedFileSystem.prototype.stat;
-    t.mock.method(
-      GuardedFileSystem.prototype,
-      'stat',
-      async function (this: GuardedFileSystem, ...a: Parameters<typeof realStat>) {
-        if (!a[0].endsWith('a.txt')) return realStat.apply(this, a);
-        // Fire once list's abort race is armed, as a real stat would.
-        await setImmediatePromise();
-        const timeout = new DOMException('test timeout', 'TimeoutError');
-        controller.abort(timeout);
-        throw timeout;
-      },
-    );
-    const result = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: dir, includeSizes: true },
-    });
-    assert.notStrictEqual(result.isError, true);
-    assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
   });
 
   it('a timed-out list externalizes a partial tree', async (t) => {
@@ -2568,58 +2049,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     };
     assert.strictEqual(tree.stoppedReason, 'timeout');
     assert.strictEqual(tree.truncated, true);
-  });
-
-  it('list counts an unreadable directory', async (t) => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return t.skip('needs POSIX directory permissions as non-root');
-    }
-    const dir = join(tmpDir, 'list_locked');
-    const locked = join(dir, 'locked');
-    await writeTestFile(dir, 'a.ts', 'x');
-    await writeTestFile(dir, 'locked/x.ts', 'x');
-    await chmod(locked, 0o000);
-    try {
-      const result = await harness.client.callTool({
-        name: 'list',
-        arguments: { path: dir, maxDepth: 3 },
-      });
-      const meta = result._meta as {
-        entries?: { relativePath: string }[];
-        skippedInaccessible?: number;
-      };
-      assert.strictEqual(meta.skippedInaccessible, 1);
-      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
-      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
-    } finally {
-      await chmod(locked, 0o755);
-    }
-  });
-
-  it('list does not probe a directory at the depth bound', async (t) => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return t.skip('needs POSIX directory permissions as non-root');
-    }
-    const dir = join(tmpDir, 'list_bound');
-    const locked = join(dir, 'locked');
-    await writeTestFile(dir, 'a.ts', 'x');
-    await writeTestFile(dir, 'locked/x.ts', 'x');
-    await chmod(locked, 0o000);
-    try {
-      const result = await harness.client.callTool({
-        name: 'list',
-        arguments: { path: dir, maxDepth: 1 },
-      });
-      const meta = result._meta as {
-        entries?: { relativePath: string }[];
-        skippedInaccessible?: number;
-      };
-      assert.strictEqual(meta.skippedInaccessible ?? 0, 0);
-      assert.ok(meta.entries?.some((e) => e.relativePath === 'locked'));
-      assert.doesNotMatch(JSON.stringify(result.content), /may be incomplete/);
-    } finally {
-      await chmod(locked, 0o755);
-    }
   });
 
   it('TC-LOG-001: Tool execution logs to stderr', async (t) => {
@@ -4120,14 +3549,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(edited.isError, true);
     assert.strictEqual(await readFile(file, 'utf-8'), `${prefix}Line with BETA and more.\n`);
-
-    // The reported column is a UTF-16 offset into the line, as `indexOf` gives.
-    const searched = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: join(tmpDir, 'emoji'), searchPattern: 'BETA' },
-    });
-    const sc = searched._meta as { matches?: { column: number }[] };
-    assert.strictEqual(sc.matches?.[0]?.column, 'Line with '.length);
   });
 
   // RE2's \b is ASCII-only: it saw no boundary around "é"/"ü" and none at a
@@ -4297,6 +3718,36 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'aa X a\n');
   });
 
+  it('replace_text explains a zero-match result in the text (#55)', async () => {
+    const dir = join(tmpDir, 'zero_hint');
+    await writeTestFile(dir, 'a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');
+    const regexLine =
+      '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
+    const globLine =
+      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.";
+    const replace = async (args: Record<string, unknown>) =>
+      firstTextBlock(
+        await harness.client.callTool({
+          name: 'replace_text',
+          arguments: { path: dir, replacement: 'X', dryRun: true, ...args },
+        }),
+      ).text ?? '';
+
+    assert.ok((await replace({ searchPattern: '\\d+' })).endsWith(`\n${regexLine}`));
+    assert.ok(
+      (await replace({ searchPattern: 'TOKEN1', pattern: '**/*.py' })).endsWith(`\n${globLine}`),
+    );
+    assert.strictEqual(
+      await replace({ searchPattern: '\\d{9}', isRegex: true }),
+      "replace_text: '\\d{9}' [dry run] · 0 match(es) in 0 file(s)",
+    );
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    assert.strictEqual(
+      await replace({ searchPattern: 'a|b' }),
+      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s) · 1 binary skipped",
+    );
+  });
+
   it('TC-FUNC-014: find_files returns matched files via callTool', async () => {
     await writeTestFile(tmpDir, 'findme.txt', 'x');
     // The shared tmpDir holds more than find_files' default 100 results of *.txt.
@@ -4305,171 +3756,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { pattern: '**/findme.txt' },
     });
     assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structuredContent, undefined);
+    assert.match(firstTextBlock(result).text ?? '', /findme\.txt/);
     const sc = result._meta as { results?: { path: string }[] };
     assert.ok(sc.results?.some((r) => r.path.endsWith('findme.txt')));
-  });
-
-  it('find_files counts an unreadable directory', async (t) => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return t.skip('needs POSIX directory permissions as non-root');
-    }
-    const dir = join(tmpDir, 'find_locked');
-    const locked = join(dir, 'locked');
-    await writeTestFile(dir, 'a.ts', 'x');
-    await writeTestFile(dir, 'locked/x.ts', 'x');
-    await chmod(locked, 0o000);
-    try {
-      const result = await harness.client.callTool({
-        name: 'find_files',
-        arguments: { path: dir, pattern: '**/*.ts' },
-      });
-      const meta = result._meta as { results?: { path: string }[]; skippedInaccessible?: number };
-      assert.strictEqual(meta.skippedInaccessible, 1);
-      assert.match(JSON.stringify(result.content), /1 inaccessible entry/);
-      assert.deepStrictEqual(
-        meta.results?.map((r) => basename(r.path)),
-        ['a.ts'],
-      );
-    } finally {
-      await chmod(locked, 0o755);
-    }
-  });
-
-  it('find_files keeps the first results in walk order past its cap', () => {
-    const over = keepFirstResults(
-      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0 },
-      2,
-    );
-    assert.deepStrictEqual(over, { results: ['a', 'b'], stoppedReason: 'maxResults' });
-    const timedOut = keepFirstResults(
-      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0, stoppedReason: 'timeout' },
-      2,
-    );
-    assert.strictEqual(timedOut.stoppedReason, 'timeout');
-    const exact = keepFirstResults({ results: ['a', 'b'], scanned: 2, skippedInaccessible: 0 }, 2);
-    assert.deepStrictEqual(exact, { results: ['a', 'b'] });
-  });
-
-  it('find_files filters by pattern', async () => {
-    const dir = join(tmpDir, 'find_filter');
-    await writeTestFile(dir, 'moduleA.ts', 'x');
-    await writeTestFile(dir, 'notes.txt', 'x');
-    await writeTestFile(dir, 'sub/moduleC.ts', 'x');
-    await writeTestFile(dir, 'sub/readme.txt', 'x');
-    const find = async (pattern: string) => {
-      const result = await harness.client.callTool({
-        name: 'find_files',
-        arguments: { path: dir, pattern },
-      });
-      return (result._meta as { results: { path: string }[] }).results;
-    };
-    const ts = await find('**/*.ts');
-    assert.strictEqual(ts.length, 2);
-    assert.ok(ts.every((r) => r.path.endsWith('.ts')));
-    const txt = await find('**/*.txt');
-    assert.strictEqual(txt.length, 2);
-    assert.ok(txt.every((r) => r.path.endsWith('.txt')));
-  });
-
-  it("find_files sortBy 'name' orders by basename, not full path", async () => {
-    const dir = join(tmpDir, 'find_sort');
-    await writeTestFile(dir, 'zzz/alpha.ts', '// a');
-    await writeTestFile(dir, 'aaa/omega.ts', '// o');
-    const names = async (sortBy?: 'name') => {
-      const result = await harness.client.callTool({
-        name: 'find_files',
-        arguments: { path: dir, pattern: '**/*.ts', ...(sortBy ? { sortBy } : {}) },
-      });
-      return (result._meta as { results: { path: string }[] }).results.map((r) => basename(r.path));
-    };
-    assert.deepStrictEqual(await names('name'), ['alpha.ts', 'omega.ts']);
-    assert.deepStrictEqual(await names(), ['omega.ts', 'alpha.ts']);
-  });
-
-  it('find_files pages are stable and reject cursor pattern replay', async () => {
-    const dir = join(tmpDir, 'find_pages');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'bravo.txt'), 'x');
-    await writeFile(join(dir, 'charlie.txt'), 'x');
-    const first = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '*.txt', maxResults: 1 },
-    });
-    const firstStructured = first._meta as {
-      results?: { path: string }[];
-      nextCursor?: string;
-      resourceUri?: string;
-    };
-    const cursor = firstStructured.nextCursor;
-    assert.ok(cursor);
-    // The overflow entry is minted by this call and runs on ResourceStore's own
-    // clock, not the page snapshot's.
-    assert.ok(firstStructured.resourceUri, 'page one carries the overflow URI');
-
-    await rm(dir, { recursive: true, force: true });
-    const second = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '*.txt', maxResults: 10, cursor },
-    });
-    assert.notStrictEqual(second.isError, true);
-    const secondStructured = second._meta as {
-      results?: { path: string }[];
-      resourceUri?: string;
-    };
-    assert.deepStrictEqual(
-      [...(firstStructured.results ?? []), ...(secondStructured.results ?? [])].map(
-        (entry) => entry.path,
-      ),
-      ['find_pages/bravo.txt', 'find_pages/charlie.txt'],
-    );
-    assert.strictEqual(
-      secondStructured.resourceUri,
-      undefined,
-      'later pages must not replay a URI that expires on a different clock',
-    );
-
-    const replay = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '*.md', maxResults: 10, cursor },
-    });
-    assert.strictEqual(replay.isError, true);
-    assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
-  });
-
-  it('find_files and search_text match a slash-free glob at any depth, as replace_text does', async () => {
-    const dir = join(tmpDir, 'basename_glob');
-    await mkdir(join(dir, 'sub'), { recursive: true });
-    await writeFile(join(dir, 'top.ts'), 'NEEDLE\n');
-    await writeFile(join(dir, 'sub', 'deep.ts'), 'NEEDLE\n');
-    await writeFile(join(dir, 'sub', 'top.ts'), 'NEEDLE\n');
-
-    const found = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: dir, pattern: '*.ts' },
-    });
-    assert.deepStrictEqual(
-      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path),
-      ['basename_glob/sub/deep.ts', 'basename_glob/sub/top.ts', 'basename_glob/top.ts'],
-    );
-
-    const searched = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, pattern: 'deep.ts', searchPattern: 'NEEDLE' },
-    });
-    assert.deepStrictEqual(
-      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
-      ['basename_glob/sub/deep.ts'],
-    );
-
-    // Naming a file must still search that file alone, not its namesake below.
-    const named = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: join(dir, 'top.ts'), searchPattern: 'NEEDLE' },
-    });
-    assert.deepStrictEqual(
-      (named._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
-      ['basename_glob/top.ts'],
-    );
   });
 
   it('TC-FUNC-072: search_text finds a literal match via callTool', async () => {
@@ -4481,6 +3771,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: dir, searchPattern: 'NEEDLE_MARK' },
     });
     assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structuredContent, undefined);
+    assert.match(firstTextBlock(result).text ?? '', /grep_dir\/target\.txt:2: NEEDLE_MARK here/);
     const structured = result._meta as {
       matches?: { line?: number; content?: string }[];
       totalMatches?: number;
@@ -4488,693 +3780,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(structured.totalMatches, 1);
     assert.strictEqual(structured.matches?.[0]?.line, 2);
     assert.ok(structured.matches?.[0]?.content?.includes('NEEDLE_MARK'));
-  });
-
-  it('search_text on a file whose name has glob metacharacters searches that file', async () => {
-    const target = await writeTestFile(tmpDir, 'globby/[slug].tsx', 'export const NEEDLE_A = 1;\n');
-    // A same-directory decoy that the character class `[slug]` would match.
-    await writeTestFile(tmpDir, 'globby/s.tsx', 'export const NEEDLE_A = 2;\n');
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: target, searchPattern: 'NEEDLE_A' },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const matches = (result._meta as { matches?: { file: string; line: number }[] }).matches ?? [];
-    assert.deepStrictEqual(
-      matches.map((m) => m.file),
-      ['globby/[slug].tsx'],
-      'exactly the named file, not the decoy',
-    );
-  });
-
-  it('search_text on an explicit file ignores glob, hidden, and ignored filters', async () => {
-    const target = await writeTestFile(tmpDir, 'explicit_scope/.hidden.log', 'NEEDLE_SCOPE\n');
-    await writeTestFile(tmpDir, 'explicit_scope/.gitignore', '*.log\n');
-    await writeTestFile(tmpDir, 'explicit_scope/nested/.hidden.log', 'NEEDLE_SCOPE\n');
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: {
-        path: target,
-        searchPattern: 'NEEDLE_SCOPE',
-        pattern: '**/*.ts',
-        includeHidden: false,
-        includeIgnored: false,
-      },
-    });
-    assert.notStrictEqual(result.isError, true);
-    assert.strictEqual(firstTextBlock(result).text, 'explicit_scope/.hidden.log:1: NEEDLE_SCOPE');
-    const matches = (result._meta as { matches: { file: string; line: number }[] }).matches;
-    assert.deepStrictEqual(
-      matches.map(({ file, line }) => ({ file, line })),
-      [{ file: 'explicit_scope/.hidden.log', line: 1 }],
-    );
-  });
-
-  it('find_files accepts a literal file name containing .. inside a segment', async () => {
-    // `[...slug]` stays a character class (as in any glob), so the accepted
-    // pattern that is also *useful* is a literal name with `..` inside it.
-    await writeTestFile(tmpDir, 'globby/docs/v1..2.md', 'x\n');
-    const result = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: join(tmpDir, 'globby'), pattern: 'docs/v1..2.md' },
-    });
-    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
-    const paths =
-      (result._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(paths, ['globby/docs/v1..2.md']);
-  });
-
-  it('search_text: an empty-line pattern sees no phantom line after a trailing newline', async () => {
-    const dir = join(tmpDir, 'phantom_line');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'trailing.txt'), 'alpha\nbeta\n');
-    await writeFile(join(dir, 'blank.txt'), 'alpha\n\nbeta\n');
-    await writeFile(join(dir, 'empty.txt'), '');
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: '^$', isRegex: true },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const structured = result._meta as {
-      matches?: { file: string; line: number }[];
-      totalMatches?: number;
-    };
-    assert.deepStrictEqual(
-      structured.matches?.map((m) => `${m.file}:${String(m.line)}`),
-      ['phantom_line/blank.txt:2'],
-    );
-    assert.strictEqual(structured.totalMatches, 1);
-  });
-
-  it('search_text pages are stable and reject cursor query replay', async () => {
-    const file = await writeTestFile(tmpDir, 'search_pages.txt', 'NEEDLE bravo\nNEEDLE charlie\n');
-    const first = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1 },
-    });
-    const firstStructured = first._meta as {
-      matches?: { content: string }[];
-      nextCursor?: string;
-    };
-    const cursor = firstStructured.nextCursor;
-    assert.ok(cursor);
-
-    await rm(file, { force: true });
-    const second = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 10, cursor },
-    });
-    assert.notStrictEqual(second.isError, true);
-    const secondStructured = second._meta as { matches?: { content: string }[] };
-    assert.deepStrictEqual(
-      [...(firstStructured.matches ?? []), ...(secondStructured.matches ?? [])].map(
-        (match) => match.content,
-      ),
-      ['NEEDLE bravo', 'NEEDLE charlie'],
-    );
-
-    const replay = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'different query', maxResults: 10, cursor },
-    });
-    assert.strictEqual(replay.isError, true);
-    assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
-  });
-
-  it('a page cursor replays only for the query that minted it, whatever the page size', async () => {
-    const dir = join(tmpDir, 'cursor_identity');
-    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
-      await writeTestFile(dir, name, 'NEEDLE\n');
-    }
-    const cases: {
-      name: string;
-      base: Record<string, unknown>;
-      pageSize: string;
-      changed: Record<string, unknown>[];
-    }[] = [
-      {
-        name: 'list',
-        base: { path: dir, maxEntries: 1 },
-        pageSize: 'maxEntries',
-        changed: [
-          { path: tmpDir },
-          { maxDepth: 2 },
-          { includeHidden: true },
-          { includeIgnored: true },
-        ],
-      },
-      {
-        name: 'find_files',
-        base: { path: dir, pattern: '*.txt', maxResults: 1 },
-        pageSize: 'maxResults',
-        changed: [
-          { path: tmpDir },
-          { pattern: '*' },
-          { includeIgnored: true },
-          { includeHidden: true },
-          { sortBy: 'name' },
-          { maxDepth: 2 },
-        ],
-      },
-      {
-        name: 'search_text',
-        base: { path: dir, searchPattern: 'NEEDLE', maxResults: 1 },
-        pageSize: 'maxResults',
-        changed: [
-          { path: tmpDir },
-          { pattern: '*.txt' },
-          { searchPattern: 'NEEDL' },
-          { isRegex: true },
-          { includeHidden: true },
-          { includeIgnored: true },
-          { caseSensitive: true },
-          { maxDepth: 2 },
-          { context: 1 },
-        ],
-      },
-    ];
-
-    for (const { name, base, pageSize, changed } of cases) {
-      const first = await harness.client.callTool({ name, arguments: base });
-      const cursor = (first._meta as { nextCursor?: string } | undefined)?.nextCursor;
-      assert.ok(cursor, `${name} must page`);
-
-      const resized = await harness.client.callTool({
-        name,
-        arguments: { ...base, [pageSize]: 10, cursor },
-      });
-      assert.notStrictEqual(resized.isError, true, `${name}: a new page size still replays`);
-
-      for (const change of changed) {
-        const replay = await harness.client.callTool({
-          name,
-          arguments: { ...base, ...change, cursor },
-        });
-        assert.strictEqual(replay.isError, true, `${name} ${JSON.stringify(change)}`);
-        assert.match(firstTextBlock(replay).text ?? '', /Invalid cursor/);
-      }
-    }
-
-    // An omitted path defaults to the root; spelling the root out (as the guard
-    // stores it) is the same query.
-    const rootPage = await harness.client.callTool({
-      name: 'list',
-      arguments: { maxDepth: 2, maxEntries: 1 },
-    });
-    const rootCursor = (rootPage._meta as { nextCursor?: string } | undefined)?.nextCursor;
-    assert.ok(rootCursor, 'root list must page');
-    const spelled = await harness.client.callTool({
-      name: 'list',
-      arguments: { path: normalizePath(tmpDir), maxDepth: 2, maxEntries: 1, cursor: rootCursor },
-    });
-    assert.notStrictEqual(spelled.isError, true, JSON.stringify(spelled));
-  });
-
-  it('search_text context returns surrounding lines and renders them grep-style once', async () => {
-    const dir = join(tmpDir, 'grep_context');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'a.txt'), 'import x\nNEEDLE one\nconst y\nNEEDLE two\n}\nfiller\n');
-    await writeFile(join(dir, 'b.txt'), 'foo\nNEEDLE\nbar\n');
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const structured = result._meta as {
-      matches?: { file: string; line: number; before?: string[]; after?: string[] }[];
-    };
-    assert.deepStrictEqual(
-      structured.matches?.map((m) => [m.file, m.line, m.before, m.after]),
-      [
-        ['grep_context/a.txt', 2, ['import x'], ['const y']],
-        ['grep_context/a.txt', 4, ['const y'], ['}']],
-        ['grep_context/b.txt', 2, ['foo'], ['bar']],
-      ],
-    );
-    assert.ok(
-      (firstTextBlock(result).text ?? '').startsWith(
-        [
-          'grep_context/a.txt-1- import x',
-          'grep_context/a.txt:2: NEEDLE one',
-          'grep_context/a.txt-3- const y',
-          'grep_context/a.txt:4: NEEDLE two',
-          'grep_context/a.txt-5- }',
-          '--',
-          'grep_context/b.txt-1- foo',
-          'grep_context/b.txt:2: NEEDLE',
-          'grep_context/b.txt-3- bar',
-        ].join('\n'),
-      ),
-      firstTextBlock(result).text,
-    );
-
-    const plain = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: 'NEEDLE' },
-    });
-    const plainStructured = plain._meta as { matches?: Record<string, unknown>[] };
-    assert.ok(plainStructured.matches?.every((m) => !('before' in m) && !('after' in m)));
-  });
-
-  it('search_text context: a match beats context on a shared line and stops at the last line', async () => {
-    const dir = join(tmpDir, 'grep_context_adjacent');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'c.txt'), 'x\nNEEDLE a\nNEEDLE b\n');
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
-    });
-    assert.notStrictEqual(result.isError, true);
-    const structured = result._meta as {
-      matches?: { line: number; before?: string[]; after?: string[] }[];
-    };
-    assert.deepStrictEqual(
-      structured.matches?.map((m) => [m.line, m.before, m.after]),
-      [
-        [2, ['x'], ['NEEDLE b']],
-        [3, ['NEEDLE a'], []],
-      ],
-    );
-    assert.strictEqual(
-      firstTextBlock(result).text,
-      [
-        'grep_context_adjacent/c.txt-1- x',
-        'grep_context_adjacent/c.txt:2: NEEDLE a',
-        'grep_context_adjacent/c.txt:3: NEEDLE b',
-      ].join('\n'),
-    );
-  });
-
-  it('search_text clips a multi-megabyte match line and its context lines', async () => {
-    const dir = join(tmpDir, 'grep_clip_long_line');
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      join(dir, 'big.txt'),
-      'ctx' +
-        'c'.repeat(2_000_000) +
-        '\n' +
-        'x'.repeat(1_000_000) +
-        'NEEDLE' +
-        'x'.repeat(1_000_000) +
-        '\n',
-    );
-
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: dir, searchPattern: 'NEEDLE', context: 1 },
-    });
-    assert.notStrictEqual(result.isError, true);
-    assert.ok((firstTextBlock(result).text ?? '').length < 5000);
-    const structured = result._meta as {
-      matches?: { column: number; content: string; before?: string[] }[];
-    };
-    const match = structured.matches?.[0];
-    assert.ok(match);
-    assert.ok(match.content.includes('NEEDLE'));
-    assert.ok(match.content.startsWith('…['));
-    assert.ok(match.content.endsWith(' chars]'));
-    assert.ok(match.content.length < MAX_MATCH_LINE_CHARS + 100);
-    assert.strictEqual(match.column, 1_000_000);
-    const before = match.before?.[0];
-    assert.ok(before !== undefined && before.length < MAX_MATCH_LINE_CHARS + 100);
-  });
-
-  it('search_text counts an unreadable directory', async (t) => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return t.skip('needs POSIX directory permissions as non-root');
-    }
-    const dir = join(tmpDir, 'search_locked');
-    const locked = join(dir, 'locked');
-    await writeTestFile(dir, 'a.ts', 'needle');
-    await writeTestFile(dir, 'locked/x.ts', 'needle');
-    await chmod(locked, 0o000);
-    try {
-      const result = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: dir, searchPattern: 'needle' },
-      });
-      const meta = result._meta as { skippedInaccessible?: number };
-      assert.strictEqual(meta.skippedInaccessible, 1);
-    } finally {
-      await chmod(locked, 0o755);
-    }
-  });
-
-  it('search_text on a named unreadable file fails the call', async (t) => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return t.skip('needs POSIX directory permissions as non-root');
-    }
-    const dir = join(tmpDir, 'search_named_locked');
-    const file = join(dir, 'b.txt');
-    await writeTestFile(dir, 'b.txt', 'needle');
-    await chmod(file, 0o000);
-    try {
-      const result = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: file, searchPattern: 'needle' },
-      });
-      assert.strictEqual(result.isError, true);
-    } finally {
-      await chmod(file, 0o644);
-    }
-  });
-
-  it('search_text: anchors, word boundaries and CRLF behave per line (prefilter must not change them)', async () => {
-    const dir = join(tmpDir, 'prefilter_semantics');
-    await writeTestFile(tmpDir, 'prefilter_semantics/lf.txt', 'x\nimport a\n  import b\nfoo$bar\n');
-    await writeTestFile(tmpDir, 'prefilter_semantics/crlf.txt', 'alpha\r\nbeta end\r\ngamma\r\n');
-
-    const run = async (searchPattern: string, isRegex: boolean, caseSensitive = true) => {
-      const r = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: dir, searchPattern, isRegex, caseSensitive },
-      });
-      return (
-        ((r._meta as { matches?: { file: string; line: number; column: number }[] }).matches ?? [])
-          // Paths are root-relative; this test is about matching, so compare names.
-          .map((m) => `${m.file.replace(/^prefilter_semantics\//u, '')}:${m.line}:${m.column}`)
-          .sort()
-      );
-    };
-
-    assert.deepStrictEqual(await run('^import', true), ['lf.txt:2:0']);
-    assert.deepStrictEqual(
-      await run('end$', true),
-      ['crlf.txt:2:5'],
-      'CRLF: $ matches before the stripped \r',
-    );
-    assert.deepStrictEqual(await run(String.raw`\bimport\b`, true), ['lf.txt:2:0', 'lf.txt:3:2']);
-    assert.deepStrictEqual(await run('IMPORT', false, false), ['lf.txt:2:0', 'lf.txt:3:2']);
-    assert.deepStrictEqual(await run('foo$bar', false), ['lf.txt:4:0'], 'literal $ is escaped');
-    assert.deepStrictEqual(
-      await run(String.raw`\Aimport`, true),
-      ['lf.txt:2:0'],
-      String.raw`\A is start of each line`,
-    );
-    assert.deepStrictEqual(
-      await run('(?-m)^import', true),
-      ['lf.txt:2:0'],
-      'an inline flag group cannot turn ^ into a buffer anchor',
-    );
-    assert.deepStrictEqual(await run('(?i)IMPORT', true), ['lf.txt:2:0', 'lf.txt:3:2']);
-  });
-
-  it('search_text: the match set under maxResults is deterministic across runs', async () => {
-    const dir = join(tmpDir, 'determinism');
-    for (let i = 0; i < 40; i++) {
-      await writeTestFile(
-        tmpDir,
-        `determinism/f${String(i).padStart(2, '0')}.txt`,
-        'DET_HIT\nDET_HIT\nDET_HIT\n',
-      );
-    }
-    const once = async () => {
-      const r = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: dir, searchPattern: 'DET_HIT', maxResults: 25 },
-      });
-      const meta = r._meta as { matches?: { file: string; line: number }[]; nextCursor?: string };
-      return {
-        first: (meta.matches ?? []).map((m) => `${m.file}:${m.line}`),
-        cursor: meta.nextCursor,
-      };
-    };
-    const a = await once();
-    const b = await once();
-    assert.deepStrictEqual(a.first, b.first);
-    assert.strictEqual(a.first.length, 25);
-  });
-
-  it('searchContent under its own cap keeps the first matches in walk order', async () => {
-    const root = await createTestRoot();
-    try {
-      for (let i = 0; i < 30; i++) {
-        await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
-      }
-      const guard = await makeGuard([root]);
-      const a = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
-      const b = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
-      const key = (r: typeof a) => r.matches.map((m) => `${basename(m.file)}:${m.line}`);
-      assert.deepStrictEqual(key(a), key(b));
-      assert.strictEqual(a.matches.length, 7);
-      assert.strictEqual(a.summary.stoppedReason, 'maxResults');
-      assert.strictEqual(a.summary.truncated, true);
-    } finally {
-      await cleanupTestRoot(root);
-    }
-  });
-
-  it('searchContent never collects more matches from one file than its cap', async () => {
-    const root = await createTestRoot();
-    try {
-      // One file with far more matching lines than the cap: the scan must not
-      // materialize them all before the cap is applied.
-      await writeTestFile(
-        root,
-        'many.txt',
-        Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
-      );
-      const guard = await makeGuard([root]);
-      const r = await searchContent({ root }, 'CAP_ONE', { maxResults: 5 }, guard);
-      assert.strictEqual(r.matches.length, 5);
-      assert.strictEqual(r.summary.matchingLines, 5);
-      assert.strictEqual(r.summary.filesMatched, 1);
-      assert.strictEqual(r.summary.stoppedReason, 'maxResults');
-    } finally {
-      await cleanupTestRoot(root);
-    }
-  });
-
-  it('search_text rejects a cursor minted under a different context', async () => {
-    const file = await writeTestFile(tmpDir, 'search_ctx_cursor.txt', 'NEEDLE a\nNEEDLE b\n');
-    const first = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1 },
-    });
-    const cursor = (first._meta as { nextCursor?: string }).nextCursor;
-    assert.ok(cursor);
-
-    const replay = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1, context: 1, cursor },
-    });
-    assert.strictEqual(replay.isError, true);
-    assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
-  });
-
-  it('search_text externalizes the full match list on the first page only', async () => {
-    const lines = Array.from({ length: 120 }, (_, i) => `NEEDLE line ${String(i)}`);
-    const file = await writeTestFile(tmpDir, 'search_first_page.txt', `${lines.join('\n')}\n`);
-    const first = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 60 },
-    });
-    const firstStructured = first._meta as {
-      matches?: unknown[];
-      nextCursor?: string;
-      resourceUri?: string;
-      truncated?: boolean;
-    };
-    assert.strictEqual(firstStructured.matches?.length, 60, 'maxResults is the page size');
-    assert.ok(firstStructured.nextCursor, 'more matches remain');
-    assert.ok(firstStructured.resourceUri, 'an incomplete first page carries the full-list URI');
-    assert.strictEqual(
-      firstStructured.truncated,
-      undefined,
-      'paging is not truncation: the engine hit no cap',
-    );
-
-    const second = await harness.client.callTool({
-      name: 'search_text',
-      arguments: {
-        path: file,
-        searchPattern: 'NEEDLE',
-        maxResults: 60,
-        cursor: firstStructured.nextCursor,
-      },
-    });
-    assert.notStrictEqual(second.isError, true);
-    const secondStructured = second._meta as { matches?: unknown[]; resourceUri?: string };
-    assert.strictEqual(secondStructured.matches?.length, 60);
-    assert.strictEqual(
-      secondStructured.resourceUri,
-      undefined,
-      'a continuation page must not mint a new resource',
-    );
-  });
-
-  it('the page trailer tracks position across pages and both search tools', async () => {
-    // `_meta` reaches no client, so a page that hides matches has to say so in
-    // the text or the caller reads a capped list as the whole answer.
-    const lines = Array.from({ length: 9 }, (_, i) => `NEEDLE line ${String(i)}`);
-    const file = await writeTestFile(tmpDir, 'trailer/hits.txt', `${lines.join('\n')}\n`);
-    const first = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4 },
-    });
-    assert.match(
-      firstTextBlock(first).text ?? '',
-      /^\/\/ showing 1-4 of 9 matches\. Next page: search_text \{.*"searchPattern":"NEEDLE".*"cursor":"/m,
-    );
-
-    const cursor = (first._meta as { nextCursor?: string }).nextCursor;
-    assert.ok(cursor);
-    const second = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4, cursor },
-    });
-    // The whole point: page 2 must not repeat page 1's counter.
-    assert.match(firstTextBlock(second).text ?? '', /^\/\/ showing 5-8 of 9 matches\./m);
-
-    // The last page carries no cursor and still owes its position, or a
-    // one-row tail reads as the whole answer.
-    const lastCursor = (second._meta as { nextCursor?: string }).nextCursor;
-    assert.ok(lastCursor);
-    const last = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4, cursor: lastCursor },
-    });
-    const lastText = firstTextBlock(last).text ?? '';
-    assert.match(lastText, /^\/\/ showing 9-9 of 9 matches\.$/m);
-    assert.doesNotMatch(lastText, /Next page/);
-
-    const complete = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 50 },
-    });
-    assert.doesNotMatch(
-      firstTextBlock(complete).text ?? '',
-      /Next page/,
-      'a complete set gets no trailer',
-    );
-
-    // Own subdirectory with two files of its own: pointing at the shared tmpDir
-    // would borrow whatever earlier tests left there and pass for the wrong
-    // reason when this test runs alone.
-    await writeTestFile(tmpDir, 'trailer_files/a.txt', 'a');
-    await writeTestFile(tmpDir, 'trailer_files/b.txt', 'b');
-    const files = await harness.client.callTool({
-      name: 'find_files',
-      arguments: { path: join(tmpDir, 'trailer_files'), pattern: '**/*', maxResults: 1 },
-    });
-    assert.match(
-      firstTextBlock(files).text ?? '',
-      /^\/\/ showing 1-1 of 2 files\. Next page: find_files \{.*"pattern":"\*\*\/\*".*"cursor":"/m,
-    );
-  });
-
-  it('search_text says so in the text when the engine cut the scan', async () => {
-    // One line over the hard result cap makes the engine stop, so totalMatches
-    // is a floor rather than the real count.
-    const lines = Array.from({ length: MAX_SEARCH_RESULTS + 1 }, (_, i) => `CAPPED ${String(i)}`);
-    const file = await writeTestFile(tmpDir, 'capped/hits.txt', `${lines.join('\n')}\n`);
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: file, searchPattern: 'CAPPED', maxResults: 5 },
-    });
-    const text = firstTextBlock(result).text ?? '';
-    assert.ok(text.includes(`// showing 1-5 of ${String(MAX_SEARCH_RESULTS)} matches.`), text);
-    assert.ok(
-      text.includes(
-        `// scan stopped early: hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults.`,
-      ),
-      text,
-    );
-    assert.strictEqual(
-      (result._meta as { truncated?: boolean }).truncated,
-      true,
-      'the engine reports its own stop state',
-    );
-  });
-
-  it('search_text names the files it skipped in the text, with or without matches', async () => {
-    // A lone match in a file over the size cap read as "No matches": the skip
-    // count lived only in `_meta`, which no client shows the model.
-    const limit = 1024 * 1024;
-    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
-      const dir = join(tmpDir, 'skipped_big');
-      await writeTestFile(tmpDir, 'skipped_big/big.txt', `BIGNEEDLE\n${'a'.repeat(limit)}`);
-      const skipLine = '// skipped 1 file over the text size limit; results may be incomplete.';
-      const alone = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
-      });
-      assert.strictEqual(firstTextBlock(alone).text, `No matches for 'BIGNEEDLE'\n\n${skipLine}`);
-
-      await writeTestFile(tmpDir, 'skipped_big/small.txt', 'BIGNEEDLE\n');
-      const beside = await harness.client.callTool({
-        name: 'search_text',
-        arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
-      });
-      assert.strictEqual(
-        firstTextBlock(beside).text,
-        `skipped_big/small.txt:1: BIGNEEDLE\n\n${skipLine}`,
-      );
-    });
-  });
-
-  it('search_text and replace_text explain a zero-match result in the text (#55)', async () => {
-    // A regex sent without isRegex, or a glob that selects no files, read
-    // exactly like a genuine miss: filesScanned lives only in `_meta`.
-    const dir = join(tmpDir, 'zero_hint');
-    await writeTestFile(tmpDir, 'zero_hint/a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');
-    const regexLine =
-      '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
-    const globLine =
-      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.";
-    const text = async (name: string, args: Record<string, unknown>) =>
-      firstTextBlock(await harness.client.callTool({ name, arguments: { path: dir, ...args } }))
-        .text ?? '';
-    const search = (args: Record<string, unknown>) => text('search_text', args);
-    const replace = (args: Record<string, unknown>) =>
-      text('replace_text', { replacement: 'X', dryRun: true, ...args });
-
-    assert.strictEqual(
-      await search({ searchPattern: 'TOKEN1|token2' }),
-      `No matches for 'TOKEN1|token2'\n${regexLine}`,
-    );
-    assert.strictEqual(
-      await search({ searchPattern: 'TOKEN1', pattern: '**/*.py' }),
-      `No matches for 'TOKEN1'\n${globLine}`,
-    );
-    for (const literal of ['foo(', 'a.b', 'x || y', 'arr[0]', 'string | undefined', '|x| x']) {
-      assert.strictEqual(await search({ searchPattern: literal }), `No matches for '${literal}'`);
-    }
-    assert.ok((await replace({ searchPattern: '\\d+' })).endsWith(`\n${regexLine}`));
-    assert.ok(
-      (await replace({ searchPattern: 'TOKEN1', pattern: '**/*.py' })).endsWith(`\n${globLine}`),
-    );
-    // Already a regex: a genuine miss gets no hint.
-    assert.strictEqual(
-      await replace({ searchPattern: '\\d{9}', isRegex: true }),
-      "replace_text: '\\d{9}' [dry run] · 0 match(es) in 0 file(s)",
-    );
-    // A literal the needle hit inside a binary file: the skip, not a regex, explains the zero.
-    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
-    assert.strictEqual(
-      await replace({ searchPattern: 'a|b' }),
-      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s) · 1 binary skipped",
-    );
-  });
-
-  it('search_text skips binary files and reports the count', async () => {
-    await writeTestFile(tmpDir, 'search_bin/text.txt', 'BINNEEDLE\n');
-    await writeFile(
-      join(tmpDir, 'search_bin', 'blob.bin'),
-      Buffer.from([0x00, ...Buffer.from('BINNEEDLE'), 0x00]),
-    );
-    const result = await harness.client.callTool({
-      name: 'search_text',
-      arguments: { path: join(tmpDir, 'search_bin'), searchPattern: 'BINNEEDLE' },
-    });
-    assert.strictEqual(firstTextBlock(result).text, 'search_bin/text.txt:1: BINNEEDLE');
-    assert.strictEqual((result._meta as { filesScanned?: number }).filesScanned, 2);
-    assert.strictEqual((result._meta as { skippedBinary?: number }).skippedBinary, 1);
   });
 
   it('HTTP pagination survives the per-request server factory', async () => {
@@ -5576,63 +4181,7 @@ describe('High-severity bug-hunt regressions (tools)', () => {
     );
   });
 
-  describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
-    it('H6: a line past the RE2 input bound is reported skippedTooLarge, not a false empty, and later searches still work', async () => {
-      const dir = join(tmpDir, 'oversized');
-      // One line over the bound, ending in a match RE2 never gets to see.
-      const bigLine = `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} NEEDLE`;
-      await writeTestFile(dir, 'huge.txt', bigLine);
-      await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
-
-      const outcome = await searchContent(
-        { root: dir },
-        'NEEDLE',
-        { isRegex: true },
-        pair.serverCtx.pathGuard,
-      );
-      assert.strictEqual(outcome.summary.skippedTooLarge, 1, 'the huge-line file is skipped');
-      assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
-
-      // The wasm module is still alive for a second search in the same process.
-      const again = await searchContent(
-        { root: dir },
-        'NEEDLE',
-        { isRegex: true },
-        pair.serverCtx.pathGuard,
-      );
-      assert.strictEqual(again.matches.length, 1);
-
-      // A literal is matched natively, so the long line holds no hazard and is searched.
-      const literal = await searchContent(
-        { root: dir },
-        'NEEDLE',
-        { isRegex: false },
-        pair.serverCtx.pathGuard,
-      );
-      assert.strictEqual(literal.summary.skippedTooLarge, 0);
-      assert.deepStrictEqual(literal.matches.map((m) => m.file).sort(), [
-        join(dir, 'huge.txt'),
-        join(dir, 'ok.txt'),
-      ]);
-    });
-
-    it('H1: an aborted search over a dense-match line resolves as timeout, not a hang', async () => {
-      const dir = join(tmpDir, 'dense-line');
-      await writeTestFile(dir, 'line.txt', 'needle\n'.repeat(200_000));
-      const controller = new AbortController();
-      const search = searchContent(
-        { root: dir },
-        'needle',
-        { isRegex: false, maxResults: 100_000, signal: controller.signal },
-        pair.serverCtx.pathGuard,
-      );
-      setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), 50);
-      const outcome = await search;
-      assert.strictEqual(outcome.summary.stoppedReason, 'timeout');
-      assert.ok(outcome.summary.truncated, 'an aborted scan is incomplete');
-      assert.ok(outcome.summary.filesScanned > 0, 'the scan started before cancellation');
-    });
-
+  describe('H1: replace_text timeouts', () => {
     it(
       'H1: a live replace_text timeout never writes a partially spliced file',
       { timeout: 5000 },
