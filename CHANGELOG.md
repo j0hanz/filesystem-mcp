@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] - 2026-11-02
+
+A correctness release. Directory transfers recheck the sensitive-file policy
+when they run, and all transfer rules now live in one place. No tool or input
+field changed. Before upgrading, read Changed: `replace_text` can now refuse
+`TOO_LARGE`, `move` accepts a link it used to refuse, and `copy` with
+`overwrite: true` can now cancel. Read Fixed for the `move` that now cancels
+when its source link changes.
+
+### Security
+
+- **Directory transfers recheck protection when they run.** A `move` or `copy` of a directory walked it for protected entries only while planning, so an entry added while a confirmation was open could leave the sensitive-file policy's protection. The walk now runs again just before the transfer, and such an entry fails with `ACCESS_DENIED`.
+
+### Changed
+
+- **`move` renames a link whose target fails validation.** A symlink pointing outside the roots or at a sensitive file now moves as itself, where it failed with `ACCESS_DENIED`. The target is not touched, and reading through the link is still refused.
+- **`copy` with `overwrite: true` cancels if the destination was replaced.** A destination replaced by another entry after planning now fails with `CANCELLED`, where it was overwritten.
+- **`replace_text` can refuse `TOO_LARGE` for some literal needles.** A case-sensitive literal needle containing U+FFFD or a lone surrogate now goes to RE2, as `search_text` does. A file over RE2's 4 MiB input limit now fails with `TOO_LARGE`, where it was a silent no-match.
+- **Dependencies.** `ignore` is 7.0.14. The lockfile now resolves `@hono/node-server` to 2.1.6, up from 1.19.17, within the range `@modelcontextprotocol/node` allows.
+- **`SECURITY.md` states what the server does not protect against.**
+
+### Fixed
+
+- **`move` cancels when its source link changed after planning.** A link retargeted between planning and the rename could be renamed over the file it then pointed at. It now fails with `CANCELLED`.
+- **`replace_text` agrees with `search_text` on a lone-surrogate needle.** The raw-byte search matched a literal U+FFFD in the file and claimed a file the replace pass could not change. It now reports no matches.
+
 ## [2.14.0] - 2026-11-01
 
 A feature release. Read-only roots let one folder stay readable while the rest
