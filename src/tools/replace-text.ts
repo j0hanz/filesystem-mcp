@@ -16,6 +16,17 @@ import {
 } from '../core/errors.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
+import type { LiteralMatcher, Regex } from '../core/matcher.ts';
+import {
+  compileRegex,
+  createLiteralMatcher,
+  createYielder,
+  execMatches,
+  foldAsciiCase,
+  freeRegex,
+  RE2_MAX_INPUT_BYTES,
+  WORD_CLASS,
+} from '../core/matcher.ts';
 import type { ResultPaths } from '../core/path.ts';
 import { createTooLargeError, NOT_UTF8_MESSAGE } from '../core/read.ts';
 import type { Rewritten } from '../core/rewrite.ts';
@@ -32,16 +43,6 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import type { LiteralMatcher, Regex } from '../core/search.ts';
-import {
-  compileRegex,
-  createLiteralMatcher,
-  createYielder,
-  execMatches,
-  foldAsciiCase,
-  freeRegex,
-  RE2_MAX_INPUT_BYTES,
-} from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   escapeRegExp,
@@ -193,8 +194,6 @@ interface ReplacementMatcher {
 
 const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
-// RE2's \b is ASCII-only, so wholeWord spells out the Unicode word class.
-const WORD_CLASS = String.raw`\p{L}\p{N}\p{M}_`;
 // Matches a consumed text that ends in a non-word char: its last char may lead the next match.
 const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
 // wholeWord scans behind this non-word char instead of a `^` lead: an empty lead
