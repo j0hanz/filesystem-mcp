@@ -376,8 +376,8 @@
               }),
             ),
             make('p', {
-              // Windows reports readOnly instead of permissions.
-              textContent: `modified ${info.modified} · ${info.permissions ?? (info.readOnly ? 'read-only' : 'writable')}`,
+              // Windows reports the DOS read-only attribute instead of permissions; ACLs are not checked.
+              textContent: `modified ${info.modified} · ${info.permissions ?? `read-only attribute ${info.readOnly ? 'set' : 'not set'}`}`,
             }),
           );
         } catch (error) {

@@ -61,7 +61,9 @@ allowing a folder that holds secrets, are not.
   allow only folders whose contents you trust the AI to read.
 - **In-place edits.** `edit`, `patch`, and `replace_text` apply without asking.
   `dryRun` previews them. `undo` can revert them for 30 minutes while the server
-  runs, within its limit of 64 calls and 32 MiB, and skips files changed since.
+  runs, within its limit of 64 calls and 32 MiB by default, and skips files
+  changed since. `FS_MAX_UNDO_BYTES` changes the size limit, and 0 turns undo
+  off.
 - **Other software on your machine.** This is a check inside the server, not an
   operating system sandbox. Other tools and processes keep their own access.
 
