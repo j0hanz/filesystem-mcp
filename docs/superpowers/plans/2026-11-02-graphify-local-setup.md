@@ -10,14 +10,14 @@
 
 **Spec:** The settled grilling decisions from the 2026-11-02 session (no separate spec doc exists). Decision table:
 
-| Decision | Choice |
-| :-- | :-- |
-| Wiring | Local bare `graphify install` (skill + pre-grep hooks) |
-| First index | `graphify . --mode deep` |
-| Model pass | Skipped; revisit after graph proves useful |
-| Repo footprint | Zero — all ignores in `.git/info/excludes`, config user-global |
-| Freshness | Local git hook in `.git/hooks`, incremental `--update` per commit |
-| Strict | Non-strict; flip with `GRAPHIFY_HOOK_STRICT=1` later |
+| Decision       | Choice                                                            |
+| :------------- | :---------------------------------------------------------------- |
+| Wiring         | Local bare `graphify install` (skill + pre-grep hooks)            |
+| First index    | `graphify . --mode deep`                                          |
+| Model pass     | Skipped; revisit after graph proves useful                        |
+| Repo footprint | Zero — all ignores in `.git/info/excludes`, config user-global    |
+| Freshness      | Local git hook in `.git/hooks`, incremental `--update` per commit |
+| Strict         | Non-strict; flip with `GRAPHIFY_HOOK_STRICT=1` later              |
 
 ## Global Constraints
 
@@ -44,10 +44,12 @@ Failure modes this setup could hit, pinned by a task's verification:
 ### Task 1: Snapshot and back up user-global config
 
 **Files:**
+
 - Create: `~/.claude/CLAUDE.md.backup-20261102`
 - Create: `~/.claude/settings.json.backup-20261102`
 
 **Interfaces:**
+
 - Produces: byte-identical backups of both files, used by Task 3's diff verification and by rollback.
 
 - [ ] **Step 1: Confirm repo starts clean**
@@ -55,6 +57,7 @@ Failure modes this setup could hit, pinned by a task's verification:
 ```powershell
 git status --porcelain
 ```
+
 Expected: empty output. If not, stop — the plan assumes a clean tree.
 
 - [ ] **Step 2: Back up both config files**
@@ -70,14 +73,17 @@ Copy-Item "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.backup-2026
 (Get-Item "$HOME/.claude/CLAUDE.md.backup-20261102").Length
 (Get-Item "$HOME/.claude/settings.json.backup-20261102").Length
 ```
+
 Expected: first is 450; second is non-zero and equals the live file's size.
 
 ### Task 2: Install the Graphify CLI
 
 **Files:**
+
 - Create: uv tool environment for `graphifyy` (under `%LOCALAPPDATA%` uv tools dir; nothing in the repo)
 
 **Interfaces:**
+
 - Produces: `graphify` command on PATH (uv tool shim).
 - Consumes: nothing from earlier tasks.
 
@@ -86,6 +92,7 @@ Expected: first is 450; second is non-zero and equals the live file's size.
 ```powershell
 uv tool install graphifyy
 ```
+
 Expected: success, ending with "graphify" executable installed.
 
 - [ ] **Step 2: If step 1 fails on Python 3.14 (missing wheels), retry on a managed 3.12**
@@ -93,6 +100,7 @@ Expected: success, ending with "graphify" executable installed.
 ```powershell
 uv tool install --python 3.12 graphifyy
 ```
+
 Expected: success. If this also fails, stop and report the exact error; do not fall back to `pip install graphify`.
 
 - [ ] **Step 3: Verify the right package and its command**
@@ -101,15 +109,18 @@ Expected: success. If this also fails, stop and report the exact error; do not f
 uv tool list
 graphify --help
 ```
+
 Expected: `uv tool list` shows `graphifyy`; `graphify --help` exits 0 and lists graph/index commands (`--update`, `--mode`, `install`, query subcommands). Help referencing anything unrelated to code graphs means the wrong package — uninstall with `uv tool uninstall graphifyy` and stop.
 
 ### Task 3: Bare install (skill + hooks), non-strict
 
 **Files:**
+
 - Modify: `~/.claude/CLAUDE.md` (Graphify section appended by the installer)
 - Modify: `~/.claude/settings.json` or a sibling (PreToolUse hook registration; exact location discovered here)
 
 **Interfaces:**
+
 - Produces: `/graphify` skill available in Claude Code sessions; pre-grep hooks registered; no `--strict`.
 - Consumes: `graphify` command from Task 2.
 
@@ -118,6 +129,7 @@ Expected: `uv tool list` shows `graphifyy`; `graphify --help` exits 0 and lists 
 ```powershell
 graphify install
 ```
+
 Expected: success; output mentions Claude Code, the skill, and hooks. Do not pass `--strict`.
 
 - [ ] **Step 2: Verify global CLAUDE.md got an append, not a rewrite**
@@ -125,6 +137,7 @@ Expected: success; output mentions Claude Code, the skill, and hooks. Do not pas
 ```powershell
 Compare-Object (Get-Content "$HOME/.claude/CLAUDE.md.backup-20261102") (Get-Content "$HOME/.claude/CLAUDE.md") | Where-Object SideIndicator -eq '<='
 ```
+
 Expected: no output (nothing from the original 450 bytes was removed). New lines at the end (`=>`) are the Graphify section.
 
 - [ ] **Step 3: Find where hooks landed**
@@ -132,6 +145,7 @@ Expected: no output (nothing from the original 450 bytes was removed). New lines
 ```powershell
 Compare-Object (Get-Content "$HOME/.claude/settings.json.backup-20261102") (Get-Content "$HOME/.claude/settings.json")
 ```
+
 Expected: a PreToolUse hook entry for graphify in the diff. If hooks landed in a project file instead (`.claude/settings.json` or `CLAUDE.md` inside the repo), that violates the footprint constraint: revert that file from git and rerun the install with the user-global variant per `graphify install --help`.
 
 - [ ] **Step 4: Footprint check**
@@ -139,16 +153,19 @@ Expected: a PreToolUse hook entry for graphify in the diff. If hooks landed in a
 ```powershell
 git status --porcelain
 ```
+
 Expected: empty.
 
 ### Task 4: First deep index
 
 **Files:**
+
 - Create: `graphify-out/graph.json`
 - Create: `graphify-out/GRAPH_REPORT.md`
 - Create: `graphify-out/graph.html`
 
 **Interfaces:**
+
 - Produces: the graph for repo HEAD, deep mode; consumed by Tasks 5-7.
 - Consumes: `graphify` CLI and installed skill.
 
@@ -159,6 +176,7 @@ Run in `C:\filesystem-mcp` in PowerShell:
 ```powershell
 graphify . --mode deep
 ```
+
 Expected: progress output; 5-15 minutes for 244 files. If it exceeds 15 minutes, Ctrl+C and rerun without `--mode deep` (default pass), noting deep mode as a later retry.
 
 - [ ] **Step 2: Verify all three artifacts exist and are non-empty**
@@ -167,6 +185,7 @@ Expected: progress output; 5-15 minutes for 244 files. If it exceeds 15 minutes,
 Get-ChildItem graphify-out
 (Get-Item graphify-out/graph.json).Length
 ```
+
 Expected: `graph.json`, `GRAPH_REPORT.md`, `graph.html` present; graph.json well above 0 bytes.
 
 - [ ] **Step 3: Verify the report knows this repo**
@@ -174,6 +193,7 @@ Expected: `graph.json`, `GRAPH_REPORT.md`, `graph.html` present; graph.json well
 ```powershell
 Select-String -Path graphify-out/GRAPH_REPORT.md -Pattern "PathGuard","ToolDef"
 ```
+
 Expected: hits. `PathGuard` lives in `src/core/path.ts`; its absence means the index scanned the wrong directory.
 
 - [ ] **Step 4: Spot-check a query with citations**
@@ -181,14 +201,17 @@ Expected: hits. `PathGuard` lives in `src/core/path.ts`; its absence means the i
 ```powershell
 graphify query PathGuard --graph graphify-out/graph.json
 ```
+
 (If `graphify --help` shows a different query spelling, use that.) Expected: answer naming `src/core/path.ts` with line references.
 
 ### Task 5: Freshness via local git hook
 
 **Files:**
+
 - Create: a hook file under `.git/hooks/` (name discovered from `graphify --help`; never a tracked path)
 
 **Interfaces:**
+
 - Produces: incremental `--update` reindex on every commit, without touching tracked files.
 - Consumes: graph from Task 4.
 
@@ -197,6 +220,7 @@ graphify query PathGuard --graph graphify-out/graph.json
 ```powershell
 graphify --help
 ```
+
 Expected: a git-hook topic/command (llms-full.txt lists "git hooks" among help topics). Record the exact command.
 
 - [ ] **Step 2: Install the hook**
@@ -210,6 +234,7 @@ Expected: a git-hook topic/command (llms-full.txt lists "git hooks" among help t
 ```powershell
 Get-ChildItem .git/hooks
 ```
+
 Expected: the graphify hook file present in `.git/hooks/` (e.g. `post-commit` or a graphify-named file). `.git/` is never tracked, so this keeps zero footprint.
 
 - [ ] **Step 4: Run the hook standalone**
@@ -217,6 +242,7 @@ Expected: the graphify hook file present in `.git/hooks/` (e.g. `post-commit` or
 ```powershell
 & .git/hooks/<hook-name>
 ```
+
 Expected: exit 0, incremental update output. Do not create a throwaway commit on main to test; the next real commit exercises it.
 
 - [ ] **Step 5: Footprint check**
@@ -224,14 +250,17 @@ Expected: exit 0, incremental update output. Do not create a throwaway commit on
 ```powershell
 git status --porcelain
 ```
+
 Expected: empty.
 
 ### Task 6: Excludes and final footprint guard
 
 **Files:**
+
 - Modify: `.git/info/excludes` (exists, currently empty; not a tracked file)
 
 **Interfaces:**
+
 - Produces: `graphify-out/` invisible to git, completing the zero-footprint guarantee.
 - Consumes: Task 4's artifacts.
 
@@ -246,6 +275,7 @@ Add-Content .git/info/excludes "graphify-out/"
 ```powershell
 git check-ignore -v graphify-out/graph.json
 ```
+
 Expected: output naming `.git/info/excludes` and the `graphify-out/` pattern.
 
 - [ ] **Step 3: Final repo cleanliness**
@@ -253,6 +283,7 @@ Expected: output naming `.git/info/excludes` and the `graphify-out/` pattern.
 ```powershell
 git status --porcelain
 ```
+
 Expected: empty. This plus Task 3 step 4 and Task 5 step 5 close Review Focus item 2.
 
 ### Task 7: End-to-end smoke in a fresh session
@@ -260,6 +291,7 @@ Expected: empty. This plus Task 3 step 4 and Task 5 step 5 close Review Focus it
 **Files:** none (session-level verification)
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: confirmation the hooks and skill work in real use.
 

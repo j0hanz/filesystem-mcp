@@ -24,6 +24,11 @@ prompts, resource templates, capabilities, instructions, get-help text). When a 
 change is intended, run `node --test --test-update-snapshots __tests__/contract.test.ts`
 with no `FS_*` variables set, and commit the `.snapshot` diff with the change.
 
+`__tests__/tool-harness.ts` drives one tool's `run` with a minimal `ToolCtx`,
+no MCP pair (`runToolBodyResult(STAT, args, { roots })`). Test payload assembly
+through it in the tool's own file (`__tests__/stat.test.ts`) and keep the wire
+(in-memory client) for what the executor adds.
+
 ## Architecture
 
 ```text

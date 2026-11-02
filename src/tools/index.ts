@@ -14,7 +14,7 @@ import { SEARCH_TEXT } from './search-text.ts';
 import { STAT } from './stat.ts';
 import { UNDO } from './undo.ts';
 
-export const ALL_TOOLS = [
+export const ALL_TOOLS: readonly DefinedTool[] = [
   CREATE,
   DELETE,
   DIFF,
@@ -29,7 +29,7 @@ export const ALL_TOOLS = [
   FIND_FILES,
   STAT,
   UNDO,
-] as const;
+];
 
 export const MUTATING_TOOL_NAMES = new Set(
   ALL_TOOLS.filter((t) => !t.readOnlyHint).map((t) => t.name),
