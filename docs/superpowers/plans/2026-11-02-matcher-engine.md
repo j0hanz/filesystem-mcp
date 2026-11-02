@@ -32,10 +32,12 @@
 ### Task 1: Bail the case-sensitive literal to RE2
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts:389-420` (`createCaseSensitiveLiteralMatcher`), `:643-646` (fast-path call)
 - Test: `__tests__/replace-text-bail.test.ts` (new)
 
 **Interfaces:**
+
 - Consumes: today's `createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher` (replace-text.ts:389).
 - Produces: `createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher | undefined` — `undefined` when the needle contains U+FFFD or is not its own UTF-8 round trip; the caller falls through to the regex path.
 
@@ -91,12 +93,14 @@ The fix's honest cost, accepted by the drift decision: a whole buffer over 4 MiB
 ### Task 2: The judgment moves to core/matcher.ts behind planMatch
 
 **Files:**
+
 - Create: `src/core/matcher.ts`
 - Modify: `src/core/search.ts` (:65-331 blocks, :470, :476-478, :484-487, :504-506), `src/tools/replace-text.ts:36-44` (import re-point), `__tests__/tools.test.ts:28` (import re-point)
 - Test: `__tests__/matcher.test.ts` (new)
 - The commit also carries the already-written `GLOSSARY.md` (the **Match plan** term, sitting uncommitted in the tree).
 
 **Interfaces:**
+
 - Produces (moved verbatim from `src/core/search.ts`, exported): `createYielder`, `RE2_MAX_INPUT_BYTES`, `MAX_MATCHES_PER_LINE`, `countOccurrences`, `foldAsciiCase`, `LiteralMatcher`, `LineHit`, `createLiteralMatcher`, `compileRegex`, `freeRegex`, `execMatches`.
 - Produces (new):
 
@@ -163,10 +167,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 3: The replace trio moves beside the judgment
 
 **Files:**
+
 - Modify: `src/core/matcher.ts` (grows), `src/tools/replace-text.ts` (shrinks)
 - Test: `__tests__/matcher.test.ts` (extends)
 
 **Interfaces:**
+
 - Produces (moved verbatim, exported): `ReplacementMatcher` (:178-192), `createCaseSensitiveLiteralMatcher` (with Task 1's `| undefined`), `createCaseInsensitiveLiteralMatcher` (:349-387), `createRegexReplacementMatcher` (:262-346), `createReplacementMatcher` (:643-655).
 - Becomes private in matcher.ts: `expandDollarTokens` (:233-260), `DOLLAR_TOKEN` (:194), `ENDS_NON_WORD` (:199), `TEXT_START` (:202).
 - Consumes: `planMatch` from Task 2; `freeRegex`, `execMatches`, `RE2_MAX_INPUT_BYTES` in-module.
@@ -210,11 +216,13 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 4: The DiffBudget owns its folding; scan's admission seam is named
 
 **Files:**
+
 - Create: `src/core/diff-budget.ts`
 - Modify: `src/tools/replace-text.ts` (:143, :548-602, call sites `:805-811`, `:826`), `src/core/scan.ts:218-221` (comment only)
 - Test: `__tests__/diff-budget.test.ts` (new)
 
 **Interfaces:**
+
 - Produces (moved verbatim from replace-text.ts, exported): `MAX_DIFF_SIZE` (:143), the `DiffBudget` interface (:548-557), `fold` (:560-566), `settle` (:569-575), `finishDiff` (:578-581), `patchWithinBudget` (:585-602 — keep the existing parameter order).
 - Consumes: nothing new — pure data and pure functions.
 

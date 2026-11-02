@@ -9,8 +9,8 @@ import {
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
-  writeTestFile,
   type TestClientContext,
+  writeTestFile,
 } from './helpers.ts';
 
 // The case-sensitive literal fast path must obey the same RE2 bail as
