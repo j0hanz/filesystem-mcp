@@ -386,7 +386,13 @@ function createCaseInsensitiveLiteralMatcher(
   };
 }
 
-function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher {
+function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher | undefined {
+  // Same bail as createLiteralMatcher (core/search.ts): a needle containing
+  // U+FFFD or a lone surrogate is judged over decoded text by RE2 — raw-byte
+  // indexOf would claim a file the replace pass cannot transform.
+  if (searchPattern.includes('�') || Buffer.from(searchPattern).toString() !== searchPattern) {
+    return undefined;
+  }
   const searchBuffer = Buffer.from(searchPattern, 'utf8');
 
   return {
@@ -642,7 +648,9 @@ function buildSearchPattern(args: SearchAndReplaceArgs): string {
 
 function createReplacementMatcher(args: SearchAndReplaceArgs): ReplacementMatcher {
   if (!args.isRegex && !args.wholeWord && args.caseSensitive) {
-    return createCaseSensitiveLiteralMatcher(args.searchPattern);
+    // undefined means the bail handed this needle to the RE2 path below.
+    const fast = createCaseSensitiveLiteralMatcher(args.searchPattern);
+    if (fast) return fast;
   }
   const regex = compileRegex(buildSearchPattern(args), { caseSensitive: args.caseSensitive });
   const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);
