@@ -2,14 +2,18 @@ import type {
   ClientCapabilities,
   InputRequiredResult,
   RequestStateAccessor,
-  ServerContext,
 } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { type PendingState, requestStateCodec } from '../src/core/input-required.ts';
+import {
+  bindContextOf,
+  type PendingState,
+  requestStateCodec,
+  type RoundBind,
+} from '../src/core/input-required.ts';
 import type { LoggingLevel } from '../src/core/observability.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
@@ -82,18 +86,7 @@ interface ToolBodyRun<O extends object> {
 /** A Confirmation runs three rounds at most (confirmation.ts); more is a loop. */
 const MAX_CONFIRM_ROUNDS = 3;
 
-/**
- * The tool body has no business with the SDK request context beyond what the
- * requestState codec binds to (the method and the HTTP caller); any other
- * read fails loudly here instead of reading a half-built stub.
- */
-const HARNESS_SERVER_CTX = new Proxy({} as ServerContext, {
-  get(_target, key) {
-    if (key === 'mcpReq') return { method: 'tools/call' };
-    if (key === 'http') return undefined;
-    throw new Error(`tool-harness: the tool body read serverCtx.${String(key)}`);
-  },
-});
+const HARNESS_ROUND_BIND: RoundBind = { method: 'tools/call' };
 
 function promptsOf(result: InputRequiredResult): ConfirmPrompt[] {
   return Object.entries(result.inputRequests ?? {}).map(([key, request]) => {
@@ -136,7 +129,7 @@ async function runToolBody<I extends z.ZodType, O extends object>(
       options.onProgress?.(p);
     },
     clientCapabilities: options.clientCapabilities,
-    serverCtx: HARNESS_SERVER_CTX,
+    roundBind: HARNESS_ROUND_BIND,
   } satisfies ToolCtx;
   const parsed: z.infer<I> = tool.def.input.parse(args);
 
@@ -159,7 +152,7 @@ async function runToolBody<I extends z.ZodType, O extends object>(
     state =
       result.requestState === undefined
         ? undefined
-        : await requestStateCodec.verify(result.requestState, HARNESS_SERVER_CTX);
+        : await requestStateCodec.verify(result.requestState, bindContextOf(HARNESS_ROUND_BIND));
     inputResponses = {};
     for (const prompt of promptsOf(result)) {
       inputResponses[prompt.key] = await options.confirm(prompt, rounds + 1);

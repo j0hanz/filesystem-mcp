@@ -1,4 +1,4 @@
-import type { InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
+import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -7,16 +7,15 @@ import { describe, it } from 'node:test';
 import { confirm, type Confirmed, type ConfirmItem } from '../src/core/confirmation.ts';
 import { type EntryIdentity, UNKNOWN_IDENTITY } from '../src/core/fs.ts';
 import {
+  bindContextOf,
   describeRefusal,
   type PendingCtx,
   type PendingState,
   requestStateCodec,
+  type RoundBind,
 } from '../src/core/input-required.ts';
 
-/** The two fields `requestStateBinding` reads; everything else is unused. */
-function bindContext(): ServerContext {
-  return { mcpReq: { method: 'tools/call' } } as unknown as ServerContext;
-}
+const ROUND_BIND: RoundBind = { method: 'tools/call' };
 
 const id = (ino: number): EntryIdentity => ({ itemType: 'file', dev: 1, ino, birthtimeMs: 1 });
 
@@ -48,7 +47,7 @@ function ctx(
 ): PendingCtx {
   return {
     requestState: () => state,
-    serverCtx: bindContext(),
+    roundBind: ROUND_BIND,
     ...(inputResponses ? { inputResponses } : {}),
     ...(droppedInputResponseKeys ? { droppedInputResponseKeys } : {}),
   };
@@ -63,7 +62,7 @@ async function run(
 
 async function asRound(result: InputRequiredResult | Confirmed): Promise<PendingState> {
   assert.ok(isInputRequiredResult(result), 'expected input_required');
-  return requestStateCodec.verify(result.requestState ?? '', bindContext());
+  return requestStateCodec.verify(result.requestState ?? '', bindContextOf(ROUND_BIND));
 }
 
 function asConfirmed(result: InputRequiredResult | Confirmed): Confirmed {
