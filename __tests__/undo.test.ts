@@ -2316,6 +2316,39 @@ describe('undo tool over the wire', () => {
     }
   });
 
+  it('a deleted file comes back by its undo id, and the undo itself is not journaled', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const file = join(tmp, 'gone.txt');
+      await writeFile(file, 'keep me\n');
+      const del = await call(pair.client, 'delete', { paths: [file] });
+      assert.notStrictEqual(del.isError, true);
+      const id = undoId(del);
+      const undone = await call(pair.client, 'undo', { id });
+      assert.notStrictEqual(undone.isError, true);
+      assert.strictEqual(await readFile(file, 'utf8'), 'keep me\n');
+      // undo authors its own text, so its steps ship under _meta.
+      assert.strictEqual(undone.structuredContent, undefined);
+      const { steps } = undone._meta as {
+        steps: { id: string; tool: string; results: { path: string; error?: unknown }[] }[];
+      };
+      assert.deepStrictEqual(
+        steps.map((s) => [s.id, s.tool, s.results.length]),
+        [[id, 'delete', 1]],
+      );
+      assert.strictEqual(steps[0]?.results[0]?.error, undefined);
+      assert.ok(!(firstTextBlock(undone) ?? '').includes(' · undo '));
+      assert.strictEqual(
+        firstTextBlock(await call(pair.client, 'undo', {})),
+        'undo: nothing to undo',
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
   it('non-recursive delete on a non-empty folder records no undo step', async () => {
     const tmp = await createTestRoot();
     const pair = await createTestClientPair([tmp]);
