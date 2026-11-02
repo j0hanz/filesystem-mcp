@@ -26,6 +26,9 @@ tmp-workspace-cache-*/
 # MCP Registry auth tokens
 .mcpregistry_*
 
+# Local MCP client registration (machine-specific interpreter path)
+.mcp.json
+
 # MCP Publisher CLI
 mcp-publisher.exe
 mcp-publisher
