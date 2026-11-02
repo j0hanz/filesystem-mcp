@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { classifyCauseChain, ErrorCode, isSkippableErrno } from '../src/core/errors.ts';
+import {
+  classifyCauseChain,
+  DELETE_ERRNOS,
+  ErrorCode,
+  FsError,
+  isSkippable,
+  isSkippableErrno,
+  Problem,
+} from '../src/core/errors.ts';
 
 const errnoError = (code: string, path?: string): NodeJS.ErrnoException =>
   Object.assign(new Error(`${code}: boom`), path === undefined ? { code } : { code, path });
@@ -42,5 +50,48 @@ describe('isSkippableErrno', () => {
     assert.ok(!isSkippableErrno(errnoError('ENOTDIR')));
     assert.ok(!isSkippableErrno(new Error('no code')));
     assert.ok(!isSkippableErrno('ENOENT'));
+  });
+});
+
+describe('isSkippable', () => {
+  it('reads an FsError by its code and anything else by its errno', async () => {
+    assert.ok(isSkippable(new FsError(ErrorCode.ACCESS_DENIED, 'no')));
+    assert.ok(isSkippable(errnoError('EPERM')));
+    assert.ok(!isSkippable(new FsError(ErrorCode.BINARY_FILE, 'bin')));
+    assert.ok(!isSkippable(errnoError('ENOTDIR')));
+  });
+});
+
+describe('Problem.fromUnknown with errno rows', () => {
+  it("applies delete's rows over the shared map, and only to errnos", async () => {
+    const notEmpty = Problem.fromUnknown(
+      errnoError('ENOTEMPTY'),
+      ErrorCode.UNKNOWN,
+      '/d',
+      DELETE_ERRNOS,
+    );
+    assert.strictEqual(notEmpty.code, ErrorCode.INVALID_INPUT);
+    assert.strictEqual(notEmpty.message, 'Directory not empty. Set recursive: true.');
+    assert.strictEqual(notEmpty.path, '/d');
+    const missing = Problem.fromUnknown(
+      errnoError('ENOENT'),
+      ErrorCode.UNKNOWN,
+      '/m',
+      DELETE_ERRNOS,
+    );
+    assert.strictEqual(missing.code, ErrorCode.NOT_FOUND);
+    assert.strictEqual(missing.message, 'Path not found');
+    assert.ok(missing.suggestion);
+    // Without rows the shared map answers.
+    assert.strictEqual(
+      Problem.fromUnknown(errnoError('ENOTEMPTY'), ErrorCode.UNKNOWN).code,
+      ErrorCode.NOT_DIRECTORY,
+    );
+    // A thrown FsError keeps its own reading.
+    const own = new FsError(ErrorCode.NOT_FOUND, 'gone', '/g');
+    assert.strictEqual(
+      Problem.fromUnknown(own, ErrorCode.UNKNOWN, '/g', DELETE_ERRNOS).message,
+      'gone',
+    );
   });
 });

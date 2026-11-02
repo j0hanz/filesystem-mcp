@@ -181,7 +181,7 @@ describe('Rewrite', () => {
     };
     await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
       const cases: [string, string, ErrorCode, RegExp][] = [
-        ['a.png', 'edit', ErrorCode.INVALID_INPUT, /^Binary file detected\.$/],
+        ['a.png', 'edit', ErrorCode.BINARY_FILE, /^Binary file detected\.$/],
         ['bom.txt', 'edit', ErrorCode.INVALID_INPUT, /^UTF-16 text file detected/],
         ['late.txt', 'edit', ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/],
         ['big.txt', 'patch', ErrorCode.TOO_LARGE, /^File too large for patch/],

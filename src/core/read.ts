@@ -416,15 +416,11 @@ async function readFullContent(
   return { content, totalLines: countLines(content) };
 }
 
-/** The text path's binary refusal; `read` matches it to offer `binary: true`. */
+/** The text path's binary refusal; `read` catches its code to offer `binary: true`. */
 export const BINARY_FILE_MESSAGE = 'Binary file detected.';
 
 export function isBinaryRefusal(error: unknown): error is FsError {
-  return (
-    error instanceof FsError &&
-    error.code === ErrorCode.INVALID_INPUT &&
-    error.message === BINARY_FILE_MESSAGE
-  );
+  return error instanceof FsError && error.code === ErrorCode.BINARY_FILE;
 }
 
 /** The refusal of a file whose bytes a writer would not round-trip as UTF-8. */
@@ -448,7 +444,7 @@ export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsErr
         'UTF-16 text file detected; convert it to UTF-8 first.',
         filePath,
       )
-    : new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
+    : new FsError(ErrorCode.BINARY_FILE, BINARY_FILE_MESSAGE, filePath);
 }
 
 async function assertNotBinary(

@@ -13,14 +13,7 @@ import {
   patchWithinBudget,
   settle,
 } from '../core/diff-budget.ts';
-import {
-  ErrorCode,
-  FsError,
-  isFsError,
-  isSkippableErrno,
-  Problem,
-  SKIPPABLE_FS_CODES,
-} from '../core/errors.ts';
+import { ErrorCode, FsError, isSkippable, Problem } from '../core/errors.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import {
@@ -286,11 +279,7 @@ async function processEntry(
     if (signal?.aborted) throw error;
     // Rethrown, scan counts the walked file as inaccessible. A named file's
     // failure is the whole request, so it stays a failure row.
-    if (
-      !ctx.singleFile &&
-      !write.started &&
-      ((isFsError(error) && SKIPPABLE_FS_CODES.has(error.code)) || isSkippableErrno(error))
-    ) {
+    if (!ctx.singleFile && !write.started && isSkippable(error)) {
       throw error;
     }
     return { kind: 'failed', path: entryPath, error };

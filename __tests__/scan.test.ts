@@ -825,7 +825,7 @@ describe('readNamedText', () => {
 
     await assert.rejects(
       readNamedText(fs, filePath),
-      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary file detected\.$/),
+      fsErrorMatcher(ErrorCode.BINARY_FILE, /^Binary file detected\.$/),
     );
   });
 
