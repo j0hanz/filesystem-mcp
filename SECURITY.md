@@ -49,6 +49,20 @@ A way to break any of these is a vulnerability. Things the operator chose,
 such as `--allow-sensitive`, `--allow`, `FS_ALLOW_UNRESTRICTED_HOSTS`, or
 allowing a folder that holds secrets, are not.
 
+## What this does not protect against
+
+- **Secrets under ordinary names.** The secret-file list matches paths and
+  names, not contents. An API key in `notes.txt` is readable if its folder is
+  allowed.
+- **Anything the AI can read leaving your machine.** The server makes no network
+  calls, but your AI client may send what it reads to its model provider.
+- **Instructions hidden in files.** File contents reach the AI unfiltered, so
+  allow only folders whose contents you trust the AI to read.
+- **In-place edits.** `edit`, `patch`, and `replace_text` apply without asking.
+  `dryRun` previews them, and `undo` reverts them only while the server runs.
+- **Other software on your machine.** This is a check inside the server, not an
+  operating system sandbox. Other tools and processes keep their own access.
+
 See the [Security section of the README](README.md#security) and the
 [configuration reference](docs/configuration.md) for how these protections
 work.

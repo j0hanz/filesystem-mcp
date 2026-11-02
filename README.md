@@ -57,7 +57,7 @@ Once it is connected, you can ask things like:
 
 How this server differs from the official
 [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem),
-checked against its README on 2026-10-11:
+checked against its README on 2026-11-02:
 
 | Capability                | Filesystem MCP                                     | Reference server                        |
 | :------------------------ | :------------------------------------------------- | :-------------------------------------- |
