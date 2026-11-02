@@ -43,6 +43,17 @@ by one rule shared by every tool that scans.
 _Avoid_: walk (the raw traversal, which relocation and undo also use), search
 (one tool's use of a scan), sweep
 
+## Matching
+
+**Match plan**:
+What a text search or a replacement settles about its needle before any text
+is read: which engine judges it — a native literal pass or the regex engine —
+under the flags, and the per-text bails that hand judgment to the regex
+engine (a fold character in the text; U+FFFD or a lone surrogate in the
+needle). Search and replace ask one module for their plans, so a preview
+judges exactly what its replacement will touch.
+_Avoid_: matcher selection, dispatch, engine choice, fast path
+
 ## Writes
 
 **Rewrite**:
