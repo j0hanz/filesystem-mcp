@@ -20,7 +20,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -38,7 +38,12 @@ import {
 import { detectMimeFromContent, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { isSamePath, normalizePath, resolveEntryType } from './path-utils.ts';
+import {
+  isPathInsideDirectory,
+  isSamePath,
+  normalizePath,
+  resolveEntryType,
+} from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -82,6 +87,53 @@ export interface RawOps {
   readonly rename?: typeof fsRename;
   readonly rm?: typeof fsRm;
 }
+
+export type TransferOp = 'move' | 'copy';
+
+const TRANSFER_VERB: Readonly<Record<TransferOp, string>> = { move: 'Move', copy: 'Copy' };
+
+/** What a copy always asks of `fs.cp`: the whole tree, links as links, times kept. */
+const TRANSFER_COPY_OPTIONS = {
+  recursive: true,
+  verbatimSymlinks: true,
+  preserveTimestamps: true,
+  force: true,
+} as const;
+
+/**
+ * A Transfer settled by `planTransfer`, before any change and before any
+ * Confirmation. Plain data: a Confirmation ends the call, so the next round
+ * plans again rather than holding one open.
+ */
+export interface TransferPlan {
+  readonly op: TransferOp;
+  /** The pair as the caller spelled it; error messages name these. */
+  readonly request: { readonly source: string; readonly destination: string };
+  /** A Self-move, or a copy onto its own Respelling: execute changes nothing. */
+  readonly noop: boolean;
+  /** A move onto its own Respelling: real work, exempt from the destination checks. */
+  readonly respelling: boolean;
+  /** What the mutation acts on: the Entry for a move (a link stays a link), the Landing for a copy. */
+  readonly entry: string;
+  /** The source resolved through links; every same-target comparison uses it. */
+  readonly landing: string;
+  /** The validated destination. */
+  readonly destination: string;
+  /** What sat at the destination when planned; undefined when absent or a Respelling. */
+  readonly existing: EntryIdentity | undefined;
+  /** Copy only: extra `fs.cp` options over the fixed copy defaults; the walks honour its filter. */
+  readonly copy?: Parameters<typeof fsCp>[2];
+}
+
+export interface ExecuteTransferOptions {
+  /** Create the destination's missing parent directories first (recorded for undo). */
+  readonly createParents?: boolean;
+  /** Move only: false rethrows EXDEV instead of copying across devices. */
+  readonly crossDevice?: boolean;
+  readonly signal?: AbortSignal;
+}
+
+type CopyFilter = NonNullable<NonNullable<Parameters<typeof fsCp>[2]>['filter']>;
 
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
@@ -139,21 +191,62 @@ export class GuardedFileSystem {
     }
   }
 
-  async #validateMappedDescendants(source: string, destination: string): Promise<void> {
-    if (!(await fsLstat(source)).isDirectory()) return;
-
-    const pending = [{ source, destination }];
-    while (pending.length > 0) {
-      const current = pending.pop();
-      if (!current) continue;
-      for (const entry of await fsReaddir(current.source, { withFileTypes: true })) {
-        const sourcePath = join(current.source, entry.name);
-        const destinationPath = join(current.destination, entry.name);
-        await this.pathGuard.validateTransferPathForWrite(destinationPath);
-        if (entry.isDirectory()) {
-          pending.push({ source: sourcePath, destination: destinationPath });
+  /**
+   * The Relocation walk: one pass under a directory `entry` that checks both
+   * rules a transfer of it must keep. Every mapped destination must pass the
+   * write check (read-only dirs, the denylist), and every entry must keep its
+   * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
+   * any other non-directory, has nothing under it to relocate. A directory
+   * that cannot be listed fails closed. A copy's `filter` prunes what it
+   * would not copy, as `fs.cp` does: a refused directory takes its subtree.
+   */
+  async #relocationWalk(
+    op: TransferOp,
+    entry: string,
+    requestedFrom: string,
+    destination: string,
+    signal?: AbortSignal,
+    filter?: CopyFilter,
+  ): Promise<void> {
+    if (!(await fsLstat(entry)).isDirectory()) return;
+    if (filter && !(await filter(entry, destination))) return;
+    const guard = this.pathGuard;
+    async function* names(): AsyncGenerator<string> {
+      const pending = [''];
+      for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
+        let dirents: Dirent[];
+        try {
+          dirents = await fsReaddir(join(entry, rel), { withFileTypes: true });
+        } catch (error) {
+          rethrowIfAborted(error);
+          throw new FsError(
+            ErrorCode.ACCESS_DENIED,
+            `${TRANSFER_VERB[op]} refused: the directory could not be fully inspected for protected entries`,
+            requestedFrom,
+            error,
+          );
+        }
+        for (const dirent of dirents) {
+          signal?.throwIfAborted();
+          const name = rel === '' ? dirent.name : join(rel, dirent.name);
+          if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
+          await guard.validateTransferPathForWrite(join(destination, name));
+          yield name;
+          if (dirent.isDirectory()) pending.push(name);
         }
       }
+    }
+    const keeps = await guard.relocationKeepsProtection(
+      names(),
+      { from: entry, requestedFrom },
+      destination,
+    );
+    if (!keeps) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        `${TRANSFER_VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
+        requestedFrom,
+      );
     }
   }
 
@@ -344,38 +437,174 @@ export class GuardedFileSystem {
   }
 
   /**
-   * On EXDEV the entry is copied into place and the source removed, unless
-   * `crossDevice` is false: a copy gives every descendant a new identity,
-   * which undo's records cannot follow, so a restore rethrows instead.
+   * Settle a Transfer of `pair` without changing anything: the source's two
+   * views, the destination's spelling and kind, the Relocation walk, and
+   * what sits at the destination now. Throws the pair's refusal as an
+   * `FsError`; a caller with many pairs folds it into that pair's failure.
+   *
+   * A move acts on its Entry, so moving a link renames the link, not the file
+   * it points at; a copy reads through the link. Every comparison uses the
+   * Landing, or a link moved onto its own target would read as a real move
+   * and replace that target with the link.
+   */
+  async planTransfer(
+    op: TransferOp,
+    pair: { source: string; destination: string },
+    { signal, copy }: { signal?: AbortSignal; copy?: Parameters<typeof fsCp>[2] } = {},
+  ): Promise<TransferPlan> {
+    const { entry, landing } = await this.#transferSource(op, pair.source, signal);
+    const { destination, kind } = await this.pathGuard.resolveTransferDestination(
+      pair.destination,
+      { entry, landing },
+    );
+    const respelling = kind === 'respelling';
+    const base = {
+      op,
+      request: pair,
+      entry,
+      landing,
+      destination,
+      ...(op === 'copy' && copy ? { copy } : {}),
+    };
+    // A copy onto its own Respelling is the same file; the same rename is
+    // real work for a move and proceeds.
+    if (kind === 'self' || (respelling && op === 'copy')) {
+      return { ...base, noop: true, respelling, existing: undefined };
+    }
+    if (!respelling && isPathInsideDirectory(resolve(landing), resolve(destination))) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `Cannot ${op} a directory into its own subdirectory`,
+        pair.source,
+      );
+    }
+    // On the final destination spelling: a re-spelled directory moves its
+    // entries in or out of a spelling-specific allow or deny rule.
+    await this.#relocationWalk(op, entry, pair.source, destination, signal, copy?.filter);
+    const existing = respelling ? undefined : await destIdentity(this, destination, op);
+    return { ...base, noop: false, respelling, existing };
+  }
+
+  /**
+   * Carry out a planned Transfer. The Relocation walk runs again and the
+   * destination must still be what the plan saw, so nothing that changed
+   * while a Confirmation was open is acted on: a destination that appeared
+   * fails as created, and one replaced by another entry fails as replaced.
+   * A move's source must still name what the plan saw: a link retargeted
+   * since could otherwise be renamed over the very file it now points at.
+   * A move renames, falling back on EXDEV to a staged copy and removal
+   * unless `crossDevice` is false: a copy gives every descendant a new
+   * identity, which undo's records cannot follow, so a restore rethrows.
+   */
+  async executeTransfer(
+    plan: TransferPlan,
+    { createParents = false, crossDevice = true, signal }: ExecuteTransferOptions = {},
+  ): Promise<{ from: string; to: string }> {
+    const { op, entry, destination, request } = plan;
+    const done = { from: entry, to: destination };
+    if (plan.noop) {
+      // A self-move changes nothing, but a missing source still fails as the
+      // rename would; lstat, so a dangling link counts as present.
+      await fsLstat(entry);
+      return done;
+    }
+    if (op === 'move') {
+      const now = await this.#transferSource(op, request.source, signal);
+      if (!isSamePath(now.entry, entry) || !isSamePath(now.landing, plan.landing)) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `Move cancelled: source "${request.source}" changed after it was planned.`,
+          request.source,
+        );
+      }
+    }
+    await this.#relocationWalk(op, entry, request.source, destination, signal, plan.copy?.filter);
+    if (!plan.respelling) {
+      const now = await destIdentity(this, destination, op);
+      if (plan.existing === undefined && now !== undefined) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `${TRANSFER_VERB[op]} cancelled: destination "${request.destination}" was created during confirmation.`,
+          request.destination,
+        );
+      }
+      // shortcut: transfers take no write lock, so a swap between this check and the rename still lands; lock the destination if that window matters
+      if (plan.existing !== undefined && now !== undefined && !sameIdentity(now, plan.existing)) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `${TRANSFER_VERB[op]} cancelled: destination "${request.destination}" was replaced after the overwrite was approved.`,
+          request.destination,
+        );
+      }
+    }
+    if (createParents) await this.mkdir(dirname(destination), { recursive: true });
+    if (op === 'copy') await this.#copy(entry, destination, plan.copy);
+    else await this.#move(plan, crossDevice);
+    return done;
+  }
+
+  /**
+   * One-shot move: `planTransfer` then `executeTransfer`, with no
+   * Confirmation between them.
    */
   async rename(
     oldPath: string,
     newPath: string,
     { crossDevice = true }: { crossDevice?: boolean } = {},
   ): Promise<void> {
-    // Not validateExistingPath: that resolves through a symlink, so renaming a
-    // link would rename its target and leave the link dangling.
-    const validOld = await this.pathGuard.validatePathForDelete(oldPath);
-    // Where the old path lands: a link's target. A link whose target cannot be
-    // named stands for itself, as a dangling source does in the move tool.
-    const oldLanding = await this.pathGuard.validateExistingPath(oldPath).catch(() => validOld);
-    const { destination: validNew, kind } = await this.pathGuard.resolveTransferDestination(
-      newPath,
-      { entry: validOld, landing: oldLanding },
-    );
-    // A self-move changes nothing, but a missing source still fails as the
-    // rename would; lstat, so a dangling link counts as present.
-    if (kind === 'self') {
-      await fsLstat(validOld);
-      return;
+    const plan = await this.planTransfer('move', { source: oldPath, destination: newPath });
+    await this.executeTransfer(plan, { crossDevice });
+  }
+
+  /**
+   * A move needs two views of its source: the Entry it renames (a link stays a
+   * link) and the Landing every check compares. A link whose target is gone
+   * or cannot be validated stands for itself: the move renames the link and
+   * never touches what it points at. A copy reads through the link, so both
+   * views are the Landing.
+   */
+  async #transferSource(
+    op: TransferOp,
+    source: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{ entry: string; landing: string }> {
+    try {
+      if (op === 'move') {
+        const entry = await this.pathGuard.validatePathForDelete(source);
+        try {
+          const { validPath: landing } = await this.stat(source, { signal });
+          return { entry, landing };
+        } catch (err) {
+          if (!isFsError(err)) throw err;
+          const link = await unlessMissing(this.lstat(source, { signal }));
+          if (!link?.stats.isSymbolicLink()) throw err;
+          return { entry, landing: entry };
+        }
+      }
+      const { validPath: landing } = await this.stat(source, { signal });
+      return { entry: landing, landing };
+    } catch (error) {
+      if (isFsError(error) || signal?.aborted) throw error;
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        `${TRANSFER_VERB[op]} failed for ${source}`,
+        source,
+      );
     }
-    const spellingOnly = kind === 'respelling';
-    await this.#validateMappedDescendants(validOld, validNew);
+  }
+
+  /** The move half of `executeTransfer`: Capture, raw rename, cross-device fallback. */
+  async #move(plan: TransferPlan, crossDevice: boolean): Promise<void> {
+    // Validated again right before the rename, as every mutation is.
+    const validOld = await this.pathGuard.validatePathForDelete(plan.entry);
+    const validNew = plan.respelling
+      ? plan.destination
+      : await this.pathGuard.validatePathForWrite(plan.destination);
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     const capture = this.#capture;
     let saved: SavedFile | undefined;
-    if (capture && !spellingOnly) {
+    if (capture && !plan.respelling) {
       try {
         const dest = await unlessMissing(fsLstat(validNew));
         if (dest === undefined) {
@@ -396,7 +625,7 @@ export class GuardedFileSystem {
     } catch (error: unknown) {
       rethrowIfAborted(error);
       if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
-      await this.#moveAcrossDevices(validOld, validNew, oldPath);
+      await this.#moveAcrossDevices(validOld, validNew, plan.request.source);
       return;
     }
     // ponytail: the rename check is identity only. A moved directory whose
@@ -704,16 +933,33 @@ export class GuardedFileSystem {
     await fsSymlink(target, validPath, type);
   }
 
+  /**
+   * One-shot copy: `planTransfer` then `executeTransfer`. `options` go over
+   * the fixed copy defaults.
+   */
   async cp(
     source: string,
     destination: string,
     options?: Parameters<typeof fsCp>[2],
   ): Promise<void> {
-    // As in rename: keep the link itself so callers passing verbatimSymlinks
-    // actually copy the link rather than a dereferenced target. A copy reads
-    // its source and writes nothing under it, so the source may sit in a
-    // read-only dir; `#moveAcrossDevices` re-validates the source delete
-    // before removing it, so real moves out of a read-only dir stay refused.
+    const plan = await this.planTransfer(
+      'copy',
+      { source, destination },
+      options ? { copy: options } : {},
+    );
+    await this.executeTransfer(plan);
+  }
+
+  /** The copy half of `executeTransfer`. */
+  async #copy(
+    source: string,
+    destination: string,
+    options: Parameters<typeof fsCp>[2] | undefined,
+  ): Promise<void> {
+    // A copy reads its source and writes nothing under it, so the source may
+    // sit in a read-only dir; `#moveAcrossDevices` re-validates the source
+    // delete before removing it, so real moves out of a read-only dir stay
+    // refused.
     const validSource = await this.pathGuard.validatePathForDelete(source, {
       allowReadOnly: true,
     });
@@ -725,6 +971,7 @@ export class GuardedFileSystem {
     this.#capture?.abandon('copies are not undoable yet');
     const callerFilter = options?.filter;
     await fsCp(validSource, validDest, {
+      ...TRANSFER_COPY_OPTIONS,
       ...options,
       filter: async (sourcePath, destinationPath) => {
         if (callerFilter && !(await callerFilter(sourcePath, destinationPath))) return false;
@@ -735,7 +982,7 @@ export class GuardedFileSystem {
   }
 
   /**
-   * The cross-device half of `rename`, after the raw rename failed with EXDEV:
+   * The cross-device half of a move, after the raw rename failed with EXDEV:
    * copy into place on the destination's device, and only then remove the
    * source.
    */
@@ -744,7 +991,7 @@ export class GuardedFileSystem {
     // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.pathGuard.validatePathForDelete(source);
     const validDest = await this.pathGuard.validatePathForWrite(destination);
-    await this.#validateMappedDescendants(validSource, validDest);
+    await this.#relocationWalk('move', validSource, label, validDest);
     let copied = false;
     try {
       await this.#copyIntoPlace(validSource, validDest);

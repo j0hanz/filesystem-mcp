@@ -1,25 +1,16 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import {
-  ErrorCode,
-  FsError,
-  isFsError,
-  Problem,
-  rethrowIfAborted,
-  unlessMissing,
-} from '../core/errors.ts';
+import { ErrorCode, FsError, Problem, rethrowIfAborted } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import { destExists, destIdentity, type EntryIdentity, sameIdentity } from '../core/fs.ts';
-import { globEntries } from '../core/glob.ts';
+import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
-import type { TransferKind } from '../core/path.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
@@ -55,201 +46,9 @@ interface MoveOutput {
   skipped?: string[];
 }
 
-type PairOp = 'move' | 'copy';
+type PairOp = TransferOp;
 
 const VERB: Readonly<Record<PairOp, string>> = { move: 'Move', copy: 'Copy' };
-
-/** A move or copy pre-checked up to the point a confirmation decision is needed. */
-interface TransferPlan {
-  pair: { source: string; destination: string };
-  /**
-   * The path the mutation runs on: the link itself for a move, the resolved
-   * target for a copy. Every collision check uses the resolved source instead
-   * — see {@link validateTransferSource}.
-   */
-  opSource: string;
-  /** Symlink-resolved source, for cross-entry overlap detection (opSource may be the link). */
-  resolvedSource: string;
-  validDest: string;
-  /**
-   * A rename that only changes the destination's case or Unicode spelling
-   * (#101). Move must perform it —
-   * it is real work — so it is exempt from the destination-exists checks that
-   * would otherwise read the source itself as an existing destination. Never
-   * true for a copy, which treats such a target as a self-copy and skips.
-   */
-  isSpellingOnlyRename: boolean;
-  /** The landing at the destination when planned; undefined when absent or a respelling. */
-  destIdentity: EntryIdentity | undefined;
-  /** Whether the destination existed when planned (drives the TOCTOU guard). */
-  destExistedOriginally: boolean;
-  /** Destination exists and is not a self or spelling-only target → needs overwrite confirmation. */
-  pending: boolean;
-}
-
-/**
- * Phase 1 (no mutation): validate source and destination, reject self-targets
- * and transfers into a subdirectory of the source, and stat the destination to
- * decide whether this pair needs an overwrite confirmation. No `mkdir` happens
- * here — the old flow created the destination's parent before asking, which
- * mutated the filesystem before a confirmation; that now waits for phase 2 (R14).
- *
- * `overwrite` is copy-only — move has no confirmation bypass — so a move always
- * passes false.
- */
-async function planTransfer(
-  op: PairOp,
-  pair: { source: string; destination: string },
-  fs: ToolCtx['fs'],
-  overwrite: boolean,
-  signal: AbortSignal | undefined,
-): Promise<TransferPlanResult> {
-  let realSource: string;
-  let opSource: string;
-  let validDest: string;
-  let kind: TransferKind;
-  let isDirectory: boolean;
-  try {
-    const source = await validateTransferSource(op, pair.source, fs, signal);
-    ({ realSource, opSource, isDirectory } = source);
-    ({ destination: validDest, kind } = await fs.pathGuard.resolveTransferDestination(
-      pair.destination,
-      { entry: opSource, landing: realSource },
-    ));
-  } catch (error) {
-    return { status: 'fail', failure: pairFailure(pair, error) };
-  }
-
-  // Comparisons run on the resolved source; only the fs call in phase 2 uses
-  // opSource. The destination is resolved through a symlink too, so both
-  // sides of every check must be resolved to match.
-  const resolvedSource = resolve(realSource);
-  const resolvedDest = resolve(validDest);
-
-  // On the final destination spelling: a re-spelled directory moves its
-  // entries in or out of a spelling-specific allow or deny rule.
-  if (!(op === 'move' && opSource !== realSource) && isDirectory) {
-    try {
-      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
-    } catch (error) {
-      return { status: 'fail', failure: pairFailure(pair, error) };
-    }
-  }
-
-  const isSpellingOnlyRename = kind === 'respelling';
-
-  // A copy onto a case-only or Unicode-only variant of its own source is the
-  // same file, so it is a no-op; the same rename is real work for move and
-  // proceeds.
-  if (kind === 'self' || (isSpellingOnlyRename && op === 'copy')) {
-    return { status: 'noop' };
-  }
-
-  if (!isSpellingOnlyRename && isPathInsideDirectory(resolvedSource, resolvedDest)) {
-    return {
-      status: 'fail',
-      failure: pairFailure(
-        pair,
-        new FsError(
-          ErrorCode.INVALID_INPUT,
-          `Cannot ${op} a directory into its own subdirectory`,
-          pair.source,
-        ),
-      ),
-    };
-  }
-
-  const landing = isSpellingOnlyRename ? undefined : await destIdentity(fs, validDest, op);
-  const destExistedOriginally = landing !== undefined;
-  const pending = destExistedOriginally && !overwrite;
-
-  return {
-    status: 'plan',
-    plan: {
-      pair,
-      opSource,
-      resolvedSource,
-      validDest,
-      isSpellingOnlyRename,
-      destIdentity: landing,
-      destExistedOriginally,
-      pending,
-    },
-  };
-}
-
-/**
- * Phase 2 (mutation): confirm an overwrite if needed, TOCTOU-check the
- * destination, create its parent, then rename (with cross-device fallback) or
- * copy. A declined/missing confirmation throws `CANCELLED`, collected as a
- * per-pair failure by the caller. A destination that appeared between plan and
- * mutation (created during the confirmation gap) also fails closed.
- */
-async function executeTransfer(
-  op: PairOp,
-  plan: TransferPlan,
-  ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
-  confirmed: Confirmed,
-): Promise<TransferExecResult> {
-  const verdict = confirmed.verdict(plan.validDest);
-  if (verdict === 'skipped') return { skipped: plan.pair.destination };
-  if (verdict !== 'proceed') {
-    throw new FsError(
-      ErrorCode.CANCELLED,
-      verdict === 'changed'
-        ? `${VERB[op]} cancelled: destination "${plan.pair.destination}" was replaced again while the prompt was open.`
-        : `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${verdict.refused}`,
-      plan.pair.destination,
-    );
-  }
-
-  // TOCTOU check before any mutation: a destination that did not exist when
-  // planned but exists now was created during the confirmation gap.
-  if (
-    !plan.isSpellingOnlyRename &&
-    !plan.destExistedOriginally &&
-    (await destExists(ctx.fs, plan.validDest, op))
-  ) {
-    throw new FsError(
-      ErrorCode.CANCELLED,
-      `${VERB[op]} cancelled: destination "${plan.pair.destination}" was created during confirmation.`,
-      plan.pair.destination,
-    );
-  }
-
-  // Replaced since approval: the verdict only covers the identity it sealed.
-  // shortcut: move/copy take no write lock, so a swap between this check and the rename still lands; lock the destination if that window matters
-  if (plan.pending && plan.destIdentity) {
-    const now = await destIdentity(ctx.fs, plan.validDest, op);
-    if (now && !sameIdentity(now, plan.destIdentity)) {
-      throw new FsError(
-        ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: destination "${plan.pair.destination}" was replaced after the overwrite was approved.`,
-        plan.pair.destination,
-      );
-    }
-  }
-
-  await ctx.fs.mkdir(dirname(plan.validDest), { recursive: true });
-
-  if (op === 'move') {
-    await ctx.fs.rename(plan.opSource, plan.validDest);
-    ctx.log('info', `move: ${plan.pair.source} -> ${plan.pair.destination}`, 'move');
-  } else {
-    await ctx.fs.cp(plan.opSource, plan.validDest, {
-      recursive: true,
-      verbatimSymlinks: true,
-      preserveTimestamps: true,
-      force: true,
-    });
-  }
-  return { value: { from: plan.opSource, to: plan.validDest } };
-}
-
-type TransferPlanResult =
-  | { status: 'fail'; failure: MoveFailureItem }
-  | { status: 'noop' }
-  | { status: 'plan'; plan: TransferPlan };
 
 /** A discriminated union, so the fold below narrows without a generic cast. */
 type TransferExecResult = { readonly skipped: string } | { readonly value: MoveItemResult };
@@ -265,11 +64,28 @@ function pairFailure(
   };
 }
 
+/** The Confirmation's verdict on a pair, as the error that stops it. */
+function cancelled(
+  op: PairOp,
+  plan: TransferPlan,
+  verdict: Exclude<ReturnType<Confirmed['verdict']>, 'proceed' | 'skipped'>,
+): FsError {
+  const { destination } = plan.request;
+  return new FsError(
+    ErrorCode.CANCELLED,
+    verdict === 'changed'
+      ? `${VERB[op]} cancelled: destination "${destination}" was replaced again while the prompt was open.`
+      : `${VERB[op]} cancelled: overwrite of "${destination}" was ${verdict.refused}`,
+    destination,
+  );
+}
+
 /**
  * The source→destination sibling of `runOverPaths`: plan every pair, fail closed
  * on a duplicated destination, round-trip the overwrite confirmations as one
- * set, then execute what survived in parallel. `copy` and `move` differ only in
- * their `plan` and `execute` callbacks.
+ * set, then execute what survived in parallel. The Transfer itself (source
+ * views, Self-move, Respelling, the Relocation walk, the destination checks)
+ * is `GuardedFileSystem`'s; this owns only what spans pairs.
  */
 async function runTransfers(
   items: readonly z.infer<typeof MoveItemSchema>[],
@@ -282,22 +98,26 @@ async function runTransfers(
 > {
   const { results: planned, errors: planErrors } = await processInParallel(
     items,
-    (pair) => planTransfer(op, pair, ctx.fs, overwrite, ctx.signal),
+    async (pair): Promise<TransferPlan | MoveFailureItem> => {
+      try {
+        return await ctx.fs.planTransfer(op, pair, { signal: ctx.signal });
+      } catch (error) {
+        rethrowIfAborted(error);
+        return pairFailure(pair, error);
+      }
+    },
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
-  // plan callbacks are fail-closed (they return { status: 'fail' }, never
-  // throw), so planErrors should always be empty. Surface the first rather
-  // than silently dropping the item if a future plan callback violates that.
   const firstPlanError = planErrors[0];
   if (firstPlanError) throw firstPlanError.error;
 
   const failures: MoveFailureItem[] = [];
   const candidates: TransferPlan[] = [];
   for (const { value } of planned) {
-    if (value.status === 'fail') failures.push(value.failure);
-    else if (value.status === 'plan') candidates.push(value.plan);
-    // 'noop' (self-copy / self-move) is silently skipped.
+    if ('error' in value) failures.push(value);
+    else if (!value.noop) candidates.push(value);
+    // A no-op (self-copy / self-move) is silently skipped.
   }
 
   // Two sources targeting the same destination in one batch would otherwise
@@ -310,15 +130,15 @@ async function runTransfers(
   for (const candidate of candidates) {
     // Unicode-folded too: two spellings of one missing name land on one file
     // once the first move creates it (#101).
-    const destKey = unicodeMatchKey(candidate.validDest);
+    const destKey = unicodeMatchKey(candidate.destination);
     if (seenDest.has(destKey)) {
       failures.push(
         pairFailure(
-          candidate.pair,
+          candidate.request,
           new FsError(
             ErrorCode.INVALID_INPUT,
-            `${VERB[op]} cancelled: another entry in this batch already targets destination "${candidate.pair.destination}"`,
-            candidate.pair.destination,
+            `${VERB[op]} cancelled: another entry in this batch already targets destination "${candidate.request.destination}"`,
+            candidate.request.destination,
           ),
         ),
       );
@@ -335,8 +155,8 @@ async function runTransfers(
   // Refuse both sides so the survivors are independent and can run concurrently.
   // isPathInsideDirectory covers equality and containment, case-folded; the
   // keys fold Unicode spelling too, parents included. Two moves compare the
-  // entries they rename (opSource), not where a link points, and unfolded:
-  // validated sources are on-disk names, so two that fold alike are distinct.
+  // entries they rename, not where a link points, and unfolded: validated
+  // sources are on-disk names, so two that fold alike are distinct.
   const touches = (x: string, y: string): boolean => {
     const [keyX, keyY] = [unicodeMatchKey(x), unicodeMatchKey(y)];
     return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
@@ -346,11 +166,10 @@ async function runTransfers(
     for (const b of ready.slice(i + 1)) {
       if (
         (op === 'move' &&
-          (isPathInsideDirectory(a.opSource, b.opSource) ||
-            isPathInsideDirectory(b.opSource, a.opSource))) ||
-        touches(a.resolvedSource, b.validDest) ||
-        touches(b.resolvedSource, a.validDest) ||
-        touches(a.validDest, b.validDest)
+          (isPathInsideDirectory(a.entry, b.entry) || isPathInsideDirectory(b.entry, a.entry))) ||
+        touches(resolve(a.landing), b.destination) ||
+        touches(resolve(b.landing), a.destination) ||
+        touches(a.destination, b.destination)
       ) {
         overlapping.add(a);
         overlapping.add(b);
@@ -365,17 +184,18 @@ async function runTransfers(
     }
     failures.push(
       pairFailure(
-        plan.pair,
+        plan.request,
         new FsError(
           ErrorCode.INVALID_INPUT,
-          `${VERB[op]} cancelled: "${plan.pair.source}" or "${plan.pair.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
-          plan.pair.source,
+          `${VERB[op]} cancelled: "${plan.request.source}" or "${plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+          plan.request.source,
         ),
       ),
     );
   }
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
+  // `overwrite` is copy-only: move has no confirmation bypass.
   const confirmed = await confirm(
     ctx,
     op,
@@ -383,17 +203,17 @@ async function runTransfers(
     overwrite
       ? []
       : safe.flatMap((plan) =>
-          plan.destIdentity === undefined
+          plan.existing === undefined
             ? []
             : [
                 {
-                  path: plan.validDest,
-                  identity: plan.destIdentity,
-                  required: plan.pending,
+                  path: plan.destination,
+                  identity: plan.existing,
+                  required: true,
                   message:
                     op === 'move'
-                      ? `"${plan.validDest}" already exists. Overwrite it?`
-                      : `Destination "${plan.validDest}" already exists. Overwrite it?`,
+                      ? `"${plan.destination}" already exists. Overwrite it?`
+                      : `Destination "${plan.destination}" already exists. Overwrite it?`,
                 },
               ],
         ),
@@ -408,9 +228,19 @@ async function runTransfers(
   };
   const { results: execResults, errors: execErrors } = await processInParallel(
     safe,
-    async (readyPlan) => {
+    async (plan): Promise<TransferExecResult> => {
       try {
-        return await executeTransfer(op, readyPlan, ctx, confirmed);
+        const verdict = confirmed.verdict(plan.destination);
+        if (verdict === 'skipped') return { skipped: plan.request.destination };
+        if (verdict !== 'proceed') throw cancelled(op, plan, verdict);
+        const moved = await ctx.fs.executeTransfer(plan, {
+          createParents: true,
+          signal: ctx.signal,
+        });
+        if (op === 'move') {
+          ctx.log('info', `move: ${plan.request.source} -> ${plan.request.destination}`, 'move');
+        }
+        return { value: moved };
       } finally {
         tick();
       }
@@ -422,7 +252,7 @@ async function runTransfers(
   for (const { error, index } of execErrors) {
     rethrowIfAborted(error);
     const failed = safe[index];
-    if (failed) failures.push(pairFailure(failed.pair, error));
+    if (failed) failures.push(pairFailure(failed.request, error));
   }
 
   const results: MoveItemResult[] = [];
@@ -453,103 +283,6 @@ function buildSummary(
   const parts = [`${verb}: ${joinRoster(tokens) || 'nothing'}`];
   if (failCount > 0) parts.push(`${String(failCount)} failed`);
   return parts.join(' · ');
-}
-
-interface TransferSource {
-  /** Symlink resolved — the identity used for every same-target comparison. */
-  realSource: string;
-  /** The path the mutation runs on: symlink preserved for move, resolved for copy. */
-  opSource: string;
-  /** Whether the resolved source is a directory (from the same guarded stat). */
-  isDirectory: boolean;
-}
-
-/**
- * A move needs two views of its source. Renaming must operate on the link
- * itself, or moving a symlink would rename the file it points at and leave the
- * link dangling. Every collision check must instead compare the resolved
- * target, or a link moved onto itself (or onto its own target) reads as a real
- * move and renames the link over that target, destroying it. A copy reads
- * through the link, so both views are the resolved one.
- */
-async function validateTransferSource(
-  op: PairOp,
-  source: string,
-  fs: ToolCtx['fs'],
-  signal: AbortSignal | undefined,
-): Promise<TransferSource> {
-  try {
-    if (op === 'move') {
-      const opSource = await fs.pathGuard.validatePathForDelete(source);
-      try {
-        const { stats, validPath: realSource } = await fs.stat(source, { signal });
-        return { realSource, opSource, isDirectory: stats.isDirectory() };
-      } catch (err) {
-        if (!isFsError(err) || err.code !== ErrorCode.NOT_FOUND) throw err;
-        // No entry at all is the stat's NOT_FOUND, not the outer catch's ACCESS_DENIED.
-        const link = await unlessMissing(fs.lstat(source, { signal }));
-        if (!link?.stats.isSymbolicLink()) throw err;
-        return { realSource: opSource, opSource, isDirectory: false };
-      }
-    }
-    const { stats, validPath: realSource } = await fs.stat(source, { signal });
-    return { realSource, opSource: realSource, isDirectory: stats.isDirectory() };
-  } catch (error) {
-    if (isFsError(error) || signal?.aborted) throw error;
-    throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);
-  }
-}
-
-/**
- * A directory transfer may proceed only when every entry keeps its
- * sensitive-file status (`PathGuard.relocationKeepsProtection`). Walk the tree
- * once before any mutation and fail the pair closed if anything changes status
- * or the tree cannot be fully listed.
- */
-async function assertTreeHasNoProtectedEntries(
-  op: PairOp,
-  realSource: string,
-  requestedSource: string,
-  validDest: string,
-  fs: ToolCtx['fs'],
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  async function* names(): AsyncGenerator<string> {
-    for await (const entry of globEntries({
-      cwd: realSource,
-      pattern: '**/*',
-      includeHidden: true,
-      skipIgnored: false,
-      onlyFiles: false,
-      ...(signal ? { signal } : {}),
-    })) {
-      signal?.throwIfAborted();
-      yield relative(realSource, entry.path);
-    }
-  }
-  let keeps: boolean;
-  try {
-    keeps = await fs.pathGuard.relocationKeepsProtection(
-      names(),
-      { from: realSource, requestedFrom: requestedSource },
-      validDest,
-    );
-  } catch (error) {
-    rethrowIfAborted(error);
-    throw new FsError(
-      ErrorCode.ACCESS_DENIED,
-      `${VERB[op]} refused: the directory could not be fully inspected for protected entries`,
-      requestedSource,
-      error,
-    );
-  }
-  if (!keeps) {
-    throw new FsError(
-      ErrorCode.ACCESS_DENIED,
-      `${VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
-      requestedSource,
-    );
-  }
 }
 
 export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({

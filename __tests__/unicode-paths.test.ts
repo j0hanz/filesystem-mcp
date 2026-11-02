@@ -754,7 +754,7 @@ describe('Unicode-equivalent path lookup (#101)', () => {
           join(root, 'missing.txt'),
           join(root, 'missing.txt'),
         ),
-        { code: 'ENOENT' },
+        { code: 'NOT_FOUND' },
       );
     });
 

@@ -31,6 +31,15 @@ moving a directory back. A relocation must keep every entry's protection: no
 entry may leave or enter the sensitive-file policy because its path changed.
 _Avoid_: transfer (when undo is meant too), rename (when the entries move)
 
+**Transfer**:
+A move or copy of one source to one destination on a client's behalf, settled
+before any Confirmation is asked for and checked again before anything changes.
+A Self-move, or a copy onto its own Respelling, changes nothing; a directory
+transfer must be a Relocation. It refuses when the destination is no longer the
+entry it saw when it was settled.
+_Avoid_: relocation (which also covers undo moving a directory back), move (one
+of its two kinds)
+
 ## Scans
 
 **Scan**:
