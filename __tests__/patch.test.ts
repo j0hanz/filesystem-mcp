@@ -1,0 +1,164 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+import type * as z from 'zod/v4';
+
+import { ErrorCode } from '../src/core/errors.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
+import { PATCH } from '../src/tools/patch.ts';
+import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard } from './helpers.ts';
+import { runToolBodyResult } from './tool-harness.ts';
+
+type PatchArgs = z.input<typeof PATCH.def.input>;
+
+const DIFF = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
+
+describe('patch body', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const patch = (args: PatchArgs) => runToolBodyResult(PATCH, args, { fs });
+
+  it('applies a unified diff and summarizes it', async () => {
+    const f = join(root, 'patch_target.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const result = await patch({ path: f, diff: DIFF });
+    assert.strictEqual(result.text, 'patch: patch_target.txt +1 -1');
+    assert.strictEqual(result.structured.linesAdded, 1);
+    assert.strictEqual(result.structured.linesRemoved, 1);
+    assert.strictEqual(result.structured.diff, undefined);
+    assert.ok(result.structured.resourceUri, 'a real write links the file');
+    assert.ok(result.resources?.some((block) => block.type === 'resource_link'));
+    assert.strictEqual(await readFile(f, 'utf-8'), 'X\nb\nc\n');
+  });
+
+  it('refuses a diff whose context does not match', async () => {
+    const f = join(root, 'patch_bad.txt');
+    await writeFile(f, 'q\nb\nc\n');
+    await assert.rejects(
+      patch({ path: f, diff: DIFF }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly/),
+    );
+    assert.strictEqual(await readFile(f, 'utf-8'), 'q\nb\nc\n');
+  });
+
+  it('refuses a zero-context hunk past the end of the file and writes nothing', async () => {
+    const f = join(root, 'patch_past_end.txt');
+    await writeFile(f, 'a\nb\n');
+    for (const diff of [
+      '--- f.txt\n+++ f.txt\n@@ -10,0 +11,1 @@\n+X\n',
+      '--- f.txt\n+++ f.txt\n@@ -3,0 +4,1 @@\n+X\n',
+    ]) {
+      await assert.rejects(
+        patch({ path: f, diff }),
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /would duplicate or drop lines/u),
+      );
+      assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\n');
+    }
+  });
+
+  it('dryRun returns the patched text and advertises no resourceUri or resource_link', async () => {
+    const f = join(root, 'patch_dry.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const dry = await patch({ path: f, diff: DIFF, dryRun: true });
+    assert.strictEqual(dry.text, 'X\nb\nc\n');
+    assert.strictEqual(dry.structured.diff, DIFF);
+    assert.strictEqual(dry.structured.resourceUri, undefined);
+    assert.strictEqual(dry.resources, undefined, 'a dry run links nothing');
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\n');
+  });
+
+  it('rejects out-of-order hunks instead of duplicating text', async () => {
+    const f = join(root, 'patch_order.txt');
+    const original = 'abcdefghijklmnopqrst'.split('').join('\n') + '\n';
+    await writeFile(f, original);
+    const swapped = '--- f.txt\n+++ f.txt\n@@ -5,1 +5,1 @@\n-e\n+E\n@@ -1,1 +1,1 @@\n-a\n+A\n';
+    for (const dryRun of [true, false]) {
+      await assert.rejects(
+        patch({ path: f, diff: swapped, dryRun }),
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /file order/),
+        `dryRun=${String(dryRun)}`,
+      );
+    }
+    assert.strictEqual(await readFile(f, 'utf-8'), original);
+
+    // Same hunks in order, both headers off by +2: offset tolerance still applies.
+    const offset = '--- f.txt\n+++ f.txt\n@@ -3,1 +3,1 @@\n-a\n+A\n@@ -7,1 +7,1 @@\n-e\n+E\n';
+    await patch({ path: f, diff: offset });
+    assert.strictEqual(await readFile(f, 'utf-8'), original.replace('a', 'A').replace('e', 'E'));
+
+    // Hand-written headers can be wrong by different amounts, even descending,
+    // while the hunks themselves are in order; jsdiff places those correctly.
+    await writeFile(f, original);
+    const misnumbered = '--- f.txt\n+++ f.txt\n@@ -9,1 +9,1 @@\n-a\n+A\n@@ -3,1 +3,1 @@\n-e\n+E\n';
+    await patch({ path: f, diff: misnumbered });
+    assert.strictEqual(await readFile(f, 'utf-8'), original.replace('a', 'A').replace('e', 'E'));
+
+    // A later hunk whose header points back to text that also appears earlier
+    // must land after the previous hunk, not on that earlier copy.
+    const repeated = join(root, 'patch_repeat.txt');
+    await writeFile(repeated, 'x\n1\n2\n3\nx\n5\n');
+    const back = '--- f\n+++ f\n@@ -2,1 +2,1 @@\n-1\n+ONE\n@@ -1,1 +1,1 @@\n-x\n+X\n';
+    await patch({ path: repeated, diff: back });
+    assert.strictEqual(await readFile(repeated, 'utf-8'), 'x\nONE\n2\n3\nX\n5\n');
+  });
+
+  it('refuses a non-UTF-8 file and leaves its bytes intact', async () => {
+    const path = join(root, 'late.txt');
+    // First 512 bytes are plain ASCII; the bad byte (0xe9) lands past the binary probe.
+    const bytes = Buffer.concat([
+      Buffer.from('a'.repeat(600) + '\nhello\n'),
+      Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
+    ]);
+    await writeFile(path, bytes);
+    // Line 1 is the 600 `a`s, line 2 is `hello`; this hunk would apply cleanly to
+    // a UTF-8 file, so a refusal here can only come from the strict-UTF-8 check.
+    await assert.rejects(
+      patch({ path, diff: '--- f\n+++ f\n@@ -2,1 +2,1 @@\n-hello\n+bye\n' }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT),
+    );
+    assert.deepStrictEqual(await readFile(path), bytes);
+  });
+
+  it('a dry run previews through a held write lock; a live run waits for it', async () => {
+    const f = join(root, 'patch_locked.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const gate = Promise.withResolvers<undefined>();
+    const acquired = Promise.withResolvers<undefined>();
+    const held = fs.lockForWrite(f, () => {
+      acquired.resolve(undefined);
+      return gate.promise;
+    });
+    await acquired.promise;
+    let live: Promise<unknown> | undefined;
+    try {
+      const dry = await patch({ path: f, diff: DIFF, dryRun: true });
+      assert.strictEqual(dry.text, 'X\nb\nc\n');
+
+      let settled = false;
+      live = patch({ path: f, diff: DIFF }).finally(() => {
+        settled = true;
+      });
+      await sleep(50);
+      assert.strictEqual(settled, false, 'a live patch must wait for the lock');
+      assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\n');
+    } finally {
+      gate.resolve(undefined);
+      await held;
+    }
+    await live;
+    assert.strictEqual(await readFile(f, 'utf-8'), 'X\nb\nc\n');
+  });
+});
