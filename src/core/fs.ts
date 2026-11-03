@@ -989,6 +989,13 @@ export class GuardedFileSystem {
     // fsCp, the way snapshotTree does.
     this.#capture?.abandon('copies are not undoable yet');
     const callerFilter = options?.filter;
+    // One file copied over one existing file stages instead: fs.cp with force
+    // unlinks the destination before it copies, so a failed copy lost the old
+    // bytes. The staged copy renames into place, leaving the destination
+    // untouched on any failure (and no temporary file behind).
+    if (!callerFilter && (await fileOverFile(validSource, validDest))) {
+      return this.#copyIntoPlace(validSource, validDest);
+    }
     await fsCp(validSource, validDest, {
       ...TRANSFER_COPY_OPTIONS,
       ...options,
@@ -1368,6 +1375,21 @@ export function atomicTempPath(validPath: string, suffix: string): string {
 export function crossDeviceStagingPath(validDest: string): string {
   const stagingDir = `.${randomUUID().replace(/-/g, '').slice(0, 12)}.tmp`;
   return join(dirname(validDest), stagingDir, basename(validDest));
+}
+
+/**
+ * True when a copy hands one regular file over one existing regular file: the
+ * one shape where a forced `fs.cp` unlinks the destination and a failure
+ * after that loses the old bytes. Everything else — directories, missing
+ * ends, links at either end — keeps the plain cp path it had.
+ */
+async function fileOverFile(source: string, destination: string): Promise<boolean> {
+  try {
+    const [src, dst] = await Promise.all([fsLstat(source), fsLstat(destination)]);
+    return src.isFile() && dst.isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** What an approval round pins an entry to: a swapped entry differs in at least one field. */
