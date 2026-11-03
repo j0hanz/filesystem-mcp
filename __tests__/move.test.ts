@@ -176,6 +176,250 @@ describe('move body', () => {
     }
   });
 
+  it('a failed merged directory copy keeps the old bytes of the failing entry, leaves no temp file, and says it stopped part-way', async (t) => {
+    const srcDir = join(root, 'merge_fail_src');
+    const dstDir = join(root, 'merge_fail_dst');
+    await mkdir(srcDir, { recursive: true });
+    await mkdir(dstDir, { recursive: true });
+    const doomed = join(srcDir, 'doomed.txt');
+    await writeFile(doomed, 'new bytes');
+    await writeFile(join(srcDir, 'fresh.txt'), 'fresh bytes');
+    await writeFile(join(dstDir, 'doomed.txt'), 'old bytes');
+    await writeFile(join(dstDir, 'keep.txt'), 'kept bytes');
+    const realCp = fsPromises.cp;
+    // The guard returns a drive letter in a different case than the request on
+    // Windows, so the doomed copy is matched case-insensitively.
+    const samePath = (a: unknown, b: string) =>
+      typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
+    // Stand in for an unreadable source entry: whichever shape the copy takes -
+    // one whole-tree call, or one call per entry - the doomed entry's copy has
+    // already written partial bytes when it fails.
+    t.mock.method(
+      fsPromises,
+      'cp',
+      async (source: unknown, destination: string, options: unknown) => {
+        if (samePath(source, srcDir) || samePath(source, doomed)) {
+          const partial = destination.endsWith('doomed.txt')
+            ? destination
+            : join(destination, 'doomed.txt');
+          await fsPromises.writeFile(partial, 'partial copy bytes');
+          throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        }
+        return (realCp as (...args: unknown[]) => Promise<void>)(source, destination, options);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      const result = await move({
+        moves: [{ source: srcDir, destination: dstDir }],
+        copy: true,
+        overwrite: true,
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(result.structured.moves.length, 0);
+      assert.strictEqual(result.structured.failures?.length, 1);
+      assert.strictEqual(await readFile(join(dstDir, 'doomed.txt'), 'utf-8'), 'old bytes');
+      assert.strictEqual(await readFile(join(dstDir, 'keep.txt'), 'utf-8'), 'kept bytes');
+      assert.strictEqual(
+        (await readdir(dstDir)).some((entry) => entry.includes('.tmp')),
+        false,
+        'the staged copy must be cleaned up',
+      );
+      assert.match(
+        result.structured.failures?.[0]?.error.message ?? '',
+        /part-way/,
+        'the failure must say the copy stopped part-way',
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a failed merged copy of a nested directory keeps the old bytes there too', async (t) => {
+    const srcDir = join(root, 'merge_deep_src');
+    const dstDir = join(root, 'merge_deep_dst');
+    await mkdir(join(srcDir, 'nested'), { recursive: true });
+    await mkdir(join(dstDir, 'nested'), { recursive: true });
+    const doomed = join(srcDir, 'nested', 'doomed.txt');
+    await writeFile(doomed, 'new bytes');
+    await writeFile(join(srcDir, 'top.txt'), 'top bytes');
+    await writeFile(join(dstDir, 'nested', 'doomed.txt'), 'old bytes');
+    const realCp = fsPromises.cp;
+    const samePath = (a: unknown, b: string) =>
+      typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
+    t.mock.method(
+      fsPromises,
+      'cp',
+      async (source: unknown, destination: string, options: unknown) => {
+        if (samePath(source, srcDir) || samePath(source, doomed)) {
+          const partial = destination.endsWith('doomed.txt')
+            ? destination
+            : join(destination, 'nested', 'doomed.txt');
+          await fsPromises.writeFile(partial, 'partial copy bytes');
+          throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        }
+        return (realCp as (...args: unknown[]) => Promise<void>)(source, destination, options);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      const result = await move({
+        moves: [{ source: srcDir, destination: dstDir }],
+        copy: true,
+        overwrite: true,
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        await readFile(join(dstDir, 'nested', 'doomed.txt'), 'utf-8'),
+        'old bytes',
+      );
+      assert.strictEqual(
+        (await readdir(join(dstDir, 'nested'))).some((entry) => entry.includes('.tmp')),
+        false,
+        'the staged copy inside the merged subdirectory must be cleaned up',
+      );
+      assert.match(result.structured.failures?.[0]?.error.message ?? '', /part-way/);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a merged copy matches the plain copy: new files, nested merges, links, timestamps', async (t) => {
+    const srcDir = join(root, 'merge_ok_src');
+    const dstDir = join(root, 'merge_ok_dst');
+    const linkTarget = await writeTestFile(root, 'merge_ok_target.txt', 'target bytes');
+    await mkdir(join(srcDir, 'nested'), { recursive: true });
+    await mkdir(join(dstDir, 'nested'), { recursive: true });
+    const link = join(srcDir, 'link');
+    if (
+      !(await trySymlink(linkTarget, link, () => t.skip('symlink creation not permitted'), 'file'))
+    )
+      return;
+    await writeFile(join(srcDir, 'over.txt'), 'new over');
+    await writeFile(join(srcDir, 'added.txt'), 'added');
+    await writeFile(join(srcDir, 'nested', 'deep_over.txt'), 'new deep');
+    await writeFile(join(srcDir, 'nested', 'deep_new.txt'), 'deep new');
+    await writeFile(join(dstDir, 'over.txt'), 'old over');
+    await writeFile(join(dstDir, 'untouched.txt'), 'kept');
+    await writeFile(join(dstDir, 'nested', 'deep_over.txt'), 'old deep');
+    // Everything on the source side is stamped 2001, everything on the
+    // destination side now: what survives must say where it came from.
+    const oldTime = new Date('2001-02-03T04:05:06.000Z');
+    for (const p of [
+      srcDir,
+      join(srcDir, 'nested'),
+      join(srcDir, 'over.txt'),
+      join(srcDir, 'added.txt'),
+      join(srcDir, 'nested', 'deep_over.txt'),
+      join(srcDir, 'nested', 'deep_new.txt'),
+    ]) {
+      await utimes(p, oldTime, oldTime);
+    }
+
+    const result = await move({
+      moves: [{ source: srcDir, destination: dstDir }],
+      copy: true,
+      overwrite: true,
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(join(dstDir, 'over.txt'), 'utf-8'), 'new over');
+    assert.strictEqual(await readFile(join(dstDir, 'added.txt'), 'utf-8'), 'added');
+    assert.strictEqual(
+      await readFile(join(dstDir, 'nested', 'deep_over.txt'), 'utf-8'),
+      'new deep',
+    );
+    assert.strictEqual(await readFile(join(dstDir, 'nested', 'deep_new.txt'), 'utf-8'), 'deep new');
+    assert.strictEqual(await readFile(join(dstDir, 'untouched.txt'), 'utf-8'), 'kept');
+    assert.strictEqual(await readFile(linkTarget, 'utf-8'), 'target bytes');
+    const copiedLink = await lstat(join(dstDir, 'link'));
+    assert.strictEqual(copiedLink.isSymbolicLink(), true, 'the link is copied as a link');
+    assert.strictEqual(await readlink(join(dstDir, 'link')), linkTarget);
+    // fs.cp keeps the source's times on everything it touches, including the
+    // existing merged directories themselves.
+    const keptTime = async (p: string) =>
+      assert.strictEqual((await stat(p)).mtimeMs, oldTime.getTime(), p);
+    await keptTime(join(dstDir, 'over.txt'));
+    await keptTime(join(dstDir, 'added.txt'));
+    await keptTime(join(dstDir, 'nested', 'deep_over.txt'));
+    await keptTime(join(dstDir, 'nested', 'deep_new.txt'));
+    await keptTime(join(dstDir, 'nested'));
+    await keptTime(dstDir);
+  });
+
+  it('a merged copy still refuses a source directory landing on an existing file', async () => {
+    const srcDir = join(root, 'merge_dir_src');
+    const dstDir = join(root, 'merge_dir_dst');
+    await mkdir(join(srcDir, 'conflict'), { recursive: true });
+    await mkdir(dstDir, { recursive: true });
+    await writeFile(join(srcDir, 'conflict', 'inside.txt'), 'inside');
+    await writeFile(join(dstDir, 'conflict'), 'an existing file, not a directory');
+
+    const result = await move({
+      moves: [{ source: srcDir, destination: dstDir }],
+      copy: true,
+      overwrite: true,
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(
+      await readFile(join(dstDir, 'conflict'), 'utf-8'),
+      'an existing file, not a directory',
+    );
+    assert.strictEqual(
+      (await readdir(dstDir)).some((entry) => entry.includes('.tmp')),
+      false,
+      'a refusal must not leave staging behind',
+    );
+  });
+
+  it('a merged copy still refuses a source file landing on an existing directory', async () => {
+    const srcDir = join(root, 'merge_file_src');
+    const dstDir = join(root, 'merge_file_dst');
+    await mkdir(srcDir, { recursive: true });
+    await mkdir(join(dstDir, 'conflict.txt'), { recursive: true });
+    await writeFile(join(srcDir, 'conflict.txt'), 'a file, not a directory');
+    await writeFile(join(dstDir, 'conflict.txt', 'inside.txt'), 'kept');
+
+    const result = await move({
+      moves: [{ source: srcDir, destination: dstDir }],
+      copy: true,
+      overwrite: true,
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(await readFile(join(dstDir, 'conflict.txt', 'inside.txt'), 'utf-8'), 'kept');
+  });
+
+  it('refuses a merged copy whose destination tree contains a path-denied file', async () => {
+    await withEnv({ FS_DENYLIST: 'merged-dst/secret.txt' }, async () => {
+      const own = await createTestRoot();
+      try {
+        const ownFs = new GuardedFileSystem(await makeGuard([own]));
+        const srcDir = join(own, 'src');
+        const dstDir = join(own, 'merged-dst');
+        await mkdir(srcDir, { recursive: true });
+        await mkdir(dstDir, { recursive: true });
+        await writeFile(join(srcDir, 'secret.txt'), 'top secret\n');
+        await writeFile(join(srcDir, 'plain.txt'), 'plain\n');
+        await writeFile(join(dstDir, 'secret.txt'), 'old secret\n');
+
+        const result = await move(
+          { moves: [{ source: srcDir, destination: dstDir }], copy: true, overwrite: true },
+          { fs: ownFs },
+        );
+        assert.strictEqual(result.isError, true);
+        const failure = result.structured.failures?.[0]?.error;
+        assert.strictEqual(failure?.code, 'ACCESS_DENIED');
+        assert.match(failure?.message ?? '', /protected/i);
+        assert.strictEqual(await readFile(join(dstDir, 'secret.txt'), 'utf-8'), 'old secret\n');
+        assert.strictEqual(await readFile(join(srcDir, 'secret.txt'), 'utf-8'), 'top secret\n');
+        await assert.rejects(access(join(dstDir, 'plain.txt')), 'the denial must stop the copy');
+      } finally {
+        await cleanupTestRoot(own);
+      }
+    });
+  });
+
   it('a forced file copy replaces the destination with the source bytes, mode and timestamps', async () => {
     const src = await writeTestFile(root, 'copy_place_src.txt', 'placed bytes');
     const dst = await writeTestFile(root, 'copy_place_dst.txt', 'old bytes');

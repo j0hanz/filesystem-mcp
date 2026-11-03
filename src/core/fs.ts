@@ -19,6 +19,7 @@ import {
   stat as fsStat,
   symlink as fsSymlink,
   unlink as fsUnlink,
+  utimes as fsUtimes,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -996,6 +997,16 @@ export class GuardedFileSystem {
     if (!callerFilter && (await fileOverFile(validSource, validDest))) {
       return this.#copyIntoPlace(validSource, validDest);
     }
+    // A directory merged into an existing one cannot stage as a whole (a
+    // rename never merges), so it walks: only the entries that would lose old
+    // bytes stage; everything else copies exactly as the plain cp did.
+    if (
+      !callerFilter &&
+      options?.force !== false &&
+      (await directoryIntoDirectory(validSource, validDest))
+    ) {
+      return this.#copyMerging(validSource, validDest, options);
+    }
     await fsCp(validSource, validDest, {
       ...TRANSFER_COPY_OPTIONS,
       ...options,
@@ -1077,6 +1088,71 @@ export class GuardedFileSystem {
           `Failed to remove staging directory ${stagingDir} after a cross-device move: ${formatUnknownErrorMessage(cleanupError)}`,
         );
       });
+    }
+  }
+
+  /**
+   * A copy of one directory merged into another. Not transactional: entries
+   * copied before a failure stay. Only the one shape that loses old bytes on a
+   * failure — a file landing on an existing file — stages through
+   * `#copyIntoPlace`; every other entry copies exactly as the whole-tree
+   * `fs.cp` it replaces, so refusals, links and timestamps are unchanged. The
+   * merged destination directory keeps the source's times, as `fs.cp` set
+   * them.
+   */
+  async #copyMerging(
+    validSource: string,
+    validDest: string,
+    options: Parameters<typeof fsCp>[2] | undefined,
+  ): Promise<void> {
+    try {
+      await this.#copyMergedDir(validSource, validDest, options);
+    } catch (error) {
+      rethrowIfAborted(error);
+      const baseProblem = Problem.fromUnknown(error, ErrorCode.UNKNOWN, validSource);
+      throw new FsError(
+        baseProblem.code,
+        `Copy stopped part-way after some entries were copied: ${baseProblem.message}`,
+        validSource,
+        error,
+      );
+    }
+  }
+
+  async #copyMergedDir(
+    source: string,
+    destination: string,
+    options: Parameters<typeof fsCp>[2] | undefined,
+  ): Promise<void> {
+    const dirents = await fsReaddir(source, { withFileTypes: true });
+    const preserveTimestamps = options?.preserveTimestamps ?? true;
+    const sourceStats = preserveTimestamps ? await fsLstat(source) : undefined;
+    for (const dirent of dirents) {
+      const srcChild = join(source, dirent.name);
+      const destChild = join(destination, dirent.name);
+      let destStats: Stats | undefined;
+      try {
+        destStats = await fsLstat(destChild);
+      } catch {
+        // Nothing there yet: the plain cp creates it, as before.
+      }
+      if (dirent.isFile() && destStats?.isFile()) {
+        await this.#copyIntoPlace(srcChild, destChild);
+      } else if (dirent.isDirectory() && destStats?.isDirectory()) {
+        await this.#copyMergedDir(srcChild, destChild, options);
+      } else {
+        await fsCp(srcChild, destChild, {
+          ...TRANSFER_COPY_OPTIONS,
+          ...options,
+          filter: async (_sourcePath, destinationPath) => {
+            await this.#guard('relocate', destinationPath);
+            return true;
+          },
+        });
+      }
+    }
+    if (sourceStats) {
+      await fsUtimes(destination, sourceStats.atime, sourceStats.mtime);
     }
   }
 
@@ -1387,6 +1463,20 @@ async function fileOverFile(source: string, destination: string): Promise<boolea
   try {
     const [src, dst] = await Promise.all([fsLstat(source), fsLstat(destination)]);
     return src.isFile() && dst.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when a copy merges one directory into an existing one: the tree shape
+ * where a whole-tree `fs.cp` overwrites existing files entry by entry and a
+ * failure loses old bytes.
+ */
+async function directoryIntoDirectory(source: string, destination: string): Promise<boolean> {
+  try {
+    const [src, dst] = await Promise.all([fsLstat(source), fsLstat(destination)]);
+    return src.isDirectory() && dst.isDirectory();
   } catch {
     return false;
   }
