@@ -1,6 +1,6 @@
 # Implementation Plans
 
-Open plans from the improve-skill audits (2026-09-25 to 2026-10-16). Finished,
+Open plans from the improve-skill audits (2026-09-25 to 2026-11-03). Finished,
 superseded and reverted plans were deleted on 2026-10-28; `git log -- plans/`
 holds them. Each executor: read the plan fully before starting, honor its STOP
 conditions, and update your row when done.
@@ -10,13 +10,16 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 
 ## Execution order & status
 
-| Plan | Title                                                   | Priority | Effort | Depends on | Status                                                                                                       |
-| ---- | ------------------------------------------------------- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------ |
-| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | 056        | PARTIAL (step 1 only; blocked on 056; branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`) |
-| 077  | Inline single-use hop helpers                           | P2       | S      | —          | TODO — commit dda3542b                                                                                       |
-| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —          | TODO — commit dda3542b                                                                                       |
-| 079  | Single unicode fold primitive for search                | P3       | S      | —          | TODO — commit dda3542b                                                                                       |
-| 080  | Enforce coverage floor on all runners                   | P3       | S      | —          | TODO — commit dda3542b                                                                                       |
+| Plan | Title                                                   | Priority | Effort | Depends on | Status                                                                                                                                                                           |
+| ---- | ------------------------------------------------------- | -------- | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | 056        | PARTIAL (step 1 only; blocked on 056; branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`)                                                                     |
+| 077  | Inline single-use hop helpers                           | P2       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
+| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
+| 079  | Single unicode fold primitive for search                | P3       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
+| 080  | Enforce coverage floor on all runners                   | P3       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
+| 081  | Regex search survives lossy files                       | P1       | S      | —          | DONE: review approved; branch `advisor/081-regex-search-survives-lossy-files`, tip `c694f5ad`, PR #193 open                                                                      |
+| 082  | Warn before deleting protected files                    | P2       | S      | —          | DONE: merged to `main` in #194                                                                                                                                                   |
+| 083  | writeFile keeps owner, flushes, handles long names      | P2       | S      | —          | DONE: review approved; branch `advisor/083-writefile-keeps-owner-durable-long-names`, tip `3c31d53a`, not merged; uses `lchown`, not the plan's `chown`; root-only tests not run |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -28,6 +31,19 @@ abandoned)
   load. 056 has to find out first whether load is what drops notifications.
 
 ## Findings considered and rejected
+
+From the 2026-11-03 deep audit at `5ebbd489` (one advisor, no subagents; probes
+run on Windows and Node 26 only):
+
+- Forced `copy` writing through a hard link into a read-only directory: probed;
+  `fs.cp` replaced the name, and the other name kept its bytes. No bypass of
+  ADR-010.
+- `patch` prepending through `@@ -0,0 +1,1 @@`, CRLF files, and a missing final
+  newline: probed; all correct. The prepend recipe in issue #153 works.
+- A RE2 abort corrupting the stdio stream: probed; the abort text goes to
+  stderr, with 0 bytes on stdout.
+- The nested-path check in `delete`, quadratic in paths: a 1000-path delete took
+  1.3 s in total. Not worth changing.
 
 From the 2026-10-13 standard audit at `8deb0d50`:
 
@@ -317,6 +333,46 @@ From the 2026-10-09 SDK 2.3.1 / adapter review at `8941498f`:
   implemented it (`src/core/input-required.ts:287-297`, `CHANGELOG.md`).
 
 ## Found but not planned (available for a later run)
+
+Found while reviewing plan 083 on 2026-11-03 (branch tip `3c31d53a`):
+
+- **`writeFile`'s `fsChmod(tempPath, mode)` follows a symlink.** `chmod(2)` does
+  (`fs.ts:773` on that branch), and it predates 083. With a root server writing
+  in a directory another user controls, swapping a symlink in at the temp path
+  applies the target file's mode to whatever the link names. Not reproduced.
+  Doing the chown and chmod on an open handle (`fchown`, `fchmod`) would close
+  this, and would replace `lchown`. Effort S, confidence MED.
+- **A non-root server drops a shared file's group.** `keepOwner` asks for owner
+  and group together, so a file owned by another user gets `EPERM` and keeps
+  neither, even when the server belongs to the group. A retry with
+  `lchown(path, -1, gid)` would keep the group. Effort S.
+
+From the 2026-11-03 deep audit at `5ebbd489` (not selected):
+
+- **`--allow-cwd-walk` has no tests.** `findProjectRoot`
+  (`path-discovery.ts:107`) widens the root, and `__tests__/` never names it
+  (71% line coverage on Windows). Pin the marker search, the ceiling, and the
+  case where a `package.json` in home resolves to home, which is refused and
+  leaves no root from the walk. Effort S.
+- **`replace_text`'s `maxResults` alias is overdue.** It has shipped since
+  v2.12.0; `CHANGELOG.md:188` and `replace-text.ts:97-104` both promise removal
+  in the next release. Removing it breaks callers, so the release type is the
+  maintainer's call. Effort S.
+- **HTTP keep-alive contradicts its own comment.** `http.ts:46-48` says the
+  timeout must exceed any proxy's idle timeout, and sets 5 s. Common proxies
+  idle for 60 s or more. No failure has been reported. Effort S, confidence MED.
+- **Direction: settle issue #153.** The reporter called newline-on-append
+  "niche". Closing with a docs line is cheapest; a newline flag costs one schema
+  field.
+- **Direction: make copies undoable.** `fs.ts:998` abandons the capture, and
+  `copy` with `overwrite: true` skips the prompt too, so nothing protects the
+  destination. Effort M; merged-tree snapshots are the cost.
+- **Direction: mention undo in the `replace_text` timeout hint.**
+  `replace-text.ts:558` warns about re-runs but omits undo, though a partial run
+  should still get an id. Effort S; check that first.
+- **This index needs `/improve reconcile`.** The MCPB read-only and deny items
+  below have shipped, and 061 waits on plan 056, which has been deleted. Plan
+  079's excerpts also predate `matcher.ts`.
 
 From the 2026-10-13 standard audit at `8deb0d50` (not selected):
 
