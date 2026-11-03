@@ -704,6 +704,18 @@ describe('dry runs under a read-only root', { concurrency: false }, () => {
     await rm(alias);
   });
 
+  it('RO-DRY-006: edit on a hard link into the read-only root is refused', async () => {
+    const linked = join(rw, 'linked.txt');
+    await link(join(ro, 'x.txt'), linked);
+    const result = await pair.client.callTool({
+      name: 'edit',
+      arguments: { path: linked, edits, dryRun: true },
+    });
+    await rm(linked);
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /multiply-linked/u);
+  });
+
   // Last: its live half rewrites rw/x.txt.
   it('RO-DRY-003: replace_text skips the root as the live call does', async () => {
     const args = { path: base, searchPattern: 'retries = 1', replacement: 'retries = 3' };

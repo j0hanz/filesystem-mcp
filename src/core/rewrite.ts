@@ -102,6 +102,7 @@ async function apply<T>(
 ): Promise<Rewritten<T>> {
   const { fs, dryRun, signal, transport } = request;
   const written = !dryRun && change.write;
+  if (dryRun && change.write) fs.assertNoReadOnlyHardLink(validPath, stats);
   let modified = stats.mtime.toISOString();
   if (written) {
     await fs.writeFile(request.path, change.content, { signal });
