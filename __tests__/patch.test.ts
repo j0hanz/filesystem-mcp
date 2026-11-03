@@ -6,11 +6,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode } from '../src/core/errors.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { PATCH } from '../src/tools/patch.ts';
 import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard } from './helpers.ts';
-import { runToolBodyResult } from './tool-harness.ts';
+import { runToolBodyResult, schemaIssues } from './tool-harness.ts';
 
 type PatchArgs = z.input<typeof PATCH.def.input>;
 
@@ -160,5 +160,78 @@ describe('patch body', () => {
     }
     await live;
     assert.strictEqual(await readFile(f, 'utf-8'), 'X\nb\nc\n');
+  });
+});
+
+describe('patch work limit', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const patch = (args: PatchArgs) => runToolBodyResult(PATCH, args, { fs });
+  // A file of F lines of "x" and a one-hunk diff of N hunk lines: N-1 context
+  // lines, then a removal that never matches.
+  const shape = (fileLines: number, hunkLines: number) => ({
+    content: 'x\n'.repeat(fileLines),
+    diff: `--- f.txt\n+++ f.txt\n@@ -1,${hunkLines} +1,${hunkLines - 1} @@\n${' x\n'.repeat(hunkLines - 1)}-y\n`,
+  });
+  const tooLarge = (error: unknown) =>
+    isFsError(error) &&
+    error.code === ErrorCode.TOO_LARGE &&
+    error.message.includes('10,000,000') &&
+    error.message.includes('use edit');
+
+  it('refuses a combination over the limit', async () => {
+    const f = join(root, 'limit.txt');
+    const { content, diff } = shape(10_001, 1_000);
+    await writeFile(f, content);
+    await assert.rejects(patch({ path: f, diff }), tooLarge);
+    assert.strictEqual(await readFile(f, 'utf-8'), content);
+  });
+
+  it('refuses under dryRun too', async () => {
+    const f = join(root, 'limit-dry.txt');
+    const { content, diff } = shape(10_001, 1_000);
+    await writeFile(f, content);
+    await assert.rejects(patch({ path: f, diff, dryRun: true }), tooLarge);
+  });
+
+  it('does not start applyPatch when over the limit', async () => {
+    const f = join(root, 'limit-fast.txt');
+    const { content, diff } = shape(80_000, 6_000);
+    await writeFile(f, content);
+    const start = performance.now();
+    await assert.rejects(patch({ path: f, diff }), tooLarge);
+    assert.ok(performance.now() - start < 2000);
+  });
+
+  it('applies at exactly the limit', async () => {
+    const f = join(root, 'limit-exact.txt');
+    const lines = Array.from({ length: 10_000 }, (_, i) => `line ${String(i)}`);
+    await writeFile(f, `${lines.join('\n')}\n`);
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,999 +1,999 @@\n${lines
+      .slice(0, 999)
+      .map((l, i) => (i === 500 ? `-${l}\n+changed` : ` ${l}`))
+      .join('\n')}\n`;
+    await patch({ path: f, diff });
+    assert.match(await readFile(f, 'utf-8'), /^changed$/mu);
+  });
+
+  it('refuses a diff past the limit', async () => {
+    const f = join(root, 'limit-diff.txt');
+    await writeFile(f, 'a\n');
+    const issues = await schemaIssues(patch({ path: f, diff: 'a'.repeat(1_048_577) }));
+    assert.ok(
+      issues.some((m) => m.includes('1,048,576')),
+      issues.join('; '),
+    );
   });
 });

@@ -228,6 +228,8 @@ These variables are for HTTP only:
 | Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped                             |
 | Files per `create`, `move` call                         | 100                                                                                |
 | Paths per `read`, `stat`, `delete` call                 | 1000                                                                               |
+| `diff` of one `patch`                                   | 1 MiB (1,048,576 characters)                                                       |
+| `patch` work                                            | File lines x diff lines up to 10,000,000; patch fewer lines at once or use `edit`  |
 | Files per `edit` call                                   | 5, with up to 100 edits per file                                                   |
 | `find_files` / `search_text` results                    | Up to 10,000 per call, paged                                                       |
 | `list` entries                                          | 1000 per page by default, up to 20,000                                             |

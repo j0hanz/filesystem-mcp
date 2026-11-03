@@ -8,13 +8,22 @@ import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
+import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
+
+// jsdiff compares a hunk at each file line and cannot be interrupted, so its
+// cost follows file lines x diff lines. Worst case (identical lines, a hunk
+// failing at its last line), 2026-11-03, jsdiff 9, Node 26: 10,000 x 1,000 lines
+// of 1,000 chars took 0.8 s. A product of 5e7 reached 4.4 s on long lines.
+const MAX_PATCH_LINE_PRODUCT = 10_000_000;
+const MAX_DIFF_CHARS = MIB;
 
 const PatchInputSchema = z.strictObject({
   path: RequiredPath.describe('File to apply the diff to'),
   diff: z
     .string()
     .min(1)
+    .max(MAX_DIFF_CHARS, { message: 'diff too long (max 1,048,576 chars)' })
     .describe('Single-file unified diff to apply (as produced by the diff tool or edit dry-run)'),
   dryRun: defaultFalseBoolean('Preview the result without writing (default: false)'),
 });
@@ -126,6 +135,15 @@ function patchContent(
     throw new FsError(
       ErrorCode.INVALID_INPUT,
       'patch accepts a single-file unified diff with at least one hunk; received an empty patch',
+      args.path,
+    );
+  }
+  const fileLines = countLines(content);
+  const diffLines = parsedPatch.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
+  if (fileLines * diffLines > MAX_PATCH_LINE_PRODUCT) {
+    throw new FsError(
+      ErrorCode.TOO_LARGE,
+      `patch refused: ${String(fileLines)} file lines x ${String(diffLines)} diff lines is over the limit of 10,000,000. Patch fewer lines at once, or use edit.`,
       args.path,
     );
   }
