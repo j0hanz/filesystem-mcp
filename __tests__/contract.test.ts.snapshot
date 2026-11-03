@@ -421,6 +421,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           "diff": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 1048576,
             "description": "Single-file unified diff to apply (as produced by the diff tool or edit dry-run)"
           },
           "dryRun": {

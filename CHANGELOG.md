@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`patch` refuses work it cannot finish in time.** jsdiff cannot be interrupted and its cost grows with file lines times diff lines, so a call over 10,000,000 (file lines x diff lines) now answers `TOO_LARGE` before applying, under `dryRun` too; patch fewer lines at once or use `edit`. The `diff` argument is capped at 1 MiB (1,048,576 characters) and a longer value fails validation.
 - **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file still answers `INVALID_INPUT`.
 - **`filesScanned` means every file a scan ruled on.** `search_text` left out files over the size limit, and `find_files` repeated its match count; both now report the same count as `replace_text`.
 - **`search_text` names binary skips.** Its text gains `// skipped N binary files; results may be incomplete.`, and a search where every file was skipped as binary no longer guesses at the pattern on zero matches.
