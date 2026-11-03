@@ -259,12 +259,16 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
             zeroMatchHint({
               ...args,
               filesScanned: structured.filesScanned ?? 0,
-              incomplete: Boolean(
-                structured.stoppedReason ??
-                structured.skippedTooLarge ??
-                structured.skippedBinary ??
-                structured.skippedInaccessible,
-              ),
+              // Most trees hold a binary file, so one only explains the zero when
+              // no text file was searched at all.
+              incomplete:
+                Boolean(
+                  structured.stoppedReason ??
+                  structured.skippedTooLarge ??
+                  structured.skippedInaccessible,
+                ) ||
+                (structured.skippedBinary !== undefined &&
+                  structured.skippedBinary === structured.filesScanned),
             }),
           ]
             .filter(Boolean)

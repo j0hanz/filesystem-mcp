@@ -542,6 +542,19 @@ describe('search_text body', () => {
     );
   });
 
+  it('keeps the pattern hint when a binary skip sits beside searched text files', async () => {
+    const dir = join(root, 'binary_beside_text');
+    await writeTestFile(dir, 'a.ts', 'const x = 1;\n');
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    const { text } = await search({ path: dir, searchPattern: 'foo|bar' });
+    assert.strictEqual(
+      text,
+      "No matches for 'foo|bar'\n" +
+        '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.' +
+        '\n\n// skipped 1 binary file; results may be incomplete.',
+    );
+  });
+
   it('keeps the skip line on a later page', async () => {
     const dir = join(root, 'paged_binary');
     await writeTestFile(dir, 'a.txt', 'PAGED\nPAGED\nPAGED\n');
