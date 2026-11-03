@@ -5,6 +5,7 @@ import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
   cp as fsCp,
+  lchown as fsLchown,
   lstat as fsLstat,
   mkdir as fsMkdir,
   open as fsOpen,
@@ -81,6 +82,10 @@ const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/
 const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+/** A name component's limit: bytes on Linux and macOS, UTF-16 units on Windows, and bytes are never fewer. */
+const MAX_NAME_BYTES = 255;
+/** `.` + 12 hex + `.tmp`, the part a temp file adds to the name it sits beside. */
+const TEMP_SUFFIX_BYTES = 17;
 
 /** The raw ops a test swaps to force a cross-device rename or a failed removal. */
 export interface RawOps {
@@ -687,7 +692,7 @@ export class GuardedFileSystem {
     const validPath = await this.#guard('write', filePath);
 
     const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
-    const tempPath = `${validPath}.${tempSuffix}.tmp`;
+    const tempPath = atomicTempPath(validPath, tempSuffix);
 
     // The rename below swaps in the temp file's inode, so the target would
     // inherit fsWriteFile's default 0o666 & ~umask — silently widening a 0600
@@ -758,8 +763,12 @@ export class GuardedFileSystem {
         await fsWriteFile(tempPath, content, {
           signal,
           flag: 'wx',
+          // The rename publishes these bytes, so they must reach the disk first: a
+          // crash in between could otherwise leave the name on an empty file.
+          flush: true,
           ...(mode !== undefined ? { mode } : {}),
         });
+        await keepOwner(tempPath, existingStats);
         if (mode !== undefined) {
           await fsChmod(tempPath, mode);
         }
@@ -1329,6 +1338,43 @@ export class GuardedFileSystem {
       });
     }
   }
+}
+
+/**
+ * Give a temp file the owner of the file it will replace: the rename swaps in a
+ * new inode, which otherwise belongs to whoever runs the server. Best effort,
+ * because only root can give a file away, and a refused write would be worse
+ * than a changed owner. POSIX only: Windows has no `process.getuid`.
+ * shortcut: POSIX ACLs, extended attributes and Windows ACLs are still lost; copy them if a client reports it.
+ */
+export async function keepOwner(
+  tempPath: string,
+  existing: Pick<Stats, 'uid' | 'gid'> | undefined,
+  lchown: typeof fsLchown = fsLchown,
+): Promise<void> {
+  if (existing === undefined || process.getuid === undefined) return;
+  // No same-owner shortcut: a temp file can take its group from a setgid
+  // directory, so matching the process's ids proves nothing.
+  try {
+    // lchown: the temp file's directory may be writable by others, so a symlink
+    // swapped in must not redirect the ownership change.
+    await lchown(tempPath, existing.uid, existing.gid);
+  } catch (error) {
+    Logger.debug(`Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`);
+  }
+}
+
+/**
+ * Where `writeFile` stages new bytes: beside the target, in the same directory,
+ * so the rename stays on one device. The target's own name is kept when it fits,
+ * since it says what the file is if a crash leaves it behind. A name too long to
+ * take the suffix gets a short one, or a file that exists could not be rewritten.
+ */
+export function atomicTempPath(validPath: string, suffix: string): string {
+  const name = basename(validPath);
+  return Buffer.byteLength(name, 'utf8') + TEMP_SUFFIX_BYTES <= MAX_NAME_BYTES
+    ? `${validPath}.${suffix}.tmp`
+    : join(dirname(validPath), `.${suffix}.tmp`);
 }
 
 /**

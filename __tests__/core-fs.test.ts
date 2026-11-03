@@ -3,7 +3,9 @@ import { constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
+  chown,
   link,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -24,10 +26,12 @@ import { after, before, describe, it, mock } from 'node:test';
 import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import {
+  atomicTempPath,
   destExists,
   destIdentity,
   GuardedFileSystem,
   identityOf,
+  keepOwner,
   sameIdentity,
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
@@ -635,6 +639,111 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
 
       assert.strictEqual(await fs.countFileLines(filePath), 1);
+    });
+
+    it('atomicTempPath keeps the name while it fits, and shortens it when not', () => {
+      const dir = join(tmpDir, 'd');
+      assert.strictEqual(atomicTempPath(join(dir, 'a.txt'), 'abc'), join(dir, 'a.txt.abc.tmp'));
+      const fits = `${'n'.repeat(234)}.txt`; // 238 bytes + 17 = 255
+      assert.strictEqual(atomicTempPath(join(dir, fits), 'abc'), `${join(dir, fits)}.abc.tmp`);
+      const over = `${'n'.repeat(235)}.txt`; // 239 bytes + 17 = 256
+      assert.strictEqual(atomicTempPath(join(dir, over), 'abc'), join(dir, '.abc.tmp'));
+      const wide = `${'é'.repeat(120)}.txt`; // 124 units, 244 bytes
+      assert.strictEqual(atomicTempPath(join(dir, wide), 'abc'), join(dir, '.abc.tmp'));
+    });
+
+    it('writeFile replaces a file whose name leaves no room for the temp suffix', async () => {
+      for (const name of [`${'n'.repeat(247)}.txt`, `${'é'.repeat(120)}.txt`]) {
+        const filePath = await writeTestFile(tmpDir, name, 'old\n');
+        await fs.writeFile(filePath, 'new\n');
+        assert.strictEqual(await readFile(filePath, 'utf8'), 'new\n');
+      }
+      assert.deepStrictEqual(
+        (await readdir(tmpDir)).filter((entry) => entry.endsWith('.tmp')),
+        [],
+      );
+    });
+
+    it('writeFile flushes the temp file before renaming it', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'flushed.txt', 'old\n');
+      const writes = t.mock.method(fsPromises, 'writeFile');
+      syncBuiltinESMExports();
+      try {
+        await fs.writeFile(filePath, 'new\n');
+      } finally {
+        writes.mock.restore();
+        syncBuiltinESMExports();
+      }
+      const options = writes.mock.calls.at(-1)?.arguments[2] as { flush?: boolean } | undefined;
+      assert.strictEqual(options?.flush, true);
+    });
+
+    it('keepOwner restores the existing owner, skips a new file, and tolerates a refusal', async (t) => {
+      if (process.platform === 'win32') return t.skip('Windows has no process.getuid');
+      const uid = process.getuid?.() ?? 0;
+      const gid = process.getgid?.() ?? 0;
+      const calls: [number, number][] = [];
+      const record = ((_path: unknown, u: number, g: number) => {
+        calls.push([u, g]);
+        return Promise.resolve();
+      }) as never;
+
+      await keepOwner('t', undefined, record);
+      assert.deepStrictEqual(calls, []);
+
+      await keepOwner('t', { uid, gid }, record);
+      assert.deepStrictEqual(calls, [[uid, gid]]);
+
+      await keepOwner('t', { uid: uid + 1, gid }, record);
+      assert.deepStrictEqual(calls, [
+        [uid, gid],
+        [uid + 1, gid],
+      ]);
+
+      const refuse = (() =>
+        Promise.reject(Object.assign(new Error('EPERM'), { code: 'EPERM' }))) as never;
+      await keepOwner('t', { uid: uid + 1, gid }, refuse);
+    });
+
+    it('writeFile keeps the group of a file in a setgid directory', async (t) => {
+      if (process.platform === 'win32') return t.skip('Windows has no process.getuid');
+      const primaryGid = process.getgid?.() ?? 0;
+      const other = process.getgroups?.().find((g) => g !== primaryGid);
+      if (other === undefined) return t.skip('needs a second group the process belongs to');
+      const dir = join(tmpDir, 'setgid-dir');
+      await mkdir(dir);
+      await chown(dir, -1, other);
+      await chmod(dir, 0o2775);
+      const file = await writeTestFile(dir, 'g.txt', 'old\n');
+      await chown(file, -1, primaryGid);
+      assert.strictEqual((await stat(file)).gid, primaryGid);
+      await fs.writeFile(file, 'new\n');
+      assert.strictEqual((await stat(file)).gid, primaryGid);
+      assert.strictEqual(await readFile(file, 'utf8'), 'new\n');
+    });
+
+    it('writeFile keeps the owner of a file another user owns', async (t) => {
+      if (process.platform === 'win32' || process.getuid?.() !== 0) {
+        return t.skip('needs root on POSIX to create a file another user owns');
+      }
+      const filePath = await writeTestFile(tmpDir, 'owned.txt', 'old\n');
+      await chown(filePath, 1234, 1234);
+      await fs.writeFile(filePath, 'new\n');
+      const after = await stat(filePath);
+      assert.strictEqual(after.uid, 1234);
+      assert.strictEqual(after.gid, 1234);
+    });
+
+    it('keepOwner does not follow a symlink at the temp path', async (t) => {
+      if (process.platform === 'win32' || process.getuid?.() !== 0) {
+        return t.skip('needs root on POSIX to create a file another user owns');
+      }
+      const target = await writeTestFile(tmpDir, 'lchown-target.txt', 'x\n');
+      const link = join(tmpDir, 'lchown-link');
+      await symlink(target, link);
+      await keepOwner(link, { uid: 1234, gid: 1234 });
+      assert.strictEqual((await stat(target)).uid, 0);
+      assert.strictEqual((await lstat(link)).uid, 1234);
     });
 
     it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {
