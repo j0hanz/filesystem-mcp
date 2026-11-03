@@ -283,18 +283,17 @@ describe('find_files body', () => {
 });
 
 describe('find_files scan cap', () => {
+  const counts = { skippedInaccessible: 0, skippedBinary: 0, skippedTooLarge: 0 };
+
   it('keeps the first results in walk order and preserves an earlier timeout', () => {
-    const over = keepFirstResults(
-      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0 },
-      2,
-    );
+    const over = keepFirstResults({ results: ['a', 'b', 'c'], scanned: 3, ...counts }, 2);
     assert.deepStrictEqual(over, { results: ['a', 'b'], stoppedReason: 'maxResults' });
     const timedOut = keepFirstResults(
-      { results: ['a', 'b', 'c'], scanned: 3, skippedInaccessible: 0, stoppedReason: 'timeout' },
+      { results: ['a', 'b', 'c'], scanned: 3, ...counts, stoppedReason: 'timeout' },
       2,
     );
     assert.strictEqual(timedOut.stoppedReason, 'timeout');
-    const exact = keepFirstResults({ results: ['a', 'b'], scanned: 2, skippedInaccessible: 0 }, 2);
+    const exact = keepFirstResults({ results: ['a', 'b'], scanned: 2, ...counts }, 2);
     assert.deepStrictEqual(exact, { results: ['a', 'b'] });
   });
 });

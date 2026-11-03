@@ -9,6 +9,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { Change } from '../src/core/rewrite.ts';
 import { rewriteEntry, rewriteFile } from '../src/core/rewrite.ts';
+import { ScanSkip } from '../src/core/scan.ts';
 import { MIB } from '../src/core/util.ts';
 import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard, withEnv } from './helpers.ts';
 
@@ -212,10 +213,10 @@ describe('Rewrite', () => {
         kinds[name] = await rewriteEntry({ fs, path: target, dryRun: false }, spy);
       }
       assert.deepEqual(kinds, {
-        'a.png': { kind: 'binary' },
-        'bom.txt': { kind: 'binary' },
-        'late.txt': { kind: 'undecodable' },
-        'big.txt': { kind: 'tooLarge', size: MIB + 1 },
+        'a.png': new ScanSkip({ kind: 'binary', utf16: false }),
+        'bom.txt': new ScanSkip({ kind: 'binary', utf16: true }),
+        'late.txt': new ScanSkip({ kind: 'undecodable' }),
+        'big.txt': new ScanSkip({ kind: 'tooLarge', size: MIB + 1 }),
       });
     });
     assert.equal(ran, false);

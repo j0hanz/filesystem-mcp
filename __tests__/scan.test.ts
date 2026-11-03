@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { Dir } from 'node:fs';
 import fsPromises, { chmod, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -18,6 +18,7 @@ import {
   readText,
   resolveScanScope,
   scan,
+  ScanSkip,
 } from '../src/core/scan.ts';
 import { MIB } from '../src/core/util.ts';
 import {
@@ -73,6 +74,63 @@ describe('scan', () => {
     const out = await scan({ root }, base(), byPath);
     assert.deepEqual(rel(out.results), ['a.txt']);
     assert.equal(out.skippedInaccessible, 0);
+  });
+
+  it('counts a returned skip and drops it from results', async () => {
+    await files('a.bin', 'b.txt', 'c.big', 'd.txt');
+    const verdicts: Record<string, ScanSkip | undefined> = {
+      'a.bin': new ScanSkip({ kind: 'binary', utf16: false }),
+      'b.txt': new ScanSkip({ kind: 'undecodable' }),
+      'c.big': new ScanSkip({ kind: 'tooLarge', size: 9 }),
+    };
+    const out = await scan({ root }, base({ concurrency: 1 }), (entry) =>
+      Promise.resolve(verdicts[basename(entry.path)] ?? entry.path),
+    );
+    assert.deepEqual(rel(out.results), ['d.txt']);
+    assert.equal(out.scanned, 4);
+    assert.equal(out.skippedBinary, 2);
+    assert.equal(out.skippedTooLarge, 1);
+  });
+
+  it('a skip weighs nothing against the cap', async () => {
+    await files('a.txt', 'b.txt', 'c.txt');
+    const out = await scan({ root }, base({ cap: 1, concurrency: 1 }), (entry) =>
+      Promise.resolve(
+        basename(entry.path) === 'c.txt'
+          ? entry.path
+          : new ScanSkip({ kind: 'binary', utf16: false }),
+      ),
+    );
+    assert.deepEqual(rel(out.results), ['c.txt']);
+    assert.equal(out.stoppedReason, undefined);
+  });
+
+  it('a skip spends a maxFiles slot', async () => {
+    await files('a.txt', 'b.txt', 'c.txt');
+    const out = await scan({ root }, base({ maxEntries: 2, concurrency: 1 }), () =>
+      Promise.resolve(new ScanSkip({ kind: 'binary', utf16: false })),
+    );
+    assert.equal(out.scanned, 2);
+    assert.equal(out.skippedBinary, 2);
+    assert.equal(out.stoppedReason, 'maxFiles');
+  });
+
+  it('a sensitive file is never counted as a skip', async () => {
+    await files('a.txt', '.env');
+    const out = await scan({ root }, base(), () =>
+      Promise.resolve(new ScanSkip({ kind: 'binary', utf16: false })),
+    );
+    assert.equal(out.skippedBinary, 1);
+  });
+
+  it('counts a skip on a named file', async () => {
+    await files('a.txt');
+    const out = await scan({ root, explicitFile: join(root, 'a.txt') }, base(), () =>
+      Promise.resolve(new ScanSkip({ kind: 'binary', utf16: false })),
+    );
+    assert.deepEqual(out.results, []);
+    assert.equal(out.scanned, 1);
+    assert.equal(out.skippedBinary, 1);
   });
 
   it('unreadable directory is counted once', async (t) => {

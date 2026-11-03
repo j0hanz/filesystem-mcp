@@ -26,7 +26,7 @@ import { createTooLargeError, NOT_UTF8_MESSAGE } from '../core/read.ts';
 import type { Rewritten } from '../core/rewrite.ts';
 import { rewriteEntry } from '../core/rewrite.ts';
 import type { ScanOutcome, StoppedReason } from '../core/scan.ts';
-import { resolveScanScope, scan } from '../core/scan.ts';
+import { resolveScanScope, scan, ScanSkip } from '../core/scan.ts';
 import {
   defaultFalseBoolean,
   IncludeHidden,
@@ -191,8 +191,6 @@ interface ReplaceContext {
 
 type EntryOutcome =
   | ({ kind: 'changed'; path: string; matches: number } & Patch)
-  | { kind: 'binary' }
-  | { kind: 'tooLarge' }
   | { kind: 'failed'; path: string; error: unknown };
 
 /** What scan holds until the walk ends: a failure's error never reaches it. */
@@ -203,7 +201,7 @@ async function processEntry(
   entryPath: string,
   ctx: ReplaceContext,
   onChanged: (done: Rewritten<number>) => Patch,
-): Promise<EntryOutcome | undefined> {
+): Promise<EntryOutcome | ScanSkip | undefined> {
   const { dryRun, signal, matcher, replacement } = ctx;
   // Discovery/read failures on a walked file are counted as inaccessible; a
   // failed write is the caller's edit not landing, so it is always reported.
@@ -257,16 +255,16 @@ async function processEntry(
       },
     );
     if (done === undefined) return undefined;
-    if (done.kind !== 'text') {
+    if (done instanceof ScanSkip) {
       // A named file is the whole request: refuse it, don't skip it.
       if (ctx.singleFile) {
-        throw done.kind === 'tooLarge'
-          ? createTooLargeError(done.size, getMaxTextFileSize(), entryPath)
+        throw done.verdict.kind === 'tooLarge'
+          ? createTooLargeError(done.verdict.size, getMaxTextFileSize(), entryPath)
           : new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, entryPath);
       }
       // Only bytes that decode to UTF-8 losslessly survive the string round
       // trip, so an undecodable file is skipped as a binary one is.
-      return done.kind === 'tooLarge' ? { kind: 'tooLarge' } : { kind: 'binary' };
+      return done;
     }
 
     // Reached only after the write succeeds (or in dryRun, where there is no
@@ -291,8 +289,6 @@ interface ReplaceSummary {
   totalMatches: number;
   filesChanged: number;
   failedFiles: number;
-  skippedBinary: number;
-  skippedTooLarge: number;
   failures: Failure[];
   changedFiles: { index: number; path: string; matches: number }[];
   changedFilesTruncated: boolean;
@@ -306,8 +302,6 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
     totalMatches: 0,
     filesChanged: 0,
     failedFiles: 0,
-    skippedBinary: 0,
-    skippedTooLarge: 0,
     failures: [],
     changedFiles: [],
     changedFilesTruncated: false,
@@ -366,8 +360,8 @@ function buildSearchAndReplaceStructuredResult(
     },
     totalMatches: summary.totalMatches,
     filesScanned: outcome.scanned,
-    ...(summary.skippedBinary ? { skippedBinary: summary.skippedBinary } : {}),
-    ...(summary.skippedTooLarge ? { skippedTooLarge: summary.skippedTooLarge } : {}),
+    ...(outcome.skippedBinary ? { skippedBinary: outcome.skippedBinary } : {}),
+    ...(outcome.skippedTooLarge ? { skippedTooLarge: outcome.skippedTooLarge } : {}),
     ...(outcome.skippedInaccessible ? { skippedInaccessible: outcome.skippedInaccessible } : {}),
     // Failures are capped at MAX_FAILURES independently of the changed-file
     // cap, so either cap can leave `results` shorter than `summary.total`.
@@ -451,7 +445,7 @@ async function handleSearchAndReplace(
         concurrency: explicitCap !== undefined ? 1 : REPLACE_CONCURRENCY,
         cap: explicitCap ?? DEFAULT_SEARCH_RESULTS,
         capReason: 'maxMatches',
-        weigh: (o) => (o.kind === 'changed' ? o.matches : 0),
+        weigh: (o) => o.matches,
         ...(args.maxFiles !== undefined ? { maxEntries: args.maxFiles } : {}),
         // Bounds the patches held above an unsettled prefix.
         ...(includeDiff ? { window: 2 * REPLACE_CONCURRENCY } : {}),
@@ -472,7 +466,7 @@ async function handleSearchAndReplace(
             ? patchWithinBudget(budget, entry.index, paths.show(entry.path), done)
             : {};
         });
-        if (o === undefined) return undefined;
+        if (o === undefined || o instanceof ScanSkip) return o;
         if (o.kind !== 'failed') return { ...o, index: entry.index };
         failedFiles++;
         keepFailure(failureRows, { index: entry.index, path: o.path, error: o.error });
@@ -496,20 +490,10 @@ async function handleSearchAndReplace(
     error: Problem.fromUnknown(f.error, ErrorCode.UNKNOWN, f.path),
   }));
   for (const o of outcome.results) {
-    switch (o.kind) {
-      case 'binary':
-        summary.skippedBinary++;
-        break;
-      case 'tooLarge':
-        summary.skippedTooLarge++;
-        break;
-      case 'changed':
-        summary.totalMatches += o.matches;
-        summary.filesChanged++;
-        recordChangedFile(summary, o.index, o.path, o.matches);
-        if (o.diffTruncated) summary.diffTruncated = true;
-        break;
-    }
+    summary.totalMatches += o.matches;
+    summary.filesChanged++;
+    recordChangedFile(summary, o.index, o.path, o.matches);
+    if (o.diffTruncated) summary.diffTruncated = true;
   }
 
   if (!args.dryRun && summary.totalMatches > 0) {

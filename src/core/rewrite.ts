@@ -2,7 +2,7 @@ import type { Stats } from 'node:fs';
 
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { readNamedText, readText } from './scan.ts';
+import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
 
 /**
  * The Rewrite: a call that replaces a text file's content with a transform of
@@ -46,10 +46,6 @@ export interface Rewritten<T> {
   readonly report: () => WrittenFileReport;
 }
 
-export type Skipped =
-  | { readonly kind: 'binary' | 'undecodable' }
-  | { readonly kind: 'tooLarge'; readonly size: number };
-
 /** A file the client named (edit, patch): readNamedText's refusals fail the call. */
 export function rewriteFile<T>(
   request: RewriteRequest & { readonly tool: string },
@@ -72,11 +68,10 @@ export function rewriteFile<T>(
 export function rewriteEntry<T>(
   request: RewriteRequest,
   transform: (bytes: Buffer, stats: Stats) => Promise<Change<T> | undefined>,
-): Promise<Rewritten<T> | Skipped | undefined> {
+): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
     const verdict = await readText(request.fs, request.path, request.signal);
-    if (verdict.kind === 'tooLarge') return verdict;
-    if (verdict.kind !== 'text') return { kind: verdict.kind };
+    if (verdict.kind !== 'text') return skipOf(verdict);
     const change = await transform(verdict.bytes, verdict.stats);
     if (change === undefined) return undefined;
     // A changed file up to the text cap: decode it once, not once per side.
