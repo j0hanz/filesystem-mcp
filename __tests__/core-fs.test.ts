@@ -5,6 +5,7 @@ import fsPromises, {
   chmod,
   chown,
   link,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -710,6 +711,18 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const after = await stat(filePath);
       assert.strictEqual(after.uid, 1234);
       assert.strictEqual(after.gid, 1234);
+    });
+
+    it('keepOwner does not follow a symlink at the temp path', async (t) => {
+      if (process.platform === 'win32' || process.getuid?.() !== 0) {
+        return t.skip('needs root on POSIX to create a file another user owns');
+      }
+      const target = await writeTestFile(tmpDir, 'lchown-target.txt', 'x\n');
+      const link = join(tmpDir, 'lchown-link');
+      await symlink(target, link);
+      await keepOwner(link, { uid: 1234, gid: 1234 });
+      assert.strictEqual((await stat(target)).uid, 0);
+      assert.strictEqual((await lstat(link)).uid, 1234);
     });
 
     it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {

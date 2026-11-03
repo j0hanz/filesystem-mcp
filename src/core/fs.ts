@@ -4,8 +4,8 @@ import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
-  chown as fsChown,
   cp as fsCp,
+  lchown as fsLchown,
   lstat as fsLstat,
   mkdir as fsMkdir,
   open as fsOpen,
@@ -1302,12 +1302,14 @@ export class GuardedFileSystem {
 export async function keepOwner(
   tempPath: string,
   existing: Pick<Stats, 'uid' | 'gid'> | undefined,
-  chown: typeof fsChown = fsChown,
+  lchown: typeof fsLchown = fsLchown,
 ): Promise<void> {
   if (existing === undefined || process.getuid === undefined) return;
   if (existing.uid === process.getuid() && existing.gid === process.getgid?.()) return;
   try {
-    await chown(tempPath, existing.uid, existing.gid);
+    // lchown: the temp file's directory may be writable by others, so a symlink
+    // swapped in must not redirect the ownership change.
+    await lchown(tempPath, existing.uid, existing.gid);
   } catch (error) {
     Logger.debug(`Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`);
   }
