@@ -13,7 +13,7 @@ import {
 } from './matcher.ts';
 import type { PathGuard } from './path.ts';
 import type { ScanScope, StoppedReason } from './scan.ts';
-import { readText, scan } from './scan.ts';
+import { readText, scan, ScanSkip, skipOf } from './scan.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
@@ -129,11 +129,11 @@ export interface SearchContentOutcome {
   };
 }
 
-type FileScan =
-  | { kind: 'tooLarge' }
-  | { kind: 'binary' }
-  /** `cut`: the signal stopped this file's lines short, so scan cannot see the timeout. */
-  | { kind: 'scanned'; matches: SearchResult[]; cut?: boolean };
+interface FileScan {
+  matches: SearchResult[];
+  /** The signal stopped this file's lines short, so scan cannot see the timeout. */
+  cut?: boolean;
+}
 
 interface ScanContext {
   fs: GuardedFileSystem;
@@ -147,22 +147,24 @@ interface ScanContext {
   context: number;
 }
 
-async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
+async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
   const verdict = await readText(scanCtx.fs, entryPath, scanCtx.signal);
-  if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return { kind: verdict.kind };
+  if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does
   // for `grep -I`. Other non-UTF-8 text is still searched: a lossy decode
   // only affects the bytes a pattern could not have matched anyway.
-  if (verdict.kind === 'undecodable' && buffer.includes(0)) return { kind: 'binary' };
+  if (verdict.kind === 'undecodable' && buffer.includes(0)) {
+    return new ScanSkip({ kind: 'binary', utf16: false });
+  }
 
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
-  if (literal && !literal.mayMatch(buffer)) return { kind: 'scanned', matches: [] };
+  if (literal && !literal.mayMatch(buffer)) return { matches: [] };
   const content = buffer.toString('utf-8');
   if (!literal && canPrefilter(scanCtx.source, buffer)) {
     scanCtx.prefilter.lastIndex = 0;
-    if (scanCtx.prefilter.exec(content) === null) return { kind: 'scanned', matches: [] };
+    if (scanCtx.prefilter.exec(content) === null) return { matches: [] };
   }
 
   const lines = content.split(/\r?\n/u);
@@ -184,7 +186,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     const line = lines[i];
     if (line === undefined) continue;
     if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
-      return { kind: 'tooLarge' };
+      return new ScanSkip({ kind: 'tooLarge', size: buffer.length });
     }
     // Yield between lines too: millions of short lines never yield per-match.
     if (await tick()) break;
@@ -215,7 +217,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
       if (matches.length > scanCtx.maxResults) break;
     }
   }
-  return { kind: 'scanned', matches, cut };
+  return { matches, cut };
 }
 
 export async function searchContent(
@@ -249,11 +251,8 @@ export async function searchContent(
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const context = options.context ?? 0;
-    let filesScanned = 0;
     let filesMatched = 0;
     let matchingLines = 0;
-    let skippedTooLarge = 0;
-    let skippedBinary = 0;
     let trimmed = false;
     let cut = false;
     const scanCtx: ScanContext = {
@@ -280,37 +279,25 @@ export async function searchContent(
         ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
         concurrency: PARALLEL_CONCURRENCY,
         cap: maxResults,
-        weigh: (s) => (s.kind === 'scanned' ? s.matches.length : 0),
+        weigh: (s) => s.matches.length,
         ...(options.signal ? { signal: options.signal } : {}),
       },
       (entry) => scanFile(entry.path, scanCtx),
     );
 
     for (const file of outcome.results) {
-      switch (file.kind) {
-        case 'tooLarge':
-          skippedTooLarge++;
+      if (file.matches.length > 0) filesMatched++;
+      if (file.cut) cut = true;
+      for (const match of file.matches) {
+        if (matches.length >= maxResults) {
+          trimmed = true;
           break;
-        case 'binary':
-          filesScanned++;
-          skippedBinary++;
-          break;
-        case 'scanned':
-          filesScanned++;
-          if (file.matches.length > 0) filesMatched++;
-          if (file.cut) cut = true;
-          for (const match of file.matches) {
-            if (matches.length >= maxResults) {
-              trimmed = true;
-              break;
-            }
-            matches.push(match);
-            matchingLines++;
-          }
-          break;
+        }
+        matches.push(match);
+        matchingLines++;
       }
     }
-    const { skippedInaccessible } = outcome;
+    const { skippedInaccessible, skippedTooLarge, skippedBinary } = outcome;
     // scan stops on a refused entry only; matches cut here are the cap too. Abort beats it.
     const stoppedReason =
       outcome.stoppedReason ??
@@ -321,7 +308,7 @@ export async function searchContent(
       matches,
       summary: {
         matchingLines,
-        filesScanned,
+        filesScanned: outcome.scanned - skippedTooLarge,
         filesMatched,
         truncated: stoppedReason !== undefined,
         skippedInaccessible,
