@@ -15,6 +15,8 @@ import { defineTool, type ToolCtx } from './define.ts';
 // cost follows file lines x diff lines. Worst case (identical lines, a hunk
 // failing at its last line), 2026-11-03, jsdiff 9, Node 26: 10,000 x 1,000 lines
 // of 1,000 chars took 0.8 s. A product of 5e7 reached 4.4 s on long lines.
+// At FS_MAX_FILE_SIZE 100 MiB the same product took 1898 ms (31,622 file lines
+// x 316 diff lines of 3,162 chars).
 const MAX_PATCH_LINE_PRODUCT = 10_000_000;
 const MAX_DIFF_CHARS = MIB;
 
@@ -143,8 +145,10 @@ function patchContent(
   if (fileLines * diffLines > MAX_PATCH_LINE_PRODUCT) {
     throw new FsError(
       ErrorCode.TOO_LARGE,
-      `patch refused: ${String(fileLines)} file lines x ${String(diffLines)} diff lines is over the limit of 10,000,000. Patch fewer lines at once, or use edit.`,
+      `patch refused: ${String(fileLines)} file lines x ${String(diffLines)} diff lines is over the limit of 10,000,000.`,
       args.path,
+      undefined,
+      'Patch fewer lines at once, or use edit.',
     );
   }
   // jsdiff tries each hunk at its header line before bounding the search by

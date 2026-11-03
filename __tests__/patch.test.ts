@@ -9,7 +9,14 @@ import type * as z from 'zod/v4';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { PATCH } from '../src/tools/patch.ts';
-import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestClientPair,
+  createTestRoot,
+  firstTextBlock,
+  fsErrorMatcher,
+  makeGuard,
+} from './helpers.ts';
 import { runToolBodyResult, schemaIssues } from './tool-harness.ts';
 
 type PatchArgs = z.input<typeof PATCH.def.input>;
@@ -187,7 +194,7 @@ describe('patch work limit', () => {
     isFsError(error) &&
     error.code === ErrorCode.TOO_LARGE &&
     error.message.includes('10,000,000') &&
-    error.message.includes('use edit');
+    (error.problem.suggestion ?? '').includes('use edit');
 
   it('refuses a combination over the limit', async () => {
     const f = join(root, 'limit.txt');
@@ -195,6 +202,22 @@ describe('patch work limit', () => {
     await writeFile(f, content);
     await assert.rejects(patch({ path: f, diff }), tooLarge);
     assert.strictEqual(await readFile(f, 'utf-8'), content);
+  });
+
+  it('ends the refusal with the patch advice, not the read advice', async () => {
+    const f = join(root, 'limit-wire.txt');
+    const { content, diff } = shape(10_001, 1_000);
+    await writeFile(f, content);
+    const pair = await createTestClientPair([root]);
+    try {
+      const result = await pair.client.callTool({ name: 'patch', arguments: { path: f, diff } });
+      const text = firstTextBlock(result).text ?? '';
+      assert.strictEqual(result.isError, true);
+      assert.match(text, /use edit/u);
+      assert.doesNotMatch(text, /head\/tail/u);
+    } finally {
+      await pair.close();
+    }
   });
 
   it('refuses under dryRun too', async () => {
