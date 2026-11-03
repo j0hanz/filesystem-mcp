@@ -8,6 +8,7 @@ import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
+import { createYielder } from '../core/matcher.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import {
@@ -16,12 +17,16 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { toCrlf, usesCrlf } from '../core/util.ts';
+import { MIB, toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
+/** One candidate's walk is bounded by oldText: about 9 ms at this size. */
+const MAX_OLD_TEXT_CHARS = MIB;
+
 const EditSpecSchema = z.strictObject({
   oldText: nonBlankString('oldText')
+    .max(MAX_OLD_TEXT_CHARS, { message: 'oldText too long (max 1,048,576 chars)' })
     .describe(
       'Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.',
     )
@@ -302,6 +307,18 @@ function walkForward(content: string, at: number, spec: FlexSpec): number {
  * stop after a few.
  */
 export function* flexMatches(content: string, oldText: string, from = 0): Generator<FlexMatch> {
+  for (const match of flexWalk(content, oldText, from)) if (match !== undefined) yield match;
+}
+
+/** A candidate's walk is bounded by oldText; yield between candidates. */
+const WALK_SLICE_MS = 5;
+
+/** flexMatches, plus an `undefined` each time the walk has run for WALK_SLICE_MS. */
+function* flexWalk(
+  content: string,
+  oldText: string,
+  from: number,
+): Generator<FlexMatch | undefined> {
   const spec = buildFlexSpec(oldText);
   const first = spec.literals[0];
   if (first === undefined) return;
@@ -310,7 +327,12 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
   // literal's offset and the first hit that fits is the leftmost match.
   let floor = from;
   let at = content.indexOf(first, floor);
+  let last = Date.now();
   while (at !== -1) {
+    if (Date.now() - last >= WALK_SLICE_MS) {
+      yield undefined;
+      last = Date.now();
+    }
     const start = spec.lead ? walkLeadBack(content, at, spec.lead, floor) : at;
     const end = start === -1 ? -1 : walkForward(content, at, spec);
     if (end === -1) {
@@ -330,7 +352,13 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
  * when it answers "once or not". Only the count and the first few starts are
  * kept: a short oldText in a large file can match millions of times.
  */
-function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
+async function findEditMatches(
+  content: string,
+  oldText: string,
+  ignoreWhitespace: boolean,
+  tick: () => Promise<boolean>,
+  signal: AbortSignal | undefined,
+): Promise<EditMatches> {
   const found: EditMatches = { first: undefined, count: 0, starts: [], truncated: false };
   // Returns true once the match is known ambiguous: applyEdits only needs
   // 0 / 1 / >1 and a few starts, and counting every occurrence of a short
@@ -352,13 +380,17 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // adjacent identifiers are not merged. A newline run at either edge of
     // oldText matches exactly, so the edit cannot reach past the lines the
     // caller named.
-    const scan = (from: number): void => {
-      for (const match of flexMatches(content, oldText, from)) {
+    const scan = async (from: number): Promise<void> => {
+      for (const match of flexWalk(content, oldText, from)) {
+        if (match === undefined) {
+          if (await tick()) signal?.throwIfAborted();
+          continue;
+        }
         if (add(match.start, match.length)) return;
         if (from > 0) return;
       }
     };
-    scan(0);
+    await scan(0);
     // flexMatches resumes past each match, so a second match overlapping the
     // first is never reported; look once more from just past its first
     // non-whitespace character. Starting inside the leading whitespace would
@@ -366,7 +398,7 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     if (found.count === 1 && found.first) {
       const { startIndex, length } = found.first;
       const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
-      scan(afterCodePoint(content, startIndex + lead));
+      await scan(afterCodePoint(content, startIndex + lead));
     }
     return found;
   }
@@ -455,11 +487,13 @@ function ambiguousEditError(
   );
 }
 
-function applyEdits(
+async function applyEdits(
   content: string,
   edits: z.infer<typeof EditSpecSchema>[],
   ignoreWhitespace: boolean,
-): EditResult {
+  signal: AbortSignal | undefined,
+): Promise<EditResult> {
+  const tick = createYielder(signal);
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
@@ -476,7 +510,7 @@ function applyEdits(
     }
     const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
     const newText = crlf ? toCrlf(edit.newText) : edit.newText;
-    const found = findEditMatches(newContent, oldText, ignoreWhitespace);
+    const found = await findEditMatches(newContent, oldText, ignoreWhitespace, tick, signal);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
@@ -520,8 +554,8 @@ async function editOnce(
       transport: ctx.transport,
       tool: 'edit',
     },
-    (content) => {
-      const result = applyEdits(content, edits, options.ignoreWhitespace);
+    async (content) => {
+      const result = await applyEdits(content, edits, options.ignoreWhitespace, ctx.signal);
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
         throw new FsError(
           ErrorCode.INVALID_INPUT,
@@ -624,6 +658,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     'replace_text replaces every occurrence across files.',
   input: EditFileInputSchema,
   readOnlyHint: false,
+  deadline: true,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     let subject: string;

@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A whitespace-flexible `edit` no longer blocks the server.** On a large repetitive file that never matched, the `ignoreWhitespace` walk ran for seconds without yielding, so a cancel could not land and every client stalled. The walk now yields to the event loop, honours cancel and times out at the tool deadline, leaving the file unchanged.
 - **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`, including through a hard link. They now answer the same refusal.
 
 ### Changed
 
+- **`edit` has the tool deadline and an `oldText` cap.** `edit` now times out after `--tool-timeout` like `replace_text`, and an `oldText` over 1 MiB (1,048,576 characters) gets a validation error.
 - **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file still answers `INVALID_INPUT`.
 - **`filesScanned` means every file a scan ruled on.** `search_text` left out files over the size limit, and `find_files` repeated its match count; both now report the same count as `replace_text`.
 - **`search_text` names binary skips.** Its text gains `// skipped N binary files; results may be incomplete.`, and a search where every file was skipped as binary no longer guesses at the pattern on zero matches.

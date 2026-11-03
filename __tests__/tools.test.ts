@@ -1008,8 +1008,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // readOnlyDirs (#162); measured 20849 / 9863.
   // Lowered 2026-11-03 to 20700 full (read-only unchanged): replace_text drops
   // the deprecated maxResults alias; measured 20698.
+  // Raised 2026-11-03 to 20800 full (read-only unchanged): edit's oldText
+  // gains maxLength in two places; measured 20738.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_700;
+    const BUDGET_CHARS = 20_800;
     const BUDGET_CHARS_READ_ONLY = 9_900;
 
     const full = await createTestClientPair([tmpDir]);
