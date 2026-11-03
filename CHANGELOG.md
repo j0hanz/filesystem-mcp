@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` reports skips in the same line.** The `· N binary skipped`, `· N too large skipped` and `· N inaccessible skipped` segments become one `// skipped ...` line.
 - **A named file that cannot be scanned fails the call.** `search_text` on a named binary or too-large file answered `No matches`; it now refuses, as it does for a named file with a line too long for a regex search. `replace_text` refusing a named file now answers with tool error text and no `results` row, using the refusals `read` and `edit` give: `BINARY_FILE`, `File too large for replace_text`, and the UTF-16 advice.
 
+### Fixed
+
+- **Writes keep a file's owner where the server is allowed to.** A write replaces the file with a new one, which belonged to the server's user. A server running as root turned other users' files into root's, locking them out of a 0600 file. It now restores the owner and group when it can. POSIX ACLs, extended attributes and Windows ACLs are still not carried over.
+- **Writes reach the disk before they replace a file.** New content is flushed before the rename, so a crash cannot leave the name on an empty file. Large `replace_text` runs may take a little longer.
+- **Files with very long names can be rewritten.** A name of 239 or more characters left no room for the temporary name, so `edit`, `patch`, `replace_text` and an overwrite failed on a file that exists, with an error naming a file the caller never asked about.
+- **A recursive delete says when it would remove protected files.** A folder holding a file on the secret-file list asked only "and all its contents?", though listings hide those files and the delete cannot be undone. The confirmation now says both. The delete still proceeds when approved. A folder that cannot be fully inspected refuses the delete instead.
+- **Regex search no longer exhausts its engine on non-UTF-8 files.** `search_text` sized the engine's input by a file's raw bytes, so a file of about 2.8 MiB or more of mostly invalid bytes aborted the engine, lost that file's matches, and reported it as inaccessible. Each abort also shrank what the engine could take until restart, until regex search failed on small files. The size is now measured after decoding. If the engine still runs out of memory, a walked file counts as too large and a named file answers `TOO_LARGE` with advice.
+
 ## [2.15.0] - 2026-11-02
 
 A correctness release. Directory transfers recheck the sensitive-file policy

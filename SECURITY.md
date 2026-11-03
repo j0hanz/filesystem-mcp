@@ -64,6 +64,10 @@ allowing a folder that holds secrets, are not.
   runs, within its limit of 64 calls and 32 MiB by default, and skips files
   changed since. `FS_MAX_UNDO_BYTES` changes the size limit, and 0 turns undo
   off.
+- **Protected files inside a folder you delete.** A recursive delete removes
+  everything in the folder, including files on the secret-file list, which
+  listings hide. The confirmation says when a folder holds any, and such a
+  delete cannot be undone.
 - **Other software on your machine.** This is a check inside the server, not an
   operating system sandbox. Other tools and processes keep their own access.
 
