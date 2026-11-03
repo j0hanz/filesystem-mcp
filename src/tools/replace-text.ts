@@ -78,9 +78,10 @@ const SearchAndReplaceInputSchema = z
     ),
     includeHidden: IncludeHidden,
     includeIgnored: IncludeIgnored,
-    caseSensitive: defaultFalseBoolean(
-      'Enable case-sensitive matching (default: case-insensitive)',
-    ),
+    caseSensitive: z
+      .boolean()
+      .default(true)
+      .describe('Match case exactly (default: true). Pass false to ignore case.'),
     wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
     dryRun: defaultFalseBoolean(
       'Preview replacements without writing to disk (default: false = apply changes)',

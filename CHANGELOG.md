@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` reports skips in the same line.** The `· N binary skipped`, `· N too large skipped` and `· N inaccessible skipped` segments become one `// skipped ...` line.
 - **A named file that cannot be scanned fails the call.** `search_text` on a named binary or too-large file answered `No matches`; it now refuses, as it does for a named file with a line too long for a regex search. `replace_text` refusing a named file now answers with tool error text and no `results` row, using the refusals `read` and `edit` give: `BINARY_FILE`, `File too large for replace_text`, and the UTF-16 advice.
 - **More secret files are blocked by default.** The built-in list gains `.git/config`, `.yarnrc.yml`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate` and `*.tfstate.*`. Reads of these files that worked now refuse; `--allow` lifts them.
+- **`replace_text` matches case by default.** Renaming `getUser` to `fetchUser` also rewrote `GetUser` and `GETUSER`. `caseSensitive` now defaults to `true`, and passing `false` restores the old behaviour. `search_text` still ignores case by default, so a pattern it finds can match nothing here.
 
 ### Fixed
 
