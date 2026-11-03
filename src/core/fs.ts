@@ -995,14 +995,16 @@ export class GuardedFileSystem {
     // bytes. The staged copy renames into place, leaving the destination
     // untouched on any failure (and no temporary file behind).
     if (!callerFilter && (await fileOverFile(validSource, validDest))) {
-      return this.#copyIntoPlace(validSource, validDest);
+      return this.#copyIntoPlace(validSource, validDest, options);
     }
     // A directory merged into an existing one cannot stage as a whole (a
     // rename never merges), so it walks: only the entries that would lose old
     // bytes stage; everything else copies exactly as the plain cp did.
+    // recursive: false keeps the plain cp's refusal of a directory copy.
     if (
       !callerFilter &&
       options?.force !== false &&
+      options?.recursive !== false &&
       (await directoryIntoDirectory(validSource, validDest))
     ) {
       return this.#copyMerging(validSource, validDest, options);
@@ -1031,7 +1033,7 @@ export class GuardedFileSystem {
     await this.#relocationWalk('move', validSource, label, validDest);
     let copied = false;
     try {
-      await this.#copyIntoPlace(validSource, validDest);
+      await this.#copyIntoPlace(validSource, validDest, undefined);
       copied = true;
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
@@ -1061,9 +1063,14 @@ export class GuardedFileSystem {
    * beside `validDest`, then rename it into place. That rename stays on one
    * device, so it refuses what a plain rename would (a non-empty directory is
    * never merged into), and a partial copy never reaches the destination. The
-   * staging directory is removed either way.
+   * staging directory is removed either way. The caller's copy options ride
+   * along, over the defaults, so an overwrite honors them as a plain cp did.
    */
-  async #copyIntoPlace(validSource: string, validDest: string): Promise<void> {
+  async #copyIntoPlace(
+    validSource: string,
+    validDest: string,
+    options: Parameters<typeof fsCp>[2] | undefined,
+  ): Promise<void> {
     // Not validated on its own: it sits under the validated destination's
     // parent, and the denylist has ruled on the destination, which a rooted
     // allow or deny entry names exactly and the staged spelling would miss.
@@ -1077,6 +1084,7 @@ export class GuardedFileSystem {
         recursive: true,
         verbatimSymlinks: true,
         preserveTimestamps: true,
+        ...options,
       });
       // Raw, not this.rename: both ends are validated, and the guarded rename
       // would read a relative link that now resolves to the destination as a
@@ -1137,7 +1145,12 @@ export class GuardedFileSystem {
         // Nothing there yet: the plain cp creates it, as before.
       }
       if (dirent.isFile() && destStats?.isFile()) {
-        await this.#copyIntoPlace(srcChild, destChild);
+        // Revalidated here, not only in the pre-copy walk: an ancestor
+        // swapped for an out-of-root link while an earlier entry copied must
+        // not steer the staged rename outside the roots. The delegated
+        // branch's filter revalidates its entries the same way.
+        await this.#guard('relocate', destChild);
+        await this.#copyIntoPlace(srcChild, destChild, options);
       } else if (dirent.isDirectory() && destStats?.isDirectory()) {
         await this.#copyMergedDir(srcChild, destChild, options);
       } else {

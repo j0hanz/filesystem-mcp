@@ -286,6 +286,76 @@ describe('move body', () => {
     }
   });
 
+  it('a merged copy re-checks a staged entry whose destination ancestor was swapped for a link mid-copy', async (t) => {
+    const srcDir = join(root, 'merge_swap_src');
+    const dstDir = join(root, 'merge_swap_dst');
+    const srcInner = join(srcDir, 'inner');
+    const dstInner = join(dstDir, 'inner');
+    const victimInner = join(outside, 'merge_swap_victim');
+    await mkdir(srcInner, { recursive: true });
+    await mkdir(dstInner, { recursive: true });
+    await mkdir(victimInner, { recursive: true });
+    await writeFile(join(srcInner, 'trigger.txt'), 'trigger');
+    await writeFile(join(srcInner, 'target.txt'), 'new bytes');
+    await writeFile(join(dstInner, 'target.txt'), 'old bytes');
+    await writeFile(join(victimInner, 'target.txt'), 'victim bytes');
+    const samePath = (a: unknown, b: string) =>
+      typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
+    const realCp = fsPromises.cp;
+    const realReaddir = fsPromises.readdir;
+    const realRename = fsPromises.rename;
+    let swapped = false;
+    // Whatever the directory order is, trigger.txt is copied first: the link
+    // swap it performs must precede the staged copy of target.txt.
+    const reorder = async (path: unknown, options: unknown): Promise<unknown> => {
+      const entries = await (realReaddir as (...args: unknown[]) => Promise<unknown>)(
+        path,
+        options,
+      );
+      if (samePath(path, srcInner) && Array.isArray(entries)) {
+        (entries as { name: string }[]).sort(
+          (a, b) => Number(b.name === 'trigger.txt') - Number(a.name === 'trigger.txt'),
+        );
+      }
+      return entries;
+    };
+    t.mock.method(fsPromises, 'readdir', reorder as unknown as typeof fsPromises.readdir);
+    t.mock.method(
+      fsPromises,
+      'cp',
+      async (source: unknown, destination: string, options: unknown) => {
+        if (samePath(source, join(srcInner, 'trigger.txt'))) {
+          await (realCp as (...args: unknown[]) => Promise<void>)(source, destination, options);
+          if (!swapped) {
+            swapped = true;
+            await realRename(dstInner, `${dstInner}.gone`);
+            await fsPromises.symlink(victimInner, dstInner, 'junction');
+          }
+          return;
+        }
+        return (realCp as (...args: unknown[]) => Promise<void>)(source, destination, options);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      const result = await move({
+        moves: [{ source: srcDir, destination: dstDir }],
+        copy: true,
+        overwrite: true,
+      });
+      assert.strictEqual(result.isError, true, 'the swapped destination must be refused');
+      assert.strictEqual(await readFile(join(victimInner, 'target.txt'), 'utf-8'), 'victim bytes');
+      assert.strictEqual(
+        (await readdir(victimInner)).some((entry) => entry.includes('.tmp')),
+        false,
+        'no staging may be created outside the roots',
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('a merged copy matches the plain copy: new files, nested merges, links, timestamps', async (t) => {
     const srcDir = join(root, 'merge_ok_src');
     const dstDir = join(root, 'merge_ok_dst');
