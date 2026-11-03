@@ -13,8 +13,8 @@ In WSL, once, without root:
 bash scripts/demos/install-tools.sh
 ```
 
-Built with asciinema 3.2.1, agg 1.9.0, and gifsicle 1.96. Run `npm run build` at
-the repository root first.
+Built with asciinema 3.2.1, agg 1.9.0, and gifsicle 1.96. Recording needs Node 24+
+in WSL, through NVM or on `PATH`. Run `npm run build` at the repository root first.
 
 ## Record
 

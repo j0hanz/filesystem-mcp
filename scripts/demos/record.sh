@@ -8,8 +8,10 @@ slug="${1:?usage: record.sh <slug>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 export PATH="$HOME/.local/bin:$PATH"
-# shellcheck disable=SC1091
-source "$HOME/.nvm/nvm.sh" >/dev/null
+if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$HOME/.nvm/nvm.sh" >/dev/null
+fi
 
 source "$here/lib.sh"
 source "$here/scenarios/$slug.sh"
@@ -22,7 +24,31 @@ cast="$HOME/.cache/fs-demos/$slug.cast"
 out="$repo/assets/demos/$slug.gif"
 mkdir -p "$(dirname "$cast")" "$(dirname "$out")"
 
-tmux kill-session -t "$DEMO_SESSION" 2>/dev/null || true
+recorder=''
+
+# Every way out scans the cast, because abort paths are where error text reaches the screen.
+stop_recording() {
+  if [[ -n "$recorder" ]]; then
+    kill -9 "$recorder" 2>/dev/null || true
+    wait "$recorder" 2>/dev/null || true
+  fi
+  [[ -f "$cast" ]] || return 0
+  if ! node "$here/cast-lacks-key.mjs" "$cast"; then
+    rm -f "$cast"
+    echo 'the recording may hold the API key; cast deleted' >&2
+    return 1
+  fi
+}
+
+on_exit() {
+  local status=$?
+  stop_recording || status=1
+  demo_tmux kill-server 2>/dev/null || true
+  exit "$status"
+}
+trap on_exit EXIT
+
+demo_tmux kill-server 2>/dev/null || true
 rm -rf "$DEMO_DIR" "$cast"
 mkdir -p "$DEMO_DIR"
 fixture
@@ -30,9 +56,9 @@ fixture
 DEMO_IDLE="${DEMO_IDLE:-0.7}"
 DEMO_ROWS="${DEMO_ROWS:-28}"
 agent="$repo/examples/clients/gatekeeper/agent.ts"
-tmux -f /dev/null new-session -d -s "$DEMO_SESSION" -x 90 -y "$DEMO_ROWS" -c "$DEMO_DIR" \
+demo_tmux -f /dev/null new-session -d -s "$DEMO_SESSION" -x 90 -y "$DEMO_ROWS" -c "$DEMO_DIR" \
   "exec node '$agent' '$DEMO_DIR' --provider gemini --model gemini-flash-latest"
-tmux set-option -t "$DEMO_SESSION" status off >/dev/null
+demo_tmux set-option -t "$DEMO_SESSION" status off >/dev/null
 
 # Wait for the first prompt, so startup is not recorded.
 for _ in $(seq 1 120); do
@@ -45,27 +71,16 @@ done
 }
 
 asciinema rec --headless --quiet --window-size "90x$DEMO_ROWS" --idle-time-limit "$DEMO_IDLE" \
-  --output-format asciicast-v2 --command "tmux attach -t $DEMO_SESSION" "$cast" &
+  --output-format asciicast-v2 --command "tmux -L $DEMO_SOCKET attach -t $DEMO_SESSION" "$cast" &
 recorder=$!
 
-# Every way out scans the cast, because abort paths are where error text reaches the screen.
-stop_recording() {
-  kill -9 "$recorder" 2>/dev/null || true
-  wait "$recorder" 2>/dev/null || true
-  if [[ -f "$cast" ]] && grep -qaF -- "$GEMINI_API_KEY" "$cast"; then
-    rm -f "$cast"
-    echo 'the recording held the API key; cast deleted' >&2
-    exit 1
-  fi
-}
-trap 'stop_recording; tmux kill-session -t "$DEMO_SESSION" 2>/dev/null || true' EXIT
 sleep 1
 
 script
 
 # Stop while the session is still on screen, so no detach text is captured.
 sleep 1
-stop_recording
+stop_recording || exit 1
 
 check "$cast"
 

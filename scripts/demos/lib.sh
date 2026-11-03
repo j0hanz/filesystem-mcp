@@ -2,9 +2,15 @@
 
 DEMO_DIR=/tmp/demo/my-app
 DEMO_SESSION=demo
+DEMO_SOCKET=fs-demo
 DEMO_TURN_TIMEOUT=600 # polls of 0.5 s, so 300 s
 # How long a preview stays up before the driver answers it.
 DEMO_READ_PAUSE=2
+
+# A private server, so each run's panes get this run's environment.
+demo_tmux() {
+  tmux -L "$DEMO_SOCKET" "$@"
+}
 
 demo_file() {
   local path="$DEMO_DIR/$1"
@@ -14,17 +20,20 @@ demo_file() {
 
 # shortcut: one send-keys per character looks like typing; slow only for long prompts.
 _demo_type() {
-  local pane="$1" text="$2" i
+  local pane="$1" text="$2" i char
   for ((i = 0; i < ${#text}; i++)); do
-    tmux send-keys -t "$pane" -l "${text:i:1}"
+    char="${text:i:1}"
+    # A lone `;` is tmux's command separator, not text.
+    [[ "$char" == ';' ]] && char='\;'
+    demo_tmux send-keys -t "$pane" -l "$char"
     sleep 0.01
   done
   sleep 0.3
-  tmux send-keys -t "$pane" Enter
+  demo_tmux send-keys -t "$pane" Enter
 }
 
 _demo_last_line() {
-  tmux capture-pane -p -t "$DEMO_SESSION:0.0" | awk 'NF { line = $0 } END { print line }'
+  demo_tmux capture-pane -p -t "$DEMO_SESSION:0.0" | awk 'NF { line = $0 } END { print line }'
 }
 
 # Types the prompt, answers every gate, returns at the next `> ` prompt.
@@ -69,8 +78,8 @@ demo_turn() {
 
 # Runs a visible command in a second pane, as the person at the keyboard.
 demo_human() {
-  if (($(tmux list-panes -t "$DEMO_SESSION:0" | wc -l) == 1)); then
-    tmux split-window -d -v -l 5 -t "$DEMO_SESSION:0.0" -c "$DEMO_DIR" \
+  if (($(demo_tmux list-panes -t "$DEMO_SESSION:0" | wc -l) == 1)); then
+    demo_tmux split-window -d -v -l 5 -t "$DEMO_SESSION:0.0" -c "$DEMO_DIR" \
       "PS1='you\$ ' bash --norc --noprofile"
     sleep 0.5
   fi
