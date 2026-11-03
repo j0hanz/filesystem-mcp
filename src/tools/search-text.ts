@@ -262,6 +262,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
               incomplete: Boolean(
                 structured.stoppedReason ??
                 structured.skippedTooLarge ??
+                structured.skippedBinary ??
                 structured.skippedInaccessible,
               ),
             }),
@@ -280,6 +281,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         nextArgs: args,
         stoppedReason: structured.stoppedReason,
         skippedTooLarge: structured.skippedTooLarge,
+        skippedBinary: structured.skippedBinary,
         skippedInaccessible: structured.skippedInaccessible,
       });
     return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };

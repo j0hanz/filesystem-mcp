@@ -13,7 +13,12 @@ import {
   settle,
 } from '../core/diff-budget.ts';
 import { ErrorCode, FsError, isSkippable, Problem } from '../core/errors.ts';
-import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
+import {
+  skippedLine,
+  stoppedEarlyLine,
+  truncateProgressPattern,
+  zeroMatchHint,
+} from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import {
   createReplacementMatcher,
@@ -537,21 +542,14 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       `replace_text: '${truncatedPattern}'${dryLabel}` +
       ` \u00b7 ${String(structured.totalMatches)} match(es)` +
       ` in ${String(structured.summary.succeeded)} file(s)` +
-      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '') +
-      (structured.skippedBinary
-        ? ` \u00b7 ${String(structured.skippedBinary)} binary skipped`
-        : '') +
-      (structured.skippedTooLarge
-        ? ` \u00b7 ${String(structured.skippedTooLarge)} too large skipped`
-        : '') +
-      (structured.skippedInaccessible
-        ? ` \u00b7 ${String(structured.skippedInaccessible)} inaccessible skipped`
-        : '');
+      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '');
     // The structured half ships under `_meta`, which clients do not show the
     // model, so the stop state and the diff preview must ride the text.
     const lines = [summaryText];
     const stop = structured.stoppedReason;
     if (stop !== undefined) lines.push(stoppedEarlyLine(stop));
+    const skipped = skippedLine(structured);
+    if (skipped) lines.push(skipped);
     if (stop === 'timeout') {
       // A live run writes as it scans, so a timeout leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name

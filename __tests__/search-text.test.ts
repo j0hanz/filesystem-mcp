@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
@@ -530,12 +530,38 @@ describe('search_text body', () => {
     }
   });
 
+  it('reports a binary skip and gives no pattern hint when every file was skipped', async () => {
+    const dir = join(root, 'only_binary');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    const { text } = await search({ path: dir, searchPattern: 'a|b' });
+    assert.strictEqual(
+      text,
+      "No matches for 'a|b'\n\n// skipped 1 binary file; results may be incomplete.",
+    );
+  });
+
+  it('keeps the skip line on a later page', async () => {
+    const dir = join(root, 'paged_binary');
+    await writeTestFile(dir, 'a.txt', 'PAGED\nPAGED\nPAGED\n');
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0]));
+    const args = { path: dir, searchPattern: 'PAGED', maxResults: 1 };
+    const first = await search(args);
+    const cursor = first.structured.nextCursor;
+    assert.ok(cursor);
+    const second = await search({ ...args, cursor });
+    assert.match(second.text ?? '', /\/\/ skipped 1 binary file; results may be incomplete\./);
+  });
+
   it('skips binary files and reports the count', async () => {
     const dir = join(root, 'search_bin');
     await writeTestFile(dir, 'text.txt', 'BINNEEDLE\n');
     await writeFile(join(dir, 'blob.bin'), Buffer.from([0x00, ...Buffer.from('BINNEEDLE'), 0x00]));
     const { structured, text } = await search({ path: dir, searchPattern: 'BINNEEDLE' });
-    assert.strictEqual(text, 'search_bin/text.txt:1: BINNEEDLE');
+    assert.strictEqual(
+      text,
+      'search_bin/text.txt:1: BINNEEDLE\n\n// skipped 1 binary file; results may be incomplete.',
+    );
     assert.strictEqual(structured.filesScanned, 2);
     assert.strictEqual(structured.skippedBinary, 1);
   });

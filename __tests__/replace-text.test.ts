@@ -290,7 +290,7 @@ describe('replace_text body', () => {
         assert.notStrictEqual(swept.isError, true);
         assert.strictEqual(swept.structured.skippedTooLarge, 2);
         assert.strictEqual(swept.structured.summary.failed, 0);
-        assert.match(swept.text ?? '', /2 too large skipped/);
+        assert.match(swept.text ?? '', /\/\/ skipped 2 files over the text size limit/);
         assert.ok((await readFile(a, 'utf-8')).startsWith('FIND\n'));
         assert.ok((await readFile(b, 'utf-8')).startsWith('FIND\n'));
       });
@@ -455,7 +455,7 @@ describe('replace_text body', () => {
       assert.notStrictEqual(swept.isError, true);
       assert.strictEqual(swept.structured.summary.failed, 0);
       assert.strictEqual(swept.structured.skippedBinary, 2);
-      assert.match(swept.text ?? '', /2 binary skipped/);
+      assert.match(swept.text ?? '', /\/\/ skipped 2 binary files/);
       assert.strictEqual(await readFile(text, 'utf-8'), 'bar\n');
       assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
       assert.deepStrictEqual(await readFile(join(dir, 'latin1.txt')), latin1);
@@ -497,7 +497,7 @@ describe('replace_text body', () => {
         });
         assert.strictEqual(result.structured.skippedInaccessible, 1);
         assert.strictEqual(result.structured.summary.failed, 0);
-        assert.match(result.text ?? '', /1 inaccessible skipped/u);
+        assert.match(result.text ?? '', /1 inaccessible entry/u);
         assert.doesNotMatch(result.text ?? '', /no files were searched/u);
       } finally {
         await chmod(locked, 0o755);
@@ -1121,7 +1121,7 @@ describe('replace_text body', () => {
     await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
     assert.strictEqual(
       await text({ searchPattern: 'a|b' }),
-      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s) · 1 binary skipped",
+      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s)\n// skipped 1 binary file; results may be incomplete.",
     );
   });
 
