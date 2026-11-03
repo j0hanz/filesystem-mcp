@@ -9,7 +9,7 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { MIB } from './util.ts';
+import { escapeRegExp, MIB } from './util.ts';
 
 export type Regex = RE2;
 /** Occurrence-counting bound, so one pathological line cannot spin forever. */
@@ -286,7 +286,7 @@ export function planMatch(
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
 ): MatchPlan {
   const literal = flags.isRegex ? undefined : createLiteralMatcher(needle, flags.caseSensitive);
-  const pattern = flags.isRegex ? needle : RegExp.escape(needle);
+  const pattern = flags.isRegex ? needle : escapeRegExp(needle);
   // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
   const source = flags.wholeWord ? `([^${WORD_CLASS}])(?:${pattern})([^${WORD_CLASS}]|$)` : pattern;
   return { literal, source };
