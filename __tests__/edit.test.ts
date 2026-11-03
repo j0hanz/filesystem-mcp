@@ -929,6 +929,34 @@ describe('edit whitespace walk stays responsive', () => {
     });
   }
 
+  it('many whitespace-flexible edits keep the loop responsive and cancel promptly', async () => {
+    bytes = 'x'.repeat(10_400_000);
+    await writeFile(file, bytes);
+    const edits = Array.from({ length: 100 }, () => ({
+      oldText: `${'x'.repeat(14)}y`,
+      newText: '',
+    }));
+    let last = Date.now();
+    let longest = 0;
+    const timer = setInterval(() => {
+      longest = Math.max(longest, Date.now() - last);
+      last = Date.now();
+    }, 10);
+    const t0 = Date.now();
+    try {
+      const result = await run(
+        { path: file, edits, ignoreWhitespace: true, dryRun: true },
+        cancelAfter(500),
+      );
+      assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+    } finally {
+      clearInterval(timer);
+    }
+    assert.ok(longest < 1000, `longest gap ${String(longest)} ms`);
+    assert.ok(Date.now() - t0 < 2000, `took ${String(Date.now() - t0)} ms`);
+    await unchanged();
+  });
+
   it('findFrom equals indexOf', () => {
     const cases: [string, string, number][] = [
       ['abcabcabc', 'abc', 0],

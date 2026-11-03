@@ -21,7 +21,7 @@ import { MIB, toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
-/** One candidate's walk is bounded by oldText: about 9 ms at this size. */
+/** A candidate's walk sweeps content through its gaps, so it is not bounded by oldText; walks yield on a time slice instead. */
 const MAX_OLD_TEXT_CHARS = MIB;
 
 const EditSpecSchema = z.strictObject({
@@ -338,7 +338,10 @@ export function* findFrom(
   return -1;
 }
 
-/** flexMatches, plus an `undefined` each time the walk has run for WALK_SLICE_MS. */
+/**
+ * flexMatches, plus an `undefined` each time the walk has run for WALK_SLICE_MS.
+ * Gaps sweep the content, so a candidate's walk is not bounded by oldText.
+ */
 function* flexWalk(
   content: string,
   oldText: string,
@@ -528,6 +531,7 @@ async function applyEdits(
   const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
+    if (await tick()) signal?.throwIfAborted();
     // The file is decoded UTF-8, so its pairs are whole; a lone half in oldText
     // can only match half of one and would leave the other half in the file.
     if (!edit.oldText.isWellFormed()) {
