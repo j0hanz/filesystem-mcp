@@ -27,6 +27,7 @@ rm -rf "$DEMO_DIR" "$cast"
 mkdir -p "$DEMO_DIR"
 fixture
 
+DEMO_IDLE="${DEMO_IDLE:-0.7}"
 agent="$repo/examples/clients/gatekeeper/agent.ts"
 tmux -f /dev/null new-session -d -s "$DEMO_SESSION" -x 90 -y 28 -c "$DEMO_DIR" \
   "exec node '$agent' '$DEMO_DIR' --provider gemini --model gemini-flash-latest"
@@ -42,7 +43,7 @@ done
   exit 3
 }
 
-asciinema rec --headless --quiet --window-size 90x28 --idle-time-limit 0.7 \
+asciinema rec --headless --quiet --window-size 90x28 --idle-time-limit "$DEMO_IDLE" \
   --output-format asciicast-v2 --command "tmux attach -t $DEMO_SESSION" "$cast" &
 recorder=$!
 trap 'kill -9 "$recorder" 2>/dev/null || true; tmux kill-session -t "$DEMO_SESSION" 2>/dev/null || true' EXIT
@@ -63,7 +64,7 @@ fi
 
 check "$cast"
 
-agg --idle-time-limit 0.7 --last-frame-duration 3 --font-size 16 --theme asciinema "$cast" "$out.tmp"
+agg --idle-time-limit "$DEMO_IDLE" --last-frame-duration 3 --font-size 16 --theme asciinema "$cast" "$out.tmp"
 gifsicle -O3 --lossy=30 "$out.tmp" -o "$out"
 rm -f "$out.tmp"
 

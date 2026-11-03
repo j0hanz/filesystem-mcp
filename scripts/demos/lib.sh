@@ -2,7 +2,7 @@
 
 DEMO_DIR=/tmp/demo/my-app
 DEMO_SESSION=demo
-DEMO_TURN_TIMEOUT=120
+DEMO_TURN_TIMEOUT=240 # polls of 0.5 s, so 120 s
 # How long a preview stays up before the driver answers it.
 DEMO_READ_PAUSE=2
 
@@ -58,7 +58,7 @@ demo_turn() {
     sleep 0.5
     waited=$((waited + 1))
   done
-  echo "stalled: no prompt after ${DEMO_TURN_TIMEOUT} polls (not a take)" >&2
+  echo "stalled: no prompt after 120 s (not a take)" >&2
   exit 3
 }
 
