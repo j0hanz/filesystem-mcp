@@ -20,7 +20,7 @@ import { type FileType, type GuardedFileSystem, identityOf, sameIdentity } from 
 import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, summarize } from './batch.ts';
+import { type BatchResult, failureLines, isTotalFailure, summarize } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -400,6 +400,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
       return r.value.deleted ? label : `${label} SKIPPED`;
     });
     const ratio = failed > 0 ? ` (${String(total - failed)}/${String(total)} ok)` : '';
-    return { structured, text: `delete: ${joinRoster(tokens)}${ratio}`, isError };
+    const text = [`delete: ${joinRoster(tokens)}${ratio}`, ...failureLines(structured.results)];
+    return { structured, text: text.join('\n'), isError };
   },
 });

@@ -64,6 +64,19 @@ describe('move body', () => {
   const move = async (args: MoveArgs, options: Partial<ToolBodyOptions> = {}): Promise<MoveRun> =>
     runToolBodyResult(MOVE, args, { fs, ...options });
 
+  it('names the failing pair, code and reason in its text', async () => {
+    const source = join(root, 'move_reason_missing.txt');
+    const destination = join(root, 'move_reason_dest.txt');
+    const result = await move({ moves: [{ source, destination }] });
+
+    const failure = result.structured.failures?.[0];
+    assert.ok(failure);
+    assert.strictEqual(
+      result.text,
+      `move: nothing · 1 failed\n// ${source} → ${destination}: ${failure.error.code} ${failure.error.message}`,
+    );
+  });
+
   it('is a total failure when every requested copy was denied', async () => {
     const source = await writeTestFile(root, 'movable.txt', 'body');
     const result = await move({

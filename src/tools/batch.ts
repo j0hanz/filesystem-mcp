@@ -3,6 +3,8 @@ import { type ErrorCode, type PerPathResult, Problem } from '../core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
 
+const MAX_FAILURE_LINES = 3;
+
 export interface BatchResult<T> {
   results: PerPathResult<T>[];
   summary: { total: number; succeeded: number; failed: number };
@@ -51,6 +53,20 @@ export function summarize(
 ): BatchResult<unknown>['summary'] {
   const failed = results.filter((r) => 'error' in r).length;
   return { total: results.length, succeeded: results.length - failed, failed };
+}
+
+/**
+ * The first failures as text lines: the structured half ships under `_meta`,
+ * which clients do not show the model, so the reasons must ride the text.
+ */
+export function failureLines(failures: readonly PerPathResult<unknown>[]): string[] {
+  const lines: string[] = [];
+  for (const f of failures) {
+    if (!('error' in f)) continue;
+    lines.push(`// ${f.path}: ${f.error.code} ${f.error.message}`);
+    if (lines.length === MAX_FAILURE_LINES) break;
+  }
+  return lines;
 }
 
 /**
