@@ -43,8 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # No credentials on disk: install, build, test and pack run third-party code.
-          # Only `Commit, tag & push` reads the deploy key.
+          # No credentials on disk during install, build, test and pack; only `Commit, tag & push`
+          # receives the key. Not a guarantee: earlier steps share this job, so their code can
+          # still reach the key through a planted git hook or $GITHUB_PATH / $GITHUB_ENV.
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
