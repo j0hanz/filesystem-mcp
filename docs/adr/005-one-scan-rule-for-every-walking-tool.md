@@ -96,3 +96,15 @@ The rules every tool now shares:
   `delete`'s child check are not Scans. Move protection and undo's checks
   must see every entry and fail closed (ADR-001 amendment). The others read
   one level for a different question.
+
+## Addendum, 2026-11-03: the Scan counts content skips
+
+A callback still does the guarded read, so `replace_text` keeps its write
+lock, and returns a skip value that the Scan counts. `filesScanned` is every
+file ruled on, in every tool. A skip on a named file fails the call with
+`readNamedText`'s refusal.
+
+Stop reasons the Scan cannot see stay in the tools: a file cut mid-read in
+`search_text`, and a cap reached inside a file in `replace_text`. They are one
+or two lines on facts only that tool has, and they differ on purpose. A stop
+hook on the Scan would be about as wide as the code it hides.

@@ -402,8 +402,10 @@ ends with `// scan stopped early: ...` and sets `_meta.stoppedReason`
 `maxFiles` are replace_text's caps). The totals are then a floor, not a count.
 Narrow the path or the pattern, or for `replace_text` raise `maxMatches` or
 `maxFiles`. The [limits table](configuration.md#limits) has the numbers. A scan
-does not follow a symlinked file, and `_meta.skippedInaccessible` counts the
-entries and directories it could not read.
+does not follow a symlinked file. `_meta.skippedInaccessible` counts the entries
+and directories it could not read, and `_meta.skippedBinary` and
+`_meta.skippedTooLarge` count the files it would not read as text. A file you
+name yourself is refused instead of skipped.
 
 ## Progress, cancellation, and timeouts
 
