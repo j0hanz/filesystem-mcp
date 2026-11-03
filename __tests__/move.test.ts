@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
-import {
+import fsPromises, {
   access,
+  chmod,
   lstat,
   mkdir,
   readdir,
   readFile,
   readlink,
   rename,
+  stat,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -138,6 +142,86 @@ describe('move body', () => {
     );
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(await readFile(dst, 'utf-8'), 'new source');
+  });
+
+  it('a failed forced file copy over an existing file keeps the old bytes and leaves no temp file', async (t) => {
+    const src = await writeTestFile(root, 'copy_fail_src.txt', 'new bytes');
+    const dst = await writeTestFile(root, 'copy_fail_dst.txt', 'old bytes');
+    // Stand in for an unreadable source: a forced cp unlinks the destination
+    // first, then the copy of the source fails.
+    t.mock.method(fsPromises, 'cp', async (_source: unknown, destination: string) => {
+      await fsPromises.unlink(destination);
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    });
+    syncBuiltinESMExports();
+    try {
+      const result = await move({
+        moves: [{ source: src, destination: dst }],
+        copy: true,
+        overwrite: true,
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(result.structured.moves.length, 0);
+      assert.strictEqual(result.structured.failures?.length, 1);
+      assert.strictEqual(await readFile(dst, 'utf-8'), 'old bytes');
+      assert.strictEqual(await readFile(src, 'utf-8'), 'new bytes');
+      assert.strictEqual(
+        (await readdir(root)).some((entry) => entry.includes('.tmp')),
+        false,
+        'the staged copy must be cleaned up',
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a forced file copy replaces the destination with the source bytes, mode and timestamps', async () => {
+    const src = await writeTestFile(root, 'copy_place_src.txt', 'placed bytes');
+    const dst = await writeTestFile(root, 'copy_place_dst.txt', 'old bytes');
+    await chmod(src, 0o604);
+    const mtime = new Date('2001-02-03T04:05:06.000Z');
+    await utimes(src, mtime, mtime);
+
+    const result = await move({
+      moves: [{ source: src, destination: dst }],
+      copy: true,
+      overwrite: true,
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(dst, 'utf-8'), 'placed bytes');
+    const placed = await stat(dst);
+    assert.strictEqual(placed.mtimeMs, mtime.getTime());
+    if (process.platform !== 'win32') {
+      assert.strictEqual(placed.mode & 0o7777, 0o604);
+    }
+    assert.strictEqual(
+      (await readdir(root)).some((entry) => entry.includes('.tmp')),
+      false,
+      'the staging directory must be gone',
+    );
+  });
+
+  it('copies a symlink over an existing file as before: the link reads through to its target', async (t) => {
+    const target = await writeTestFile(root, 'copy_link_target.txt', 'target bytes');
+    const link = join(root, 'copy_link');
+    if (!(await trySymlink(target, link, () => t.skip('symlink creation not permitted'), 'file')))
+      return;
+    const dst = await writeTestFile(root, 'copy_link_dst.txt', 'old bytes');
+
+    const result = await move({
+      moves: [{ source: link, destination: dst }],
+      copy: true,
+      overwrite: true,
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual((await lstat(dst)).isSymbolicLink(), false);
+    assert.strictEqual(await readFile(dst, 'utf-8'), 'target bytes');
+    assert.strictEqual(await readFile(target, 'utf-8'), 'target bytes');
+    assert.strictEqual(
+      (await readdir(root)).some((entry) => entry.includes('.tmp')),
+      false,
+    );
   });
 
   it('copies a single file and leaves the source in place', async () => {
