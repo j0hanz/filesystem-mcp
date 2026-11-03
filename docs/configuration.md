@@ -72,6 +72,22 @@ Symlinks are resolved first, so a link that points at one of these folders is
 refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
 given, because you named them on purpose.
 
+On Windows, a client's workspace folders and approval requests also never add
+network shares and device paths (`\\server\share`, `\\?\...`, `\\.\...`). The
+server refuses these with `ACCESS_DENIED` without touching the path, so it never
+connects to the named host and never prompts. A share you configure as a root,
+or a working directory on a share that you admit with `--allow-cwd` or
+`--walk-cwd`, keeps working, but folders on it outside that root are refused too.
+
+Resolving a local link does touch its target. A link inside an allowed root or a
+granted folder, or a local link outside any root, is resolved during the grant
+check, before any prompt, so one that points at a share can still reach that
+host. The grant is refused, the lookup is not. A mapped network drive that
+resolves to a share counts as a share, so it is never granted and must be
+configured as a root. The grant check reads such a path before it refuses it,
+which contacts the server you mapped that drive to. WSL paths such as
+`\\wsl.localhost\Ubuntu\...` count as shares too.
+
 ## Secret files
 
 By default, the server blocks these names inside every allowed folder, for
@@ -228,6 +244,8 @@ These variables are for HTTP only:
 | Total text of one batched `read`                                | 512 KiB; files past the budget are reported as skipped                             |
 | Files per `create`, `move` call                                 | 100                                                                                |
 | Paths per `read`, `stat`, `delete` call                         | 1000                                                                               |
+| `diff` of one `patch`                                           | 1 MiB (1,048,576 characters)                                                       |
+| `patch` work                                                    | File lines x diff lines up to 10,000,000; patch fewer lines at once or use `edit`  |
 | Files per `edit` call                                           | 5, with up to 100 edits per file                                                   |
 | `find_files` / `search_text` results                            | Up to 10,000 per call, paged                                                       |
 | `list` entries                                                  | 1000 per page by default, up to 20,000                                             |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage the built server, production node_modules, manifest and icon, boot the
 # staged tree once with --version, then pack filesystem-mcp.mcpb at the repo
-# root. Needs dev dependencies installed (tsc).
+# root. Needs dev dependencies installed (tsc, the MCPB packer).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,4 +19,10 @@ cp assets/logo.png "$stage/icon.png"
 # dependency that only resolves through devDependencies fails here, not for users.
 node "$stage/dist/index.js" --version
 
-npx -y @anthropic-ai/mcpb@2.1.2 pack "$stage" "$root/filesystem-mcp.mcpb"
+# The packer stays a dev dependency: a user's bundle must not carry it.
+if [ -e "$stage/node_modules/@anthropic-ai/mcpb" ]; then
+  echo "pack-mcpb: the MCPB packer leaked into the production tree" >&2
+  exit 1
+fi
+
+"$root/node_modules/.bin/mcpb" pack "$stage" "$root/filesystem-mcp.mcpb"

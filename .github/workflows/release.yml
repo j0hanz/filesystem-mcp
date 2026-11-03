@@ -43,9 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Push with the deploy key: the main-branch ruleset lets only this
-          # key (and the repository admin) update main without a PR (plan 064).
-          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+          # No credentials on disk during install, build, test and pack; only `Commit, tag & push`
+          # receives the key. Not a guarantee: earlier steps share this job, so their code can
+          # still reach the key through a planted git hook or $GITHUB_PATH / $GITHUB_ENV.
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -167,14 +168,23 @@ jobs:
       - name: Release-only build paths (Docker, MCPB)
         run: bash scripts/check-release-paths.sh
 
+      # Push with the deploy key: the main-branch ruleset lets only this
+      # key (and the repository admin) update main without a PR (plan 064).
       - name: Commit, tag & push
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
         run: |
           git add package.json package-lock.json server.json mcpb/manifest.json .codex-plugin/plugin.json .cursor-plugin/plugin.json
           git commit -m "release: v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
-          git push --atomic origin main --follow-tags
+          key_dir="$(mktemp -d)"
+          trap 'rm -rf "$key_dir"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$key_dir/id")
+          # From https://api.github.com/meta; SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$key_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key_dir/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$key_dir/known_hosts -o StrictHostKeyChecking=yes"
+          git push --atomic "git@github.com:$GITHUB_REPOSITORY.git" main --follow-tags
 
       - name: Create GitHub release
         env:

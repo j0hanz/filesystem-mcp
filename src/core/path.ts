@@ -25,6 +25,7 @@ import {
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
+  isUncOrDevicePath,
   isUnresolvableDrivePath,
   isWindowsDrivePath,
   isWindowsDriveRelativePath,
@@ -408,6 +409,13 @@ export class PathGuard {
       // A server bug, not an entry the scan can skip.
       if (!this.allowedDirectoriesState) throw error;
       if (isFsError(error) && error.code === ErrorCode.ACCESS_DENIED) {
+        const normalized = normalizePath(entryPath);
+        if (
+          isUncOrDevicePath(normalized) &&
+          !isPathWithinDirectories(normalized, this.allowedDirectoriesState)
+        ) {
+          return 'inaccessible';
+        }
         // The denylist and the out-of-root check share this code; the real path tells them apart.
         try {
           return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
@@ -436,10 +444,12 @@ export class PathGuard {
    * into the allowed set, so a lexical-only check let a symlink or junction
    * aliasing $HOME/C:\Windows in under an innocuous name — and the confirmation
    * prompt showed the alias, not the target. A target that cannot be resolved
-   * is judged lexically; it does not exist to escape into.
+   * is judged lexically; it does not exist to escape into. A UNC or device path
+   * is refused before any filesystem call, which could reach the named host.
    */
   private async isUnsafeGrantTarget(targetDir: string): Promise<boolean> {
     const normalized = normalizePath(targetDir);
+    if (isUncOrDevicePath(normalized)) return true;
     if (isUnsafeCwdPath(normalized)) return true;
     let resolved: string;
     try {
@@ -447,7 +457,10 @@ export class PathGuard {
     } catch {
       return false;
     }
-    return !isSamePath(resolved, normalized) && isUnsafeCwdPath(resolved);
+    return (
+      !isSamePath(resolved, normalized) &&
+      (isUnsafeCwdPath(resolved) || isUncOrDevicePath(resolved))
+    );
   }
 
   /** Walk up from a blocked path to the closest existing ancestor directory. */
@@ -501,6 +514,11 @@ export class PathGuard {
         continue;
       }
       if (isPathWithinDirectories(normalized, allowedDirs)) {
+        continue;
+      }
+      // The requested path itself, not only its grant directory: a file link's
+      // grant directory is its local parent, which says nothing about its target.
+      if (await this.isUnsafeGrantTarget(normalized)) {
         continue;
       }
       const targetDir = normalizePath(await this.resolveGrantTargetDir(normalized));
@@ -661,7 +679,12 @@ export class PathGuard {
       // already been accepted and added to the allowed set. A path still out of
       // root here was either declined, ungrantable (outside FS_ROOT_BOUNDARY), or
       // never pre-checked — fail closed.
-      this.throwAccessDenied(requestedPath, accessDeniedHint);
+      this.throwAccessDenied(
+        requestedPath,
+        isUncOrDevicePath(normalizedRequested)
+          ? `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`
+          : accessDeniedHint,
+      );
     }
     if (!allowSensitive) {
       this.assertNotSensitiveFile(requestedPath, requestedPath);
