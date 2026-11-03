@@ -202,10 +202,10 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   // file has, for matching or for context.
   const lineCount =
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-  // A single line past RE2_MAX_INPUT_BYTES aborts the wasm module and leaks its heap
-  // the process; report the file tooLarge instead. Only a buffer over the bound
-  // can hold such a line, so ordinary files skip the per-line measure, and a
-  // literal match never hands a line to RE2.
+  // A single line past RE2_MAX_INPUT_BYTES aborts the wasm module and leaks its
+  // heap; report the file tooLarge instead. Only decoded text over the bound can
+  // hold such a line, so ordinary files skip the per-line measure, and a literal
+  // match never hands a line to RE2.
   const checkLineSize = !literal && decodedBytes > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
   const yielder = createYielder(scanCtx.signal);
