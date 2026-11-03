@@ -123,7 +123,9 @@ async function findMatchesInDirectory(
       for await (const entry of dir) {
         if (prefix !== '' && !entry.name.toLowerCase().startsWith(lowerPrefix)) continue;
         const fullPath = join(searchDir, entry.name);
-        if (pathGuard.isSensitive(fullPath)) continue;
+        if (pathGuard.isSensitive(fullPath) || pathGuard.isSensitive(join(listable, entry.name))) {
+          continue;
+        }
         matches.push(entry.isDirectory() ? `${fullPath}${sep}` : fullPath);
       }
     } finally {

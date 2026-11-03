@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Declining a folder request no longer loops.** A call that declined a folder outside the roots and also needed another confirmation, such as an overwrite, asked both questions again for 10 rounds and then failed with nothing written. It now asks each once, writes what was approved, and fails the declined path with `ACCESS_DENIED`.
 - **Grants refuse more unsafe folders.** `~/.config`, which holds `~/.config/gcloud`, could be offered, and so could `~/.azure` and `~/.config/gh`. On Linux, so could `/proc`, `/sys`, `/dev` and `/boot`, and `/proc/self/environ` holds the server's API key. These are now refused, and other folders under `~/.config` stay grantable.
 - **A root can no longer be removed through its parent.** Deleting an allowed root was refused, but deleting or moving a folder that contained one was not. With roots `/w` and `/w/sub/proj`, deleting `/w/sub` removed the second root. It is now refused, as it already was for a folder that contains a read-only root.
+- **Path completion hides names denied under their real path.** Completion checked the deny list only under the spelling the client typed, so a root reached through a link could show names that `list` hides. File contents were not exposed.
 
 ## [2.15.0] - 2026-11-02
 
