@@ -252,6 +252,26 @@ describe('PathGuard grant round-trip', () => {
     },
   );
 
+  it('a folder holding a home credential folder is unsafe, its siblings are not', () => {
+    const home = homedir();
+    for (const sub of ['.config', '.config/gh', '.config/gcloud', '.azure', '.azure/x']) {
+      assert.ok(isUnsafeCwdPath(join(home, sub)), `${sub} must be unsafe`);
+    }
+    for (const sub of ['projects', '.config/myapp']) {
+      assert.strictEqual(isUnsafeCwdPath(join(home, sub)), false, `${sub} must stay grantable`);
+    }
+  });
+
+  it(
+    'Linux virtual and boot folders are unsafe',
+    { skip: process.platform === 'win32' && 'POSIX paths' },
+    () => {
+      for (const dir of ['/proc', '/proc/self', '/sys', '/dev', '/dev/shm', '/boot']) {
+        assert.ok(isUnsafeCwdPath(dir), `${dir} must be unsafe`);
+      }
+    },
+  );
+
   it('TC-PG-013: precheckAccess never offers an ancestor of home, a subtree of a system dir, or a secret subtree of home', async () => {
     delete process.env['FS_ROOT_BOUNDARY'];
     const guard = new PathGuard({ cliAllowedDirs: [root] });

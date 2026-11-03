@@ -61,7 +61,7 @@ export async function resolveConfiguredDirs(
 const UNSAFE_SYSTEM_DIRS = withRealSpellings(
   IS_WINDOWS
     ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
-    : ['/usr', '/etc', '/bin', '/sbin', '/System'],
+    : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'],
 );
 
 function withRealSpellings(dirs: readonly string[]): string[] {
@@ -79,7 +79,16 @@ function withRealSpellings(dirs: readonly string[]): string[] {
 
 // Subtrees of home that hold credentials. Home itself and its other
 // subdirectories stay grantable: projects live there.
-const UNSAFE_HOME_SUBDIRS = ['.ssh', '.aws', '.gnupg', '.kube', '.docker', '.config/gcloud'];
+const UNSAFE_HOME_SUBDIRS = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.kube',
+  '.docker',
+  '.config/gcloud',
+  '.config/gh',
+  '.azure',
+];
 
 export function isUnsafeCwdPath(normalizedCwd: string): boolean {
   const candidate = normalizePath(normalizedCwd);
@@ -96,7 +105,10 @@ export function isUnsafeCwdPath(normalizedCwd: string): boolean {
 
   // 2. Credential subtrees of home.
   for (const sub of UNSAFE_HOME_SUBDIRS) {
-    if (isPathInsideDirectory(normalizePath(join(home, sub)), candidate)) return true;
+    const secrets = normalizePath(join(home, sub));
+    if (isPathInsideDirectory(secrets, candidate) || isPathInsideDirectory(candidate, secrets)) {
+      return true;
+    }
   }
   return false;
 }
