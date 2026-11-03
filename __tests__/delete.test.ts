@@ -157,6 +157,55 @@ describe('delete body', () => {
     await assert.rejects(access(dir));
   });
 
+  /** Deletes `dir` recursively, answering the prompt, and returns what it said. */
+  const promptFor = async (dir: string, choice: 'delete' | 'skip'): Promise<string> => {
+    let message = '';
+    await del(
+      { paths: [dir], recursive: true },
+      {
+        confirm: (prompt) => {
+          message = prompt.message;
+          return choose(choice)();
+        },
+      },
+    );
+    return message;
+  };
+
+  it('warns in the confirmation when the folder holds a protected file', async () => {
+    const dir = join(root, 'holds_env');
+    await mkdir(join(dir, 'deep', 'er'), { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'x');
+    await writeFile(join(dir, 'deep', 'er', '.env'), 'X=1');
+
+    const message = await promptFor(dir, 'delete');
+
+    assert.match(message, /protected/);
+    assert.match(message, /cannot be undone/);
+    await assert.rejects(access(dir));
+  });
+
+  it('still honors skip after warning about a protected file', async () => {
+    const dir = join(root, 'holds_env_skip');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, '.env'), 'X=1');
+
+    const message = await promptFor(dir, 'skip');
+
+    assert.match(message, /protected/);
+    await access(join(dir, '.env'));
+  });
+
+  it('asks the plain question when the folder holds no protected file', async () => {
+    const dir = await nonEmptyDir('holds_nothing');
+
+    const message = await promptFor(dir, 'delete');
+
+    // A regex, because the prompt names the normalized path, whose drive letter
+    // can differ in case from `dir` on Windows.
+    assert.match(message, /^Delete ".*holds_nothing" and all its contents\?$/);
+  });
+
   it('reports a declined delete as CANCELLED and keeps the directory', async () => {
     const dir = await nonEmptyDir('del_declined_dir');
     const result = await del(

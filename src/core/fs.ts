@@ -1176,6 +1176,41 @@ export class GuardedFileSystem {
   }
 
   /**
+   * True when a directory a delete would remove holds an entry the sensitive-file
+   * policy protects, under its validated or requested spelling. Listings hide
+   * such entries and a Capture refuses them, so the Confirmation must say so.
+   * Links are not followed. A directory that cannot be read is passed over:
+   * a recursive delete cannot empty it either, so nothing in it is lost.
+   */
+  async holdsProtectedEntry(
+    validPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const pending = [''];
+    for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
+      signal?.throwIfAborted();
+      let dirents: Dirent[];
+      try {
+        dirents = await fsReaddir(join(validPath, rel), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const dirent of dirents) {
+        const name = join(rel, dirent.name);
+        if (
+          this.pathGuard.isSensitive(join(validPath, name)) ||
+          this.pathGuard.isSensitive(join(requestedPath, name))
+        ) {
+          return true;
+        }
+        if (dirent.isDirectory()) pending.push(name);
+      }
+    }
+    return false;
+  }
+
+  /**
    * Direct children of a directory, leaving out entries the guard treats as
    * sensitive so the count never reveals what listings hide. Hidden and
    * ignored entries count: this answers "is it empty?", not "what would list show?".
