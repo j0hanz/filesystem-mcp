@@ -117,6 +117,26 @@ describe('Real HTTP Server integration', () => {
     });
   }
 
+  it('answers 415 for an unsupported charset', async () => {
+    const response = await fetch(base, {
+      method: 'POST',
+      headers: {
+        authorization: ['Bearer', TEST_API_KEY].join(' '),
+        'content-type': 'application/json; charset=latin1',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.strictEqual(response.status, 415);
+    assert.deepStrictEqual(await response.json(), {
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32000,
+        message: 'Unsupported Media Type: Content-Type charset must be UTF-8',
+      },
+    });
+  });
+
   it('rejects an unframed empty JSON request before raw conversion', async () => {
     const result = await postWithoutEndingUpload(
       base,
