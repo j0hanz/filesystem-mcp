@@ -83,9 +83,35 @@ export function rewriteEntry<T>(
 
 /** A dry run never writes, so it takes no lock, but it answers the same refusals as a write. */
 async function locked<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
-  if (!request.dryRun) return request.fs.lockForWrite(request.path, body);
+  if (!request.dryRun) return lockedWrite(request, body);
   await withAbort(request.fs.pathGuard.validatePathForWrite(request.path), request.signal);
   return body();
+}
+
+/**
+ * A cancel or deadline ends the wait for the lock, and the queued body never
+ * runs. Once the body holds the lock only it decides: it watches the signal
+ * itself, and answering early could report a failure for a write that lands.
+ */
+function lockedWrite<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
+  const { signal } = request;
+  let started = false;
+  const run = request.fs.lockForWrite(request.path, () => {
+    signal?.throwIfAborted();
+    started = true;
+    return body();
+  });
+  if (signal === undefined) return run;
+  return new Promise<R>((resolve, reject) => {
+    const onAbort = (): void => {
+      if (!started) reject(signal.reason as Error);
+    };
+    if (signal.aborted) onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    void run.then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
+  });
 }
 
 /**

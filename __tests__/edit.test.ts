@@ -743,6 +743,18 @@ function* generatedCases(
 }
 
 describe('flexMatches', () => {
+  it('flexMatches treats every UTF-16 unit as the whitespace class says', () => {
+    for (let code = 0; code <= 0xffff; code++) {
+      const unit = String.fromCharCode(code);
+      const horizontal = code !== 10 && code !== 0xfeff && /\s/u.test(unit);
+      assert.strictEqual(
+        [...flexMatches(`a${unit}b`, 'a b')].length,
+        horizontal ? 1 : 0,
+        `U+${code.toString(16)}`,
+      );
+    }
+  });
+
   it('flexMatches equals the old flexible pattern on generated cases', () => {
     for (const { content, oldText, from } of generatedCases(3000)) {
       const got = take(flexMatches(content, oldText, from), LIMIT);
@@ -950,6 +962,8 @@ describe('edit whitespace walk stays responsive', () => {
       );
       assert.strictEqual(firstError(result)?.code, 'CANCELLED');
     } finally {
+      // A stall that ends the call clears the timer before it can fire and record the gap.
+      longest = Math.max(longest, Date.now() - last);
       clearInterval(timer);
     }
     assert.ok(longest < 1000, `longest gap ${String(longest)} ms`);

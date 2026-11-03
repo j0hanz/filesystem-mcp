@@ -200,11 +200,21 @@ interface FlexSpec {
 // BOM it would be absorbed as indentation and copied onto every new line.
 //
 // Char-code loops, not sticky regexes: a repetitive file can walk the gaps of
-// every candidate, and a regex call per gap made that ten times slower.
+// every candidate, and a regex call per gap made that ten times slower. The
+// non-ASCII half is spelled out too: a regex per unit made one long gap of NBSP
+// the longest stall in the walk, which cannot yield inside a gap.
 const isSpace = (code: number): boolean =>
   code === 32 ||
   (code >= 9 && code <= 13) ||
-  (code >= 0xa0 && code !== 0xfeff && /\s/u.test(String.fromCharCode(code)));
+  (code >= 0xa0 &&
+    (code === 0xa0 ||
+      code === 0x1680 ||
+      (code >= 0x2000 && code <= 0x200a) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      code === 0x202f ||
+      code === 0x205f ||
+      code === 0x3000));
 const isHorizontal = (code: number): boolean => code !== 10 && isSpace(code);
 
 function skipHorizontal(content: string, at: number): number {
@@ -310,7 +320,10 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
   for (const match of flexWalk(content, oldText, from)) if (match !== undefined) yield match;
 }
 
-/** A candidate's walk is bounded by oldText; yield between candidates. */
+/**
+ * Yield between candidates. One candidate's walk moves forward only, so it
+ * costs at most one pass over the file: under 50 ms at the default file size.
+ */
 const WALK_SLICE_MS = 5;
 const PREFIX_UNITS = 16;
 

@@ -25,25 +25,36 @@ export async function runOverPaths<TItem extends string | { path: string }, TPer
     ctx.onProgress({ current: completed, total });
   };
 
-  await processInParallel(
-    items,
-    async (item, index) => {
-      const path = typeof item === 'string' ? item : item.path;
-      try {
-        const value = await perPath(item, ctx);
-        results[index] = { path, value };
-      } catch (error: unknown) {
-        results[index] = {
-          path,
-          error: Problem.fromUnknown(error, defaultErrorCode, path),
-        };
-      } finally {
-        tick();
-      }
-    },
-    PARALLEL_CONCURRENCY,
-    ctx.signal,
-  );
+  const pathOf = (item: TItem): string => (typeof item === 'string' ? item : item.path);
+
+  try {
+    await processInParallel(
+      items,
+      async (item, index) => {
+        const path = pathOf(item);
+        try {
+          const value = await perPath(item, ctx);
+          results[index] = { path, value };
+        } catch (error: unknown) {
+          results[index] = {
+            path,
+            error: Problem.fromUnknown(error, defaultErrorCode, path),
+          };
+        } finally {
+          tick();
+        }
+      },
+      PARALLEL_CONCURRENCY,
+      ctx.signal,
+    );
+  } catch (error: unknown) {
+    // The signal fired before some items started. Finished items may have
+    // written, so the caller must still see them to know what a retry repeats.
+    for (const [index, item] of items.entries()) {
+      const path = pathOf(item);
+      results[index] ??= { path, error: Problem.fromUnknown(error, defaultErrorCode, path) };
+    }
+  }
 
   return { results, summary: summarize(results) };
 }
