@@ -308,7 +308,7 @@ export async function searchContent(
       matches,
       summary: {
         matchingLines,
-        filesScanned: outcome.scanned - skippedTooLarge,
+        filesScanned: outcome.scanned,
         filesMatched,
         truncated: stoppedReason !== undefined,
         skippedInaccessible,

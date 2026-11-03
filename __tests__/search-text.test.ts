@@ -496,6 +496,18 @@ describe('search_text body', () => {
     });
   });
 
+  it('counts a file over the size limit in filesScanned', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const dir = join(root, 'scanned_big');
+      await writeTestFile(dir, 'big.txt', `NEEDLE\n${'a'.repeat(limit)}`);
+      await writeTestFile(dir, 'small.txt', 'NEEDLE\n');
+      const { structured } = await search({ path: dir, searchPattern: 'NEEDLE' });
+      assert.strictEqual(structured.filesScanned, 2);
+      assert.strictEqual(structured.skippedTooLarge, 1);
+    });
+  });
+
   it('explains zero matches caused by a likely regex or a glob that selects no files', async () => {
     const dir = join(root, 'zero_hint');
     await writeTestFile(dir, 'a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');

@@ -40,6 +40,13 @@ describe('find_files body', () => {
     await cleanupTestRoot(root);
   });
 
+  it('reports filesScanned from the Scan', async () => {
+    const dir = join(root, 'scanned_count');
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(dir, name, 'x');
+    const { structured } = await find({ path: dir, pattern: '**/*' });
+    assert.strictEqual(structured.filesScanned, 3);
+  });
+
   const find = (args: FindArgs, signal?: AbortSignal) =>
     runToolBodyResult(FIND_FILES, args, {
       guard,
