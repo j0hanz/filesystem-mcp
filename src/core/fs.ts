@@ -1305,7 +1305,8 @@ export async function keepOwner(
   lchown: typeof fsLchown = fsLchown,
 ): Promise<void> {
   if (existing === undefined || process.getuid === undefined) return;
-  if (existing.uid === process.getuid() && existing.gid === process.getgid?.()) return;
+  // No same-owner shortcut: a temp file can take its group from a setgid
+  // directory, so matching the process's ids proves nothing.
   try {
     // lchown: the temp file's directory may be writable by others, so a symlink
     // swapped in must not redirect the ownership change.

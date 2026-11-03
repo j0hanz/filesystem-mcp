@@ -678,7 +678,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(options?.flush, true);
     });
 
-    it('keepOwner calls chown only when the owner differs, and tolerates a refusal', async (t) => {
+    it('keepOwner restores the existing owner, skips a new file, and tolerates a refusal', async (t) => {
       if (process.platform === 'win32') return t.skip('Windows has no process.getuid');
       const uid = process.getuid?.() ?? 0;
       const gid = process.getgid?.() ?? 0;
@@ -688,17 +688,38 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         return Promise.resolve();
       }) as never;
 
-      await keepOwner('t', { uid, gid }, record);
-      assert.deepStrictEqual(calls, []);
       await keepOwner('t', undefined, record);
       assert.deepStrictEqual(calls, []);
 
+      await keepOwner('t', { uid, gid }, record);
+      assert.deepStrictEqual(calls, [[uid, gid]]);
+
       await keepOwner('t', { uid: uid + 1, gid }, record);
-      assert.deepStrictEqual(calls, [[uid + 1, gid]]);
+      assert.deepStrictEqual(calls, [
+        [uid, gid],
+        [uid + 1, gid],
+      ]);
 
       const refuse = (() =>
         Promise.reject(Object.assign(new Error('EPERM'), { code: 'EPERM' }))) as never;
       await keepOwner('t', { uid: uid + 1, gid }, refuse);
+    });
+
+    it('writeFile keeps the group of a file in a setgid directory', async (t) => {
+      if (process.platform === 'win32') return t.skip('Windows has no process.getuid');
+      const primaryGid = process.getgid?.() ?? 0;
+      const other = process.getgroups?.().find((g) => g !== primaryGid);
+      if (other === undefined) return t.skip('needs a second group the process belongs to');
+      const dir = join(tmpDir, 'setgid-dir');
+      await mkdir(dir);
+      await chown(dir, -1, other);
+      await chmod(dir, 0o2775);
+      const file = await writeTestFile(dir, 'g.txt', 'old\n');
+      await chown(file, -1, primaryGid);
+      assert.strictEqual((await stat(file)).gid, primaryGid);
+      await fs.writeFile(file, 'new\n');
+      assert.strictEqual((await stat(file)).gid, primaryGid);
+      assert.strictEqual(await readFile(file, 'utf8'), 'new\n');
     });
 
     it('writeFile keeps the owner of a file another user owns', async (t) => {
