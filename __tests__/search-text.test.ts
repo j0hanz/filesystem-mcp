@@ -588,6 +588,20 @@ describe('search_text body', () => {
     );
   });
 
+  it('tells a literal search refused for an overlong line how to recover', async () => {
+    const file = await writeTestFile(
+      join(root, 'named_overlong_literal'),
+      'huge.txt',
+      `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} café`,
+    );
+    await assert.rejects(
+      search({ path: file, searchPattern: 'café' }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /pass caseSensitive: true/),
+    );
+    const { structured } = await search({ path: file, searchPattern: 'café', caseSensitive: true });
+    assert.strictEqual(structured.totalMatches, 1);
+  });
+
   it('still searches a named undecodable file lossily', async () => {
     const dir = join(root, 'named_lossy');
     await mkdir(dir, { recursive: true });

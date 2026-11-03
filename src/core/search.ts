@@ -193,7 +193,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
         // "File too large" would be false: the file fits, one line of it does not.
         throw new FsError(
           ErrorCode.TOO_LARGE,
-          'A line in this file is too long for a regex search; use a literal searchPattern.',
+          'A line in this file is too long for a regex search. Regex mode is used for isRegex or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern.',
           entryPath,
         );
       }
