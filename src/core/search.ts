@@ -1,3 +1,4 @@
+import { ErrorCode, FsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
   compileRegex,
@@ -145,6 +146,8 @@ interface ScanContext {
   literal: LiteralMatcher | undefined;
   source: string;
   context: number;
+  /** A file the client named: an overlong line refuses the call instead of skipping. */
+  named: boolean;
 }
 
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
@@ -186,6 +189,14 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     const line = lines[i];
     if (line === undefined) continue;
     if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
+      if (scanCtx.named) {
+        // "File too large" would be false: the file fits, one line of it does not.
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          'A line in this file is too long for a regex search. Regex mode is used for isRegex or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern.',
+          entryPath,
+        );
+      }
       return new ScanSkip({ kind: 'tooLarge', size: buffer.length });
     }
     // Yield between lines too: millions of short lines never yield per-match.
@@ -264,11 +275,13 @@ export async function searchContent(
       literal: plan.literal,
       source,
       context,
+      named: scope.explicitFile !== undefined,
     };
     const outcome = await scan<FileScan>(
       scope,
       {
         pathGuard,
+        tool: 'search_text',
         pattern: options.filePattern ?? '**/*',
         // Same rule as replace_text, so a search with the same glob previews the
         // files a replace would touch: a slash-free glob matches at any depth.
@@ -308,7 +321,7 @@ export async function searchContent(
       matches,
       summary: {
         matchingLines,
-        filesScanned: outcome.scanned - skippedTooLarge,
+        filesScanned: outcome.scanned,
         filesMatched,
         truncated: stoppedReason !== undefined,
         skippedInaccessible,

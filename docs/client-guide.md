@@ -373,8 +373,8 @@ Error codes in tool results: `ACCESS_DENIED`, `NOT_FOUND`, `NOT_FILE`,
 `NOT_DIRECTORY`, `TOO_LARGE`, `TIMEOUT`, `CANCELLED`, `INVALID_PATTERN`,
 `INVALID_INPUT`, `BINARY_FILE`, `PERMISSION_DENIED`, `SYMLINK_NOT_ALLOWED`, `IO_ERROR`,
 `UNKNOWN`. A declined confirmation is `CANCELLED`. `BINARY_FILE` is a text
-tool (`read`, `edit`, `patch`, `diff`) refusing a binary file; `read` accepts
-it with `binary: true`. The `suggestion` field and
+tool (`read`, `edit`, `patch`, `diff`, or `search_text` or `replace_text` on a
+file you name) refusing a binary file; `read` accepts it with `binary: true`. The `suggestion` field and
 the server's guide (below) say how to recover from each.
 
 ## Pagination and cached results
@@ -402,8 +402,10 @@ ends with `// scan stopped early: ...` and sets `_meta.stoppedReason`
 `maxFiles` are replace_text's caps). The totals are then a floor, not a count.
 Narrow the path or the pattern, or for `replace_text` raise `maxMatches` or
 `maxFiles`. The [limits table](configuration.md#limits) has the numbers. A scan
-does not follow a symlinked file, and `_meta.skippedInaccessible` counts the
-entries and directories it could not read.
+does not follow a symlinked file. `_meta.skippedInaccessible` counts the entries
+and directories it could not read, and `_meta.skippedBinary` and
+`_meta.skippedTooLarge` count the files it would not read as text. A file you
+name yourself is refused instead of skipped.
 
 ## Progress, cancellation, and timeouts
 

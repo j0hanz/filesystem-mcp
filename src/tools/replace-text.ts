@@ -12,8 +12,13 @@ import {
   patchWithinBudget,
   settle,
 } from '../core/diff-budget.ts';
-import { ErrorCode, FsError, isSkippable, Problem } from '../core/errors.ts';
-import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
+import { ErrorCode, isSkippable, Problem } from '../core/errors.ts';
+import {
+  skippedLine,
+  stoppedEarlyLine,
+  truncateProgressPattern,
+  zeroMatchHint,
+} from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import {
   createReplacementMatcher,
@@ -22,7 +27,6 @@ import {
   type ReplacementMatcher,
 } from '../core/matcher.ts';
 import type { ResultPaths } from '../core/path.ts';
-import { createTooLargeError, NOT_UTF8_MESSAGE } from '../core/read.ts';
 import type { Rewritten } from '../core/rewrite.ts';
 import { rewriteEntry } from '../core/rewrite.ts';
 import type { ScanOutcome, StoppedReason } from '../core/scan.ts';
@@ -255,17 +259,9 @@ async function processEntry(
       },
     );
     if (done === undefined) return undefined;
-    if (done instanceof ScanSkip) {
-      // A named file is the whole request: refuse it, don't skip it.
-      if (ctx.singleFile) {
-        throw done.verdict.kind === 'tooLarge'
-          ? createTooLargeError(done.verdict.size, getMaxTextFileSize(), entryPath)
-          : new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, entryPath);
-      }
-      // Only bytes that decode to UTF-8 losslessly survive the string round
-      // trip, so an undecodable file is skipped as a binary one is.
-      return done;
-    }
+    // Only bytes that decode to UTF-8 losslessly survive the string round trip,
+    // so an undecodable file is skipped as a binary one is.
+    if (done instanceof ScanSkip) return done;
 
     // Reached only after the write succeeds (or in dryRun, where there is no
     // write): a failed write must not count the file as changed.
@@ -436,6 +432,7 @@ async function handleSearchAndReplace(
       scope,
       {
         pathGuard: ctx.fs.pathGuard,
+        tool: 'replace_text',
         pattern: args.pattern ?? '**/*',
         baseNameMatch: true,
         includeHidden: args.includeHidden,
@@ -537,21 +534,14 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       `replace_text: '${truncatedPattern}'${dryLabel}` +
       ` \u00b7 ${String(structured.totalMatches)} match(es)` +
       ` in ${String(structured.summary.succeeded)} file(s)` +
-      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '') +
-      (structured.skippedBinary
-        ? ` \u00b7 ${String(structured.skippedBinary)} binary skipped`
-        : '') +
-      (structured.skippedTooLarge
-        ? ` \u00b7 ${String(structured.skippedTooLarge)} too large skipped`
-        : '') +
-      (structured.skippedInaccessible
-        ? ` \u00b7 ${String(structured.skippedInaccessible)} inaccessible skipped`
-        : '');
+      (structured.summary.failed > 0 ? ` \u00b7 ${String(structured.summary.failed)} failed` : '');
     // The structured half ships under `_meta`, which clients do not show the
     // model, so the stop state and the diff preview must ride the text.
     const lines = [summaryText];
     const stop = structured.stoppedReason;
     if (stop !== undefined) lines.push(stoppedEarlyLine(stop));
+    const skipped = skippedLine(structured);
+    if (skipped) lines.push(skipped);
     if (stop === 'timeout') {
       // A live run writes as it scans, so a timeout leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name

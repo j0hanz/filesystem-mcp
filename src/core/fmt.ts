@@ -131,19 +131,39 @@ const STOP_REASON_TEXT: Record<StoppedReason, string> = {
  * truncation with no cursor must still say so. Prefixed `//` so none can be
  * mistaken for a result row.
  */
-export function pageTrailer(p: {
-  offset: number;
-  shown: number;
-  total: number;
-  noun: string;
-  tool: string;
-  nextCursor?: string | undefined;
-  /** The call's own arguments; printed merged with the cursor so the hint is sendable as-is. */
-  nextArgs?: Record<string, unknown> | undefined;
-  stoppedReason?: StoppedReason | undefined;
+interface SkipCounts {
   skippedTooLarge?: number | undefined;
+  skippedBinary?: number | undefined;
   skippedInaccessible?: number | undefined;
-}): string {
+}
+
+/** `// skipped ...; results may be incomplete.`, or '' with nothing skipped. */
+export function skippedLine(counts: SkipCounts): string {
+  const skipped = [
+    counts.skippedTooLarge
+      ? `${formatCount(counts.skippedTooLarge, 'file')} over the text size limit`
+      : '',
+    counts.skippedBinary ? formatCount(counts.skippedBinary, 'binary file') : '',
+    counts.skippedInaccessible
+      ? formatCount(counts.skippedInaccessible, 'inaccessible entry', 'inaccessible entries')
+      : '',
+  ].filter(Boolean);
+  return skipped.length > 0 ? `// skipped ${skipped.join(', ')}; results may be incomplete.` : '';
+}
+
+export function pageTrailer(
+  p: SkipCounts & {
+    offset: number;
+    shown: number;
+    total: number;
+    noun: string;
+    tool: string;
+    nextCursor?: string | undefined;
+    /** The call's own arguments; printed merged with the cursor so the hint is sendable as-is. */
+    nextArgs?: Record<string, unknown> | undefined;
+    stoppedReason?: StoppedReason | undefined;
+  },
+): string {
   const lines: string[] = [];
   // Position is owed on every page of a split set, including the last one —
   // which has no cursor and would otherwise read as the whole answer.
@@ -157,15 +177,8 @@ export function pageTrailer(p: {
     );
   }
   if (p.stoppedReason !== undefined) lines.push(stoppedEarlyLine(p.stoppedReason));
-  const skipped = [
-    p.skippedTooLarge ? `${formatCount(p.skippedTooLarge, 'file')} over the text size limit` : '',
-    p.skippedInaccessible
-      ? formatCount(p.skippedInaccessible, 'inaccessible entry', 'inaccessible entries')
-      : '',
-  ].filter(Boolean);
-  if (skipped.length > 0) {
-    lines.push(`// skipped ${skipped.join(', ')}; results may be incomplete.`);
-  }
+  const skipped = skippedLine(p);
+  if (skipped) lines.push(skipped);
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
 }
 

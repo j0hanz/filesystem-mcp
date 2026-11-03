@@ -12,7 +12,14 @@ import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import { escapeRegExp, MIB } from '../src/core/util.ts';
 import { SEARCH_TEXT } from '../src/tools/index.ts';
 import { REPLACE_TEXT } from '../src/tools/replace-text.ts';
-import { cleanupTestRoot, createTestRoot, makeGuard, withEnv, writeTestFile } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  fsErrorMatcher,
+  makeGuard,
+  withEnv,
+  writeTestFile,
+} from './helpers.ts';
 import { runToolBodyResult, schemaIssues, type ToolBodyOptions } from './tool-harness.ts';
 
 type ReplaceArgs = z.input<typeof REPLACE_TEXT.def.input>;
@@ -271,12 +278,13 @@ describe('replace_text body', () => {
   describe('size limits', () => {
     const limit = 1024 * 1024;
 
-    it('refuses a file over the text size limit with the shared TOO_LARGE wording', async () => {
+    it('refuses a named file over the text size limit', async () => {
       await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
         const big = await writeTestFile(root, 'size_cap/big.txt', 'FIND\n' + 'x'.repeat(limit));
-        const refused = await replace({ path: big, searchPattern: 'FIND', replacement: 'FOUND' });
-        assert.strictEqual(refused.isError, true);
-        assert.match(refused.text ?? '', /big\.txt: TOO_LARGE File exceeds size limit/);
+        await assert.rejects(
+          replace({ path: big, searchPattern: 'FIND', replacement: 'FOUND' }),
+          fsErrorMatcher(ErrorCode.TOO_LARGE, /^File too large for replace_text/),
+        );
         assert.ok((await readFile(big, 'utf-8')).startsWith('FIND\n'), 'file must be untouched');
       });
     });
@@ -290,7 +298,7 @@ describe('replace_text body', () => {
         assert.notStrictEqual(swept.isError, true);
         assert.strictEqual(swept.structured.skippedTooLarge, 2);
         assert.strictEqual(swept.structured.summary.failed, 0);
-        assert.match(swept.text ?? '', /2 too large skipped/);
+        assert.match(swept.text ?? '', /\/\/ skipped 2 files over the text size limit/);
         assert.ok((await readFile(a, 'utf-8')).startsWith('FIND\n'));
         assert.ok((await readFile(b, 'utf-8')).startsWith('FIND\n'));
       });
@@ -435,9 +443,33 @@ describe('replace_text body', () => {
       const blob = join(root, 'binrep_named/blob.bin');
       await mkdir(dirname(blob), { recursive: true });
       await writeFile(blob, Buffer.from([0x01, 0x00, 0x02]));
-      const single = await replace({ path: blob, searchPattern: 'zzz', replacement: 'bar' });
-      assert.strictEqual(single.isError, true);
-      assert.strictEqual(single.rows[0]?.error?.code, 'INVALID_INPUT');
+      await assert.rejects(
+        replace({ path: blob, searchPattern: 'zzz', replacement: 'bar' }),
+        fsErrorMatcher(ErrorCode.BINARY_FILE),
+      );
+    });
+
+    it('refuses a named binary file on a dry run', async () => {
+      const blob = join(root, 'binrep_named_dry/blob.bin');
+      await mkdir(dirname(blob), { recursive: true });
+      await writeFile(blob, Buffer.from([0x01, 0x00, 0x02]));
+      await assert.rejects(
+        replace({ path: blob, searchPattern: 'zzz', replacement: 'bar', dryRun: true }),
+        fsErrorMatcher(ErrorCode.BINARY_FILE),
+      );
+    });
+
+    it('refuses a named late non-UTF-8 file', async () => {
+      const file = join(root, 'binrep_named_late/late.txt');
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(
+        file,
+        Buffer.concat([Buffer.alloc(600, 'a'), Buffer.from('\nfoo'), Buffer.from([0xe9, 0x0a])]),
+      );
+      await assert.rejects(
+        replace({ path: file, searchPattern: 'foo', replacement: 'bar' }),
+        fsErrorMatcher(ErrorCode.INVALID_INPUT, /non-UTF-8/),
+      );
     });
 
     // Decoding these as UTF-8 and writing the result back swaps every invalid
@@ -455,19 +487,16 @@ describe('replace_text body', () => {
       assert.notStrictEqual(swept.isError, true);
       assert.strictEqual(swept.structured.summary.failed, 0);
       assert.strictEqual(swept.structured.skippedBinary, 2);
-      assert.match(swept.text ?? '', /2 binary skipped/);
+      assert.match(swept.text ?? '', /\/\/ skipped 2 binary files/);
       assert.strictEqual(await readFile(text, 'utf-8'), 'bar\n');
       assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
       assert.deepStrictEqual(await readFile(join(dir, 'latin1.txt')), latin1);
 
       // Named explicitly, the file is the whole request: refuse it, don't skip.
-      const single = await replace({
-        path: join(dir, 'blob.bin'),
-        searchPattern: 'foo',
-        replacement: 'bar',
-      });
-      assert.strictEqual(single.isError, true);
-      assert.strictEqual(single.rows[0]?.error?.code, 'INVALID_INPUT');
+      await assert.rejects(
+        replace({ path: join(dir, 'blob.bin'), searchPattern: 'foo', replacement: 'bar' }),
+        fsErrorMatcher(ErrorCode.BINARY_FILE),
+      );
       assert.deepStrictEqual(await readFile(join(dir, 'blob.bin')), blob);
     });
   });
@@ -497,7 +526,7 @@ describe('replace_text body', () => {
         });
         assert.strictEqual(result.structured.skippedInaccessible, 1);
         assert.strictEqual(result.structured.summary.failed, 0);
-        assert.match(result.text ?? '', /1 inaccessible skipped/u);
+        assert.match(result.text ?? '', /1 inaccessible entry/u);
         assert.doesNotMatch(result.text ?? '', /no files were searched/u);
       } finally {
         await chmod(locked, 0o755);
@@ -1121,7 +1150,7 @@ describe('replace_text body', () => {
     await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
     assert.strictEqual(
       await text({ searchPattern: 'a|b' }),
-      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s) · 1 binary skipped",
+      "replace_text: 'a|b' [dry run] · 0 match(es) in 0 file(s)\n// skipped 1 binary file; results may be incomplete.",
     );
   });
 

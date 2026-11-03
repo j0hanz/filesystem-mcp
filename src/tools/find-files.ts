@@ -139,7 +139,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           metadata: {
             root: paths.root,
             matched: found.length,
-            filesScanned: found.length,
+            filesScanned: scanned.scanned,
             truncated: stoppedReason !== undefined,
             skippedInaccessible: scanned.skippedInaccessible,
             ...(stoppedReason ? { stoppedReason } : {}),

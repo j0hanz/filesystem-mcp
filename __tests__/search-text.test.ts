@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
@@ -7,6 +7,7 @@ import type * as z from 'zod/v4';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
@@ -496,6 +497,18 @@ describe('search_text body', () => {
     });
   });
 
+  it('counts a file over the size limit in filesScanned', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const dir = join(root, 'scanned_big');
+      await writeTestFile(dir, 'big.txt', `NEEDLE\n${'a'.repeat(limit)}`);
+      await writeTestFile(dir, 'small.txt', 'NEEDLE\n');
+      const { structured } = await search({ path: dir, searchPattern: 'NEEDLE' });
+      assert.strictEqual(structured.filesScanned, 2);
+      assert.strictEqual(structured.skippedTooLarge, 1);
+    });
+  });
+
   it('explains zero matches caused by a likely regex or a glob that selects no files', async () => {
     const dir = join(root, 'zero_hint');
     await writeTestFile(dir, 'a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');
@@ -518,12 +531,115 @@ describe('search_text body', () => {
     }
   });
 
+  it('reports a binary skip and gives no pattern hint when every file was skipped', async () => {
+    const dir = join(root, 'only_binary');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    const { text } = await search({ path: dir, searchPattern: 'a|b' });
+    assert.strictEqual(
+      text,
+      "No matches for 'a|b'\n\n// skipped 1 binary file; results may be incomplete.",
+    );
+  });
+
+  it('keeps the pattern hint when a binary skip sits beside searched text files', async () => {
+    const dir = join(root, 'binary_beside_text');
+    await writeTestFile(dir, 'a.ts', 'const x = 1;\n');
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0x7c, 0x62, 0]));
+    const { text } = await search({ path: dir, searchPattern: 'foo|bar' });
+    assert.strictEqual(
+      text,
+      "No matches for 'foo|bar'\n" +
+        '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.' +
+        '\n\n// skipped 1 binary file; results may be incomplete.',
+    );
+  });
+
+  it('keeps the skip line on a later page', async () => {
+    const dir = join(root, 'paged_binary');
+    await writeTestFile(dir, 'a.txt', 'PAGED\nPAGED\nPAGED\n');
+    await writeFile(join(dir, 'b.bin'), Buffer.from([0, 0x61, 0]));
+    const args = { path: dir, searchPattern: 'PAGED', maxResults: 1 };
+    const first = await search(args);
+    const cursor = first.structured.nextCursor;
+    assert.ok(cursor);
+    const second = await search({ ...args, cursor });
+    assert.match(second.text ?? '', /\/\/ skipped 1 binary file; results may be incomplete\./);
+  });
+
+  it('refuses a named binary file', async () => {
+    const dir = join(root, 'named_binary');
+    await mkdir(dir, { recursive: true });
+    const blob = join(dir, 'b.bin');
+    await writeFile(blob, Buffer.from([0, 0x61, 0]));
+    await assert.rejects(
+      search({ path: blob, searchPattern: 'a' }),
+      fsErrorMatcher(ErrorCode.BINARY_FILE),
+    );
+  });
+
+  it('refuses a named UTF-16 file', async () => {
+    const dir = join(root, 'named_utf16');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'u.txt');
+    await writeFile(file, Buffer.from([0xff, 0xfe, 0x61, 0x00]));
+    await assert.rejects(
+      search({ path: file, searchPattern: 'a' }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /UTF-16/),
+    );
+  });
+
+  it('refuses a named file with an overlong regex line, and names the line', async () => {
+    const file = await writeTestFile(
+      join(root, 'named_overlong'),
+      'huge.txt',
+      `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} NEEDLE`,
+    );
+    await assert.rejects(
+      search({ path: file, searchPattern: 'NEEDLE', isRegex: true }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /line/),
+    );
+  });
+
+  it('tells a literal search refused for an overlong line how to recover', async () => {
+    const file = await writeTestFile(
+      join(root, 'named_overlong_literal'),
+      'huge.txt',
+      `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} café`,
+    );
+    await assert.rejects(
+      search({ path: file, searchPattern: 'café' }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /pass caseSensitive: true/),
+    );
+    const { structured } = await search({ path: file, searchPattern: 'café', caseSensitive: true });
+    assert.strictEqual(structured.totalMatches, 1);
+  });
+
+  it('still searches a named undecodable file lossily', async () => {
+    const dir = join(root, 'named_lossy');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'late-latin1.txt');
+    await writeFile(
+      file,
+      Buffer.concat([
+        Buffer.alloc(600, 'a'),
+        Buffer.from('\nNEEDLE caf'),
+        Buffer.from([0xe9, 0x0a]),
+      ]),
+    );
+    const { structured } = await search({ path: file, searchPattern: 'NEEDLE' });
+    assert.strictEqual(structured.totalMatches, 1);
+  });
+
   it('skips binary files and reports the count', async () => {
     const dir = join(root, 'search_bin');
     await writeTestFile(dir, 'text.txt', 'BINNEEDLE\n');
     await writeFile(join(dir, 'blob.bin'), Buffer.from([0x00, ...Buffer.from('BINNEEDLE'), 0x00]));
     const { structured, text } = await search({ path: dir, searchPattern: 'BINNEEDLE' });
-    assert.strictEqual(text, 'search_bin/text.txt:1: BINNEEDLE');
+    assert.strictEqual(
+      text,
+      'search_bin/text.txt:1: BINNEEDLE\n\n// skipped 1 binary file; results may be incomplete.',
+    );
     assert.strictEqual(structured.filesScanned, 2);
     assert.strictEqual(structured.skippedBinary, 1);
   });

@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file and `replace_text`'s `Binary or non-UTF-8 file detected.` still answer `INVALID_INPUT`.
+- **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file still answers `INVALID_INPUT`.
+- **`filesScanned` means every file a scan ruled on.** `search_text` left out files over the size limit, and `find_files` repeated its match count; both now report the same count as `replace_text`.
+- **`search_text` names binary skips.** Its text gains `// skipped N binary files; results may be incomplete.`, and a search where every file was skipped as binary no longer guesses at the pattern on zero matches.
+- **`replace_text` reports skips in the same line.** The `· N binary skipped`, `· N too large skipped` and `· N inaccessible skipped` segments become one `// skipped ...` line.
+- **A named file that cannot be scanned fails the call.** `search_text` on a named binary or too-large file answered `No matches`; it now refuses, as it does for a named file with a line too long for a regex search. `replace_text` refusing a named file now answers with tool error text and no `results` row, using the refusals `read` and `edit` give: `BINARY_FILE`, `File too large for replace_text`, and the UTF-16 advice.
 
 ## [2.15.0] - 2026-11-02
 
