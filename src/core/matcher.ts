@@ -126,7 +126,7 @@ export function re2AbortError(path: string | undefined, cause: unknown): FsError
     'The regex engine ran out of its fixed 16 MB of memory. Regex search can keep failing on smaller inputs until the server restarts.',
     path,
     cause,
-    'Restart the server, or use a literal searchPattern with caseSensitive: true, which does not need the engine.',
+    'Restart the server.',
   );
 }
 
