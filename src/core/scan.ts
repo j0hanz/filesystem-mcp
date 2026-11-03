@@ -177,6 +177,25 @@ export function skipOf(verdict: Exclude<TextVerdict, { kind: 'text' }>): ScanSki
   return new ScanSkip(verdict.kind === 'undecodable' ? { kind: 'undecodable' } : verdict);
 }
 
+/** The refusal a named file gets for a non-text verdict; `tool` labels the too-large message. */
+function refusalOf(verdict: SkipVerdict, filePath: string, tool: string | undefined): FsError {
+  switch (verdict.kind) {
+    case 'tooLarge': {
+      const maxSize = getMaxTextFileSize();
+      return new FsError(
+        ErrorCode.TOO_LARGE,
+        `File too large for ${tool ?? 'edit'} (${verdict.size} bytes > ${maxSize} bytes)`,
+        filePath,
+        { size: verdict.size, maxFileSize: maxSize },
+      );
+    }
+    case 'binary':
+      return binaryRefusal(verdict.utf16 ? 'utf16' : 'binary', filePath);
+    case 'undecodable':
+      return new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, filePath);
+  }
+}
+
 /**
  * A file the client named is not a scan (ADR-005): any verdict but text fails
  * the call, with the refusals edit, patch and diff have always given.
@@ -190,24 +209,8 @@ export async function readNamedText(
   const { stats, validPath } = await fs.stat(filePath, { signal });
   assertFileStats(filePath, stats);
   const verdict = await readText(fs, validPath, signal, filePath);
-  switch (verdict.kind) {
-    case 'text':
-      return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
-    case 'tooLarge': {
-      const maxSize = getMaxTextFileSize();
-      // `tool` labels the TOO_LARGE message so the client sees which tool refused.
-      throw new FsError(
-        ErrorCode.TOO_LARGE,
-        `File too large for ${options?.tool ?? 'edit'} (${verdict.size} bytes > ${maxSize} bytes)`,
-        filePath,
-        { size: verdict.size, maxFileSize: maxSize },
-      );
-    }
-    case 'binary':
-      throw binaryRefusal(verdict.utf16 ? 'utf16' : 'binary', filePath);
-    case 'undecodable':
-      throw new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, filePath);
-  }
+  if (verdict.kind !== 'text') throw refusalOf(verdict, filePath, options?.tool);
+  return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
 }
 
 export interface ScanEntry {
@@ -225,6 +228,8 @@ export type StoppedReason = 'maxResults' | 'maxMatches' | 'maxFiles' | 'timeout'
 
 export interface ScanOptions<R> {
   readonly pathGuard: PathGuard;
+  /** Names the tool in a named file's too-large refusal. */
+  readonly tool?: string;
   readonly pattern: string;
   readonly baseNameMatch: boolean;
   readonly includeHidden: boolean;
@@ -270,8 +275,6 @@ export interface ScanOutcome<R> {
   readonly skippedTooLarge: number;
   readonly stoppedReason?: StoppedReason;
 }
-
-const isTooLarge = (skip: ScanSkip): boolean => skip.verdict.kind === 'tooLarge';
 
 /**
  * The one Scan every walking tool runs: walk the scope, rule on each entry
@@ -464,7 +467,7 @@ export async function scan<R>(
     scanned++;
     onScanned?.(scanned);
     if (result instanceof ScanSkip) {
-      if (isTooLarge(result)) skippedTooLarge++;
+      if (result.verdict.kind === 'tooLarge') skippedTooLarge++;
       else skippedBinary++;
     } else if (result !== undefined) {
       results.set(index, result);
@@ -577,7 +580,7 @@ export async function probeDirectory(
   }
 }
 
-/** A named file: the guard's errors and onEntry's fail the call, unless the signal aborted. */
+/** A named file: the guard's errors, onEntry's and a skip fail the call, unless the signal aborted. */
 async function scanNamedFile<R>(
   explicitFile: string,
   options: ScanOptions<R>,
@@ -602,13 +605,13 @@ async function scanNamedFile<R>(
     if (signal?.aborted) return timedOut;
     throw error;
   }
+  if (result instanceof ScanSkip) throw refusalOf(result.verdict, explicitFile, options.tool);
   options.onScanned?.(1);
-  const skip = result instanceof ScanSkip ? result : undefined;
   return {
-    results: result === undefined || result instanceof ScanSkip ? [] : [result],
+    results: result === undefined ? [] : [result],
     scanned: 1,
     skippedInaccessible: 0,
-    skippedBinary: skip && !isTooLarge(skip) ? 1 : 0,
-    skippedTooLarge: skip && isTooLarge(skip) ? 1 : 0,
+    skippedBinary: 0,
+    skippedTooLarge: 0,
   };
 }

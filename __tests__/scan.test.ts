@@ -123,14 +123,14 @@ describe('scan', () => {
     assert.equal(out.skippedBinary, 1);
   });
 
-  it('counts a skip on a named file', async () => {
+  it('a skip on a named file fails the call', async () => {
     await files('a.txt');
-    const out = await scan({ root, explicitFile: join(root, 'a.txt') }, base(), () =>
-      Promise.resolve(new ScanSkip({ kind: 'binary', utf16: false })),
+    await assert.rejects(
+      scan({ root, explicitFile: join(root, 'a.txt') }, base({ tool: 'search_text' }), () =>
+        Promise.resolve(new ScanSkip({ kind: 'tooLarge', size: 9 })),
+      ),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /^File too large for search_text \(9 bytes/),
     );
-    assert.deepEqual(out.results, []);
-    assert.equal(out.scanned, 1);
-    assert.equal(out.skippedBinary, 1);
   });
 
   it('unreadable directory is counted once', async (t) => {

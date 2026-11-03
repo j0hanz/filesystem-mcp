@@ -7,6 +7,7 @@ import type * as z from 'zod/v4';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
@@ -551,6 +552,56 @@ describe('search_text body', () => {
     assert.ok(cursor);
     const second = await search({ ...args, cursor });
     assert.match(second.text ?? '', /\/\/ skipped 1 binary file; results may be incomplete\./);
+  });
+
+  it('refuses a named binary file', async () => {
+    const dir = join(root, 'named_binary');
+    await mkdir(dir, { recursive: true });
+    const blob = join(dir, 'b.bin');
+    await writeFile(blob, Buffer.from([0, 0x61, 0]));
+    await assert.rejects(
+      search({ path: blob, searchPattern: 'a' }),
+      fsErrorMatcher(ErrorCode.BINARY_FILE),
+    );
+  });
+
+  it('refuses a named UTF-16 file', async () => {
+    const dir = join(root, 'named_utf16');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'u.txt');
+    await writeFile(file, Buffer.from([0xff, 0xfe, 0x61, 0x00]));
+    await assert.rejects(
+      search({ path: file, searchPattern: 'a' }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /UTF-16/),
+    );
+  });
+
+  it('refuses a named file with an overlong regex line, and names the line', async () => {
+    const file = await writeTestFile(
+      join(root, 'named_overlong'),
+      'huge.txt',
+      `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} NEEDLE`,
+    );
+    await assert.rejects(
+      search({ path: file, searchPattern: 'NEEDLE', isRegex: true }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /line/),
+    );
+  });
+
+  it('still searches a named undecodable file lossily', async () => {
+    const dir = join(root, 'named_lossy');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'late-latin1.txt');
+    await writeFile(
+      file,
+      Buffer.concat([
+        Buffer.alloc(600, 'a'),
+        Buffer.from('\nNEEDLE caf'),
+        Buffer.from([0xe9, 0x0a]),
+      ]),
+    );
+    const { structured } = await search({ path: file, searchPattern: 'NEEDLE' });
+    assert.strictEqual(structured.totalMatches, 1);
   });
 
   it('skips binary files and reports the count', async () => {
