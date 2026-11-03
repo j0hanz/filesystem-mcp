@@ -104,6 +104,16 @@ describe(
       }
     });
 
+    it('says network and device paths are never granted and a share must be a root', async (t) => {
+      stubFilesystem(t);
+      for (const path of OUT_OF_ROOT) {
+        await assert.rejects(
+          guard.validateExistingPath(path),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, /never granted.*configure the share as a root/iu),
+        );
+      }
+    });
+
     it('refuses without a filesystem call under FS_ROOT_BOUNDARY', async (t) => {
       const previous = process.env['FS_ROOT_BOUNDARY'];
       t.after(() => {
@@ -198,6 +208,7 @@ describe(
         const sibling = String.raw`\\fs-mcp-test.invalid\share\other\a.txt`;
         assert.deepEqual(await shared.precheckAccess([sibling]), []);
         assert.equal(fs.stat.mock.callCount(), 0);
+        assert.equal(fs.total(), 0);
         await assert.rejects(
           shared.validateExistingPath(sibling),
           fsErrorMatcher(ErrorCode.ACCESS_DENIED),

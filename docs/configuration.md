@@ -79,9 +79,13 @@ touching the path, so it never connects to the named host and never prompts. A
 share you configure as a root keeps working, but folders on it outside that root
 are refused too.
 
-Resolving a local link does touch its target, so a link inside an allowed root or
-a granted folder that points at a share can still reach that host. The grant is
-refused, the lookup is not.
+Resolving a local link does touch its target. A link inside an allowed root or a
+granted folder, or a local link outside any root, is resolved during the grant
+check, before any prompt, so one that points at a share can still reach that
+host. The grant is refused, the lookup is not. A mapped network drive that
+resolves to a share counts as a share, so it is never granted and must be
+configured as a root. WSL paths such as `\\wsl.localhost\Ubuntu\...` count as
+shares too.
 
 ## Secret files
 

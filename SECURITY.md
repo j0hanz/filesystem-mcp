@@ -54,8 +54,10 @@ allowing a folder that holds secrets, are not.
 - **Secrets under ordinary names.** The secret-file list matches paths and
   names, not contents. An API key in `notes.txt` is readable if its folder is
   allowed.
-- **Anything the AI can read leaving your machine.** The server makes no
-  outbound network requests, but your AI client may send what it reads to its
+- **Anything the AI can read leaving your machine.** The server starts no
+  network connections of its own, but on Windows, resolving a local link whose
+  target is a network share, or using a share you configured as a root, makes
+  the OS contact that host. Your AI client may also send what it reads to its
   model provider.
 - **Instructions hidden in files.** File contents reach the AI unfiltered, so
   allow only folders whose contents you trust the AI to read.

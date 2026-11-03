@@ -677,7 +677,12 @@ export class PathGuard {
       // already been accepted and added to the allowed set. A path still out of
       // root here was either declined, ungrantable (outside FS_ROOT_BOUNDARY), or
       // never pre-checked — fail closed.
-      this.throwAccessDenied(requestedPath, accessDeniedHint);
+      this.throwAccessDenied(
+        requestedPath,
+        isUncOrDevicePath(normalizedRequested)
+          ? `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`
+          : accessDeniedHint,
+      );
     }
     if (!allowSensitive) {
       this.assertNotSensitiveFile(requestedPath, requestedPath);
