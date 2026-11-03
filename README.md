@@ -15,7 +15,63 @@ Secret files stay hidden, and risky changes wait for your OK.
 
 [![filesystem-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp/badges/card.svg)](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp)
 
+Real sessions with a real model, except the web client demo. The `apply?` prompt comes from the example [gatekeeper](examples/clients/gatekeeper/) client, not the server.
+
+<details open>
+<summary><b>Undo skips a file you edited since, so your edit stays</b></summary>
+
+![A model removes a line from a.ts and b.ts. You then edit b.ts in a second pane. Asked to undo, the server restores a.ts, reports b.ts SKIPPED, and your edit stays](assets/demos/undo.gif)
+
+</details>
+
+<details>
+<summary><b>Rename across a repo, reviewed as one diff, with dist/ and .env untouched</b></summary>
+
+![A model renames getUser to fetchUser after showing a diff of four files. getUserById is unchanged, and grep still finds the old name in dist/bundle.js and .env](assets/demos/rename.gif)
+
+</details>
+
+<details>
+<summary><b>Bring back a deleted folder that git can't restore</b></summary>
+
+![A model deletes the gitignored seed-data folder after the server asks about all its contents. Asked to bring it back, undo restores the whole nested folder](assets/demos/rescue.gif)
+
+</details>
+
+<details>
+<summary><b>Secret files stay hidden, and overwrites wait for your OK</b></summary>
+
 ![The example web client lists a folder with .env hidden, the server refuses to open .env, then asks before overwriting README.md and keeps the file when told to skip](assets/demo.gif)
+
+</details>
+
+<details>
+<summary><b>Move files into an archive, then undo a move that overwrote one</b></summary>
+
+![A model moves three screenshots into archive/2025, and the server asks before overwriting two.png. Undo puts them back, and cat shows the old two.png is restored](assets/demos/tidy.gif)
+
+</details>
+
+<details>
+<summary><b>Review different edits to three files as one diff before they are written</b></summary>
+
+![A model adds a retries option. One preview shows different edits to client.ts, server.ts and types.ts, which are written only after approval](assets/demos/review.gif)
+
+</details>
+
+<details>
+<summary><b>A patch that no longer fits changes nothing</b></summary>
+
+![A model tries a two-hunk patch whose second hunk is stale. It fails, the file stays untouched, and the model explains why, fixes the hunk, applies it, and shows a diff](assets/demos/hotfix.gif)
+
+</details>
+
+<details>
+<summary><b>Find a crash in a 14 MB log without reading all of it</b></summary>
+
+![A model finds a 14 MB log, reads only its tail, names the db pool error, points at src/pool.ts, and reports that reading the whole log would have cost about 3.5 million tokens](assets/demos/triage.gif)
+
+</details>
 
 ## What is this?
 
