@@ -3,6 +3,7 @@
 DEMO_DIR=/tmp/demo/my-app
 DEMO_SESSION=demo
 DEMO_SOCKET=fs-demo
+DEMO_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_TURN_TIMEOUT=600 # polls of 0.5 s, so 300 s
 # How long a preview stays up before the driver answers it.
 DEMO_READ_PAUSE=2
@@ -102,5 +103,7 @@ assert_file_lacks() {
 }
 
 assert_cast_has() {
-  grep -qaF -- "$2" "$1" || _demo_fail "recording lacks: $2"
+  local code=0
+  CAST_TEXT="$2" node "$DEMO_HOME/cast-lacks.mjs" "$1" 2>/dev/null || code=$?
+  ((code == 2)) || _demo_fail "recording lacks: $2"
 }

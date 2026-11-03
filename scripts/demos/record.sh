@@ -19,6 +19,8 @@ source "$here/scenarios/$slug.sh"
 : "${GEMINI_API_KEY:?GEMINI_API_KEY is not set; from PowerShell, set WSLENV=GEMINI_API_KEY}"
 export GEMINI_API_KEY
 export FS_MCP_BIN="${FS_MCP_BIN:-$repo/dist/index.js}"
+# These outrank the provider in gatekeeper, and the key scan would not know their key.
+unset LLM_BASE_URL LLM_API_KEY LLM_MODEL
 
 cast="$HOME/.cache/fs-demos/$slug.cast"
 out="$repo/assets/demos/$slug.gif"
@@ -33,7 +35,7 @@ stop_recording() {
     wait "$recorder" 2>/dev/null || true
   fi
   [[ -f "$cast" ]] || return 0
-  if ! node "$here/cast-lacks-key.mjs" "$cast"; then
+  if ! CAST_TEXT="$GEMINI_API_KEY" node "$here/cast-lacks.mjs" "$cast"; then
     rm -f "$cast"
     echo 'the recording may hold the API key; cast deleted' >&2
     return 1
