@@ -5,6 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { DELETE } from '../src/tools/delete.ts';
 import {
@@ -155,6 +156,139 @@ describe('delete body', () => {
     );
     await assert.rejects(access(plain));
     await assert.rejects(access(dir));
+  });
+
+  /** Deletes `dir` recursively, answering the prompt, and returns what it said. */
+  const promptFor = async (dir: string, choice: 'delete' | 'skip'): Promise<string> => {
+    let message = '';
+    await del(
+      { paths: [dir], recursive: true },
+      {
+        confirm: (prompt) => {
+          message = prompt.message;
+          return choose(choice)();
+        },
+      },
+    );
+    return message;
+  };
+
+  it('warns in the confirmation when the folder holds a protected file', async () => {
+    const dir = join(root, 'holds_env');
+    await mkdir(join(dir, 'deep', 'er'), { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'x');
+    await writeFile(join(dir, 'deep', 'er', '.env'), 'X=1');
+
+    const message = await promptFor(dir, 'delete');
+
+    assert.match(message, /protected/);
+    assert.match(message, /cannot be undone/);
+    await assert.rejects(access(dir));
+  });
+
+  it('still honors skip after warning about a protected file', async () => {
+    const dir = join(root, 'holds_env_skip');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, '.env'), 'X=1');
+
+    const message = await promptFor(dir, 'skip');
+
+    assert.match(message, /protected/);
+    await access(join(dir, '.env'));
+  });
+
+  it('asks the plain question when the folder holds no protected file', async () => {
+    const dir = await nonEmptyDir('holds_nothing');
+
+    const message = await promptFor(dir, 'delete');
+
+    // A regex, because the prompt names the normalized path, whose drive letter
+    // can differ in case from `dir` on Windows.
+    assert.match(message, /^Delete ".*holds_nothing" and all its contents\?$/);
+  });
+
+  it('reports an abort during the protected-file walk as cancelled, not unknown', async () => {
+    const dir = join(root, 'holds_env_abort');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, '.env'), 'X=1');
+    const controller = new AbortController();
+    class AbortingFs extends GuardedFileSystem {
+      override holdsProtectedEntry(v: string, r: string, s?: AbortSignal): Promise<boolean> {
+        controller.abort();
+        return super.holdsProtectedEntry(v, r, s);
+      }
+    }
+    const aborting = new AbortingFs(await makeGuard([root]));
+    let asked = false;
+
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        fs: aborting,
+        signal: controller.signal,
+        confirm: () => {
+          asked = true;
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(asked, false);
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    await access(join(dir, '.env'));
+  });
+
+  it('rejects when an abort lands during the protected-file walk', async () => {
+    const dir = join(root, 'walk_abort');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'x');
+    const controller = new AbortController();
+
+    const pending = fs.holdsProtectedEntry(dir, dir, controller.signal);
+    controller.abort();
+
+    await assert.rejects(pending, { name: 'AbortError' });
+  });
+
+  it('refuses a directory the protected-file walk cannot read', async () => {
+    const file = join(root, 'walk_not_a_dir.txt');
+    await writeFile(file, 'x');
+
+    await assert.rejects(fs.holdsProtectedEntry(file, file), {
+      code: ErrorCode.ACCESS_DENIED,
+    });
+  });
+
+  it('treats an entry that vanished before the walk as holding nothing', async () => {
+    const gone = join(root, 'never_existed');
+
+    assert.strictEqual(await fs.holdsProtectedEntry(gone, gone), false);
+  });
+
+  it('refuses before any prompt when the protected-file walk fails', async () => {
+    const dir = await nonEmptyDir('walk_fails');
+    class FailingFs extends GuardedFileSystem {
+      override holdsProtectedEntry(v: string): Promise<boolean> {
+        return Promise.reject(new FsError(ErrorCode.ACCESS_DENIED, 'x', v));
+      }
+    }
+    const failing = new FailingFs(await makeGuard([root]));
+    let asked = false;
+
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        fs: failing,
+        confirm: () => {
+          asked = true;
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(asked, false);
+    assert.strictEqual(only(result).error?.code, ErrorCode.ACCESS_DENIED);
+    await access(dir);
   });
 
   it('reports a declined delete as CANCELLED and keeps the directory', async () => {
