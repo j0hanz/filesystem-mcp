@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A recursive delete says when it would remove protected files.** A folder holding a file on the secret-file list asked only "and all its contents?", though listings hide those files and the delete cannot be undone. The confirmation now says both. The delete still proceeds when approved.
+- **A recursive delete says when it would remove protected files.** A folder holding a file on the secret-file list asked only "and all its contents?", though listings hide those files and the delete cannot be undone. The confirmation now says both. The delete still proceeds when approved. A folder that cannot be fully inspected refuses the delete instead.
 
 ## [2.15.0] - 2026-11-02
 

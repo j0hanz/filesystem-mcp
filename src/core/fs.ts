@@ -1179,8 +1179,9 @@ export class GuardedFileSystem {
    * True when a directory a delete would remove holds an entry the sensitive-file
    * policy protects, under its validated or requested spelling. Listings hide
    * such entries and a Capture refuses them, so the Confirmation must say so.
-   * Links are not followed. A directory that cannot be read is passed over:
-   * a recursive delete cannot empty it either, so nothing in it is lost.
+   * Links are not followed. A directory that cannot be read refuses the delete:
+   * the failure may clear before the delete runs, and the Confirmation could
+   * not say what the directory holds.
    */
   async holdsProtectedEntry(
     validPath: string,
@@ -1192,9 +1193,19 @@ export class GuardedFileSystem {
       signal?.throwIfAborted();
       let dirents: Dirent[];
       try {
-        dirents = await fsReaddir(join(validPath, rel), { withFileTypes: true });
-      } catch {
-        continue;
+        dirents = await withAbort(fsReaddir(join(validPath, rel), { withFileTypes: true }), signal);
+      } catch (error) {
+        rethrowIfAborted(error);
+        // A deadline's TimeoutError is not read as aborted, so the signal decides.
+        signal?.throwIfAborted();
+        // An entry that vanished mid-walk holds nothing to warn about.
+        if (isNotFoundErrno(error)) continue;
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Delete refused: the directory could not be fully inspected for protected entries',
+          requestedPath,
+          error,
+        );
       }
       for (const dirent of dirents) {
         const name = join(rel, dirent.name);
@@ -1207,6 +1218,8 @@ export class GuardedFileSystem {
         if (dirent.isDirectory()) pending.push(name);
       }
     }
+    // A deadline that fired during the last read still ends the call, even with no entries left.
+    signal?.throwIfAborted();
     return false;
   }
 

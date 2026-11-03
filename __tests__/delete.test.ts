@@ -5,7 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode } from '../src/core/errors.ts';
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { DELETE } from '../src/tools/delete.ts';
 import {
@@ -236,6 +236,59 @@ describe('delete body', () => {
     assert.strictEqual(asked, false);
     assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
     await access(join(dir, '.env'));
+  });
+
+  it('rejects when an abort lands during the protected-file walk', async () => {
+    const dir = join(root, 'walk_abort');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'x');
+    const controller = new AbortController();
+
+    const pending = fs.holdsProtectedEntry(dir, dir, controller.signal);
+    controller.abort();
+
+    await assert.rejects(pending, { name: 'AbortError' });
+  });
+
+  it('refuses a directory the protected-file walk cannot read', async () => {
+    const file = join(root, 'walk_not_a_dir.txt');
+    await writeFile(file, 'x');
+
+    await assert.rejects(fs.holdsProtectedEntry(file, file), {
+      code: ErrorCode.ACCESS_DENIED,
+    });
+  });
+
+  it('treats an entry that vanished before the walk as holding nothing', async () => {
+    const gone = join(root, 'never_existed');
+
+    assert.strictEqual(await fs.holdsProtectedEntry(gone, gone), false);
+  });
+
+  it('refuses before any prompt when the protected-file walk fails', async () => {
+    const dir = await nonEmptyDir('walk_fails');
+    class FailingFs extends GuardedFileSystem {
+      override holdsProtectedEntry(v: string): Promise<boolean> {
+        return Promise.reject(new FsError(ErrorCode.ACCESS_DENIED, 'x', v));
+      }
+    }
+    const failing = new FailingFs(await makeGuard([root]));
+    let asked = false;
+
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        fs: failing,
+        confirm: () => {
+          asked = true;
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(asked, false);
+    assert.strictEqual(only(result).error?.code, ErrorCode.ACCESS_DENIED);
+    await access(dir);
   });
 
   it('reports a declined delete as CANCELLED and keeps the directory', async () => {
