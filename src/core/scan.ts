@@ -157,6 +157,26 @@ export async function readText(
   return { kind: 'text', bytes, stats };
 }
 
+/** A content verdict a Scan does not hand on: what it counts, without the bytes. */
+export type SkipVerdict =
+  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | { readonly kind: 'undecodable' }
+  | { readonly kind: 'tooLarge'; readonly size: number };
+
+/** Returned from a Scan callback in place of a result: the Scan counts it and drops it. */
+export class ScanSkip {
+  readonly verdict: SkipVerdict;
+
+  constructor(verdict: SkipVerdict) {
+    this.verdict = verdict;
+  }
+}
+
+/** A non-text content verdict as a skip; drops an undecodable file's bytes. */
+export function skipOf(verdict: Exclude<TextVerdict, { kind: 'text' }>): ScanSkip {
+  return new ScanSkip(verdict.kind === 'undecodable' ? { kind: 'undecodable' } : verdict);
+}
+
 /**
  * A file the client named is not a scan (ADR-005): any verdict but text fails
  * the call, with the refusals edit, patch and diff have always given.
@@ -244,8 +264,14 @@ export interface ScanOutcome<R> {
   /** Entries whose onEntry resolved. */
   readonly scanned: number;
   readonly skippedInaccessible: number;
+  /** Skips whose verdict was binary or undecodable. */
+  readonly skippedBinary: number;
+  /** Skips whose verdict was too large. */
+  readonly skippedTooLarge: number;
   readonly stoppedReason?: StoppedReason;
 }
+
+const isTooLarge = (skip: ScanSkip): boolean => skip.verdict.kind === 'tooLarge';
 
 /**
  * The one Scan every walking tool runs: walk the scope, rule on each entry
@@ -257,7 +283,7 @@ export interface ScanOutcome<R> {
 export async function scan<R>(
   scope: ScanScope,
   options: ScanOptions<R>,
-  onEntry: (entry: ScanEntry) => Promise<R | undefined>,
+  onEntry: (entry: ScanEntry) => Promise<R | ScanSkip | undefined>,
 ): Promise<ScanOutcome<R>> {
   const { signal } = options;
   if (scope.explicitFile !== undefined) {
@@ -270,6 +296,8 @@ export async function scan<R>(
   const results = new Map<number, R>();
   let scanned = 0;
   let skippedInaccessible = 0;
+  let skippedBinary = 0;
+  let skippedTooLarge = 0;
   // A directory can fail both its probe and its verdict: count each path once.
   const counted = new Set<string>();
   const countInaccessible = (path: string): void => {
@@ -435,7 +463,10 @@ export async function scan<R>(
     const { result } = done;
     scanned++;
     onScanned?.(scanned);
-    if (result !== undefined) {
+    if (result instanceof ScanSkip) {
+      if (isTooLarge(result)) skippedTooLarge++;
+      else skippedBinary++;
+    } else if (result !== undefined) {
       results.set(index, result);
       total += weigh(result);
     }
@@ -497,6 +528,8 @@ export async function scan<R>(
     results: [...results.entries()].sort(([a], [b]) => a - b).map(([, result]) => result),
     scanned,
     skippedInaccessible,
+    skippedBinary,
+    skippedTooLarge,
     ...(stoppedReason ? { stoppedReason } : {}),
   };
 }
@@ -548,18 +581,20 @@ export async function probeDirectory(
 async function scanNamedFile<R>(
   explicitFile: string,
   options: ScanOptions<R>,
-  onEntry: (entry: ScanEntry) => Promise<R | undefined>,
+  onEntry: (entry: ScanEntry) => Promise<R | ScanSkip | undefined>,
 ): Promise<ScanOutcome<R>> {
   const { signal } = options;
   const timedOut: ScanOutcome<R> = {
     results: [],
     scanned: 0,
     skippedInaccessible: 0,
+    skippedBinary: 0,
+    skippedTooLarge: 0,
     stoppedReason: 'timeout',
   };
   await options.pathGuard.validateExistingPath(explicitFile);
   if (signal?.aborted) return timedOut;
-  let result: R | undefined;
+  let result: R | ScanSkip | undefined;
   try {
     // resolveScanScope already proved it is a file.
     result = await onEntry({ path: explicitFile, type: 'file', index: 0 });
@@ -568,9 +603,12 @@ async function scanNamedFile<R>(
     throw error;
   }
   options.onScanned?.(1);
+  const skip = result instanceof ScanSkip ? result : undefined;
   return {
-    results: result === undefined ? [] : [result],
+    results: result === undefined || result instanceof ScanSkip ? [] : [result],
     scanned: 1,
     skippedInaccessible: 0,
+    skippedBinary: skip && !isTooLarge(skip) ? 1 : 0,
+    skippedTooLarge: skip && isTooLarge(skip) ? 1 : 0,
   };
 }
