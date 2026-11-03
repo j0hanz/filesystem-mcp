@@ -59,10 +59,14 @@ add these folders, even if you say yes:
 
 - the filesystem root (`/`, `C:\`) and your home folder itself, or any folder
   that contains it (subfolders such as `~/code/app` are fine);
-- system folders: `/usr`, `/etc`, `/bin`, `/sbin`, `/System`, and on Windows
+- system folders: `/usr`, `/etc`, `/bin`, `/sbin`, `/System`, `/proc`, `/sys`,
+  `/dev`, `/boot`, and on Windows
   `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData`;
 - credential folders in your home: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
-  `~/.docker`, `~/.config/gcloud`.
+  `~/.docker`, `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, and any folder
+  that contains one, such as `~/.config`. Existing folders under `~/.config` are
+  fine, but one that does not exist yet is refused: its nearest existing folder
+  is `~/.config`.
 
 Symlinks are resolved first, so a link that points at one of these folders is
 refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
@@ -76,7 +80,7 @@ reading, writing, searching, and listing:
 | Kind                  | Patterns                                                                                                                                                                                                                       |
 | :-------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Environment files     | `.env`, `.env.*`                                                                                                                                                                                                               |
-| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.yarnrc.yml`                                                                                                                           |
+| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`                                                                                                 |
 | Cloud and tools       | `.aws/credentials`, `.aws/config`, `.docker/config.json`, `.kube/config`, `application_default_credentials.json`, `.mcpregistry_*_token`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate`, `*.tfstate.*` |
 | Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`                                                                                                                                                                           |
 | SSH private keys      | `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                                                                                                           |

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`search_text` names binary skips.** Its text gains `// skipped N binary files; results may be incomplete.`, and a search where every file was skipped as binary no longer guesses at the pattern on zero matches.
 - **`replace_text` reports skips in the same line.** The `· N binary skipped`, `· N too large skipped` and `· N inaccessible skipped` segments become one `// skipped ...` line.
 - **A named file that cannot be scanned fails the call.** `search_text` on a named binary or too-large file answered `No matches`; it now refuses, as it does for a named file with a line too long for a regex search. `replace_text` refusing a named file now answers with tool error text and no `results` row, using the refusals `read` and `edit` give: `BINARY_FILE`, `File too large for replace_text`, and the UTF-16 advice.
-- **More secret files are blocked by default.** The built-in list gains `.git/config`, `.yarnrc.yml`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate` and `*.tfstate.*`. Reads of these files that worked now refuse; `--allow` lifts them.
+- **More secret files are blocked by default.** The built-in list gains `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate` and `*.tfstate.*`. Reads of these files that worked now refuse; `--allow` lifts them. A recursive delete of a folder holding one of them cannot be undone, so deleting a git repo now warns and is `not undoable: contains protected files`.
 - **`replace_text` matches case by default.** Renaming `getUser` to `fetchUser` also rewrote `GetUser` and `GETUSER`. `caseSensitive` now defaults to `true`, and passing `false` restores the old behaviour. `search_text` still ignores case by default, so a pattern it finds can match nothing here.
 
 ### Fixed
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A recursive delete says when it would remove protected files.** A folder holding a file on the secret-file list asked only "and all its contents?", though listings hide those files and the delete cannot be undone. The confirmation now says both. The delete still proceeds when approved. A folder that cannot be fully inspected refuses the delete instead.
 - **Regex search no longer exhausts its engine on non-UTF-8 files.** `search_text` sized the engine's input by a file's raw bytes, so a file of about 2.8 MiB or more of mostly invalid bytes aborted the engine, lost that file's matches, and reported it as inaccessible. Each abort also shrank what the engine could take until restart, until regex search failed on small files. The size is now measured after decoding. If the engine still runs out of memory, a walked file counts as too large and a named file answers `TOO_LARGE` with advice.
 - **Declining a folder request no longer loops.** A call that declined a folder outside the roots and also needed another confirmation, such as an overwrite, asked both questions again for 10 rounds and then failed with nothing written. It now asks each once, writes what was approved, and fails the declined path with `ACCESS_DENIED`.
-- **Grants refuse more unsafe folders.** `~/.config`, which holds `~/.config/gcloud`, could be offered, and so could `~/.azure` and `~/.config/gh`. On Linux, so could `/proc`, `/sys`, `/dev` and `/boot`, and `/proc/self/environ` holds the server's API key. These are now refused, and other folders under `~/.config` stay grantable.
+- **Grants refuse more unsafe folders.** `~/.config`, which holds `~/.config/gcloud`, could be offered, and so could `~/.azure` and `~/.config/gh`. On Linux, so could `/proc`, `/sys`, `/dev` and `/boot`, and `/proc/self/environ` holds the server's API key. These are now refused. Existing folders under `~/.config` stay grantable, but a folder there that does not exist yet is refused, because the nearest existing folder is `~/.config`.
 - **A root can no longer be removed through its parent.** Deleting an allowed root was refused, but deleting or moving a folder that contained one was not. With roots `/w` and `/w/sub/proj`, deleting `/w/sub` removed the second root. It is now refused, as it already was for a folder that contains a read-only root.
 - **Path completion hides names denied under their real path.** Completion checked the deny list only under the spelling the client typed, so a root reached through a link could show names that `list` hides. File contents were not exposed.
 - **An unsupported charset answers 415, not 500.** A request sent with `charset=latin1` looked like a server fault and logged an error.
@@ -34,7 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **`replace_text` no longer accepts `maxResults`.** The deprecated alias is gone, and passing it fails validation. Use `maxMatches`.
-- **Node below 24 is no longer handled.** The `RegExp.escape` fallback is gone, in line with the `engines` floor: on an older Node, the server fails when it first escapes a pattern.
 
 ## [2.15.0] - 2026-11-02
 
