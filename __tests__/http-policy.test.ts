@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { connect, createServer as createProbeServer } from 'node:net';
 import { describe, it } from 'node:test';
 
 import type { Request, Response } from 'express';
@@ -21,7 +23,13 @@ import {
   validateBearerAuthorization,
 } from '../src/transport/http-policy.ts';
 import { startHttpServer } from '../src/transport/http.ts';
-import { cleanupTestRoot, createTestRoot, fsErrorMatcher, withEnv } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  fsErrorMatcher,
+  TEST_API_KEY,
+  withEnv,
+} from './helpers.ts';
 
 interface MockResponse {
   statusCode?: number;
@@ -816,6 +824,188 @@ describe('CORS reflection agrees with the SDK Origin gate', () => {
             else resolve();
           });
         });
+        await cleanupTestRoot(dir);
+      }
+    });
+  });
+});
+
+// The suites above call the policy functions directly, so deleting a check
+// from startHttpServer / setupExpressApp still passed them. Every test here
+// boots (or refuses to boot) the real server, so each deleted refusal fails
+// one of these.
+describe('real-server startup and bearer-challenge refusals', () => {
+  /** A port that is free right now (probe binds 127.0.0.1:0, then closes). */
+  function reserveFreePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const probe = createProbeServer();
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo;
+        probe.close(() => resolve(port));
+      });
+    });
+  }
+
+  /** Fails the test if anything accepts a connection on `port`. */
+  function assertNothingListening(port: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1');
+      socket.once('error', (error: NodeJS.ErrnoException) => {
+        socket.destroy();
+        assert.strictEqual(
+          error.code,
+          'ECONNREFUSED',
+          'expected no listener on the port the refused bind named',
+        );
+        resolve();
+      });
+      socket.once('connect', () => {
+        socket.destroy();
+        reject(new Error(`something is listening on port ${String(port)}`));
+      });
+    });
+  }
+
+  async function closeServer(httpServer: Server): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
+  it('refuses a non-loopback bind without an API key, and nothing listens afterwards', async () => {
+    await withEnv({ FS_API_KEY: undefined }, async () => {
+      const dir = await createTestRoot();
+      // A documentation-range address (RFC 5737): never a local interface, so a
+      // deleted refusal cannot succeed into a real bind either.
+      const port = await reserveFreePort();
+      try {
+        await assert.rejects(
+          startHttpServer(port, { cliAllowedDirs: [dir] }, { httpHost: '192.0.2.1' }),
+          fsErrorMatcher(ErrorCode.PERMISSION_DENIED, /non-loopback host/),
+        );
+        await assertNothingListening(port);
+      } finally {
+        await cleanupTestRoot(dir);
+      }
+    });
+  });
+
+  it('refuses a wildcard bind with an API key when FS_ALLOWED_HOSTS is unset and FS_ALLOW_UNRESTRICTED_HOSTS is off', async () => {
+    await withEnv(
+      { FS_ALLOWED_HOSTS: undefined, FS_ALLOW_UNRESTRICTED_HOSTS: undefined },
+      async () => {
+        const dir = await createTestRoot();
+        try {
+          await assert.rejects(
+            startHttpServer(
+              0,
+              { cliAllowedDirs: [dir] },
+              { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+            ),
+            fsErrorMatcher(ErrorCode.PERMISSION_DENIED, /wildcard host/),
+          );
+        } finally {
+          await cleanupTestRoot(dir);
+        }
+      },
+    );
+  });
+
+  it('on a keyless loopback bind with an all-blank FS_ALLOWED_ORIGINS, a foreign Origin gets 403', async () => {
+    await withEnv({ FS_ALLOWED_ORIGINS: ' , ' }, async () => {
+      const dir = await createTestRoot();
+      const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
+      const port = (httpServer.address() as AddressInfo).port;
+      try {
+        const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'https://evil.example.com' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+        });
+        await res.text();
+        assert.strictEqual(
+          res.status,
+          403,
+          'the localhost Origin gate must refuse a foreign origin',
+        );
+      } finally {
+        await closeServer(httpServer);
+        await cleanupTestRoot(dir);
+      }
+    });
+  });
+
+  it('with no Host validator mounted, the 401 challenge has no resource_metadata parameter', async () => {
+    await withEnv(
+      {
+        FS_ALLOWED_HOSTS: undefined,
+        FS_ALLOW_UNRESTRICTED_HOSTS: '1',
+        FS_PUBLIC_URL: undefined,
+      },
+      async () => {
+        const dir = await createTestRoot();
+        const httpServer = await startHttpServer(
+          0,
+          { cliAllowedDirs: [dir] },
+          { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+        );
+        const port = (httpServer.address() as AddressInfo).port;
+        try {
+          const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+          });
+          await res.text();
+          assert.strictEqual(res.status, 401);
+          const challenge = res.headers.get('www-authenticate') ?? '';
+          assert.ok(challenge.startsWith('Bearer'), `challenge: ${challenge}`);
+          assert.ok(!challenge.includes('resource_metadata'), `challenge: ${challenge}`);
+        } finally {
+          await closeServer(httpServer);
+          await cleanupTestRoot(dir);
+        }
+      },
+    );
+  });
+
+  it('with a Host validator mounted, the 401 challenge names the metadata URL and that URL serves the document', async () => {
+    await withEnv({ FS_PUBLIC_URL: undefined }, async () => {
+      const dir = await createTestRoot();
+      const httpServer = await startHttpServer(
+        0,
+        { cliAllowedDirs: [dir] },
+        { apiKey: TEST_API_KEY },
+      );
+      const port = (httpServer.address() as AddressInfo).port;
+      try {
+        const res = await fetch(`http://127.0.0.1:${String(port)}/mcp`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+        });
+        await res.text();
+        assert.strictEqual(res.status, 401);
+        const expectedMetadataUrl = `http://127.0.0.1:${String(port)}/.well-known/oauth-protected-resource/mcp`;
+        const challenge = res.headers.get('www-authenticate') ?? '';
+        assert.ok(
+          challenge.includes(`resource_metadata="${expectedMetadataUrl}"`),
+          `challenge must name the metadata URL: ${challenge}`,
+        );
+        const metadata = await fetch(expectedMetadataUrl);
+        assert.strictEqual(metadata.status, 200);
+        const doc = (await metadata.json()) as {
+          resource: string;
+          bearer_methods_supported: string[];
+        };
+        assert.strictEqual(doc.resource, `http://127.0.0.1:${String(port)}/mcp`);
+        assert.deepStrictEqual(doc.bearer_methods_supported, ['header']);
+      } finally {
+        await closeServer(httpServer);
         await cleanupTestRoot(dir);
       }
     });
