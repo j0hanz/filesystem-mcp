@@ -7,9 +7,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { EDIT, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
+import { EDIT, findFrom, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import {
   cleanupTestRoot,
+  createTestClientPair,
   createTestRoot,
   makeGuard,
   trySymlink,
@@ -742,6 +743,18 @@ function* generatedCases(
 }
 
 describe('flexMatches', () => {
+  it('flexMatches treats every UTF-16 unit as the whitespace class says', () => {
+    for (let code = 0; code <= 0xffff; code++) {
+      const unit = String.fromCharCode(code);
+      const horizontal = code !== 10 && code !== 0xfeff && /\s/u.test(unit);
+      assert.strictEqual(
+        [...flexMatches(`a${unit}b`, 'a b')].length,
+        horizontal ? 1 : 0,
+        `U+${code.toString(16)}`,
+      );
+    }
+  });
+
   it('flexMatches equals the old flexible pattern on generated cases', () => {
     for (const { content, oldText, from } of generatedCases(3000)) {
       const got = take(flexMatches(content, oldText, from), LIMIT);
@@ -759,5 +772,226 @@ describe('flexMatches', () => {
       [...flexMatches(body, body.replaceAll('    ', '  '))],
       [{ start: 0, length: body.length }],
     );
+  });
+});
+
+describe('edit whitespace walk stays responsive', () => {
+  let root: string;
+  let file: string;
+  let bytes: string;
+  const old = `${'a '.repeat(8000)}b`;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    file = join(root, 'worst.txt');
+    bytes = 'a '.repeat(80_000);
+    await writeFile(file, bytes);
+  });
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const unchanged = async () => {
+    assert.strictEqual(await readFile(file, 'utf8'), bytes);
+  };
+  const cancelAfter = (ms: number) => {
+    const ctl = new AbortController();
+    setTimeout(() => {
+      ctl.abort();
+    }, ms).unref();
+    return ctl.signal;
+  };
+  const run = (args: EditArgs, signal?: AbortSignal) =>
+    runToolBodyResult(EDIT, args, {
+      roots: [root],
+      ...(signal ? { signal } : {}),
+    }) as Promise<EditRun>;
+
+  it('keeps a timer firing during the walk', async () => {
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+    }, 10);
+    try {
+      await run(
+        { path: file, edits: [{ oldText: old, newText: '' }], ignoreWhitespace: true },
+        cancelAfter(300),
+      );
+    } finally {
+      clearInterval(timer);
+    }
+    assert.ok(ticks >= 5, `ticks: ${String(ticks)}`);
+    await unchanged();
+  });
+
+  it('a cancel ends the walk promptly', async () => {
+    const t0 = Date.now();
+    const result = await run(
+      { path: file, edits: [{ oldText: old, newText: '' }], ignoreWhitespace: true },
+      cancelAfter(200),
+    );
+    assert.ok(Date.now() - t0 < 2000);
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+    await unchanged();
+  });
+
+  it('a cancel on a later edit leaves the file unchanged', async () => {
+    bytes = `first\n${'a '.repeat(80_000)}`;
+    await writeFile(file, bytes);
+    const t0 = Date.now();
+    const result = await run(
+      {
+        path: file,
+        edits: [
+          { oldText: 'first', newText: '1st' },
+          { oldText: old, newText: '' },
+        ],
+        ignoreWhitespace: true,
+      },
+      cancelAfter(200),
+    );
+    assert.ok(Date.now() - t0 < 2000);
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+    await unchanged();
+  });
+
+  it('a dry run walks responsively', async () => {
+    const t0 = Date.now();
+    const result = await run(
+      { path: file, edits: [{ oldText: old, newText: '' }], ignoreWhitespace: true, dryRun: true },
+      cancelAfter(200),
+    );
+    assert.ok(Date.now() - t0 < 2000);
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+    await unchanged();
+  });
+
+  it('past the deadline returns TIMEOUT', async (t) => {
+    const prior = process.env['FS_TOOL_TIMEOUT_MS'];
+    process.env['FS_TOOL_TIMEOUT_MS'] = '1000';
+    t.after(() => {
+      if (prior === undefined) delete process.env['FS_TOOL_TIMEOUT_MS'];
+      else process.env['FS_TOOL_TIMEOUT_MS'] = prior;
+    });
+    const pair = await createTestClientPair([root]);
+    t.after(() => pair.close());
+    const t0 = Date.now();
+    const result = await pair.client.callTool({
+      name: 'edit',
+      arguments: { path: file, edits: [{ oldText: old, newText: '' }], ignoreWhitespace: true },
+    });
+    assert.ok(Date.now() - t0 < 5000);
+    assert.strictEqual(result.isError, true);
+    const meta = result._meta as { results: { error?: { code: string } }[] };
+    assert.strictEqual(meta.results[0]?.error?.code, 'TIMEOUT');
+    assert.match(JSON.stringify(result.content), /timeout/iu);
+    await unchanged();
+  });
+
+  it('refuses an oldText past the limit', async () => {
+    const issues = await schemaIssues(
+      runToolBodyResult(
+        EDIT,
+        { path: file, edits: [{ oldText: 'a'.repeat(1_048_577), newText: '' }] },
+        { roots: [root] },
+      ),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('1,048,576')),
+      issues.join('; '),
+    );
+  });
+
+  it('accepts an oldText at the limit', async () => {
+    const result = await run({
+      path: file,
+      edits: [{ oldText: 'a'.repeat(1_048_576), newText: '' }],
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(JSON.stringify(result.structured), /no match/u);
+    await unchanged();
+  });
+
+  for (const ignoreWhitespace of [true, false]) {
+    it(`keeps a timer firing and cancels promptly in a no-whitespace walk (ignoreWhitespace ${String(ignoreWhitespace)})`, async () => {
+      bytes = 'a'.repeat(1_048_576);
+      await writeFile(file, bytes);
+      const oldText = `${'a'.repeat(8000)}b${'a'.repeat(7999)}`;
+      let ticks = 0;
+      const timer = setInterval(() => {
+        ticks += 1;
+      }, 10);
+      const t0 = Date.now();
+      try {
+        const result = await run(
+          { path: file, edits: [{ oldText, newText: '' }], ignoreWhitespace },
+          cancelAfter(200),
+        );
+        assert.strictEqual(result.isError, true);
+        assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+      } finally {
+        clearInterval(timer);
+      }
+      assert.ok(Date.now() - t0 < 2000, `took ${String(Date.now() - t0)} ms`);
+      assert.ok(ticks >= 5, `ticks: ${String(ticks)}`);
+      await unchanged();
+    });
+  }
+
+  it('many whitespace-flexible edits keep the loop responsive and cancel promptly', async () => {
+    bytes = 'x'.repeat(10_400_000);
+    await writeFile(file, bytes);
+    const edits = Array.from({ length: 100 }, () => ({
+      oldText: `${'x'.repeat(14)}y`,
+      newText: '',
+    }));
+    let last = Date.now();
+    let longest = 0;
+    const timer = setInterval(() => {
+      longest = Math.max(longest, Date.now() - last);
+      last = Date.now();
+    }, 10);
+    const t0 = Date.now();
+    try {
+      const result = await run(
+        { path: file, edits, ignoreWhitespace: true, dryRun: true },
+        cancelAfter(500),
+      );
+      assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+    } finally {
+      // A stall that ends the call clears the timer before it can fire and record the gap.
+      longest = Math.max(longest, Date.now() - last);
+      clearInterval(timer);
+    }
+    assert.ok(longest < 1000, `longest gap ${String(longest)} ms`);
+    assert.ok(Date.now() - t0 < 2000, `took ${String(Date.now() - t0)} ms`);
+    await unchanged();
+  });
+
+  it('findFrom equals indexOf', () => {
+    const cases: [string, string, number][] = [
+      ['abcabcabc', 'abc', 0],
+      ['abcabcabc', 'abc', 1],
+      ['abcabcabc', 'abc', 7],
+      ['x😀y😀z', '😀', 0],
+      ['x😀y😀z', '😀y', 2],
+      ['aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'a'.repeat(20), 3],
+      [`${'a'.repeat(40)}b${'a'.repeat(40)}`, `${'a'.repeat(20)}b`, 0],
+      ['abc', 'abcd', 0],
+      ['abc', 'c', 5],
+    ];
+    for (const [content, literal, from] of cases) {
+      const walk = findFrom(content, literal, from);
+      let r = walk.next();
+      while (!r.done) r = walk.next();
+      assert.strictEqual(
+        r.value,
+        content.indexOf(literal, from),
+        JSON.stringify([content, literal, from]),
+      );
+    }
   });
 });

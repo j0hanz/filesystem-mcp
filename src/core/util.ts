@@ -180,7 +180,7 @@ export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;
 
 /**
  * Deadline for one call of a tool that walks or reads the disk (list, stat,
- * read, find_files, search_text, replace_text). Read per call, so the
+ * read, find_files, search_text, edit, replace_text). Read per call, so the
  * `--tool-timeout` flag applied by cli.ts after module load still counts.
  */
 export function getToolTimeoutMs(): number {

@@ -54,7 +54,7 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--tool-timeout <ms>',
-    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000) (env: FS_TOOL_TIMEOUT_MS)',
+    desc: 'Time limit for one list, stat, read, search, edit or replace_text call, in ms (default 5000, 1000-600000) (env: FS_TOOL_TIMEOUT_MS)',
   },
   {
     flags: '--walk-cwd',
@@ -97,7 +97,7 @@ const ENV_HELP: HelpRow[] = [
   },
   {
     flags: 'FS_TOOL_TIMEOUT_MS',
-    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000)',
+    desc: 'Time limit for one list, stat, read, search, edit or replace_text call, in ms (default 5000, 1000-600000)',
   },
   {
     flags: 'FS_ALLOWED_DIRS',

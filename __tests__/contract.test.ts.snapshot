@@ -183,6 +183,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                 "oldText": {
                   "type": "string",
                   "minLength": 1,
+                  "maxLength": 1048576,
                   "description": "Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.",
                   "examples": [
                     "const x = 1;",
@@ -230,6 +231,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                       "oldText": {
                         "type": "string",
                         "minLength": 1,
+                        "maxLength": 1048576,
                         "description": "Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.",
                         "examples": [
                           "const x = 1;",

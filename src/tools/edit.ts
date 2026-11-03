@@ -8,6 +8,7 @@ import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
+import { createYielder } from '../core/matcher.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import {
@@ -16,12 +17,16 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { toCrlf, usesCrlf } from '../core/util.ts';
+import { MIB, toCrlf, usesCrlf } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
+/** A candidate's walk sweeps content through its gaps, so it is not bounded by oldText; walks yield on a time slice instead. */
+const MAX_OLD_TEXT_CHARS = MIB;
+
 const EditSpecSchema = z.strictObject({
   oldText: nonBlankString('oldText')
+    .max(MAX_OLD_TEXT_CHARS, { message: 'oldText too long (max 1,048,576 chars)' })
     .describe(
       'Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.',
     )
@@ -195,11 +200,21 @@ interface FlexSpec {
 // BOM it would be absorbed as indentation and copied onto every new line.
 //
 // Char-code loops, not sticky regexes: a repetitive file can walk the gaps of
-// every candidate, and a regex call per gap made that ten times slower.
+// every candidate, and a regex call per gap made that ten times slower. The
+// non-ASCII half is spelled out too: a regex per unit made one long gap of NBSP
+// the longest stall in the walk, which cannot yield inside a gap.
 const isSpace = (code: number): boolean =>
   code === 32 ||
   (code >= 9 && code <= 13) ||
-  (code >= 0xa0 && code !== 0xfeff && /\s/u.test(String.fromCharCode(code)));
+  (code >= 0xa0 &&
+    (code === 0xa0 ||
+      code === 0x1680 ||
+      (code >= 0x2000 && code <= 0x200a) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      code === 0x202f ||
+      code === 0x205f ||
+      code === 0x3000));
 const isHorizontal = (code: number): boolean => code !== 10 && isSpace(code);
 
 function skipHorizontal(content: string, at: number): number {
@@ -302,6 +317,49 @@ function walkForward(content: string, at: number, spec: FlexSpec): number {
  * stop after a few.
  */
 export function* flexMatches(content: string, oldText: string, from = 0): Generator<FlexMatch> {
+  for (const match of flexWalk(content, oldText, from)) if (match !== undefined) yield match;
+}
+
+/**
+ * Yield between candidates. One candidate's walk moves forward only, so it
+ * costs at most one pass over the file: under 50 ms at the default file size.
+ */
+const WALK_SLICE_MS = 5;
+const PREFIX_UNITS = 16;
+
+/**
+ * `content.indexOf(literal, from)` that yields `undefined` each WALK_SLICE_MS and
+ * returns the index (-1 for none). V8's indexOf goes roughly quadratic on a long
+ * repetitive literal, so it searches a short prefix and verifies the rest.
+ */
+export function* findFrom(
+  content: string,
+  literal: string,
+  from: number,
+): Generator<undefined, number> {
+  const prefix = literal.slice(0, PREFIX_UNITS);
+  let last = Date.now();
+  let i = content.indexOf(prefix, from);
+  while (i !== -1) {
+    if (content.startsWith(literal, i)) return i;
+    if (Date.now() - last >= WALK_SLICE_MS) {
+      yield undefined;
+      last = Date.now();
+    }
+    i = content.indexOf(prefix, i + 1);
+  }
+  return -1;
+}
+
+/**
+ * flexMatches, plus an `undefined` each time the walk has run for WALK_SLICE_MS.
+ * Gaps sweep the content, so a candidate's walk is not bounded by oldText.
+ */
+function* flexWalk(
+  content: string,
+  oldText: string,
+  from: number,
+): Generator<FlexMatch | undefined> {
   const spec = buildFlexSpec(oldText);
   const first = spec.literals[0];
   if (first === undefined) return;
@@ -309,17 +367,22 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
   // gap walks back over whitespace only, so candidate starts rise with the
   // literal's offset and the first hit that fits is the leftmost match.
   let floor = from;
-  let at = content.indexOf(first, floor);
+  let at = yield* findFrom(content, first, floor);
+  let last = Date.now();
   while (at !== -1) {
+    if (Date.now() - last >= WALK_SLICE_MS) {
+      yield undefined;
+      last = Date.now();
+    }
     const start = spec.lead ? walkLeadBack(content, at, spec.lead, floor) : at;
     const end = start === -1 ? -1 : walkForward(content, at, spec);
     if (end === -1) {
-      at = content.indexOf(first, at + 1);
+      at = yield* findFrom(content, first, at + 1);
       continue;
     }
     yield { start, length: end - start };
     floor = end;
-    at = content.indexOf(first, floor);
+    at = yield* findFrom(content, first, floor);
   }
 }
 
@@ -330,7 +393,13 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
  * when it answers "once or not". Only the count and the first few starts are
  * kept: a short oldText in a large file can match millions of times.
  */
-function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
+async function findEditMatches(
+  content: string,
+  oldText: string,
+  ignoreWhitespace: boolean,
+  tick: () => Promise<boolean>,
+  signal: AbortSignal | undefined,
+): Promise<EditMatches> {
   const found: EditMatches = { first: undefined, count: 0, starts: [], truncated: false };
   // Returns true once the match is known ambiguous: applyEdits only needs
   // 0 / 1 / >1 and a few starts, and counting every occurrence of a short
@@ -352,13 +421,17 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     // adjacent identifiers are not merged. A newline run at either edge of
     // oldText matches exactly, so the edit cannot reach past the lines the
     // caller named.
-    const scan = (from: number): void => {
-      for (const match of flexMatches(content, oldText, from)) {
+    const scan = async (from: number): Promise<void> => {
+      for (const match of flexWalk(content, oldText, from)) {
+        if (match === undefined) {
+          if (await tick()) signal?.throwIfAborted();
+          continue;
+        }
         if (add(match.start, match.length)) return;
         if (from > 0) return;
       }
     };
-    scan(0);
+    await scan(0);
     // flexMatches resumes past each match, so a second match overlapping the
     // first is never reported; look once more from just past its first
     // non-whitespace character. Starting inside the leading whitespace would
@@ -366,22 +439,25 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     if (found.count === 1 && found.first) {
       const { startIndex, length } = found.first;
       const lead = content.slice(startIndex, startIndex + length).search(/\S/u);
-      scan(afterCodePoint(content, startIndex + lead));
+      await scan(afterCodePoint(content, startIndex + lead));
     }
     return found;
   }
 
   // Non-overlapping, so the scan stays linear on repetitive content; the one
   // overlap that matters — a second match inside the only one — is checked after.
-  for (
-    let i = content.indexOf(oldText);
-    i !== -1;
-    i = content.indexOf(oldText, i + oldText.length)
-  ) {
+  const indexOf = async (from: number): Promise<number> => {
+    const walk = findFrom(content, oldText, from);
+    for (let r = walk.next(); ; r = walk.next()) {
+      if (r.done) return r.value;
+      if (await tick()) signal?.throwIfAborted();
+    }
+  };
+  for (let i = await indexOf(0); i !== -1; i = await indexOf(i + oldText.length)) {
     if (add(i, oldText.length)) break;
   }
   if (found.count === 1 && found.first) {
-    const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
+    const overlap = await indexOf(afterCodePoint(content, found.first.startIndex));
     if (overlap !== -1) add(overlap, oldText.length);
   }
   return found;
@@ -455,17 +531,20 @@ function ambiguousEditError(
   );
 }
 
-function applyEdits(
+async function applyEdits(
   content: string,
   edits: z.infer<typeof EditSpecSchema>[],
   ignoreWhitespace: boolean,
-): EditResult {
+  signal: AbortSignal | undefined,
+): Promise<EditResult> {
+  const tick = createYielder(signal);
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
   const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
+    if (await tick()) signal?.throwIfAborted();
     // The file is decoded UTF-8, so its pairs are whole; a lone half in oldText
     // can only match half of one and would leave the other half in the file.
     if (!edit.oldText.isWellFormed()) {
@@ -476,7 +555,7 @@ function applyEdits(
     }
     const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
     const newText = crlf ? toCrlf(edit.newText) : edit.newText;
-    const found = findEditMatches(newContent, oldText, ignoreWhitespace);
+    const found = await findEditMatches(newContent, oldText, ignoreWhitespace, tick, signal);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
@@ -520,8 +599,8 @@ async function editOnce(
       transport: ctx.transport,
       tool: 'edit',
     },
-    (content) => {
-      const result = applyEdits(content, edits, options.ignoreWhitespace);
+    async (content) => {
+      const result = await applyEdits(content, edits, options.ignoreWhitespace, ctx.signal);
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
         throw new FsError(
           ErrorCode.INVALID_INPUT,
@@ -624,6 +703,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     'replace_text replaces every occurrence across files.',
   input: EditFileInputSchema,
   readOnlyHint: false,
+  deadline: true,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     let subject: string;

@@ -32,6 +32,67 @@ describe('Rewrite', () => {
     await cleanupTestRoot(root);
   });
 
+  it('a write queued behind another writer stops waiting when cancelled and never runs', async () => {
+    let release = (): void => undefined;
+    const holder = fs.lockForWrite(
+      path,
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await sleep(20);
+    const controller = new AbortController();
+    let ran = false;
+    const queued = rewriteFile(
+      { fs, path, dryRun: false, signal: controller.signal, tool: 'edit' },
+      (content) => {
+        ran = true;
+        return upper(content);
+      },
+    );
+    await sleep(20);
+    controller.abort();
+    const outcome = await Promise.race([
+      queued.then(
+        () => 'resolved',
+        (error: unknown) => (error as Error).name,
+      ),
+      sleep(1000, 'still waiting'),
+    ]);
+    assert.equal(outcome, 'AbortError');
+    release();
+    await holder;
+    await sleep(20);
+    assert.equal(ran, false);
+    assert.equal(await readFile(path, 'utf8'), 'hello\n');
+  });
+
+  it('a cancel after the lock is held waits for the running write to decide', async () => {
+    const controller = new AbortController();
+    let finish = (): void => undefined;
+    let settled = false;
+    const running = rewriteFile(
+      { fs, path, dryRun: false, signal: controller.signal, tool: 'edit' },
+      async (content) => {
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        return upper(content);
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    const outcome = running.catch(() => undefined);
+    await sleep(20);
+    controller.abort();
+    await sleep(50);
+    assert.equal(settled, false);
+    finish();
+    await outcome;
+    assert.equal(settled, true);
+  });
+
   it('a dry run stops waiting on a stalled path check when cancelled', async (t) => {
     t.mock.method(fs.pathGuard, 'validatePathForWrite', () => new Promise<string>(() => undefined));
     const controller = new AbortController();

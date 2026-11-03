@@ -417,7 +417,7 @@ name yourself is refused instead of skipped.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `stat` and `read` stop themselves after 5 seconds by default (the
+- `stat`, `read` and `edit` stop themselves after 5 seconds by default (the
   server's `--tool-timeout` or `FS_TOOL_TIMEOUT_MS` changes this) with a
   `TIMEOUT` error. `find_files`, `search_text` and `list` stop at the same
   deadline but return what they found so far, with
@@ -425,7 +425,9 @@ name yourself is refused instead of skipped.
   [Pagination](#pagination-and-cached-results)). `replace_text` stops at
   the same deadline too: in a live run the files it already rewrote stay
   rewritten, and the text names them. Run a wide replacement with
-  `dryRun: true` first. `maxMatches` is a strict bound: `replace_text`
+  `dryRun: true` first. For `edit`, an item past the deadline fails with
+  `TIMEOUT` and leaves its file unchanged, while files already written in a
+  batch stay written and are named. `maxMatches` is a strict bound: `replace_text`
   replaces at most that many matches, in walk order, and stops mid-file if
   it must. The result says so with `stoppedReason: 'maxMatches'`. A `path`
   that names one file honors an explicit `maxMatches` too. Without one, a

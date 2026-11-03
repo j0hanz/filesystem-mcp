@@ -181,7 +181,7 @@ exceptions:
 | `--allow-missing-roots`   | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
 | `--root-boundary <path>`  |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
 | `--max-file-size <bytes>` | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
-| `--tool-timeout <ms>`     | 5000        | Time limit for one listing, read, search, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                     |
+| `--tool-timeout <ms>`     | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.             |
 | `--port <n>`              |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
 | `--http-host <host>`      | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
 | `--api-key <key>`         |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
@@ -237,20 +237,21 @@ These variables are for HTTP only:
 
 ## Limits
 
-| Limit                                                   | Value                                                                              |
-| :------------------------------------------------------ | :--------------------------------------------------------------------------------- |
-| Largest file `read` loads                               | 10 MiB by default (`--max-file-size`, up to 100 MiB)                               |
-| Total content of one `create` call                      | Same as the file size limit                                                        |
-| Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped                             |
-| Files per `create`, `move` call                         | 100                                                                                |
-| Paths per `read`, `stat`, `delete` call                 | 1000                                                                               |
-| `diff` of one `patch`                                   | 1 MiB (1,048,576 characters)                                                       |
-| `patch` work                                            | File lines x diff lines up to 10,000,000; patch fewer lines at once or use `edit`  |
-| Files per `edit` call                                   | 5, with up to 100 edits per file                                                   |
-| `find_files` / `search_text` results                    | Up to 10,000 per call, paged                                                       |
-| `list` entries                                          | 1000 per page by default, up to 20,000                                             |
-| `list`, `stat`, `read`, search tools and `replace_text` | Time out after 5 seconds by default (`--tool-timeout`); narrow the path or pattern |
-| Cached results and page cursors                         | Expire after about 60 seconds                                                      |
+| Limit                                                           | Value                                                                              |
+| :-------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
+| Largest file `read` loads                                       | 10 MiB by default (`--max-file-size`, up to 100 MiB)                               |
+| Total content of one `create` call                              | Same as the file size limit                                                        |
+| Total text of one batched `read`                                | 512 KiB; files past the budget are reported as skipped                             |
+| Files per `create`, `move` call                                 | 100                                                                                |
+| Paths per `read`, `stat`, `delete` call                         | 1000                                                                               |
+| `diff` of one `patch`                                           | 1 MiB (1,048,576 characters)                                                       |
+| `patch` work                                                    | File lines x diff lines up to 10,000,000; patch fewer lines at once or use `edit`  |
+| Files per `edit` call                                           | 5, with up to 100 edits per file                                                   |
+| `find_files` / `search_text` results                            | Up to 10,000 per call, paged                                                       |
+| `list` entries                                                  | 1000 per page by default, up to 20,000                                             |
+| `list`, `stat`, `read`, search tools, `edit` and `replace_text` | Time out after 5 seconds by default (`--tool-timeout`); narrow the path or pattern |
+| `oldText` of one edit                                           | 1 MiB (1,048,576 characters)                                                       |
+| Cached results and page cursors                                 | Expire after about 60 seconds                                                      |
 
 `read` handles text files and returns images and audio as media. It refuses
 other binary files unless the call passes `binary: true`, which returns them
