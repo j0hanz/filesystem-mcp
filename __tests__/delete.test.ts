@@ -65,6 +65,23 @@ describe('delete body', () => {
     return dir;
   };
 
+  it('names at most 3 failed paths, with code and reason, in a partial batch', async () => {
+    const good = await writeTestFile(root, 'del_partial_ok.txt', 'x');
+    const missing = ['a', 'b', 'c', 'd'].map((n) => join(root, `del_partial_${n}.txt`));
+    const result = await del({ paths: [good, ...missing] });
+
+    assert.strictEqual(result.structured.summary.failed, 4);
+    const [head, ...reasons] = (result.text ?? '').split('\n');
+    assert.match(head ?? '', /\(1\/5 ok\)$/);
+    assert.deepStrictEqual(
+      reasons,
+      result.structured.results
+        .filter((r) => r.error)
+        .slice(0, 3)
+        .map((r) => `// ${r.path}: ${r.error?.code ?? ''} ${r.error?.message ?? ''}`),
+    );
+  });
+
   it('refuses a workspace root, naming the root rather than the parent', async () => {
     // The parent of a root is out-of-root by construction, so the containment
     // check used to answer "Outside allowed directories" for the one directory

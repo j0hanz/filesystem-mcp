@@ -13,6 +13,7 @@ import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
+import { failureLines } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -282,7 +283,10 @@ function buildSummary(
   ];
   const parts = [`${verb}: ${joinRoster(tokens) || 'nothing'}`];
   if (failCount > 0) parts.push(`${String(failCount)} failed`);
-  return parts.join(' · ');
+  const reasons = failureLines(
+    failures.map((f) => ({ path: `${f.source} → ${f.destination}`, error: f.error })),
+  );
+  return [parts.join(' · '), ...reasons].join('\n');
 }
 
 export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({

@@ -59,6 +59,25 @@ describe('edit body', () => {
     }
   });
 
+  it('names each failed path, code and reason in a partial batch', async () => {
+    const good = await writeTestFile(root, 'edit-partial-ok.txt', 'original');
+    const missing = join(root, 'edit-partial-missing.txt');
+    const edits = [{ oldText: 'original', newText: 'modified' }];
+    const result = await edit({
+      files: [
+        { path: good, edits },
+        { path: missing, edits },
+      ],
+    });
+
+    const error = result.structured.results[1]?.error;
+    assert.ok(error);
+    const [head, reason, ...rest] = (result.text ?? '').split('\n');
+    assert.match(head ?? '', /FAILED \(1\/2 ok\)$/);
+    assert.strictEqual(reason, `// ${missing}: ${error.code} ${error.message}`);
+    assert.deepStrictEqual(rest, []);
+  });
+
   it('refuses an empty or blank oldText with one message', async () => {
     const file = await writeTestFile(root, 'edit-blank-old.txt', 'original content');
     for (const oldText of ['', '   ']) {

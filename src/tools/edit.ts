@@ -17,7 +17,7 @@ import {
   RequiredPath,
 } from '../core/schema.ts';
 import { toCrlf, usesCrlf } from '../core/util.ts';
-import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
+import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z.strictObject({
@@ -610,7 +610,8 @@ function formatEditSummary(
     .map((r) => ('value' in r ? (r.value.diff ?? '') : ''))
     .filter((d) => d.includes('\n@@'))
     .join('');
-  return `edit: ${tokens.join(' · ')}${ratio}${tag}${diffs ? `\n\n${diffs}` : ''}`;
+  const head = [`edit: ${tokens.join(' · ')}${ratio}${tag}`, ...failureLines(results)].join('\n');
+  return `${head}${diffs ? `\n\n${diffs}` : ''}`;
 }
 
 export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileValue>>({

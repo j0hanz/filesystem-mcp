@@ -49,7 +49,7 @@ import {
   toCrlf,
   usesCrlf,
 } from '../core/util.ts';
-import { type BatchResult, isTotalFailure } from './batch.ts';
+import { type BatchResult, failureLines, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const SearchAndReplaceInputSchema = z.strictObject({
@@ -560,9 +560,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     // full relative path, not the basename: the error message may not carry
     // the path, and two same-named files in different directories must not
     // render as the same row.
-    for (const r of structured.results.filter((x) => 'error' in x).slice(0, 3)) {
-      lines.push(`// ${r.path}: ${r.error.code} ${r.error.message}`);
-    }
+    lines.push(...failureLines(structured.results));
     if (structured.diffTruncated) {
       lines.push(
         `// diff cut at ${String(MAX_DIFF_SIZE / 1024)} KB: some files' changes are not shown.`,
