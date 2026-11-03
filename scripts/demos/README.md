@@ -1,8 +1,9 @@
 # README demo recordings
 
 Each GIF in `assets/demos/` is one real session: the `gatekeeper` example, this
-server, and a real model. Output is never edited. 
-shape a GIF, so model pauses are shortened and nothing else changes.
+server, and a real model. Output is never edited. Only retakes and a
+per-scenario idle cap shape a GIF, so model pauses are shortened and nothing
+else changes. The cap defaults to 0.7 s; a scenario raises it with `DEMO_IDLE`.
 
 ## Setup
 
