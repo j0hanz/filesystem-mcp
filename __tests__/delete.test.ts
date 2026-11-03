@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -7,12 +7,14 @@ import type * as z from 'zod/v4';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { PathGuard } from '../src/core/path.ts';
 import { DELETE } from '../src/tools/delete.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
   makeGuard,
   trySymlink,
+  withEnv,
   writeTestFile,
 } from './helpers.ts';
 import { choose, runToolBodyResult, type ToolBodyOptions } from './tool-harness.ts';
@@ -123,6 +125,80 @@ describe('delete body', () => {
     } finally {
       await cleanupTestRoot(top);
     }
+  });
+
+  describe('a nested root under an aliased parent', () => {
+    // With /alias -> /real and roots /alias and /alias/sub/proj, a target resolves
+    // to /real/sub, and a root that does not resolve is spelled nowhere under it.
+    const aliasedTree = async (
+      top: string,
+      t: { skip: (message: string) => void },
+    ): Promise<{ real: string; alias: string } | undefined> => {
+      const real = join(top, 'real');
+      const alias = join(top, 'alias');
+      await mkdir(join(real, 'sub'), { recursive: true });
+      await writeFile(join(real, 'sub', 'beside.txt'), 'x');
+      await mkdir(join(real, 'other'));
+      const linked = await trySymlink(real, alias, () => t.skip('symlink creation not permitted'));
+      return linked ? { real, alias } : undefined;
+    };
+    const guardFor = async (roots: string[]): Promise<PathGuard> => {
+      const guard = new PathGuard({ cliAllowedDirs: roots });
+      await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, () => guard.recomputeAllowedDirectories());
+      return guard;
+    };
+
+    it('refuses the parent of a missing root', async (t) => {
+      const top = await createTestRoot();
+      try {
+        const tree = await aliasedTree(top, t);
+        if (!tree) return;
+        const guard = await guardFor([tree.alias, join(tree.alias, 'sub', 'proj')]);
+        const result = await del(
+          { paths: [join(tree.alias, 'sub')], recursive: true },
+          { fs: new GuardedFileSystem(guard) },
+        );
+        assert.strictEqual(result.isError, true);
+        assert.match(result.text ?? '', /Allowed root inside/);
+        await access(join(tree.real, 'sub', 'beside.txt'));
+
+        await guard.validatePathForDelete(join(tree.alias, 'sub', 'beside.txt'));
+        await guard.validatePathForDelete(join(tree.alias, 'other'));
+      } finally {
+        await cleanupTestRoot(top);
+      }
+    });
+
+    it('refuses the parent of a symlink root, and the link by its real spelling', async (t) => {
+      const top = await createTestRoot();
+      try {
+        const tree = await aliasedTree(top, t);
+        if (!tree) return;
+        const elsewhere = join(top, 'elsewhere');
+        await mkdir(elsewhere);
+        const link = join(tree.real, 'sub', 'proj');
+        if (!(await trySymlink(elsewhere, link, () => t.skip('symlink creation not permitted')))) {
+          return;
+        }
+        const guard = await guardFor([tree.alias, join(tree.alias, 'sub', 'proj')]);
+        const fs = new GuardedFileSystem(guard);
+
+        const parent = await del({ paths: [join(tree.alias, 'sub')], recursive: true }, { fs });
+        assert.strictEqual(parent.isError, true);
+        assert.match(parent.text ?? '', /Allowed root inside/);
+
+        const self = await del({ paths: [link] }, { fs });
+        assert.strictEqual(self.isError, true);
+        assert.match(self.text ?? '', /workspace root/i);
+        assert.ok((await lstat(link)).isSymbolicLink());
+
+        // A copy leaves its source in place, so it may still read both.
+        await guard.validatePathForDelete(join(tree.alias, 'sub'), { allowReadOnly: true });
+        await guard.validatePathForDelete(link, { allowReadOnly: true });
+      } finally {
+        await cleanupTestRoot(top);
+      }
+    });
   });
 
   it('leaves the directory in place when the user picks Skip', async () => {

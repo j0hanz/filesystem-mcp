@@ -1249,6 +1249,20 @@ export class PathGuard {
     return resolvedTarget;
   }
 
+  /**
+   * Where each root's own entry sits: its parent's real path plus its name.
+   * With /alias -> /real, a root at /alias/sub/proj that is missing or a link
+   * has no allowed spelling under /real/sub, the path a delete resolves to.
+   */
+  private async rootEntrySpellings(): Promise<string[]> {
+    const entries: string[] = [];
+    for (const root of this.getRoots()) {
+      const realParent = await projectRealPath(dirname(root));
+      if (realParent !== undefined) entries.push(join(realParent, basename(root)));
+    }
+    return entries;
+  }
+
   async validatePathForDelete(
     requestedPath: string,
     /**
@@ -1332,7 +1346,16 @@ export class PathGuard {
       const link = join(normalizedRealParent, basename(target));
       this.assertNotSensitiveFile(target, requestedPath);
       this.assertNotSensitiveFile(link, requestedPath);
-      if (!opts?.allowReadOnly) this.assertWritable(link);
+      if (!opts?.allowReadOnly) {
+        this.assertWritable(link);
+        if ((await this.rootEntrySpellings()).some((entry) => isSamePath(entry, link))) {
+          throw new FsError(
+            ErrorCode.ACCESS_DENIED,
+            'Deleting a workspace root directory is not allowed',
+            requestedPath,
+          );
+        }
+      }
       return link;
     }
 
@@ -1358,7 +1381,7 @@ export class PathGuard {
       // subtree is unaffected.
       if (stats.isDirectory()) {
         // Excludes the root itself: delete.ts names that case, as "workspace root".
-        const root = allowedDirs.find(
+        const root = [...allowedDirs, ...(await this.rootEntrySpellings())].find(
           (dir) => !isSamePath(realTarget, dir) && isPathInsideDirectory(realTarget, dir),
         );
         if (root !== undefined) {
