@@ -29,37 +29,20 @@ no MCP pair (`runToolBodyResult(STAT, args, { roots })`). Test payload assembly
 through it in the tool's own file (`__tests__/stat.test.ts`) and keep the wire
 (in-memory client) for what the executor adds.
 
-## Architecture
-
-```text
-index.ts ──cli──► transport.ts (facade)
-  ├─► transport/stdio.ts   one pinned server per connection
-  └─► transport/http.ts    fresh server per request, shared runtime state
-        └─► server.ts createServer() ──► tools/ prompts/ resources/
-                core/     PathGuard, stores, undo, errors, config
-```
-
-- `src/server.ts` `createServer()` builds the `McpServer` and registers
-  tools/prompts/resources. Its `extraDeps` let the HTTP leg share one
-  `PathGuard`/`ResourceStore`/`PageSnapshotStore`/`UndoJournal`/watcher
-  registry across per-request instances; when omitted (stdio) the instance
-  owns them and clears them on close.
-- Two protocol eras: `legacy` (initialize handshake, pinned connection) and
-  `modern` (stateless per-request HTTP). `ToolDeps.era` carries it; sunset
-  plan in `docs/adr/002-legacy-protocol-paths-sunset.md`. Other decisions in
-  `docs/adr/`.
-- Every tool is a `ToolDef` (`src/tools/define.ts`); `ToolExecutor` wraps every
-  call with relative-path resolution, the access-grant `input_required`
-  round-trip, undo capture, progress, and the stdio 10 MiB oversize refusal.
-  `src/tools/index.ts` owns the tool inventory and the `--read-only` gate.
-- `src/core/path.ts` `PathGuard` owns allowed-roots assembly and per-path
-  validation (symlink resolution, Windows path spellings); the sensitive-file
-  denylist is `src/core/sensitive.ts`.
-- No tool publishes an `outputSchema`; tools that author text ship metadata
-  under `_meta`, the rest use `structuredContent` (see `buildSuccessResponse`).
-
 ## Releases
 
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps
 `package.json`, `server.json`, `mcpb/manifest.json`, `.codex-plugin/plugin.json`,
 and `.cursor-plugin/plugin.json` in sync. Never hand-edit any of those versions.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
