@@ -32,6 +32,24 @@ describe('Rewrite', () => {
     await cleanupTestRoot(root);
   });
 
+  it('a dry run stops waiting on a stalled path check when cancelled', async (t) => {
+    t.mock.method(fs.pathGuard, 'validatePathForWrite', () => new Promise<string>(() => undefined));
+    const controller = new AbortController();
+    const preview = rewriteFile(
+      { fs, path, dryRun: true, signal: controller.signal, tool: 'edit' },
+      upper,
+    );
+    controller.abort();
+    const outcome = await Promise.race([
+      preview.then(
+        () => 'resolved',
+        () => 'rejected',
+      ),
+      sleep(1000).then(() => 'stalled'),
+    ]);
+    assert.strictEqual(outcome, 'rejected');
+  });
+
   /**
    * Holds the file's write lock until the returned release is called. Resolves
    * once the lock is held: lockForWrite validates the path before it queues, so
