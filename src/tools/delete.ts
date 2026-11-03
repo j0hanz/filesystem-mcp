@@ -122,16 +122,16 @@ async function planPath(
 
   const itemType = resolveEntryType(firstStats.stats);
   let hasChildren = false;
+  let holdsProtected = false;
   if (args.recursive && itemType === 'directory') {
     try {
       hasChildren = await fs.hasChildrenUnchecked(validPath);
+      // Only a pending directory needs the walk: nothing else is deleted with contents.
+      holdsProtected = hasChildren && (await fs.holdsProtectedEntry(validPath, inputPath, signal));
     } catch (error) {
       return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
     }
   }
-  // Only a pending directory needs the walk: nothing else is deleted with contents.
-  const holdsProtected =
-    hasChildren && (await fs.holdsProtectedEntry(validPath, inputPath, signal));
   return {
     status: 'plan',
     plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren, holdsProtected },

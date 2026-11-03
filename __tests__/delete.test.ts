@@ -5,6 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { DELETE } from '../src/tools/delete.ts';
 import {
@@ -204,6 +205,37 @@ describe('delete body', () => {
     // A regex, because the prompt names the normalized path, whose drive letter
     // can differ in case from `dir` on Windows.
     assert.match(message, /^Delete ".*holds_nothing" and all its contents\?$/);
+  });
+
+  it('reports an abort during the protected-file walk as cancelled, not unknown', async () => {
+    const dir = join(root, 'holds_env_abort');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, '.env'), 'X=1');
+    const controller = new AbortController();
+    class AbortingFs extends GuardedFileSystem {
+      override holdsProtectedEntry(v: string, r: string, s?: AbortSignal): Promise<boolean> {
+        controller.abort();
+        return super.holdsProtectedEntry(v, r, s);
+      }
+    }
+    const aborting = new AbortingFs(await makeGuard([root]));
+    let asked = false;
+
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        fs: aborting,
+        signal: controller.signal,
+        confirm: () => {
+          asked = true;
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(asked, false);
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    await access(join(dir, '.env'));
   });
 
   it('reports a declined delete as CANCELLED and keeps the directory', async () => {
