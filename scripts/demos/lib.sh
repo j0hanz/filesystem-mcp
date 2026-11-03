@@ -97,6 +97,7 @@ assert_file_has() {
 }
 
 assert_file_lacks() {
+  [[ -r "$DEMO_DIR/$1" ]] || _demo_fail "$1 is missing"
   if grep -qF -- "$2" "$DEMO_DIR/$1"; then _demo_fail "$1 has: $2"; fi
 }
 

@@ -22,7 +22,12 @@ for (const line of raw.split('\n').slice(1)) {
     const [, kind, data] = JSON.parse(line);
     if (kind === 'o') output += data;
   } catch {
-    // A killed recorder can leave a partial last line; the raw scan still covers it.
+    // A killed recorder can leave a partial last line, and the key can end inside it.
+    output += line
+      .replace(/^\[[^,]*,\s*"o",\s*"/u, '')
+      .replaceAll(String.raw`\u001b`, '\u001b')
+      .replaceAll(String.raw`\r`, '\r')
+      .replaceAll(String.raw`\n`, '\n');
   }
 }
 const shown = output.replace(ESCAPES, '').replace(/[\r\n]/gu, '');
