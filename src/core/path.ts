@@ -1357,6 +1357,17 @@ export class PathGuard {
       // delete of its source). Dir-scoped: a plain file beside a read-only
       // subtree is unaffected.
       if (stats.isDirectory()) {
+        // Excludes the root itself: delete.ts names that case, as "workspace root".
+        const root = allowedDirs.find(
+          (dir) => !isSamePath(realTarget, dir) && isPathInsideDirectory(realTarget, dir),
+        );
+        if (root !== undefined) {
+          throw new FsError(
+            ErrorCode.ACCESS_DENIED,
+            `Allowed root inside: ${realTarget} contains ${root}. Deletes and moves of a parent directory are refused there.`,
+            requestedPath,
+          );
+        }
         const inside = this.readOnlySpellings.find((dir) => isPathInsideDirectory(realTarget, dir));
         if (inside !== undefined) {
           throw new FsError(

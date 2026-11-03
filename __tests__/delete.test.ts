@@ -96,6 +96,35 @@ describe('delete body', () => {
     }
   });
 
+  it('refuses a directory that holds another allowed root, and spares its neighbours', async () => {
+    const top = await createTestRoot();
+    const a = join(top, 'a');
+    const sub = join(a, 'sub');
+    const b = join(sub, 'proj');
+    try {
+      await mkdir(b, { recursive: true });
+      await mkdir(join(a, 'other'));
+      await writeFile(join(b, 'keep.txt'), 'keep');
+      await writeFile(join(sub, 'beside.txt'), 'x');
+      const guard = await makeGuard([a, b]);
+      const result = await del(
+        { paths: [sub], recursive: true },
+        { fs: new GuardedFileSystem(guard) },
+      );
+      assert.strictEqual(result.isError, true);
+      assert.match(result.text ?? '', /Allowed root inside/);
+      await access(join(b, 'keep.txt'));
+
+      // A copy leaves its source in place, so it may still read the parent.
+      await guard.validatePathForDelete(sub, { allowReadOnly: true });
+      // The check covers only directories that hold the root.
+      await guard.validatePathForDelete(join(sub, 'beside.txt'));
+      await guard.validatePathForDelete(join(a, 'other'));
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
   it('leaves the directory in place when the user picks Skip', async () => {
     const dir = await nonEmptyDir('del_skip_dir');
     const asked: string[] = [];
