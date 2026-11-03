@@ -566,8 +566,8 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "boolean"
           },
           "caseSensitive": {
-            "default": false,
-            "description": "Enable case-sensitive matching (default: case-insensitive)",
+            "default": true,
+            "description": "Match case exactly (default: true). Pass false to ignore case.",
             "type": "boolean"
           },
           "wholeWord": {
@@ -587,13 +587,6 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "maxMatches": {
             "description": "Maximum total match count across all files before stopping (default: 100)",
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10000
-          },
-          "maxResults": {
-            "description": "Deprecated alias of maxMatches; removed in the next release",
-            "deprecated": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 10000

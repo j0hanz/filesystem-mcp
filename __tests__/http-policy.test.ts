@@ -132,16 +132,22 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(validateBearerAuthorization(validKey, ''), false);
     });
 
+    it('TC-SEC-024b: the auth scheme name is case-insensitive', () => {
+      for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+        assert.strictEqual(
+          validateBearerAuthorization(validKey, `${scheme} ${validKey}`),
+          true,
+          scheme,
+        );
+      }
+      assert.strictEqual(validateBearerAuthorization(validKey, 'bearer wrong-key'), false);
+    });
+
     it('TC-SEC-024: Rejects invalid auth schemes, empty keys, and oversized tokens', () => {
       assert.strictEqual(
         validateBearerAuthorization(validKey, `Basic ${validKey}`),
         false,
         'Basic scheme should be rejected',
-      );
-      assert.strictEqual(
-        validateBearerAuthorization(validKey, `bearer ${validKey}`),
-        false,
-        'Lowercase bearer should be rejected',
       );
       assert.strictEqual(
         validateBearerAuthorization(validKey, `Token ${validKey}`),

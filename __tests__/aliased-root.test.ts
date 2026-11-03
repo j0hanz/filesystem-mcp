@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { encodeFileUriPath, FILESYSTEM_FILE_URI_TEMPLATE } from '../src/core/file-uri.ts';
@@ -11,6 +11,7 @@ import {
   firstTextBlock,
   type TestClientContext,
   trySymlink,
+  withEnv,
 } from './helpers.ts';
 
 // A root configured through an alias (a symlink or junction, a Windows 8.3
@@ -75,5 +76,37 @@ describe('a root configured through an alias', () => {
       relative.some((v) => v.endsWith('alias-probe.txt')),
       JSON.stringify(relative),
     );
+  });
+
+  it('completion hides a name denied under the real path', async (t) => {
+    const realDeny = join(base, 'real-deny');
+    const aliasDeny = join(base, 'alias-deny');
+    await mkdir(join(realDeny, 'private'), { recursive: true });
+    await writeFile(join(realDeny, 'private', 'hidden.txt'), 'h');
+    await writeFile(join(realDeny, 'private', 'visible.txt'), 'v');
+    if (!(await trySymlink(realDeny, aliasDeny, () => undefined))) {
+      return t.skip('symlink not permitted');
+    }
+    const deny = `${realDeny.replaceAll('\\', '/')}/private/hidden*`;
+    await withEnv({ FS_DENYLIST: deny }, async () => {
+      const pair = await createTestClientPair([aliasDeny]);
+      try {
+        const result = await pair.client.complete({
+          ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+          argument: {
+            name: 'path',
+            value: encodeFileUriPath(`${join(aliasDeny, 'private')}${sep}`),
+          },
+        });
+        const values = result.completion.values;
+        assert.ok(
+          values.some((v) => v.endsWith('visible.txt')),
+          JSON.stringify(values),
+        );
+        assert.ok(!values.some((v) => v.endsWith('hidden.txt')), JSON.stringify(values));
+      } finally {
+        await pair.close();
+      }
+    });
   });
 });

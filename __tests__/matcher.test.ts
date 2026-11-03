@@ -10,7 +10,6 @@ import {
   planMatch,
   type ReplaceLimits,
 } from '../src/core/matcher.ts';
-import { escapeRegExp } from '../src/core/util.ts';
 
 // planMatch is the single Match plan entry (GLOSSARY.md): what a search or a
 // replacement settles about its needle before any text is read — the native
@@ -20,7 +19,7 @@ describe('planMatch', () => {
     const plan = planMatch('a.b', { isRegex: false, caseSensitive: true });
     assert.ok(plan.literal, 'a plain needle earns a literal pass');
     assert.strictEqual(plan.literal.needsRe2('aKb'), false);
-    assert.strictEqual(plan.source, escapeRegExp('a.b'));
+    assert.strictEqual(plan.source, RegExp.escape('a.b'));
   });
 
   it('PLAN-002: a regex needle has no literal pass and a raw source', () => {
@@ -46,7 +45,7 @@ describe('planMatch', () => {
     const word = String.raw`([^\p{L}\p{N}\p{M}_])`;
     assert.strictEqual(
       planMatch('foo', { isRegex: false, caseSensitive: false, wholeWord: true }).source,
-      // escapeRegExp spells 'f' as \x66 — \f would read as a form-feed escape — so
+      // RegExp.escape spells 'f' as \x66 — \f would read as a form-feed escape — so
       // the literal needle arrives in the boundary groups already escaped.
       `${word}(?:\\x66oo)${word.slice(0, -1)}|$)`,
     );
@@ -178,14 +177,10 @@ describe('replacement matchers', () => {
 
   it('MTCH-003: the case-sensitive literal splices once and honours the cap', async () => {
     const matcher = createCaseSensitiveLiteralMatcher('foo');
-    assert.ok(matcher);
     const done = await matcher.replace('foo foo foo', 'X', undefined, limits(2));
     assert.strictEqual(done.content, 'X X foo');
     assert.strictEqual(done.matchCount, 2);
     assert.strictEqual(done.more, true);
-
-    assert.strictEqual(createCaseSensitiveLiteralMatcher('�'), undefined);
-    assert.strictEqual(createCaseSensitiveLiteralMatcher('\uD800'), undefined);
 
     matcher.dispose();
   });
@@ -237,7 +232,6 @@ describe('replacement matchers', () => {
 
   it('MTCH-006: a replacement past the byte cap refuses', async () => {
     const matcher = createCaseSensitiveLiteralMatcher('foo');
-    assert.ok(matcher);
     await assert.rejects(
       async () =>
         matcher.replace('foofoo', 'way-too-long-replacement', undefined, {

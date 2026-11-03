@@ -7,7 +7,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { escapeRegExp } from '../src/core/util.ts';
 import { EDIT, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import {
   cleanupTestRoot,
@@ -627,7 +626,7 @@ function oraclePattern(oldText: string): string {
   let pattern = '';
   for (const [i, token] of tokens.entries()) {
     if (i % 2 === 0) {
-      pattern += escapeRegExp(token);
+      pattern += RegExp.escape(token);
     } else if (token.includes('\n')) {
       pattern += newlineRunPattern(token, {
         leading: i === 1 && tokens[0] === '',

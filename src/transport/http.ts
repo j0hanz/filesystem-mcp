@@ -67,6 +67,15 @@ function errorHandlerMiddleware(
     );
     return;
   }
+  if (err.status === 415) {
+    sendJsonRpcError(
+      res,
+      415,
+      JSONRPC_SERVER_ERROR,
+      'Unsupported Media Type: Content-Type charset must be UTF-8',
+    );
+    return;
+  }
   if (err.status === 400) {
     sendJsonRpcError(res, 400, ProtocolErrorCode.ParseError, 'Invalid JSON in request body');
     return;

@@ -14,6 +14,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import type { cp } from 'node:fs/promises';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -29,6 +30,7 @@ import {
   isFsError,
   isNodeError,
 } from '../src/core/errors.ts';
+import type { GuardedFileSystem } from '../src/core/fs.ts';
 import { PathGuard, resolveAllowedDirectoriesState } from '../src/core/path.ts';
 import type { WatcherRegistry } from '../src/core/watcher-registry.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
@@ -150,6 +152,21 @@ export function fsErrorMatcher(
  * FIFO, so hook-based restore re-applies a later block's pins over an earlier
  * block's restore (the two-block suite in security.test.ts pins this).
  */
+/** One-shot copy through the guard: plan, then execute. */
+export async function copyVia(
+  fs: GuardedFileSystem,
+  source: string,
+  destination: string,
+  options?: Parameters<typeof cp>[2],
+): Promise<void> {
+  const plan = await fs.planTransfer(
+    'copy',
+    { source, destination },
+    options ? { copy: options } : {},
+  );
+  await fs.executeTransfer(plan);
+}
+
 export async function withEnv<T>(
   vars: Record<string, string | undefined>,
   fn: () => T | Promise<T>,

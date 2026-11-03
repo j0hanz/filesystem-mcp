@@ -23,6 +23,7 @@ import { EDIT } from '../src/tools/edit.ts';
 import { UNDO } from '../src/tools/undo.ts';
 import {
   cleanupTestRoot,
+  copyVia,
   createStdioClient,
   createTestClientPair,
   createTestHttpHarness,
@@ -330,7 +331,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await writeFile(src, 'cp');
     const cap = capture();
     const fs = makeFs(cap);
-    await fs.cp(src, dest);
+    await copyVia(fs, src, dest);
     assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
   });
 
@@ -341,7 +342,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await writeFile(mid, 'mid');
     const cap = capture();
     const fs = makeFs(cap);
-    await fs.cp(src, join(tmpDir, 'pin-dest.txt')); // abandons: copies are not undoable yet
+    await copyVia(fs, src, join(tmpDir, 'pin-dest.txt')); // abandons: copies are not undoable yet
     await fs.writeFile(mid, 'replaced'); // the mutation runs; nothing is recorded
     await fs.rename(mid, src); // overwrites src; nothing is recorded
     assert.strictEqual((await lstat(src)).size, 8); // the write and rename both ran

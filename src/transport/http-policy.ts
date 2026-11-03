@@ -93,11 +93,11 @@ export function validateBearerAuthorization(
   apiKey: string,
   authHeader: unknown,
 ): authHeader is string {
-  const bearerPrefix = 'Bearer ';
-  if (typeof authHeader !== 'string' || !authHeader.startsWith(bearerPrefix)) {
+  // The scheme name is case-insensitive (RFC 9110, section 11.1).
+  if (typeof authHeader !== 'string' || !/^bearer /iu.test(authHeader)) {
     return false;
   }
-  const userKey = authHeader.slice(bearerPrefix.length).trim();
+  const userKey = authHeader.slice('Bearer '.length).trim();
   const normalizedApiKey = apiKey.trim();
   if (userKey.length > MAX_BEARER_TOKEN_LENGTH || normalizedApiKey.length === 0) {
     return false;

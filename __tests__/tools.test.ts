@@ -808,13 +808,13 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(content, 'QUX bar QUX\n');
   });
 
-  it('replace_text publishes maxResults as deprecated', async () => {
+  it('replace_text publishes maxMatches and no maxResults', async () => {
     const { tools } = await harness.client.listTools();
     const props = tools.find((t) => t.name === 'replace_text')?.inputSchema.properties as {
-      maxResults?: { deprecated?: boolean };
+      maxResults?: object;
       maxMatches?: object;
     };
-    assert.strictEqual(props.maxResults?.deprecated, true);
+    assert.strictEqual(props.maxResults, undefined);
     assert.ok(props.maxMatches);
   });
 
@@ -1006,8 +1006,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // gains maxMatches beside the deprecated maxResults alias; measured 20673.
   // Raised 2026-11-01 to 20900 full and 9900 read-only: list_roots names
   // readOnlyDirs (#162); measured 20849 / 9863.
+  // Lowered 2026-11-03 to 20700 full (read-only unchanged): replace_text drops
+  // the deprecated maxResults alias; measured 20698.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_900;
+    const BUDGET_CHARS = 20_700;
     const BUDGET_CHARS_READ_ONLY = 9_900;
 
     const full = await createTestClientPair([tmpDir]);

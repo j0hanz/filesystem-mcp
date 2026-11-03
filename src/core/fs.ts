@@ -975,23 +975,6 @@ export class GuardedFileSystem {
     await fsSymlink(target, validPath, type);
   }
 
-  /**
-   * One-shot copy: `planTransfer` then `executeTransfer`. `options` go over
-   * the fixed copy defaults.
-   */
-  async cp(
-    source: string,
-    destination: string,
-    options?: Parameters<typeof fsCp>[2],
-  ): Promise<void> {
-    const plan = await this.planTransfer(
-      'copy',
-      { source, destination },
-      options ? { copy: options } : {},
-    );
-    await this.executeTransfer(plan);
-  }
-
   /** The copy half of `executeTransfer`. */
   async #copy(
     source: string,

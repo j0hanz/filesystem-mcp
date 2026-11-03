@@ -9,7 +9,7 @@ import type * as z from 'zod/v4';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
-import { escapeRegExp, MIB } from '../src/core/util.ts';
+import { MIB } from '../src/core/util.ts';
 import { SEARCH_TEXT } from '../src/tools/index.ts';
 import { REPLACE_TEXT } from '../src/tools/replace-text.ts';
 import {
@@ -95,11 +95,35 @@ describe('replace_text body', () => {
     assert.strictEqual(await readFile(literal, 'utf-8'), '$1 $1');
   });
 
+  it('matches case exactly by default, and ignores case when asked', async () => {
+    const file = await writeTestFile(root, 'case/default.txt', 'getUser GetUser GETUSER');
+    const exact = await replace({ path: file, searchPattern: 'getUser', replacement: 'fetchUser' });
+    assert.strictEqual(await readFile(file, 'utf-8'), 'fetchUser GetUser GETUSER');
+    assert.strictEqual(exact.structured.totalMatches, 1);
+
+    await writeFile(file, 'getUser GetUser GETUSER');
+    await replace({ path: file, searchPattern: 'getUser', replacement: 'x', caseSensitive: false });
+    assert.strictEqual(await readFile(file, 'utf-8'), 'x x x');
+  });
+
+  it('a pattern that differs only in case is zero matches, not an error', async () => {
+    const file = await writeTestFile(root, 'case/only.txt', 'GetUser');
+    const result = await replace({ path: file, searchPattern: 'getUser', replacement: 'x' });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structured.totalMatches, 0);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'GetUser');
+  });
+
   it('case-insensitive literal replaces 300 matches in a 3 MB file well inside the deadline', async () => {
     const line = `${'x'.repeat(9990)} Needle\n`;
     const file = await writeTestFile(root, 'ci_literal/big.txt', line.repeat(300));
     const started = Date.now();
-    const result = await replace({ path: file, searchPattern: 'NEEDLE', replacement: 'pin' });
+    const result = await replace({
+      path: file,
+      searchPattern: 'NEEDLE',
+      replacement: 'pin',
+      caseSensitive: false,
+    });
     const elapsed = Date.now() - started;
     assert.notStrictEqual(result.isError, true);
     assert.strictEqual(result.structured.stoppedReason, undefined);
@@ -128,12 +152,18 @@ describe('replace_text body', () => {
       const literal = await writeTestFile(root, `ci_parity/lit${String(i)}.txt`, c.content);
       const regex = await writeTestFile(root, `ci_parity/re${String(i)}.txt`, c.content);
       // '<$&>' must land verbatim from a literal; '<$$&>' is the same text from a regex.
-      const lit = await replace({ path: literal, searchPattern: c.needle, replacement: '<$&>' });
+      const lit = await replace({
+        path: literal,
+        searchPattern: c.needle,
+        replacement: '<$&>',
+        caseSensitive: false,
+      });
       await replace({
         path: regex,
-        searchPattern: escapeRegExp(c.needle),
+        searchPattern: RegExp.escape(c.needle),
         replacement: '<$$&>',
         isRegex: true,
+        caseSensitive: false,
       });
       const rewritten = await readFile(literal, 'utf-8');
       assert.strictEqual(rewritten, await readFile(regex, 'utf-8'), `case ${String(i)}`);
@@ -212,10 +242,15 @@ describe('replace_text body', () => {
     );
     assert.strictEqual(await readFile(sensitive, 'utf-8'), 'uno\r\ndos\r\nthree\r\n');
 
-    // Default caseSensitive: false compiles an RE2 regex from the escaped literal.
+    // caseSensitive: false compiles an RE2 regex from the escaped literal.
     const insensitive = await writeTestFile(root, 'rt-crlf/insensitive.txt', 'One\r\nTwo\r\n');
     assert.strictEqual(
-      await call({ path: insensitive, searchPattern: 'one\ntwo', replacement: 'x\ny' }),
+      await call({
+        path: insensitive,
+        searchPattern: 'one\ntwo',
+        replacement: 'x\ny',
+        caseSensitive: false,
+      }),
       1,
     );
     assert.strictEqual(await readFile(insensitive, 'utf-8'), 'x\r\ny\r\n');
@@ -911,35 +946,18 @@ describe('replace_text body', () => {
       assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
     });
 
-    it('maxResults still caps as a deprecated alias', async () => {
-      // More files than replace_text dispatches at once, so the cap trips mid-sweep.
-      for (let i = 0; i < 10; i++) {
-        await writeTestFile(root, `replace_alias/${String(i)}.txt`, 'x\n');
-      }
-      const result = await replace({
-        path: join(root, 'replace_alias'),
-        searchPattern: 'x',
-        replacement: 'y',
-        dryRun: true,
-        maxResults: 1,
-      });
-      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
-      assert.strictEqual(result.structured.totalMatches, 1);
-    });
-
-    it('refuses maxMatches together with maxResults', async () => {
+    it('refuses the removed maxResults, so a caller cannot lose its cap silently', async () => {
       const issues = await schemaIssues(
         replace({
           path: root,
           searchPattern: 'x',
           replacement: 'y',
           dryRun: true,
-          maxMatches: 1,
           maxResults: 1,
-        }),
+        } as ReplaceArgs),
       );
       assert.ok(
-        issues.includes("Cannot use both 'maxMatches' and 'maxResults'"),
+        issues.some((issue) => issue.includes('maxResults')),
         issues.join('; '),
       );
     });
@@ -1063,7 +1081,7 @@ describe('replace_text body', () => {
             matches: 2,
           },
         ],
-        {},
+        { caseSensitive: false },
       );
     });
 
