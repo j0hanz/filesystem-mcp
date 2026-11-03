@@ -10,16 +10,16 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 
 ## Execution order & status
 
-| Plan | Title                                                   | Priority | Effort | Depends on | Status                                                                                                                                                                           |
-| ---- | ------------------------------------------------------- | -------- | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | 056        | PARTIAL (step 1 only; blocked on 056; branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`)                                                                     |
-| 077  | Inline single-use hop helpers                           | P2       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
-| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
-| 079  | Single unicode fold primitive for search                | P3       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
-| 080  | Enforce coverage floor on all runners                   | P3       | S      | —          | TODO — commit dda3542b                                                                                                                                                           |
-| 081  | Regex search survives lossy files                       | P1       | S      | —          | DONE: review approved; branch `advisor/081-regex-search-survives-lossy-files`, tip `c694f5ad`, PR #193 open                                                                      |
-| 082  | Warn before deleting protected files                    | P2       | S      | —          | DONE: merged to `main` in #194                                                                                                                                                   |
-| 083  | writeFile keeps owner, flushes, handles long names      | P2       | S      | —          | DONE: review approved; branch `advisor/083-writefile-keeps-owner-durable-long-names`, tip `3c31d53a`, not merged; uses `lchown`, not the plan's `chown`; root-only tests not run |
+| Plan | Title                                                   | Priority | Effort | Depends on                 | Status                                                                                                                            |
+| ---- | ------------------------------------------------------- | -------- | ------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | — (056 deleted, see notes) | PARTIAL (step 1 only, not on `main`; local branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`; steps 2-3 open) |
+| 077  | Inline single-use hop helpers                           | P2       | S      | —                          | REJECTED: never named its helpers, and `isEntryAccessible` is now called from `fs.ts`, not `list.ts`                              |
+| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —                          | REJECTED: `isPathAllowed` is gone and `makeGuard` is async; what remains is a one-line constructor call                           |
+| 079  | Single unicode fold primitive for search                | P3       | S      | —                          | REJECTED: `foldUnicodeSpelling` is gone; `matcher.ts` owns search folding, and path folding differs on purpose                    |
+| 080  | Enforce coverage floor on all runners                   | P3       | S      | —                          | TODO — commit dda3542b                                                                                                            |
+| 081  | Regex search survives lossy files                       | P1       | S      | —                          | DONE: merged to `main` in #193                                                                                                    |
+| 082  | Warn before deleting protected files                    | P2       | S      | —                          | DONE: merged to `main` in #194                                                                                                    |
+| 083  | writeFile keeps owner, flushes, handles long names      | P2       | S      | —                          | DONE: merged to `main` in #195; uses `lchown`, not the plan's `chown`                                                             |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -27,8 +27,10 @@ abandoned)
 
 ## Dependency notes
 
-- **056 before 061.** 061 runs stdio lease tests concurrently, which adds
-  load. 056 has to find out first whether load is what drops notifications.
+- **061 no longer has a live dependency.** It was written to wait for 056, which
+  closed as diagnostics only with the root cause open (PR #64) and was deleted in
+  `a0a91de2`. So nobody has established whether load drops notifications. Step
+  3's ten-run stability check and its revert rule are the only guard for step 2.
 
 ## Findings considered and rejected
 
@@ -92,16 +94,19 @@ From the 2026-10-12 testing & merge-gate audit at `3da494ae`:
   noise. 059 boots the production trees instead.
 - An `npm pack` → install-from-tarball smoke test: still deferred (plan
   046's note). 059's Docker and MCPB boots cover the prod-deps question.
-- Dependabot: still rejected (exact SDK pins). The weekly SDK canary (below)
-  is the pin-respecting alternative.
+- Dependabot: rejected here for exact SDK pins, then reversed. See the note in
+  the next list.
 - Lint ban on static `it.skip` / `describe.skip`: there are none today, and
   `.only` cannot leak under `node --test` without `--test-only`. Low value.
 
 - Per-request `createServer` on the HTTP leg: measured 1.9 ms warm per
   request; tool shapes and stores are already shared. Not worth it.
-- Splitting `src/core/path.ts` (815 lines): one cohesive `PathGuard` class on
-  a security boundary; a split buys nothing verifiable.
-- Dependabot: would fight the deliberate exact pins on `@modelcontextprotocol/*`.
+- Splitting `src/core/path.ts` (815 lines then, 1576 on 2026-11-03): still one
+  `PathGuard` class on a security boundary, lines 228-1576. Its growth is more
+  guard state, not a second concern, so a split still buys nothing verifiable.
+- Dependabot: reversed. `.github/dependabot.yml` (added in `c550ab34`, grouped in
+  `53082e5e`) opens weekly npm and GitHub Actions PRs. The
+  `@modelcontextprotocol/*` pins stay exact, and those PRs bump them.
 - `.mcpregistry_*` token files in the repo root: gitignored and untracked;
   local-only, not a finding.
 - `search_text` collecting up to 10,000 results regardless of page size:
@@ -201,8 +206,8 @@ re-read by the advisor):
 - `create`/`move` moving onto the shared `{ results, summary }` envelope:
   a wire-shape change; the release type is the operator's call. Presented,
   not planned.
-- SHA-pinning GitHub Actions: without an automated bumper (Dependabot was
-  rejected) SHA pins rot; tag pins stay. Noted in plan 036.
+- SHA-pinning GitHub Actions: reversed. Every workflow pins actions to SHAs
+  since `c550ab34`, and Dependabot's weekly group keeps them from rotting.
 - `define.ts` churn (69 commits): a hub file touched by every cross-cutting
   sweep, not a missing seam. Layering is clean (`core/` imports nothing
   from `tools/`/`transport/`).
@@ -334,10 +339,10 @@ From the 2026-10-09 SDK 2.3.1 / adapter review at `8941498f`:
 
 ## Found but not planned (available for a later run)
 
-Found while reviewing plan 083 on 2026-11-03 (branch tip `3c31d53a`):
+Found while reviewing plan 083 on 2026-11-03:
 
 - **`writeFile`'s `fsChmod(tempPath, mode)` follows a symlink.** `chmod(2)` does
-  (`fs.ts:773` on that branch), and it predates 083. With a root server writing
+  (`fs.ts:774`), and it predates 083. With a root server writing
   in a directory another user controls, swapping a symlink in at the temp path
   applies the target file's mode to whatever the link names. Not reproduced.
   Doing the chown and chmod on an open handle (`fchown`, `fchmod`) would close
@@ -354,10 +359,6 @@ From the 2026-11-03 deep audit at `5ebbd489` (not selected):
   (71% line coverage on Windows). Pin the marker search, the ceiling, and the
   case where a `package.json` in home resolves to home, which is refused and
   leaves no root from the walk. Effort S.
-- **`replace_text`'s `maxResults` alias is overdue.** It has shipped since
-  v2.12.0; `CHANGELOG.md:188` and `replace-text.ts:97-104` both promise removal
-  in the next release. Removing it breaks callers, so the release type is the
-  maintainer's call. Effort S.
 - **HTTP keep-alive contradicts its own comment.** `http.ts:46-48` says the
   timeout must exceed any proxy's idle timeout, and sets 5 s. Common proxies
   idle for 60 s or more. No failure has been reported. Effort S, confidence MED.
@@ -370,9 +371,6 @@ From the 2026-11-03 deep audit at `5ebbd489` (not selected):
 - **Direction: mention undo in the `replace_text` timeout hint.**
   `replace-text.ts:558` warns about re-runs but omits undo, though a partial run
   should still get an id. Effort S; check that first.
-- **This index needs `/improve reconcile`.** The MCPB read-only and deny items
-  below have shipped, and 061 waits on plan 056, which has been deleted. Plan
-  079's excerpts also predate `matcher.ts`.
 
 From the 2026-10-13 standard audit at `8deb0d50` (not selected):
 
@@ -402,31 +400,15 @@ recursive: true, ignoreIfNotExists: true }`: if `d` is removed while the
   only `stdio`; README sells Streamable HTTP. An OCI entry with `--port`,
   `FS_API_KEY` (`isSecret`) and `FS_ALLOWED_HOSTS`. Registry validation
   rules unchecked. S–M.
-- **Direction: MCPB `--deny` / `--allow`.** The documented fix for
-  "Sensitive file blocked" is `--allow '.env.example'`
-  (`docs/configuration.md:329-332`); `mcpb/manifest.json` offers only
-  `allowed_directories`. Bundle with the logged MCPB `--read-only` item. S.
+- **Direction: MCPB `--allow`.** The documented fix for "Sensitive file blocked"
+  is `--allow '.env.example'`; `mcpb/manifest.json` sets `FS_DENYLIST` but not
+  `FS_ALLOWLIST`. S.
 - **Direction: all-or-nothing `replace_text`.** Scan and plan within the
   deadline, then write without one, so a timeout never leaves a partial
   refactor. Supersedes plan 066's text line. M; spike first.
 
 From the 2026-10-12 testing & merge-gate audit at `3da494ae` (not selected):
 
-- **[FIXED in `92bdb2a7`, 2.8.0: delete confirmations are bound to sealed
-  `dev`/`ino`/`birthtimeMs` identities.]** **Product: a confirmed `delete` also removes a different object swapped
-  in during confirmation.** It was reproduced with a scratch test against
-  `3da494ae` on Windows. A recursive delete of `d/` is confirmed; while the
-  human confirms, `d/` is replaced by a file, or by a different non-empty
-  directory. The retry deletes the replacement and reports
-  `deleted: true`. The `requestState` seals only the pending **path set**
-  (`delete.ts:294-317`, `input-required.ts` `PendingState`), and the retry
-  re-plans from scratch. The identity check in `delete.ts:199-219` (and
-  `move.ts:210-222`) therefore never compares against what was shown. Its
-  comment ("a swap during the confirmation gap … fails closed") is
-  inaccurate for the current flow. One option: seal `dev`/`ino`/`birthtimeMs`
-  per pending path into the HMAC state and refuse a mismatch on retry.
-  Whether a confirmation binds to an object or to a path is the maintainer's
-  call. Effort M, risk MED.
 - **Cross-transport parity tests.** Most tool tests run on the in-memory
   pair, which serializes nothing and sets no `ctx.transport`. `7abdfe99`
   (the stdio-only read cap regressing HTTP) was caught by review, not by a
@@ -443,10 +425,6 @@ From the 2026-10-12 testing & merge-gate audit at `3da494ae` (not selected):
   `--requirements 2026-07-28`) is a spec-authored oracle with a per-check
   expected-failures baseline. Run it once locally against
   `node dist/index.js --port …` before deciding on a CI job.
-- **Weekly SDK canary (direction).** A scheduled job that runs
-  `npm i --no-save @modelcontextprotocol/*@latest && npm run check` warns
-  before a bump PR without touching the pins
-  (`modelcontextprotocol/servers` `sdk-watch.yml` is the model). Effort S.
 - **Commit the stress/fuzz harness (direction).** PR #62 / `8855acaf`
   found six high-severity bugs with a sweep that was never committed. Either
   commit it as a `scripts/` tool, or add `fast-check` properties for the two
@@ -527,8 +505,6 @@ Direction (options for the maintainer, evidence in the audit):
   step 6a; 2.6.3 shipped the `${NAME}` placeholder it needed; the remaining
   steps live in the marketplace repository and need the maintainer
   interactively.
-- MCPB bundle cannot enable `--read-only` (no env mirror, `cli.ts:96`;
-  `mcpb/manifest.json` offers only `allowed_directories`). S–M.
 - Overwrite confirmations show no diffstat (`create.ts:150-153`). S–M.
 - Multi-file `patch` is marked deferred in code (`patch.ts:82-84`) while
   `replace_text` dry runs emit exactly that format. L; spike first.
@@ -540,13 +516,8 @@ anchors (039).
 
 From the SDK re-audit at `1eb94134`:
 
-- Dead code, three spots:
-  - A second, never-firing 5 s timeout at `src/tools/list.ts:283` (the tool's
-    `timeoutMs` already bounds `ctx.signal`).
-  - A duplicate `validateExistingPath` at `src/resources.ts:220` (`readRaw`
-    validates again at `src/core/fs.ts:365`).
-  - Notifier branches that cannot run in production at
-    `src/server.ts:151-154` and `src/resources.ts:497-500`.
+- Dead code: notifier branches that cannot run in production at
+  `src/server.ts:151-154` and `src/resources.ts:497-500`.
 - Stale docs:
   - ADR-002 anchors (`resources.ts:452-559` is now 475-547; `define.ts:159-162`
     is now 166-177; `README.md:294` is now 312-314).
@@ -555,8 +526,6 @@ From the SDK re-audit at `1eb94134`:
   - Wrong comments at `src/tools/list.ts:340-343`, `src/transport/http.ts:240-243`,
     `src/server.ts:78-81`, `src/core/schema.ts:10-12`,
     `src/core/errors.ts:173-178` and `src/transport/stdio.ts:103`.
-  - `README.md:291,302` still refer to `src/transport.ts` as the transport
-    module.
 - Elicitation answer readers accept values that were never offered
   (`src/core/input-required.ts:116-118`). Validating with the SDK's
   `acceptedContent(schema)` against the offered `z.enum` would put the check

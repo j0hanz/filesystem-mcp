@@ -17,9 +17,10 @@
 > Confirm `createRawStdioServer` and `createStdioClient` still keep no
 > module-level state.)
 >
-> **Precondition**: run `grep -n '^| 056' plans/README.md`. If its Status is
-> not `DONE…`, do Step 1 and Step 4 only, skip Steps 2–3, and set the 061 row
-> to `PARTIAL (step 1 only; blocked on 056)`.
+> **Precondition (superseded)**: plan 056 was deleted in `a0a91de2`, closed as
+> diagnostics only with the root cause open (PR #64). Do not wait for it. Step 3's
+> stability check and revert rule are the guard for step 2. Step 1 exists only
+> on the local branch at `6c0ebe6c`, so reapply it on a fresh branch from `main`.
 
 ## Status
 
