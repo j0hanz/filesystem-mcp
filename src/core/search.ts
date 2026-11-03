@@ -5,13 +5,16 @@ import {
   createYielder,
   execMatches,
   freeRegex,
+  isRe2Abort,
   type LineHit,
   type LiteralMatcher,
   MAX_MATCHES_PER_LINE,
   planMatch,
   RE2_MAX_INPUT_BYTES,
+  re2AbortError,
   type Regex,
 } from './matcher.ts';
+import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
 import type { ScanScope, StoppedReason } from './scan.ts';
 import { readText, scan, ScanSkip, skipOf } from './scan.ts';
@@ -150,7 +153,26 @@ interface ScanContext {
   named: boolean;
 }
 
+/**
+ * A RE2 abort is not the file being unreadable, which is what the Scan would
+ * count a throw as. A named file fails the call with the reason; a walked file
+ * counts as too large, and the log says what happened.
+ */
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
+  try {
+    return await scanFileBody(entryPath, scanCtx);
+  } catch (error) {
+    if (!isRe2Abort(error)) throw error;
+    if (scanCtx.named) throw re2AbortError(entryPath, error);
+    Logger.warn(
+      `Regex engine ran out of memory on ${entryPath}; regex search may keep failing until the server restarts.`,
+    );
+    // Only a named file's refusal reads the size, and that branch threw above.
+    return new ScanSkip({ kind: 'tooLarge', size: 0 });
+  }
+}
+
+async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
   const verdict = await readText(scanCtx.fs, entryPath, scanCtx.signal);
   if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
@@ -165,7 +187,11 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
   if (literal && !literal.mayMatch(buffer)) return { matches: [] };
   const content = buffer.toString('utf-8');
-  if (!literal && canPrefilter(scanCtx.source, buffer)) {
+  // RE2 receives the decoded text, not the raw bytes. Each invalid byte in an
+  // undecodable file decodes to U+FFFD, which is 3 bytes, so the raw size can
+  // understate the input threefold and exhaust the engine's fixed heap.
+  const decodedBytes = verdict.kind === 'text' ? buffer.length : Buffer.byteLength(content, 'utf8');
+  if (!literal && canPrefilter(scanCtx.source, buffer, decodedBytes)) {
     scanCtx.prefilter.lastIndex = 0;
     if (scanCtx.prefilter.exec(content) === null) return { matches: [] };
   }
@@ -176,11 +202,11 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // file has, for matching or for context.
   const lineCount =
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-  // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
+  // A single line past RE2_MAX_INPUT_BYTES aborts the wasm module and leaks its heap
   // the process; report the file tooLarge instead. Only a buffer over the bound
   // can hold such a line, so ordinary files skip the per-line measure, and a
   // literal match never hands a line to RE2.
-  const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
+  const checkLineSize = !literal && decodedBytes > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
   const yielder = createYielder(scanCtx.signal);
   let cut = false;
@@ -337,8 +363,8 @@ export async function searchContent(
 }
 
 /** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
-function canPrefilter(source: string, buffer: Buffer): boolean {
-  if (buffer.length > RE2_MAX_INPUT_BYTES) return false;
+function canPrefilter(source: string, buffer: Buffer, decodedBytes: number): boolean {
+  if (decodedBytes > RE2_MAX_INPUT_BYTES) return false;
   if (BUFFER_ANCHOR_RE.test(source)) return false;
   if (INLINE_FLAGS_RE.test(source)) return false;
   if (source.includes('$') && buffer.includes(CR)) return false;

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replace_text` reports skips in the same line.** The `· N binary skipped`, `· N too large skipped` and `· N inaccessible skipped` segments become one `// skipped ...` line.
 - **A named file that cannot be scanned fails the call.** `search_text` on a named binary or too-large file answered `No matches`; it now refuses, as it does for a named file with a line too long for a regex search. `replace_text` refusing a named file now answers with tool error text and no `results` row, using the refusals `read` and `edit` give: `BINARY_FILE`, `File too large for replace_text`, and the UTF-16 advice.
 
+### Fixed
+
+- **Regex search no longer exhausts its engine on non-UTF-8 files.** `search_text` sized the engine's input by a file's raw bytes, so a file of about 2.8 MiB or more of mostly invalid bytes aborted the engine, lost that file's matches, and reported it as inaccessible. Each abort also shrank what the engine could take until restart, until regex search failed on small files. The size is now measured after decoding. If the engine still runs out of memory, a walked file counts as too large and a named file answers `TOO_LARGE` with advice.
+
 ## [2.15.0] - 2026-11-02
 
 A correctness release. Directory transfers recheck the sensitive-file policy
