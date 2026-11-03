@@ -243,6 +243,28 @@ describe(
       assert.ok(!isPathWithinDirectories(PROJECT_ROOT, local.getAllowedDirectories()));
     });
 
+    it('offers no grant for a local file link that resolves to a share', async (t) => {
+      const link = String.raw`C:\fs-mcp-review\link.txt`;
+      const fs = stubFilesystem(t);
+      fs.realpath.mock.mockImplementation((path: string) =>
+        Promise.resolve(
+          path.toLowerCase() === link.toLowerCase()
+            ? String.raw`\\fs-mcp-test.invalid\share\secret.txt`
+            : path,
+        ),
+      );
+      // A file: the walk up to a grant directory would stop at its local parent.
+      fs.stat.mock.mockImplementation((path) =>
+        Promise.resolve({
+          isDirectory: () => String(path).toLowerCase() !== link.toLowerCase(),
+        } as never),
+      );
+      const local = new PathGuard();
+      local.initialize([String.raw`C:\fs-mcp-review\root`]);
+
+      assert.deepEqual(await local.precheckAccess([link]), []);
+    });
+
     it('entryVerdict rules on an out-of-root share without realpath', async (t) => {
       const fs = stubFilesystem(t);
       assert.equal(

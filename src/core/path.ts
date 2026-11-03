@@ -516,7 +516,9 @@ export class PathGuard {
       if (isPathWithinDirectories(normalized, allowedDirs)) {
         continue;
       }
-      if (isUncOrDevicePath(normalized)) {
+      // The requested path itself, not only its grant directory: a file link's
+      // grant directory is its local parent, which says nothing about its target.
+      if (await this.isUnsafeGrantTarget(normalized)) {
         continue;
       }
       const targetDir = normalizePath(await this.resolveGrantTargetDir(normalized));

@@ -457,7 +457,8 @@ Filesystem MCP runs entirely on your machine. This policy covers the npm
 package, the Docker image, and the `.mcpb` desktop extension.
 
 - **Data collection:** none. The server has no telemetry, analytics, or crash
-  reporting, and makes no outbound network requests.
+  reporting, and starts no network connections of its own. `SECURITY.md` names
+  the Windows paths that make the OS contact a host.
 - **Use and storage:** the server reads and writes files only inside the
   folders you allow, and only when your MCP client calls a tool. Tool results go to that
   client and nowhere else. Short-lived result caches and the undo history

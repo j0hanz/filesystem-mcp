@@ -56,8 +56,9 @@ allowing a folder that holds secrets, are not.
   allowed.
 - **Anything the AI can read leaving your machine.** The server starts no
   network connections of its own, but on Windows, resolving a local link whose
-  target is a network share, or using a share you configured as a root, makes
-  the OS contact that host. Your AI client may also send what it reads to its
+  target is a network share, reading a path on a mapped network drive, or using
+  a share you configured as a root, makes the OS contact that host. Your AI
+  client may also send what it reads to its
   model provider.
 - **Instructions hidden in files.** File contents reach the AI unfiltered, so
   allow only folders whose contents you trust the AI to read.
