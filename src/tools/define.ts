@@ -27,6 +27,7 @@ import { GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
   pendingRoundTrip,
+  type PendingState,
   readAcceptedConfirm,
   readAcceptedMultiChoice,
   type RoundBind,
@@ -404,7 +405,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     if (grantDirs.length === 0) return undefined;
     // The grant round always comes first. A folder still ungranted in a later
     // round was declined, and validateAccess fails it closed.
-    const state = this.toolCtx.requestState?.();
+    const state = this.toolCtx.requestState?.<PendingState>();
     if (state !== undefined && state.op !== 'grant') return undefined;
 
     // One grant dir: a single boolean confirm. Multiple: one multi-select
