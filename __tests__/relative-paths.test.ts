@@ -200,6 +200,84 @@ describe('relative paths', () => {
     });
   });
 
+  it('a declined grant plus an accepted overwrite writes the rest and stops asking', async () => {
+    const outside = join(base, 'declined');
+    await mkdir(outside, { recursive: true });
+    await writeTestFile(root, 'existing.txt', 'old');
+    const prompts: string[] = [];
+    const harness = await createElicitationClientPair([root], (request) => {
+      const { message, requestedSchema } = request.params as {
+        message: string;
+        requestedSchema?: { properties?: Record<string, unknown> };
+      };
+      prompts.push(message);
+      return 'choice' in (requestedSchema?.properties ?? {})
+        ? { action: 'accept' as const, content: { choice: 'overwrite' } }
+        : { action: 'decline' as const };
+    });
+    try {
+      const result = await harness.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: join(outside, 'n.txt'), content: 'n' },
+            { path: 'existing.txt', content: 'new' },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+      assert.strictEqual(prompts.length, 2, JSON.stringify(prompts));
+      assert.strictEqual(await readFile(join(root, 'existing.txt'), 'utf-8'), 'new');
+      await assert.rejects(readFile(join(outside, 'n.txt')));
+      const { failures } = result.structuredContent as {
+        failures: { error: { code: string } }[];
+      };
+      assert.strictEqual(failures[0]?.error.code, 'ACCESS_DENIED');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('a partly accepted multi-folder grant plus an overwrite stops asking', async () => {
+    const outsideA = join(base, 'partly-a');
+    const outsideB = join(base, 'partly-b');
+    await mkdir(outsideA, { recursive: true });
+    await mkdir(outsideB, { recursive: true });
+    await writeTestFile(root, 'existing.txt', 'old');
+    const prompts: string[] = [];
+    const harness = await createElicitationClientPair([root], (request) => {
+      const { message, requestedSchema } = request.params as {
+        message: string;
+        requestedSchema?: { properties?: { choice?: { items?: { enum?: string[] } } } };
+      };
+      prompts.push(message);
+      if (!message.startsWith('Grant filesystem access')) {
+        return { action: 'accept' as const, content: { choice: 'overwrite' } };
+      }
+      const first = requestedSchema?.properties?.choice?.items?.enum?.[0];
+      return { action: 'accept' as const, content: { choice: first ? [first] : [] } };
+    });
+    try {
+      const result = await harness.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: join(outsideA, 'n.txt'), content: 'a' },
+            { path: join(outsideB, 'n.txt'), content: 'b' },
+            { path: 'existing.txt', content: 'new' },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+      assert.strictEqual(prompts.length, 2, JSON.stringify(prompts));
+      assert.strictEqual(await readFile(join(outsideA, 'n.txt'), 'utf-8'), 'a');
+      await assert.rejects(readFile(join(outsideB, 'n.txt')));
+      assert.strictEqual(await readFile(join(root, 'existing.txt'), 'utf-8'), 'new');
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('keeps a relative path meaning one file across the rounds of a confirmed call', async () => {
     // The first round asks for a grant, the second for an overwrite. A grant
     // that counted as a root would make the third round resolve the same
