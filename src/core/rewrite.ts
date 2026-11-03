@@ -1,5 +1,6 @@
 import type { Stats } from 'node:fs';
 
+import { withAbort } from './concurrency.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
@@ -80,9 +81,11 @@ export function rewriteEntry<T>(
   });
 }
 
-/** A dry run never writes, so it needs no lock. */
-function locked<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
-  return request.dryRun ? body() : request.fs.lockForWrite(request.path, body);
+/** A dry run never writes, so it takes no lock, but it answers the same refusals as a write. */
+async function locked<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
+  if (!request.dryRun) return request.fs.lockForWrite(request.path, body);
+  await withAbort(request.fs.pathGuard.validatePathForWrite(request.path), request.signal);
+  return body();
 }
 
 /**
@@ -100,6 +103,7 @@ async function apply<T>(
 ): Promise<Rewritten<T>> {
   const { fs, dryRun, signal, transport } = request;
   const written = !dryRun && change.write;
+  if (dryRun && change.write) fs.assertNoReadOnlyHardLink(validPath, stats);
   let modified = stats.mtime.toISOString();
   if (written) {
     await fs.writeFile(request.path, change.content, { signal });
