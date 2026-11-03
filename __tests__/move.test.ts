@@ -147,10 +147,10 @@ describe('move body', () => {
   it('a failed forced file copy over an existing file keeps the old bytes and leaves no temp file', async (t) => {
     const src = await writeTestFile(root, 'copy_fail_src.txt', 'new bytes');
     const dst = await writeTestFile(root, 'copy_fail_dst.txt', 'old bytes');
-    // Stand in for an unreadable source: a forced cp unlinks the destination
-    // first, then the copy of the source fails.
+    // Stand in for an unreadable source: the copy leaves partial bytes behind
+    // before its failure is raised.
     t.mock.method(fsPromises, 'cp', async (_source: unknown, destination: string) => {
-      await fsPromises.unlink(destination);
+      await fsPromises.writeFile(destination, 'partial copy bytes');
       throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
     });
     syncBuiltinESMExports();
