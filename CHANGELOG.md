@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`, including through a hard link. They now answer the same refusal.
+- **UNC and device paths are refused before any filesystem call.** On Windows, the access-grant check on a path such as `\\server\share\x.txt` touched it first, which could connect to the named host and send the user's NTLM credentials. Paths outside the allowed roots on a share or under `\\?\` or `\\.\` now answer `ACCESS_DENIED` without a connection or a prompt, and a client's workspace root on a share is no longer added. A share configured as a root keeps working.
 
 ### Changed
 

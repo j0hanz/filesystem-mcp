@@ -25,6 +25,7 @@ import {
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
+  isUncOrDevicePath,
   isUnresolvableDrivePath,
   isWindowsDrivePath,
   isWindowsDriveRelativePath,
@@ -408,6 +409,13 @@ export class PathGuard {
       // A server bug, not an entry the scan can skip.
       if (!this.allowedDirectoriesState) throw error;
       if (isFsError(error) && error.code === ErrorCode.ACCESS_DENIED) {
+        const normalized = normalizePath(entryPath);
+        if (
+          isUncOrDevicePath(normalized) &&
+          !isPathWithinDirectories(normalized, this.allowedDirectoriesState)
+        ) {
+          return 'inaccessible';
+        }
         // The denylist and the out-of-root check share this code; the real path tells them apart.
         try {
           return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
@@ -436,10 +444,12 @@ export class PathGuard {
    * into the allowed set, so a lexical-only check let a symlink or junction
    * aliasing $HOME/C:\Windows in under an innocuous name — and the confirmation
    * prompt showed the alias, not the target. A target that cannot be resolved
-   * is judged lexically; it does not exist to escape into.
+   * is judged lexically; it does not exist to escape into. A UNC or device path
+   * is refused before any filesystem call, which could reach the named host.
    */
   private async isUnsafeGrantTarget(targetDir: string): Promise<boolean> {
     const normalized = normalizePath(targetDir);
+    if (isUncOrDevicePath(normalized)) return true;
     if (isUnsafeCwdPath(normalized)) return true;
     let resolved: string;
     try {
@@ -501,6 +511,9 @@ export class PathGuard {
         continue;
       }
       if (isPathWithinDirectories(normalized, allowedDirs)) {
+        continue;
+      }
+      if (isUncOrDevicePath(normalized)) {
         continue;
       }
       const targetDir = normalizePath(await this.resolveGrantTargetDir(normalized));

@@ -152,6 +152,10 @@ export const hasAlternateDataStream = (requestedPath: string): boolean =>
 export const isUnresolvableDrivePath = (requestedPath: string): boolean =>
   IS_WINDOWS ? isWindowsDriveRelativePath(requestedPath) : isWindowsDrivePath(requestedPath);
 
+// A filesystem call on such a path can open a connection to the named host and send the user's NTLM credentials.
+export const isUncOrDevicePath = (normalizedPath: string): boolean =>
+  IS_WINDOWS && normalizedPath.startsWith('\\\\');
+
 export function expandHome(filepath: string): string {
   if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');

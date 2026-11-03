@@ -66,11 +66,18 @@ add these folders, even if you say yes:
   `~/.docker`, `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, and any folder
   that contains one, such as `~/.config`. Existing folders under `~/.config` are
   fine, but one that does not exist yet is refused: its nearest existing folder
-  is `~/.config`.
+  is `~/.config`;
+- on Windows, network shares and device paths (`\\server\share`, `\\?\...`,
+  `\\.\...`).
 
 Symlinks are resolved first, so a link that points at one of these folders is
 refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
 given, because you named them on purpose.
+
+The server refuses network shares and device paths with `ACCESS_DENIED` without
+touching the path, so it never connects to the named host and never prompts. A
+share you configure as a root keeps working, but folders on it outside that root
+are refused too.
 
 ## Secret files
 
