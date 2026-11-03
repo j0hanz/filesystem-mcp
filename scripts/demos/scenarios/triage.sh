@@ -1,4 +1,4 @@
-# Find a crash in a 14 MB log without reading it.
+# Find a crash in a 14 MB log without reading all of it.
 
 DEMO_IDLE=1.5
 

@@ -1,4 +1,4 @@
-# Undo restores the agent's change and keeps yours.
+# Undo skips a file you edited since, so your edit stays.
 
 fixture() {
   demo_file src/a.ts 'export const limit = 10;\nconst t = 1;\n'

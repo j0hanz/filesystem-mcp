@@ -1,5 +1,7 @@
-# Review different edits to three files as one diff before anything is written.
+# Review different edits to three files as one diff before they are written.
 
+# Taller terminal: the batch preview must show all three files on one screen.
+DEMO_ROWS=46
 DEMO_IDLE=1
 
 fixture() {

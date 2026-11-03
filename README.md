@@ -15,10 +15,10 @@ Secret files stay hidden, and risky changes wait for your OK.
 
 [![filesystem-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp/badges/card.svg)](https://glama.ai/mcp/servers/j0hanz/filesystem-mcp)
 
-Real sessions with a real model. The `apply?` prompt comes from the example [gatekeeper](examples/clients/gatekeeper/) client, not the server.
+Real sessions with a real model, except the web client demo. The `apply?` prompt comes from the example [gatekeeper](examples/clients/gatekeeper/) client, not the server.
 
 <details open>
-<summary><b>Undo restores the agent's change and keeps yours</b></summary>
+<summary><b>Undo skips a file you edited since, so your edit stays</b></summary>
 
 ![A model removes a line from a.ts and b.ts. You then edit b.ts in a second pane. Asked to undo, the server restores a.ts, reports b.ts SKIPPED, and your edit stays](assets/demos/undo.gif)
 
@@ -53,7 +53,7 @@ Real sessions with a real model. The `apply?` prompt comes from the example [gat
 </details>
 
 <details>
-<summary><b>Review different edits to three files as one diff before anything is written</b></summary>
+<summary><b>Review different edits to three files as one diff before they are written</b></summary>
 
 ![A model adds a retries option. One preview shows different edits to client.ts, server.ts and types.ts, which are written only after approval](assets/demos/review.gif)
 
@@ -67,7 +67,7 @@ Real sessions with a real model. The `apply?` prompt comes from the example [gat
 </details>
 
 <details>
-<summary><b>Find a crash in a 14 MB log without reading it</b></summary>
+<summary><b>Find a crash in a 14 MB log without reading all of it</b></summary>
 
 ![A model finds a 14 MB log, reads only its tail, names the db pool error, points at src/pool.ts, and reports that reading the whole log would have cost about 3.5 million tokens](assets/demos/triage.gif)
 

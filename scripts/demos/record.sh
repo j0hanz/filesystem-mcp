@@ -28,8 +28,9 @@ mkdir -p "$DEMO_DIR"
 fixture
 
 DEMO_IDLE="${DEMO_IDLE:-0.7}"
+DEMO_ROWS="${DEMO_ROWS:-28}"
 agent="$repo/examples/clients/gatekeeper/agent.ts"
-tmux -f /dev/null new-session -d -s "$DEMO_SESSION" -x 90 -y 28 -c "$DEMO_DIR" \
+tmux -f /dev/null new-session -d -s "$DEMO_SESSION" -x 90 -y "$DEMO_ROWS" -c "$DEMO_DIR" \
   "exec node '$agent' '$DEMO_DIR' --provider gemini --model gemini-flash-latest"
 tmux set-option -t "$DEMO_SESSION" status off >/dev/null
 
@@ -43,24 +44,28 @@ done
   exit 3
 }
 
-asciinema rec --headless --quiet --window-size 90x28 --idle-time-limit "$DEMO_IDLE" \
+asciinema rec --headless --quiet --window-size "90x$DEMO_ROWS" --idle-time-limit "$DEMO_IDLE" \
   --output-format asciicast-v2 --command "tmux attach -t $DEMO_SESSION" "$cast" &
 recorder=$!
-trap 'kill -9 "$recorder" 2>/dev/null || true; tmux kill-session -t "$DEMO_SESSION" 2>/dev/null || true' EXIT
+
+# Every way out scans the cast, because abort paths are where error text reaches the screen.
+stop_recording() {
+  kill -9 "$recorder" 2>/dev/null || true
+  wait "$recorder" 2>/dev/null || true
+  if [[ -f "$cast" ]] && grep -qaF -- "$GEMINI_API_KEY" "$cast"; then
+    rm -f "$cast"
+    echo 'the recording held the API key; cast deleted' >&2
+    exit 1
+  fi
+}
+trap 'stop_recording; tmux kill-session -t "$DEMO_SESSION" 2>/dev/null || true' EXIT
 sleep 1
 
 script
 
 # Stop while the session is still on screen, so no detach text is captured.
 sleep 1
-kill -9 "$recorder" 2>/dev/null || true
-wait "$recorder" 2>/dev/null || true
-
-if grep -qaF -- "$GEMINI_API_KEY" "$cast"; then
-  rm -f "$cast"
-  echo 'the recording held the API key; cast deleted' >&2
-  exit 1
-fi
+stop_recording
 
 check "$cast"
 
