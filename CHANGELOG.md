@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A recursive delete says when it would remove protected files.** A folder holding a file on the secret-file list asked only "and all its contents?", though listings hide those files and the delete cannot be undone. The confirmation now says both. The delete still proceeds when approved. A folder that cannot be fully inspected refuses the delete instead.
 - **Regex search no longer exhausts its engine on non-UTF-8 files.** `search_text` sized the engine's input by a file's raw bytes, so a file of about 2.8 MiB or more of mostly invalid bytes aborted the engine, lost that file's matches, and reported it as inaccessible. Each abort also shrank what the engine could take until restart, until regex search failed on small files. The size is now measured after decoding. If the engine still runs out of memory, a walked file counts as too large and a named file answers `TOO_LARGE` with advice.
 
 ## [2.15.0] - 2026-11-02

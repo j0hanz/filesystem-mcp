@@ -62,6 +62,8 @@ interface DeletePlan {
   firstStats: LstatResult;
   /** Recursive + non-empty directory: needs a round-trip confirmation. */
   pending: boolean;
+  /** Pending, and holds an entry the sensitive-file policy protects. */
+  holdsProtected: boolean;
 }
 
 type PlanResult =
@@ -77,7 +79,11 @@ type PlanResult =
 async function planPath(
   inputPath: string,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  fs: Pick<GuardedFileSystem, 'pathGuard' | 'lstat' | 'hasChildrenUnchecked'>,
+  fs: Pick<
+    GuardedFileSystem,
+    'pathGuard' | 'lstat' | 'hasChildrenUnchecked' | 'holdsProtectedEntry'
+  >,
+  signal?: AbortSignal,
 ): Promise<PlanResult> {
   let validPath: string;
   try {
@@ -116,16 +122,19 @@ async function planPath(
 
   const itemType = resolveEntryType(firstStats.stats);
   let hasChildren = false;
+  let holdsProtected = false;
   if (args.recursive && itemType === 'directory') {
     try {
       hasChildren = await fs.hasChildrenUnchecked(validPath);
+      // Only a pending directory needs the walk: nothing else is deleted with contents.
+      holdsProtected = hasChildren && (await fs.holdsProtectedEntry(validPath, inputPath, signal));
     } catch (error) {
       return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
     }
   }
   return {
     status: 'plan',
-    plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren },
+    plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren, holdsProtected },
   };
 }
 
@@ -213,6 +222,15 @@ async function executePlan(
   return finalizeDeletion(plan, args, ctx);
 }
 
+/** What the Confirmation asks. A person cannot see protected files in any listing, so it names them. */
+function deletePrompt(plan: DeletePlan): string {
+  if (plan.itemType !== 'directory') return `Delete "${plan.validPath}"?`;
+  const question = `Delete "${plan.validPath}" and all its contents?`;
+  return plan.holdsProtected
+    ? `${question} It holds files protected by the sensitive-file policy, which listings hide, so this delete cannot be undone.`
+    : question;
+}
+
 async function handleDelete(
   args: DeleteInput,
   ctx: ToolCtx,
@@ -226,7 +244,7 @@ async function handleDelete(
   // Phase 1 (no mutation): plan every path.
   const planned = await processInParallel(
     paths,
-    (inputPath) => planPath(inputPath, args, ctx.fs),
+    (inputPath) => planPath(inputPath, args, ctx.fs, ctx.signal),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
@@ -290,10 +308,7 @@ async function handleDelete(
       path: plan.validPath,
       identity: identityOf(plan.firstStats.stats),
       required: plan.pending,
-      message:
-        plan.itemType === 'directory'
-          ? `Delete "${plan.validPath}" and all its contents?`
-          : `Delete "${plan.validPath}"?`,
+      message: deletePrompt(plan),
     })),
   );
   if (isInputRequiredResult(confirmed)) return confirmed;

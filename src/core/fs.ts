@@ -1176,6 +1176,54 @@ export class GuardedFileSystem {
   }
 
   /**
+   * True when a directory a delete would remove holds an entry the sensitive-file
+   * policy protects, under its validated or requested spelling. Listings hide
+   * such entries and a Capture refuses them, so the Confirmation must say so.
+   * Links are not followed. A directory that cannot be read refuses the delete:
+   * the failure may clear before the delete runs, and the Confirmation could
+   * not say what the directory holds.
+   */
+  async holdsProtectedEntry(
+    validPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const pending = [''];
+    for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
+      signal?.throwIfAborted();
+      let dirents: Dirent[];
+      try {
+        dirents = await withAbort(fsReaddir(join(validPath, rel), { withFileTypes: true }), signal);
+      } catch (error) {
+        rethrowIfAborted(error);
+        // A deadline's TimeoutError is not read as aborted, so the signal decides.
+        signal?.throwIfAborted();
+        // An entry that vanished mid-walk holds nothing to warn about.
+        if (isNotFoundErrno(error)) continue;
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Delete refused: the directory could not be fully inspected for protected entries',
+          requestedPath,
+          error,
+        );
+      }
+      for (const dirent of dirents) {
+        const name = join(rel, dirent.name);
+        if (
+          this.pathGuard.isSensitive(join(validPath, name)) ||
+          this.pathGuard.isSensitive(join(requestedPath, name))
+        ) {
+          return true;
+        }
+        if (dirent.isDirectory()) pending.push(name);
+      }
+    }
+    // A deadline that fired during the last read still ends the call, even with no entries left.
+    signal?.throwIfAborted();
+    return false;
+  }
+
+  /**
    * Direct children of a directory, leaving out entries the guard treats as
    * sensitive so the count never reveals what listings hide. Hidden and
    * ignored entries count: this answers "is it empty?", not "what would list show?".
