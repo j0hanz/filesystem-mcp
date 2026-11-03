@@ -312,6 +312,31 @@ export function* flexMatches(content: string, oldText: string, from = 0): Genera
 
 /** A candidate's walk is bounded by oldText; yield between candidates. */
 const WALK_SLICE_MS = 5;
+const PREFIX_UNITS = 16;
+
+/**
+ * `content.indexOf(literal, from)` that yields `undefined` each WALK_SLICE_MS and
+ * returns the index (-1 for none). V8's indexOf goes roughly quadratic on a long
+ * repetitive literal, so it searches a short prefix and verifies the rest.
+ */
+export function* findFrom(
+  content: string,
+  literal: string,
+  from: number,
+): Generator<undefined, number> {
+  const prefix = literal.slice(0, PREFIX_UNITS);
+  let last = Date.now();
+  let i = content.indexOf(prefix, from);
+  while (i !== -1) {
+    if (content.startsWith(literal, i)) return i;
+    if (Date.now() - last >= WALK_SLICE_MS) {
+      yield undefined;
+      last = Date.now();
+    }
+    i = content.indexOf(prefix, i + 1);
+  }
+  return -1;
+}
 
 /** flexMatches, plus an `undefined` each time the walk has run for WALK_SLICE_MS. */
 function* flexWalk(
@@ -326,7 +351,7 @@ function* flexWalk(
   // gap walks back over whitespace only, so candidate starts rise with the
   // literal's offset and the first hit that fits is the leftmost match.
   let floor = from;
-  let at = content.indexOf(first, floor);
+  let at = yield* findFrom(content, first, floor);
   let last = Date.now();
   while (at !== -1) {
     if (Date.now() - last >= WALK_SLICE_MS) {
@@ -336,12 +361,12 @@ function* flexWalk(
     const start = spec.lead ? walkLeadBack(content, at, spec.lead, floor) : at;
     const end = start === -1 ? -1 : walkForward(content, at, spec);
     if (end === -1) {
-      at = content.indexOf(first, at + 1);
+      at = yield* findFrom(content, first, at + 1);
       continue;
     }
     yield { start, length: end - start };
     floor = end;
-    at = content.indexOf(first, floor);
+    at = yield* findFrom(content, first, floor);
   }
 }
 
@@ -405,15 +430,18 @@ async function findEditMatches(
 
   // Non-overlapping, so the scan stays linear on repetitive content; the one
   // overlap that matters — a second match inside the only one — is checked after.
-  for (
-    let i = content.indexOf(oldText);
-    i !== -1;
-    i = content.indexOf(oldText, i + oldText.length)
-  ) {
+  const indexOf = async (from: number): Promise<number> => {
+    const walk = findFrom(content, oldText, from);
+    for (let r = walk.next(); ; r = walk.next()) {
+      if (r.done) return r.value;
+      if (await tick()) signal?.throwIfAborted();
+    }
+  };
+  for (let i = await indexOf(0); i !== -1; i = await indexOf(i + oldText.length)) {
     if (add(i, oldText.length)) break;
   }
   if (found.count === 1 && found.first) {
-    const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
+    const overlap = await indexOf(afterCodePoint(content, found.first.startIndex));
     if (overlap !== -1) add(overlap, oldText.length);
   }
   return found;

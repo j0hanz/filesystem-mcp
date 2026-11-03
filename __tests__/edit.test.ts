@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { EDIT, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
+import { EDIT, findFrom, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -901,5 +901,55 @@ describe('edit whitespace walk stays responsive', () => {
     assert.strictEqual(result.isError, true);
     assert.match(JSON.stringify(result.structured), /no match/u);
     await unchanged();
+  });
+
+  for (const ignoreWhitespace of [true, false]) {
+    it(`keeps a timer firing and cancels promptly in a no-whitespace walk (ignoreWhitespace ${String(ignoreWhitespace)})`, async () => {
+      bytes = 'a'.repeat(1_048_576);
+      await writeFile(file, bytes);
+      const oldText = `${'a'.repeat(8000)}b${'a'.repeat(7999)}`;
+      let ticks = 0;
+      const timer = setInterval(() => {
+        ticks += 1;
+      }, 10);
+      const t0 = Date.now();
+      try {
+        const result = await run(
+          { path: file, edits: [{ oldText, newText: '' }], ignoreWhitespace },
+          cancelAfter(200),
+        );
+        assert.strictEqual(result.isError, true);
+        assert.strictEqual(firstError(result)?.code, 'CANCELLED');
+      } finally {
+        clearInterval(timer);
+      }
+      assert.ok(Date.now() - t0 < 2000, `took ${String(Date.now() - t0)} ms`);
+      assert.ok(ticks >= 5, `ticks: ${String(ticks)}`);
+      await unchanged();
+    });
+  }
+
+  it('findFrom equals indexOf', () => {
+    const cases: [string, string, number][] = [
+      ['abcabcabc', 'abc', 0],
+      ['abcabcabc', 'abc', 1],
+      ['abcabcabc', 'abc', 7],
+      ['x😀y😀z', '😀', 0],
+      ['x😀y😀z', '😀y', 2],
+      ['aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'a'.repeat(20), 3],
+      [`${'a'.repeat(40)}b${'a'.repeat(40)}`, `${'a'.repeat(20)}b`, 0],
+      ['abc', 'abcd', 0],
+      ['abc', 'c', 5],
+    ];
+    for (const [content, literal, from] of cases) {
+      const walk = findFrom(content, literal, from);
+      let r = walk.next();
+      while (!r.done) r = walk.next();
+      assert.strictEqual(
+        r.value,
+        content.indexOf(literal, from),
+        JSON.stringify([content, literal, from]),
+      );
+    }
   });
 });

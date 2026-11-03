@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A whitespace-flexible `edit` no longer blocks the server.** On a large repetitive file that never matched, the `ignoreWhitespace` walk ran for seconds without yielding, so a cancel could not land and every client stalled. The walk now yields to the event loop, honours cancel and times out at the tool deadline, leaving the file unchanged.
+- **`edit` no longer blocks the server on a repetitive file.** On a large repetitive file that never matched, the `ignoreWhitespace` walk, and the exact search for a long `oldText` without whitespace, ran for seconds without yielding, so a cancel could not land and every client stalled. The search now yields to the event loop, honours cancel and times out at the tool deadline, leaving the file unchanged.
 - **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`, including through a hard link. They now answer the same refusal.
 
 ### Changed
