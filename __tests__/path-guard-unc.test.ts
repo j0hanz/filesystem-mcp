@@ -9,7 +9,11 @@ import type { TestContext } from 'node:test';
 import { ErrorCode } from '../src/core/errors.ts';
 import { Logger } from '../src/core/observability.ts';
 import { suggestPaths } from '../src/core/path-completer.ts';
-import { isUncOrDevicePath, normalizePath } from '../src/core/path-utils.ts';
+import {
+  isPathWithinDirectories,
+  isUncOrDevicePath,
+  normalizePath,
+} from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { seedRootsFromClient } from '../src/transport/stdio.ts';
 import {
@@ -211,6 +215,21 @@ describe(
       const fs = stubFilesystem(t);
       await suggestPaths(guard, SHARE_PREFIX);
       assert.equal(fs.total(), 0);
+    });
+
+    it('refuses a grant to a local link that resolves to a share', async (t) => {
+      const link = String.raw`C:\fs-mcp-review\link`;
+      const fs = stubFilesystem(t);
+      fs.realpath.mock.mockImplementation((path: string) =>
+        Promise.resolve(path.toLowerCase() === link.toLowerCase() ? PROJECT_ROOT : path),
+      );
+      fs.stat.mock.mockImplementation(() => Promise.resolve({ isDirectory: () => true } as never));
+      const local = new PathGuard();
+      local.initialize([String.raw`C:\fs-mcp-review\root`]);
+
+      assert.deepEqual(await local.precheckAccess([link]), []);
+      assert.equal(await local.applyGrant(link), false);
+      assert.ok(!isPathWithinDirectories(PROJECT_ROOT, local.getAllowedDirectories()));
     });
 
     it('entryVerdict rules on an out-of-root share without realpath', async (t) => {

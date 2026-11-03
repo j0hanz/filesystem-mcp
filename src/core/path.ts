@@ -457,7 +457,10 @@ export class PathGuard {
     } catch {
       return false;
     }
-    return !isSamePath(resolved, normalized) && isUnsafeCwdPath(resolved);
+    return (
+      !isSamePath(resolved, normalized) &&
+      (isUnsafeCwdPath(resolved) || isUncOrDevicePath(resolved))
+    );
   }
 
   /** Walk up from a blocked path to the closest existing ancestor directory. */
