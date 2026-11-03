@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import {
+import fsPromises, {
   mkdir,
   mkdtemp,
   rename as nodeRename,
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -133,6 +136,69 @@ describe('GuardedFileSystem Transfer', { concurrency: false }, () => {
       rejectsWith(ErrorCode.CANCELLED, /replaced after the overwrite was approved/u),
     );
     assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'swapped');
+  });
+
+  it('keeps the plain cp refusal of a non-recursive directory copy, merged or not', async () => {
+    const { root, fs } = await setup();
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'a.txt'), 'new');
+    const dst = join(root, 'dst');
+    await mkdir(dst);
+    await writeFile(join(dst, 'a.txt'), 'old');
+    const plan = await fs.planTransfer(
+      'copy',
+      { source: join(root, 'src'), destination: dst },
+      { copy: { recursive: false } },
+    );
+    await assert.rejects(fs.executeTransfer(plan));
+    assert.equal(await readFile(join(dst, 'a.txt'), 'utf8'), 'old');
+  });
+
+  it('passes preserveTimestamps: false through to a staged overwrite', async (t) => {
+    const { root, fs } = await setup();
+    await mkdir(join(root, 'src'));
+    await mkdir(join(root, 'dst'));
+    await writeFile(join(root, 'src', 'over.txt'), 'new');
+    await writeFile(join(root, 'dst', 'over.txt'), 'old');
+    await writeFile(join(root, 'single_src.txt'), 'new');
+    await writeFile(join(root, 'single_dst.txt'), 'old');
+    const oldTime = new Date('2001-02-03T04:05:06.000Z');
+    await utimes(join(root, 'src'), oldTime, oldTime);
+    await utimes(join(root, 'src', 'over.txt'), oldTime, oldTime);
+    // Windows CopyFile preserves a source file's times however the option is
+    // set, so the option's reach is asserted on the staged cp call itself.
+    const realCp = fsPromises.cp;
+    const stagedOptions: unknown[] = [];
+    t.mock.method(
+      fsPromises,
+      'cp',
+      async (source: unknown, destination: string, options: unknown) => {
+        if (typeof destination === 'string' && destination.includes('.tmp')) {
+          stagedOptions.push(options);
+        }
+        return (realCp as (...args: unknown[]) => Promise<void>)(source, destination, options);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      for (const pair of [
+        { source: join(root, 'src'), destination: join(root, 'dst') },
+        { source: join(root, 'single_src.txt'), destination: join(root, 'single_dst.txt') },
+      ]) {
+        const plan = await fs.planTransfer('copy', pair, { copy: { preserveTimestamps: false } });
+        await fs.executeTransfer(plan);
+      }
+      assert.equal(stagedOptions.length, 2, 'one staged copy per overwrite');
+      for (const options of stagedOptions) {
+        assert.equal((options as { preserveTimestamps?: boolean }).preserveTimestamps, false);
+      }
+      assert.equal(await readFile(join(root, 'dst', 'over.txt'), 'utf8'), 'new');
+      // The merged directory keeps its own times when preservation is off.
+      assert.notEqual((await stat(join(root, 'dst'))).mtimeMs, oldTime.getTime());
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
   });
 
   it('cancels a move whose source link was retargeted after the plan', async (t) => {
