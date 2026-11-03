@@ -200,17 +200,19 @@ describe('Write-path and root guards (issue #200)', () => {
     }
   });
 
-  it('a newline-separated FS_DENYLIST denies every listed name', () => {
-    withEnv({ FS_DENYLIST: '*.pem\n*.key\n', FS_ALLOWLIST: undefined }, () => {
+  it('a newline-separated FS_DENYLIST denies every listed name', async () => {
+    // Operator entries, not built-ins: a broken newline split must show here,
+    // not hide behind a pattern the built-in list already denies.
+    await withEnv({ FS_DENYLIST: '*.ledger\n*.deck\n', FS_ALLOWLIST: undefined }, async () => {
       const matcher = new SensitiveMatcher();
-      assert.equal(matcher.isSensitive('/proj/server.pem'), true);
-      assert.equal(matcher.isSensitive('/proj/server.key'), true);
+      assert.equal(matcher.isSensitive('/proj/a.ledger'), true);
+      assert.equal(matcher.isSensitive('/proj/a.deck'), true);
       assert.equal(matcher.isSensitive('/proj/main.ts'), false);
     });
   });
 
-  it('a newline-separated FS_ALLOWLIST relieves every listed name', () => {
-    withEnv({ FS_ALLOWLIST: '*.pem\n*.key', FS_DENYLIST: undefined }, () => {
+  it('a newline-separated FS_ALLOWLIST relieves every listed name', async () => {
+    await withEnv({ FS_ALLOWLIST: '*.pem\n*.key', FS_DENYLIST: undefined }, async () => {
       const matcher = new SensitiveMatcher();
       assert.equal(matcher.isSensitive('/proj/server.pem'), false);
       assert.equal(matcher.isSensitive('/proj/server.key'), false);
