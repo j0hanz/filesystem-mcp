@@ -597,6 +597,14 @@ describe('Security (P0)', () => {
         '.docker/config.json',
         '.kube/config',
         'gcloud/application_default_credentials.json',
+        '.git/config',
+        '.yarnrc.yml',
+        '.config/gh/hosts.yml',
+        '.azure/accessTokens.json',
+        '.azure/a/b.json',
+        '.config/gcloud/credentials.db',
+        'terraform.tfstate',
+        'x.tfstate.backup',
       ];
       for (const name of denied) {
         assert.strictEqual(matcher.isSensitive(name), true, `${name} must be denied`);
@@ -604,10 +612,27 @@ describe('Security (P0)', () => {
       // `*id_ed25519*` also catches `id_ed25519.pub`, exactly as `*id_rsa*`
       // catches `id_rsa.pub` today — an accepted over-match, so no `.pub`
       // or `.md` sibling is asserted readable here.
-      const allowed = ['docker/config.json', 'kube/config', 'netrc.txt', 'README.md'];
+      const allowed = [
+        'docker/config.json',
+        'kube/config',
+        'netrc.txt',
+        'README.md',
+        '.git/HEAD',
+        'git/config',
+        'src/config',
+        '.config/gh/config.yml',
+        'azure/x',
+        'tfstate.md',
+      ];
       for (const name of allowed) {
         assert.strictEqual(matcher.isSensitive(name), false, `${name} must stay readable`);
       }
+    });
+
+    it('--allow lifts a newly denied file', async () => {
+      await withEnv({ FS_ALLOWLIST: '.git/config' }, () => {
+        assert.strictEqual(new SensitiveMatcher().isSensitive('/r/.git/config'), false);
+      });
     });
 
     it('every built-in deny entry is pinned and is the only one denying its fixture', async () => {
@@ -628,6 +653,13 @@ describe('Security (P0)', () => {
         '.kube/config': '/home/u/.kube/config',
         'application_default_credentials.json': '/r/application_default_credentials.json',
         '.mcpregistry_*_token': '/r/.mcpregistry_github_token',
+        '.git/config': '/r/.git/config',
+        '.yarnrc.yml': '/r/.yarnrc.yml',
+        '.config/gh/hosts.yml': '/home/u/.config/gh/hosts.yml',
+        '.azure/**': '/home/u/.azure/accessTokens.json',
+        '.config/gcloud/**': '/home/u/.config/gcloud/credentials.db',
+        '*.tfstate': '/r/terraform.tfstate',
+        '*.tfstate.*': '/r/terraform.tfstate.backup',
         '*.pem': '/r/server.pem',
         '*.key': '/r/server.key',
         '*.p12': '/r/cert.p12',
