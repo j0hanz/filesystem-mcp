@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`. They now answer the same refusal.
+
 ### Changed
 
 - **Binary refusals have their own error code, `BINARY_FILE`.** `read`, `edit`, `patch` and `diff` refusing a binary file (`Binary file detected.`) answered `INVALID_INPUT`. They now answer `BINARY_FILE`, so a client can tell the refusal apart without matching the message. A UTF-16 file still answers `INVALID_INPUT`.

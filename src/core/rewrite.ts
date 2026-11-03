@@ -80,9 +80,11 @@ export function rewriteEntry<T>(
   });
 }
 
-/** A dry run never writes, so it needs no lock. */
-function locked<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
-  return request.dryRun ? body() : request.fs.lockForWrite(request.path, body);
+/** A dry run never writes, so it takes no lock, but it answers the same refusals as a write. */
+async function locked<R>(request: RewriteRequest, body: () => Promise<R>): Promise<R> {
+  if (!request.dryRun) return request.fs.lockForWrite(request.path, body);
+  await request.fs.pathGuard.validatePathForWrite(request.path);
+  return body();
 }
 
 /**

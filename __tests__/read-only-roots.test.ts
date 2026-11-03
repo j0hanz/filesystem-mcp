@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { link, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -629,5 +629,96 @@ describe('read-only roots over the MCP surface', { concurrency: false }, () => {
     const entry = value.results?.[0]?.value;
     assert.equal(entry?.type, 'symlink', JSON.stringify(value));
     assert.equal(typeof entry?.symlinkTarget, 'string', JSON.stringify(value));
+  });
+});
+
+// A dry run promises what the live call would do, so it answers the same
+// read-only refusal; a preview of a write the root refuses would mislead.
+describe('dry runs under a read-only root', { concurrency: false }, () => {
+  let base: string;
+  let rw: string;
+  let ro: string;
+  let pair: TestClientContext;
+
+  const edits = [{ oldText: 'retries = 1', newText: 'retries = 3' }];
+
+  before(async () => {
+    base = await createTestRoot();
+    rw = join(base, 'rw');
+    ro = join(base, 'ro');
+    await mkdir(rw);
+    await mkdir(ro);
+    await writeFile(join(rw, 'x.txt'), 'retries = 1\n');
+    await writeFile(join(ro, 'x.txt'), 'retries = 1\n');
+    pair = await createTestClientPair([base], { readOnlyDirs: [ro] });
+  });
+
+  after(async () => {
+    await pair.close();
+    await cleanupTestRoot(base);
+  });
+
+  it('RO-DRY-001: edit is refused', async () => {
+    const result = await pair.client.callTool({
+      name: 'edit',
+      arguments: { path: join(ro, 'x.txt'), edits, dryRun: true },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Read-only root:/u);
+  });
+
+  it('RO-DRY-002: patch is refused', async () => {
+    const result = await pair.client.callTool({
+      name: 'patch',
+      arguments: {
+        path: join(ro, 'x.txt'),
+        diff: '--- x.txt\n+++ x.txt\n@@ -1,1 +1,1 @@\n-retries = 1\n+retries = 3\n',
+        dryRun: true,
+      },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Read-only root:/u);
+  });
+
+  it('RO-DRY-004: edit outside the read-only root still previews, writing nothing', async () => {
+    const result = await pair.client.callTool({
+      name: 'edit',
+      arguments: { path: join(rw, 'x.txt'), edits, dryRun: true },
+    });
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text ?? '');
+    assert.match(firstTextBlock(result).text ?? '', /\+retries = 3/u);
+    assert.strictEqual(await readFile(join(rw, 'x.txt'), 'utf8'), 'retries = 1\n');
+  });
+
+  it('RO-DRY-005: edit through a symlink into the read-only root is refused', async (t) => {
+    const alias = join(rw, 'alias.txt');
+    if (!(await trySymlink(join(ro, 'x.txt'), alias, () => undefined))) {
+      return t.skip('symlink not permitted');
+    }
+    const result = await pair.client.callTool({
+      name: 'edit',
+      arguments: { path: alias, edits, dryRun: true },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /Read-only root:/u);
+    await rm(alias);
+  });
+
+  // Last: its live half rewrites rw/x.txt.
+  it('RO-DRY-003: replace_text skips the root as the live call does', async () => {
+    const args = { path: base, searchPattern: 'retries = 1', replacement: 'retries = 3' };
+    const dry = await pair.client.callTool({
+      name: 'replace_text',
+      arguments: { ...args, dryRun: true },
+    });
+    const dryText = firstTextBlock(dry).text ?? '';
+    assert.doesNotMatch(dryText, /ro[\\/]x\.txt/u);
+    assert.match(dryText, /rw[\\/]x\.txt/u);
+    assert.match(dryText, /1 inaccessible entry/u);
+
+    const live = await pair.client.callTool({ name: 'replace_text', arguments: args });
+    const countOf = (r: typeof dry) => (r._meta as { totalMatches: number }).totalMatches;
+    assert.strictEqual(countOf(dry), countOf(live));
+    assert.strictEqual(await readFile(join(ro, 'x.txt'), 'utf8'), 'retries = 1\n');
   });
 });
