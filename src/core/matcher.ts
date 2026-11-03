@@ -111,6 +111,25 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     matchLine: (line) => countOccurrences(foldAsciiCase(line), lower),
   };
 }
+
+/** True for the abort re2-wasm raises when its fixed heap is exhausted. */
+export function isRe2Abort(error: unknown): boolean {
+  return (
+    error instanceof Error && error.name === 'RuntimeError' && error.message.startsWith('Aborted(')
+  );
+}
+
+/** The refusal a heap-exhausting call gets. An abort leaks heap, so it warns about what follows. */
+export function re2AbortError(path: string | undefined, cause: unknown): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    'The regex engine ran out of its fixed 16 MB of memory. Regex search can keep failing on smaller inputs until the server restarts.',
+    path,
+    cause,
+    'Restart the server.',
+  );
+}
+
 /**
  * Compile a pattern on RE2 rather than on V8's irregexp.
  *
@@ -128,9 +147,10 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
  * Every compiled pattern owns memory in re2-wasm's fixed 16 MB heap, which
  * `ALLOW_MEMORY_GROWTH` is off for. re2-wasm never frees it and a
  * FinalizationRegistry does not keep up (V8 sees no pressure from the wasm
- * heap), so exhaustion is an emscripten `abort()` that kills regex search for
- * the rest of the process. Every caller MUST pass the result to
- * {@link freeRegex} when it is done with it.
+ * heap), so exhaustion is an emscripten `abort()`. An abort leaks heap: each one
+ * shrinks the largest input the engine can take, until regex search fails on
+ * small files too. Only a restart restores it. Every caller MUST pass the
+ * result to {@link freeRegex} when it is done with it.
  */
 export function compileRegex(
   pattern: string,
@@ -140,6 +160,7 @@ export function compileRegex(
   try {
     return new RE2(pattern, flags);
   } catch (error) {
+    if (isRe2Abort(error)) throw re2AbortError(undefined, error);
     if (!(error instanceof SyntaxError)) throw error;
     throw new SyntaxError(
       `${error.message} — lookahead, lookbehind, and backreferences are not supported.`,

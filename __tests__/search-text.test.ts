@@ -631,6 +631,72 @@ describe('search_text body', () => {
     assert.strictEqual(structured.totalMatches, 1);
   });
 
+  /** A valid head past the 512-byte binary probe, then `tail` undecodable bytes. */
+  const lossyBody = (tail: Buffer): Buffer =>
+    Buffer.concat([Buffer.from(`${'text line\n'.repeat(100)}NEEDLE here\n`), tail]);
+
+  it('finds a match in a lossy file whose decoded text outgrows the regex limit', async () => {
+    const dir = join(root, 'lossy_lines');
+    await mkdir(dir, { recursive: true });
+    // 64 KiB invalid-byte lines: 3.9 MiB raw, about 11.7 MB decoded, each line small.
+    const line = Buffer.concat([Buffer.alloc(64 * 1024, 0xe9), Buffer.from('\n')]);
+    await writeFile(
+      join(dir, 'latin.log'),
+      lossyBody(Buffer.concat(new Array<Buffer>(62).fill(line))),
+    );
+
+    const { structured } = await search({ path: dir, searchPattern: 'NEE+DLE', isRegex: true });
+
+    assert.strictEqual(structured.totalMatches, 1);
+    assert.strictEqual(structured.skippedInaccessible, undefined);
+  });
+
+  it('counts a walked lossy file with one overlong decoded line as too large', async () => {
+    const dir = join(root, 'lossy_walked');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'latin.log'), lossyBody(Buffer.alloc(3_900_000, 0xe9)));
+
+    const { structured } = await search({ path: dir, searchPattern: 'NEE+DLE', isRegex: true });
+
+    assert.strictEqual(structured.skippedTooLarge, 1);
+    assert.strictEqual(structured.skippedInaccessible, undefined);
+  });
+
+  it('refuses a named lossy file with one overlong decoded line, and names the line', async () => {
+    const dir = join(root, 'lossy_named');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'latin.log');
+    await writeFile(file, lossyBody(Buffer.alloc(3_900_000, 0xe9)));
+
+    await assert.rejects(
+      search({ path: file, searchPattern: 'NEE+DLE', isRegex: true }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /line/),
+    );
+  });
+
+  it('leaves regex search whole after repeated searches over a lossy file', async () => {
+    const dir = join(root, 'lossy_repeat');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'latin.log'), lossyBody(Buffer.alloc(3_900_000, 0xe9)));
+    for (let i = 0; i < 3; i++) {
+      await search({ path: dir, searchPattern: 'NEE+DLE', isRegex: true });
+    }
+
+    const body = 'abc NEEDLE\n';
+    const large = await writeTestFile(
+      join(root, 'lossy_after'),
+      'valid.txt',
+      body.repeat(Math.floor((3.9 * 1024 * 1024) / body.length)),
+    );
+    const { structured } = await search({
+      path: large,
+      searchPattern: 'NEE+DLE',
+      isRegex: true,
+      maxResults: 1,
+    });
+    assert.ok((structured.totalMatches ?? 0) >= 1);
+  });
+
   it('skips binary files and reports the count', async () => {
     const dir = join(root, 'search_bin');
     await writeTestFile(dir, 'text.txt', 'BINNEEDLE\n');
