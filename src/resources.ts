@@ -221,7 +221,6 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
           'Malformed file URI: path is not valid percent-encoding',
         );
       }
-      await options.pathGuard.validateExistingPath(rawPath);
       const fs = new GuardedFileSystem(options.pathGuard);
       if (options.transport === 'stdio') {
         // Text encodes to at least its own bytes and base64 to 4/3 of them,

@@ -9,7 +9,7 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { escapeRegExp, MIB } from './util.ts';
+import { MIB } from './util.ts';
 
 export type Regex = RE2;
 /** Occurrence-counting bound, so one pathological line cannot spin forever. */
@@ -286,7 +286,7 @@ export function planMatch(
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
 ): MatchPlan {
   const literal = flags.isRegex ? undefined : createLiteralMatcher(needle, flags.caseSensitive);
-  const pattern = flags.isRegex ? needle : escapeRegExp(needle);
+  const pattern = flags.isRegex ? needle : RegExp.escape(needle);
   // The trailing boundary is part of the pattern, so RE2 picks the alternative that passes it.
   const source = flags.wholeWord ? `([^${WORD_CLASS}])(?:${pattern})([^${WORD_CLASS}]|$)` : pattern;
   return { literal, source };
@@ -495,15 +495,8 @@ export function createCaseInsensitiveLiteralMatcher(
     },
   };
 }
-export function createCaseSensitiveLiteralMatcher(
-  searchPattern: string,
-): ReplacementMatcher | undefined {
-  // Same bail as createLiteralMatcher (core/search.ts): a needle containing
-  // U+FFFD or a lone surrogate is judged over decoded text by RE2 — raw-byte
-  // indexOf would claim a file the replace pass cannot transform.
-  if (searchPattern.includes('�') || Buffer.from(searchPattern).toString() !== searchPattern) {
-    return undefined;
-  }
+/** Only for a needle `planMatch` gave a literal plan: raw-byte indexOf cannot judge the others. */
+export function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMatcher {
   const searchBuffer = Buffer.from(searchPattern, 'utf8');
 
   return {
@@ -546,10 +539,8 @@ export function createReplacementMatcher(args: {
     caseSensitive: args.caseSensitive,
     wholeWord: args.wholeWord,
   });
-  if (!args.isRegex && !args.wholeWord && args.caseSensitive) {
-    // undefined means the bail handed this needle to the RE2 path below.
-    const fast = createCaseSensitiveLiteralMatcher(args.searchPattern);
-    if (fast) return fast;
+  if (!args.isRegex && !args.wholeWord && args.caseSensitive && plan.literal) {
+    return createCaseSensitiveLiteralMatcher(args.searchPattern);
   }
   const regex = compileRegex(plan.source, { caseSensitive: args.caseSensitive });
   const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);

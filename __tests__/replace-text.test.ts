@@ -9,7 +9,7 @@ import type * as z from 'zod/v4';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
-import { escapeRegExp, MIB } from '../src/core/util.ts';
+import { MIB } from '../src/core/util.ts';
 import { SEARCH_TEXT } from '../src/tools/index.ts';
 import { REPLACE_TEXT } from '../src/tools/replace-text.ts';
 import {
@@ -160,7 +160,7 @@ describe('replace_text body', () => {
       });
       await replace({
         path: regex,
-        searchPattern: escapeRegExp(c.needle),
+        searchPattern: RegExp.escape(c.needle),
         replacement: '<$$&>',
         isRegex: true,
         caseSensitive: false,
@@ -946,35 +946,18 @@ describe('replace_text body', () => {
       assert.strictEqual(await readFile(file, 'utf8'), 'y y x x\n');
     });
 
-    it('maxResults still caps as a deprecated alias', async () => {
-      // More files than replace_text dispatches at once, so the cap trips mid-sweep.
-      for (let i = 0; i < 10; i++) {
-        await writeTestFile(root, `replace_alias/${String(i)}.txt`, 'x\n');
-      }
-      const result = await replace({
-        path: join(root, 'replace_alias'),
-        searchPattern: 'x',
-        replacement: 'y',
-        dryRun: true,
-        maxResults: 1,
-      });
-      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
-      assert.strictEqual(result.structured.totalMatches, 1);
-    });
-
-    it('refuses maxMatches together with maxResults', async () => {
+    it('refuses the removed maxResults, so a caller cannot lose its cap silently', async () => {
       const issues = await schemaIssues(
         replace({
           path: root,
           searchPattern: 'x',
           replacement: 'y',
           dryRun: true,
-          maxMatches: 1,
           maxResults: 1,
-        }),
+        } as ReplaceArgs),
       );
       assert.ok(
-        issues.includes("Cannot use both 'maxMatches' and 'maxResults'"),
+        issues.some((issue) => issue.includes('maxResults')),
         issues.join('; '),
       );
     });

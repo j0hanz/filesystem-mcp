@@ -52,75 +52,54 @@ import {
 import { type BatchResult, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
-const SearchAndReplaceInputSchema = z
-  .strictObject({
-    path: OptionalPath.describe(
-      'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — ' +
-        'scope it deliberately, and pair a wide scope with dryRun=true first',
+const SearchAndReplaceInputSchema = z.strictObject({
+  path: OptionalPath.describe(
+    'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — ' +
+      'scope it deliberately, and pair a wide scope with dryRun=true first',
+  ),
+  pattern: SafeGlobPattern.optional().describe(
+    'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
+  ),
+  searchPattern: nonBlankString('searchPattern')
+    .max(10000)
+    .describe(
+      'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
     ),
-    pattern: SafeGlobPattern.optional().describe(
-      'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
+  replacement: z
+    .string()
+    .max(10000)
+    .describe(
+      'Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.',
+    )
+    .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
+  isRegex: defaultFalseBoolean('Treat searchPattern as a RE2 regex (default: literal text match)'),
+  includeHidden: IncludeHidden,
+  includeIgnored: IncludeIgnored,
+  caseSensitive: z
+    .boolean()
+    .default(true)
+    .describe('Match case exactly (default: true). Pass false to ignore case.'),
+  wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
+  dryRun: defaultFalseBoolean(
+    'Preview replacements without writing to disk (default: false = apply changes)',
+  ),
+  returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
+  maxMatches: z
+    .uint32()
+    .min(1)
+    .max(MAX_SEARCH_RESULTS)
+    .optional()
+    .describe(
+      `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)})`,
     ),
-    searchPattern: nonBlankString('searchPattern')
-      .max(10000)
-      .describe(
-        'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
-      ),
-    replacement: z
-      .string()
-      .max(10000)
-      .describe(
-        'Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.',
-      )
-      .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
-    isRegex: defaultFalseBoolean(
-      'Treat searchPattern as a RE2 regex (default: literal text match)',
-    ),
-    includeHidden: IncludeHidden,
-    includeIgnored: IncludeIgnored,
-    caseSensitive: z
-      .boolean()
-      .default(true)
-      .describe('Match case exactly (default: true). Pass false to ignore case.'),
-    wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
-    dryRun: defaultFalseBoolean(
-      'Preview replacements without writing to disk (default: false = apply changes)',
-    ),
-    returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
-    maxMatches: z
-      .uint32()
-      .min(1)
-      .max(MAX_SEARCH_RESULTS)
-      .optional()
-      .describe(
-        `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)})`,
-      ),
-    // shortcut: maxResults alias ships one release; then drop together the field
-    // + superRefine, the `?? args.maxResults` fallback, and BUDGET_CHARS 20_750 in tools.test.ts.
-    maxResults: z
-      .uint32()
-      .min(1)
-      .max(MAX_SEARCH_RESULTS)
-      .optional()
-      .describe('Deprecated alias of maxMatches; removed in the next release')
-      .meta({ deprecated: true }),
-    maxFiles: z
-      .uint32()
-      .min(1)
-      .max(MAX_SEARCH_RESULTS)
-      .optional()
-      .describe('Maximum number of files to process'),
-    maxDepth: MaxDepth,
-  })
-  .superRefine((value, ctx) => {
-    if (value.maxMatches !== undefined && value.maxResults !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['maxResults'],
-        message: "Cannot use both 'maxMatches' and 'maxResults'",
-      });
-    }
-  });
+  maxFiles: z
+    .uint32()
+    .min(1)
+    .max(MAX_SEARCH_RESULTS)
+    .optional()
+    .describe('Maximum number of files to process'),
+  maxDepth: MaxDepth,
+});
 
 type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
   /** The root `results[].path` is relative to; a path that would not read back from it is absolute. */
@@ -410,7 +389,7 @@ async function handleSearchAndReplace(
   const failureRows: FailureRow[] = [];
   let failedFiles = 0;
   // An explicit cap is a strict bound, so its matches are claimed one file at a time, in walk order.
-  const explicitCap = args.maxMatches ?? args.maxResults;
+  const explicitCap = args.maxMatches;
   const context: ReplaceContext = {
     dryRun: args.dryRun,
     replacement: args.replacement,

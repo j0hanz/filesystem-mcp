@@ -591,13 +591,6 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "minimum": 1,
             "maximum": 10000
           },
-          "maxResults": {
-            "description": "Deprecated alias of maxMatches; removed in the next release",
-            "deprecated": true,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10000
-          },
           "maxFiles": {
             "description": "Maximum number of files to process",
             "type": "integer",

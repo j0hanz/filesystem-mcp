@@ -17,7 +17,7 @@ import { after, before, describe, it } from 'node:test';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { PathGuard } from '../src/core/path.ts';
-import { withEnv } from './helpers.ts';
+import { copyVia, withEnv } from './helpers.ts';
 
 const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin';
 
@@ -95,7 +95,7 @@ describe('GuardedFileSystem Transfer', { concurrency: false }, () => {
       );
     }
     await assert.rejects(
-      fs.cp(join(root, 'd'), join(root, 'd', 'in')),
+      copyVia(fs, join(root, 'd'), join(root, 'd', 'in')),
       rejectsWith(ErrorCode.INVALID_INPUT, /own subdirectory/u),
     );
   });
@@ -161,7 +161,7 @@ describe('GuardedFileSystem Transfer', { concurrency: false }, () => {
       await mkdir(join(root, 'src'));
       await writeFile(join(root, 'src', 'keep.txt'), 'keep');
       await writeFile(join(root, 'src', 'skip.dat'), 'skip');
-      await fs.cp(join(root, 'src'), join(root, 'vault'), {
+      await copyVia(fs, join(root, 'src'), join(root, 'vault'), {
         filter: (sourcePath) => !sourcePath.endsWith('skip.dat'),
       });
       assert.equal(await readFile(join(root, 'vault', 'keep.txt'), 'utf8'), 'keep');

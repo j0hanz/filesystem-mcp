@@ -11,6 +11,7 @@ import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
+  copyVia,
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
@@ -255,7 +256,7 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     await writeFile(join(source, 'skip.txt'), 'skip');
 
     const fs = new GuardedFileSystem(await guardFor([]));
-    await fs.cp(source, destination, {
+    await copyVia(fs, source, destination, {
       recursive: true,
       filter: (sourcePath) => !sourcePath.endsWith('skip.txt'),
     });
@@ -335,7 +336,7 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
       () => fs.rm(file),
       () => fs.rmdir(join(dir, 'empty')),
       () => fs.rename(file, join(rw, 'moved.txt')),
-      () => fs.cp(join(rw, 'src.txt'), join(dir, 'copied.txt')),
+      () => copyVia(fs, join(rw, 'src.txt'), join(dir, 'copied.txt')),
       () => fs.lockForWrite(file, () => Promise.resolve()),
     ]) {
       await assert.rejects(mutate(), (error: unknown) => {

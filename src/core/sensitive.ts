@@ -14,7 +14,7 @@ import {
   toPosixPath,
   trimTrailingDotsAndSpaces,
 } from './path-utils.ts';
-import { escapeRegExp, parseTrueEnvFlag } from './util.ts';
+import { parseTrueEnvFlag } from './util.ts';
 
 function normalizeForMatch(input: string): string {
   // Always lowercase for case-insensitive denylist matching on all platforms.
@@ -151,7 +151,7 @@ function globToRegExp(glob: string, fold: boolean): RegExp {
   let text = '';
   const flushText = (): void => {
     const literal = fold ? foldForMatch(text) : text;
-    for (let k = 0; k < literal.length; k++) source += escapeRegExp(literal.charAt(k));
+    for (let k = 0; k < literal.length; k++) source += RegExp.escape(literal.charAt(k));
     text = '';
   };
   for (let i = 0; i < segments.length; i++) {

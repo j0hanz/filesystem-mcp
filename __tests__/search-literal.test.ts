@@ -6,7 +6,6 @@ import { after, before, describe, it } from 'node:test';
 
 import type { PathGuard } from '../src/core/path.ts';
 import { searchContent } from '../src/core/search.ts';
-import { escapeRegExp } from '../src/core/util.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
 
 const KELVIN = String.fromCodePoint(0x212a); // RE2 folds it onto k
@@ -84,7 +83,7 @@ describe('literal search matches what RE2 would', () => {
             )
           ).matches;
         const literal = await search(needle, false);
-        assert.deepStrictEqual(literal, await search(escapeRegExp(needle), true));
+        assert.deepStrictEqual(literal, await search(RegExp.escape(needle), true));
         if (!caseSensitive) assert.strictEqual(literal.length, hits);
       });
     }

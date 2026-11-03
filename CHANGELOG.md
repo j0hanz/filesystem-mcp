@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An unsupported charset answers 415, not 500.** A request sent with `charset=latin1` looked like a server fault and logged an error.
 - **The bearer scheme name is case-insensitive.** `bearer <key>` with a valid key answered 401; the HTTP standard treats the scheme name as case-insensitive.
 
+### Removed
+
+- **`replace_text` no longer accepts `maxResults`.** The deprecated alias is gone, and passing it fails validation. Use `maxMatches`.
+- **Node below 24 is no longer handled.** The `RegExp.escape` fallback is gone, in line with the `engines` floor: on an older Node, the server fails when it first escapes a pattern.
+
 ## [2.15.0] - 2026-11-02
 
 A correctness release. Directory transfers recheck the sensitive-file policy
