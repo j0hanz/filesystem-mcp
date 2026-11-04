@@ -68,9 +68,20 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
   binary: defaultFalseBoolean(
     'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
   ),
+  lineNumbers: defaultFalseBoolean(
+    'Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.',
+  ),
   ...readRangeFields,
 }).superRefine((value, ctx) => {
   validateReadRange(value, ctx);
+  if (value.lineNumbers && value.tail !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['lineNumbers'],
+      message: "Cannot use 'lineNumbers' with 'tail': a tail read does not count lines.",
+      input: value,
+    });
+  }
   if (value.binary && hasLineRange(value)) {
     ctx.addIssue({
       code: 'custom',
@@ -277,6 +288,14 @@ function buildPerPathReadValue(
     ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
+}
+
+/** `cat -n` for `read`; the empty piece after a final newline is not a line. */
+function numberLines(content: string, firstLine: number): string {
+  if (content === '') return '';
+  const ending = content.endsWith('\n') ? '\n' : '';
+  const lines = (ending ? content.slice(0, -1) : content).split('\n');
+  return lines.map((line, i) => `${String(firstLine + i)}\t${line}`).join('\n') + ending;
 }
 
 /** A partial read the size limit cut short, as opposed to a slice returned whole. */
@@ -525,7 +544,12 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
 
     const [firstOrdered] = ordered;
     const body = (v: PerPathReadValue): string => {
-      const content = v.content ?? 'read failed';
+      const bytes = v.content ?? 'read failed';
+      // A media or binary placeholder is a note about the file, not its lines.
+      const content =
+        args.lineNumbers && v.mediaData === undefined && v.blobData === undefined
+          ? numberLines(bytes, v.startLine ?? 1)
+          : bytes;
       const trailer = readTrailer(v);
       if (trailer.length === 0) return content;
       // Exactly one blank line between the bytes and the trailer, whether or not

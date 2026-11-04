@@ -1026,9 +1026,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // (maxLength in two places) and patch caps diff (maxLength); measured 20758.
   // Raised 2026-11-04 to 20950 full and 10050 read-only: read declares its result
   // size in _meta and points at stat's tokenEstimate; measured 20913 / 10010.
+  // Raised 2026-11-04 to 21100 full and 10200 read-only: read gains lineNumbers;
+  // measured 21085 / 10182.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_950;
-    const BUDGET_CHARS_READ_ONLY = 10_050;
+    const BUDGET_CHARS = 21_100;
+    const BUDGET_CHARS_READ_ONLY = 10_200;
 
     const full = await createTestClientPair([tmpDir]);
     try {

@@ -462,6 +462,11 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
             "type": "boolean"
           },
+          "lineNumbers": {
+            "default": false,
+            "description": "Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.",
+            "type": "boolean"
+          },
           "head": {
             "description": "Return first N lines",
             "type": "integer",
@@ -1065,6 +1070,11 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           "binary": {
             "default": false,
             "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
+            "type": "boolean"
+          },
+          "lineNumbers": {
+            "default": false,
+            "description": "Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.",
             "type": "boolean"
           },
           "head": {

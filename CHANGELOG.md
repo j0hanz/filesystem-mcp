@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges.
+
 ### Changed
 
 - **`read` tells the client how large its results can be.** Claude Code keeps results up to 200,000 characters inline instead of saving them to a file outside the roots.

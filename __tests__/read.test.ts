@@ -473,6 +473,56 @@ describe('read body', () => {
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
   });
 
+  describe('lineNumbers', () => {
+    it('numbers whole files, heads and ranges from their real first line', async () => {
+      const file = await writeTestFile(root, 'numbered.txt', 'a\nb\nc\nd\n');
+      assert.strictEqual(
+        (await read({ path: file, lineNumbers: true }, { guard })).text,
+        '1\ta\n2\tb\n3\tc\n4\td\n',
+      );
+      assert.ok(
+        (await read({ path: file, head: 2, lineNumbers: true }, { guard })).text?.startsWith(
+          '1\ta\n2\tb\n',
+        ),
+      );
+      assert.ok(
+        (
+          await read({ path: file, startLine: 3, endLine: 3, lineNumbers: true }, { guard })
+        ).text?.startsWith('3\tc'),
+      );
+    });
+
+    it('adds no blank numbered line and leaves the hash on the file bytes', async () => {
+      const crlf = await writeTestFile(root, 'numbered-crlf.txt', 'a\r\nb\r\n');
+      assert.strictEqual(
+        (await read({ path: crlf, lineNumbers: true }, { guard })).text,
+        '1\ta\r\n2\tb\r\n',
+      );
+      const bare = await writeTestFile(root, 'numbered-bare.txt', 'a\nb');
+      assert.strictEqual(
+        (await read({ path: bare, lineNumbers: true }, { guard })).text,
+        '1\ta\n2\tb',
+      );
+      const empty = await writeTestFile(root, 'numbered-empty.txt', '');
+      assert.strictEqual((await read({ path: empty, lineNumbers: true }, { guard })).text, '');
+      const plain = await read({ path: bare, includeHash: true }, { guard });
+      const numbered = await read({ path: bare, includeHash: true, lineNumbers: true }, { guard });
+      assert.strictEqual(
+        valueOf(numbered.structured.results[0])?.contentHash,
+        valueOf(plain.structured.results[0])?.contentHash,
+      );
+    });
+
+    it('is refused with tail', async () => {
+      const file = await writeTestFile(root, 'numbered-tail.txt', 'a\n');
+      await assert.rejects(
+        () => read({ path: file, tail: 1, lineNumbers: true }, { guard }),
+        (err) =>
+          issuesOf(err).some((issue) => issue.message?.includes("'lineNumbers' with 'tail'")),
+      );
+    });
+  });
+
   it('a slice ending on the last line carries no trailer', async () => {
     const file = await writeTestFile(root, 'exact-end.txt', 'a\nb\nc\n');
     for (const args of [{ head: 3 }, { startLine: 2, endLine: 3 }, { startLine: 2, endLine: 99 }]) {
