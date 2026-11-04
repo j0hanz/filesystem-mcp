@@ -8,6 +8,7 @@ import fsPromises, {
   readFile,
   readlink,
   rename,
+  rmdir,
   stat,
   utimes,
   writeFile,
@@ -888,7 +889,7 @@ describe('relocation walk', () => {
     return guard;
   };
 
-  it('checks no entry on disk when the destination is missing', async (t) => {
+  it('checks the disk once, not per entry, when the destination is missing', async (t) => {
     const guard = await guardFor();
     const spy = t.mock.method(guard, 'validateTransferPathForWrite');
     for (const n of ['1', '2', '3']) await writeTestFile(root, `pkg/${n}.txt`, n);
@@ -896,7 +897,43 @@ describe('relocation walk', () => {
       source: join(root, 'pkg'),
       destination: join(root, 'a', 'b', 'pkg2'),
     });
-    assert.strictEqual(spy.mock.callCount(), 0);
+    assert.strictEqual(spy.mock.callCount(), 1);
+  });
+
+  it('refuses when a link redirects the destination into a read-only folder after the plan', async (t) => {
+    const guard = await guardFor([join(root, 'rt-target', 'new', 'sub')]);
+    const x = await writeTestFile(root, 'rt/sub/x.txt', 'x');
+    const parent = join(root, 'rt-parent');
+    await mkdir(parent);
+    await mkdir(join(root, 'rt-target'));
+    const fs = new GuardedFileSystem(guard);
+    const plan = await fs.planTransfer('move', {
+      source: join(root, 'rt'),
+      destination: join(parent, 'new'),
+    });
+    await rmdir(parent);
+    if (!(await trySymlink(join(root, 'rt-target'), parent, () => t.skip('no symlinks')))) return;
+    await assert.rejects(fs.executeTransfer(plan), { code: 'ACCESS_DENIED' });
+    await access(x);
+  });
+
+  it('refuses when a link redirects the destination under a denied name after the plan', async (t) => {
+    await withEnv({ FS_DENYLIST: 'dn-target/new/**' }, async () => {
+      const guard = await guardFor();
+      const x = await writeTestFile(root, 'dn/x.txt', 'x');
+      const parent = join(root, 'dn-parent');
+      await mkdir(parent);
+      await mkdir(join(root, 'dn-target'));
+      const fs = new GuardedFileSystem(guard);
+      const plan = await fs.planTransfer('move', {
+        source: join(root, 'dn'),
+        destination: join(parent, 'new'),
+      });
+      await rmdir(parent);
+      if (!(await trySymlink(join(root, 'dn-target'), parent, () => t.skip('no symlinks')))) return;
+      await assert.rejects(fs.executeTransfer(plan), { code: 'ACCESS_DENIED' });
+      await access(x);
+    });
   });
 
   it('still refuses an entry landing in a read-only folder', async () => {

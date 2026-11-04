@@ -240,7 +240,7 @@ export class GuardedFileSystem {
    * The Relocation walk: one pass under a directory `entry` that checks both
    * rules a transfer of it must keep. Every mapped destination must pass the
    * write check (read-only dirs, the denylist), or, when the destination does
-   * not exist yet, only the read-only rule (the root was validated, and a
+   * not exist yet, only the read-only rule under where it now resolves (a
    * missing destination holds no link). Every entry must keep its
    * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
    * any other non-directory, has nothing under it to relocate. A directory
@@ -257,15 +257,17 @@ export class GuardedFileSystem {
   ): Promise<void> {
     if (!(await fsLstat(entry)).isDirectory()) return;
     if (filter && !(await filter(entry, destination))) return;
-    // A missing destination holds no link and was validated: only the
-    // read-only rule can differ per entry, and it reads no disk.
+    // A missing destination holds no link, so only the read-only rule can differ
+    // per entry, and it reads no disk. Its ancestors can still change while a
+    // Confirmation is open, so where it lands is resolved once, here.
     const fresh = (await unlessMissing(fsLstat(destination))) === undefined;
+    const landing = fresh ? await this.#guard('relocate', destination) : destination;
     const relocate = fresh
-      ? (path: string) => {
-          this.pathGuard.assertWritable(path);
+      ? (name: string) => {
+          this.pathGuard.assertWritable(join(landing, name));
           return Promise.resolve();
         }
-      : (path: string) => this.#guard('relocate', path);
+      : (name: string) => this.#guard('relocate', join(destination, name));
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
       for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
@@ -285,7 +287,7 @@ export class GuardedFileSystem {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
           if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
-          await relocate(join(destination, name));
+          await relocate(name);
           yield name;
           if (dirent.isDirectory()) pending.push(name);
         }
@@ -294,7 +296,7 @@ export class GuardedFileSystem {
     const keeps = await this.pathGuard.relocationKeepsProtection(
       names(),
       { from: entry, requestedFrom },
-      destination,
+      landing,
     );
     if (!keeps) {
       throw new FsError(
