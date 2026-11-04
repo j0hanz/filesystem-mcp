@@ -9,7 +9,13 @@ import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
-import { resolveScanScope, scan, type ScanScope, type StoppedReason } from '../core/scan.ts';
+import {
+  type ExcludedDirs,
+  resolveScanScope,
+  scan,
+  type ScanScope,
+  type StoppedReason,
+} from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -58,6 +64,9 @@ export interface CollectResult {
   totalBytes?: number;
   skippedInaccessible: number;
   stoppedReason?: StoppedReason;
+  /** Directories at the depth limit, whose contents the walk did not reach. */
+  unexpandedDirectories: number;
+  ignoredDirs?: ExcludedDirs;
 }
 
 /** The entry's parent folder, relative like the entry; '' at the top level. */
@@ -91,6 +100,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
   let totalFiles = 0;
   let totalDirectories = 0;
   let totalBytes = 0;
+  let unexpandedDirectories = 0;
   const comparator = entryComparator(options.sortBy);
   const keepBest = (): void => {
     entries.sort(comparator);
@@ -143,6 +153,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       totalEntries++;
       if (entryType === 'directory') {
         totalDirectories++;
+        if (relPath.split('/').length === options.maxDepth) unexpandedDirectories++;
       } else if (entryType === 'file') {
         totalFiles++;
         if (size !== undefined) totalBytes += size;
@@ -171,6 +182,8 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
     ...(wantSizes ? { totalBytes } : {}),
     skippedInaccessible: outcome.skippedInaccessible,
     ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
+    unexpandedDirectories,
+    ...(outcome.ignoredDirs ? { ignoredDirs: outcome.ignoredDirs } : {}),
   };
 }
 
@@ -248,6 +261,23 @@ function summaryLine(metadata: ListPageMetadata, totalBytes: number): string {
 
 const DEFAULT_LIST_DEPTH = 1;
 
+/** A raised maxDepth reads as the whole tree, so say what it stopped short of. */
+function depthNote(maxDepth: number, unexpanded: number): string[] {
+  if (maxDepth <= DEFAULT_LIST_DEPTH || unexpanded === 0) return [];
+  return [
+    `// depth limit ${String(maxDepth)}: contents of ${formatCount(unexpanded, 'directory', 'directories')} not listed or counted; raise maxDepth or list one directly.`,
+  ];
+}
+
+function ignoredNote(ignored: ExcludedDirs | undefined): string[] {
+  if (!ignored) return [];
+  const rest = ignored.total - ignored.first.length;
+  const more = rest > 0 ? `, +${String(rest)} more` : '';
+  return [
+    `// hid ${formatCount(ignored.total, 'ignored folder')} (${ignored.first.join(', ')}${more}); pass includeIgnored: true to list ${ignored.total === 1 ? 'it' : 'them'}.`,
+  ];
+}
+
 const ListInputSchema = z.strictObject({
   path: OptionalPath.describe('Directory to list (default: the only root)'),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
@@ -281,6 +311,8 @@ interface ListPageMetadata {
   readonly totalBytes?: number;
   readonly skippedInaccessible?: number;
   readonly stoppedReason?: StoppedReason;
+  readonly unexpandedDirectories: number;
+  readonly ignoredDirs?: ExcludedDirs;
 }
 
 function listPageMetadata(path: string, result: CollectResult): ListPageMetadata {
@@ -293,6 +325,8 @@ function listPageMetadata(path: string, result: CollectResult): ListPageMetadata
     ...(result.totalBytes !== undefined ? { totalBytes: result.totalBytes } : {}),
     ...(result.skippedInaccessible > 0 ? { skippedInaccessible: result.skippedInaccessible } : {}),
     ...(stoppedReason ? { stoppedReason } : {}),
+    unexpandedDirectories: result.unexpandedDirectories,
+    ...(result.ignoredDirs ? { ignoredDirs: result.ignoredDirs } : {}),
   };
 }
 
@@ -309,7 +343,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   description:
     "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. " +
     'Hidden entries are skipped unless includeHidden is set, and ignored ones ' +
-    '(.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. ' +
+    '(.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. ' +
     'includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.',
   input: ListInputSchema,
   readOnlyHint: true,
@@ -397,6 +431,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       nextArgs: args,
       stoppedReason: structured.stoppedReason,
       skippedInaccessible: structured.skippedInaccessible,
+      notes: [
+        ...depthNote(args.maxDepth, paged.metadata.unexpandedDirectories),
+        ...ignoredNote(paged.metadata.ignoredDirs),
+      ],
     });
     const text =
       renderMarkdown(

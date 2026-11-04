@@ -287,7 +287,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -993,7 +993,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
       "inputSchema": {
         "type": "object",
         "properties": {

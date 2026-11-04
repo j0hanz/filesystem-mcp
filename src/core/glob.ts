@@ -475,6 +475,11 @@ export interface GlobEntriesOptions {
    * caller would not expect to be skipped. Gets the posix path relative to `cwd`.
    */
   onExcludedDir?: (posixRelativePath: string) => void;
+  /**
+   * Called once per directory `skipIgnored` pruned for any reason, at or above
+   * `maxDepth`, unless a sensitive name hides it. Gets the posix path relative to `cwd`.
+   */
+  onIgnoredDir?: (posixRelativePath: string) => void;
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
@@ -735,10 +740,12 @@ function createWalkFilter(
   pathGuard: Pick<PathGuard, 'isSensitive'> | undefined,
   onDirectory: ((absolutePath: string) => void) | undefined,
   onExcludedDir: ((posixRelativePath: string) => void) | undefined,
+  onIgnoredDir: ((posixRelativePath: string) => void) | undefined,
 ): WalkFilter {
   // fs.glob asks once per pattern variant, so a directory is asked about repeatedly.
   const reportedDirs = new Set<string>();
   const reportedExcluded = new Set<string>();
+  const reportedIgnored = new Set<string>();
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
   // name also exists in the process cwd. Resolving against `cwd` names the
@@ -792,6 +799,17 @@ function createWalkFilter(
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) {
+        if (
+          isDir &&
+          onIgnoredDir &&
+          !reportedIgnored.has(posixRel) &&
+          (maxDepth === undefined || posixRel.split('/').length - 1 <= maxDepth) &&
+          !sensitiveDir(match) &&
+          !sensitiveTree(posixRel)
+        ) {
+          reportedIgnored.add(posixRel);
+          onIgnoredDir(posixRel);
+        }
         if (isDir && onExcludedDir && !reportedExcluded.has(posixRel)) {
           const name = posixRel.slice(posixRel.lastIndexOf('/') + 1);
           if (
@@ -861,6 +879,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.pathGuard,
     options.onDirectory,
     options.onExcludedDir,
+    options.onIgnoredDir,
   );
 
   const iterable = fsGlob(await Promise.all(patterns.map((p) => foldPatternInWalk(p, cwd))), {

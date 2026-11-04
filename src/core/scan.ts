@@ -282,6 +282,8 @@ export interface ScanOutcome<R> {
   readonly stoppedReason?: StoppedReason;
   /** Absent when the walk skipped none. */
   readonly excludedDirs?: ExcludedDirs;
+  /** Every folder the ignore rules hid; absent when none. A hidden folder counts only under includeHidden. */
+  readonly ignoredDirs?: ExcludedDirs;
 }
 
 /**
@@ -319,6 +321,8 @@ export async function scan<R>(
   };
   const excludedFirst: string[] = [];
   let excludedTotal = 0;
+  const ignoredFirst: string[] = [];
+  let ignoredTotal = 0;
   let total = 0;
   let started = 0;
   let capped: StoppedReason | undefined;
@@ -507,6 +511,11 @@ export async function scan<R>(
       excludedTotal++;
       if (excludedFirst.length < 5) excludedFirst.push(shown.show(join(scope.root, rel)));
     },
+    onIgnoredDir: (rel) => {
+      if (!options.includeHidden && rel.split('/').some((seg) => seg.startsWith('.'))) return;
+      ignoredTotal++;
+      if (ignoredFirst.length < 5) ignoredFirst.push(shown.show(join(scope.root, rel)));
+    },
   });
 
   let walkError: unknown;
@@ -551,6 +560,7 @@ export async function scan<R>(
     skippedTooLarge,
     ...(stoppedReason ? { stoppedReason } : {}),
     ...(excludedTotal > 0 ? { excludedDirs: { total: excludedTotal, first: excludedFirst } } : {}),
+    ...(ignoredTotal > 0 ? { ignoredDirs: { total: ignoredTotal, first: ignoredFirst } } : {}),
   };
 }
 
