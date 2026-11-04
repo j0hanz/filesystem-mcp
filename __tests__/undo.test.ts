@@ -510,7 +510,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     cap.release();
   });
 
-  it('journalRecords drops every record that would change a refused path', () => {
+  it('journalRecords drops every record that would change a refused path', async () => {
     const refusedPath = join(tmpDir, 'refused-record.txt');
     const other = join(tmpDir, 'other-record.txt');
     const identity = { dev: 0n, ino: 0n, birthtimeNs: 0n };
@@ -521,12 +521,16 @@ describe('UndoCapture via GuardedFileSystem', () => {
       { op: 'remove', path: other, expect: 'x' },
     ];
     const cap = capture();
-    const saved = cap.forPath(other);
-    saved.push(...records);
-    saved.commit();
-    const refused = cap.forPath(refusedPath);
-    refused.abandon('no');
-    refused.commit();
+    await cap.forMutation(other, (own) => {
+      own.push(...records);
+      own.changed();
+      return Promise.resolve();
+    });
+    await cap.forMutation(refusedPath, (own) => {
+      own.abandon('no');
+      own.changed();
+      return Promise.resolve();
+    });
     assert.deepStrictEqual(cap.journalRecords(), [{ op: 'remove', path: other, expect: 'x' }]);
     cap.release();
   });
@@ -618,16 +622,28 @@ describe('UndoCapture via GuardedFileSystem', () => {
     });
   });
 
-  it('journalRecords does not depend on which path committed first', () => {
+  it('journalRecords does not depend on which path committed first', async () => {
     const dir = join(tmpDir, 'order');
     const file = join(dir, 'refused.txt');
     for (const refusedFirst of [true, false]) {
       const cap = new UndoJournal(1024 * 1024).beginCapture();
-      const survivor = cap.forPath(dir);
-      survivor.push({ op: 'rmdir', path: dir });
-      const refused = cap.forPath(file);
-      refused.abandon('no');
-      for (const own of refusedFirst ? [refused, survivor] : [survivor, refused]) own.commit();
+      const survive = (own: PathCapture): Promise<void> => {
+        own.push({ op: 'rmdir', path: dir });
+        own.changed();
+        return Promise.resolve();
+      };
+      const refuse = (own: PathCapture): Promise<void> => {
+        own.abandon('no');
+        own.changed();
+        return Promise.resolve();
+      };
+      if (refusedFirst) {
+        await cap.forMutation(file, refuse);
+        await cap.forMutation(dir, survive);
+      } else {
+        await cap.forMutation(dir, survive);
+        await cap.forMutation(file, refuse);
+      }
       assert.deepStrictEqual(cap.journalRecords(), []);
       cap.release();
     }
@@ -863,13 +879,16 @@ describe('UndoCapture via GuardedFileSystem', () => {
 
   it('a folder chain that cannot be inspected costs only that folder, and names it', async () => {
     const cap = capture();
-    const refused = cap.forPath(join(tmpDir, 'sub'));
-    // A NUL makes lstat reject on every platform.
-    assert.deepStrictEqual(await plannedMkdirChain(refused, join(tmpDir, 'bad\0name')), []);
-    refused.commit();
-    const kept = cap.forPath(join(tmpDir, 'other'));
-    kept.push({ op: 'rmdir', path: join(tmpDir, 'other') });
-    kept.commit();
+    await cap.forMutation(join(tmpDir, 'sub'), async (own) => {
+      // A NUL makes lstat reject on every platform.
+      assert.deepStrictEqual(await plannedMkdirChain(own, join(tmpDir, 'bad\0name')), []);
+      own.changed();
+    });
+    await cap.forMutation(join(tmpDir, 'other'), (own) => {
+      own.push({ op: 'rmdir', path: join(tmpDir, 'other') });
+      own.changed();
+      return Promise.resolve();
+    });
     assert.strictEqual(cap.unavailableReason(), 'sub: could not inspect the parent folders');
     assert.strictEqual(cap.records.length, 1);
     cap.release();

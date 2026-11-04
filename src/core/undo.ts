@@ -257,7 +257,7 @@ export class UndoCapture implements PathCapture {
   #unavailable: string | undefined;
   /** Each path that lost its own undo, with why; the rest of the call keeps theirs. */
   readonly #refused = new Map<string, string>();
-  /** Set on a `forPath` capture: where `commit` hands its records. */
+  /** Set on a `#forPath` capture: where `changed` hands its records. */
   #owner: { parent: UndoCapture; path: string } | undefined;
   #bytes = 0;
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
@@ -316,9 +316,9 @@ export class UndoCapture implements PathCapture {
 
   /**
    * A capture for one path of a parallel batch, so abandoning it costs only that
-   * path's undo. End it with `commit()`, or `release()` when the path never ran.
+   * path's undo. `forMutation` settles it.
    */
-  forPath(path: string): UndoCapture {
+  #forPath(path: string): UndoCapture {
     const own = new UndoCapture(this.maxBytes, this.#pool);
     own.#unavailable = this.#unavailable;
     own.#owner = { parent: this, path };
@@ -330,17 +330,13 @@ export class UndoCapture implements PathCapture {
    * that path's undo. The mutation calls `changed()` at its point of no return.
    */
   async forMutation<T>(path: string, run: (own: PathCapture) => Promise<T>): Promise<T> {
-    const own = this.forPath(path);
+    const own = this.#forPath(path);
     try {
       return await run(own);
     } finally {
       // After changed() this does nothing. Any other exit changed nothing, so nothing is reported.
       own.release();
     }
-  }
-
-  commit(): void {
-    this.changed();
   }
 
   changed(): void {
