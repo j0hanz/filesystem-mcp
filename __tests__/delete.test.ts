@@ -455,6 +455,55 @@ describe('delete body', () => {
     capture.release();
   });
 
+  it('dropping one path keeps a sibling batch too large to spread into a call', () => {
+    const capture = new UndoJournal(1024 * 1024 * 1024).beginCapture();
+    const kept = 200_000;
+    for (let i = 0; i < kept; i++) {
+      capture.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
+    }
+    capture.push({ op: 'rmdir', path: join(root, 'cancelled', 'x') });
+    capture.dropUnder(join(root, 'cancelled'));
+    assert.strictEqual(capture.records.length, kept);
+    assert.strictEqual(capture.unavailableReason(), undefined);
+    capture.release();
+  });
+
+  it('a cancel stops the snapshot walk before it can overflow the budget', async () => {
+    const tree = join(root, 'walk_stops');
+    await mkdir(tree);
+    // Each file costs more than half the budget, so a second one would abandon the capture.
+    const size = 1000;
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      await writeFile(join(tree, name), 'x'.repeat(size));
+    }
+    const controller = new AbortController();
+    const capture = new UndoJournal(2000).beginCapture();
+    let reads = 0;
+    class CancelsOnFirstRead extends GuardedFileSystem {
+      override async readSaved(path: string): Promise<Buffer> {
+        reads += 1;
+        controller.abort();
+        return super.readSaved(path);
+      }
+    }
+
+    const result = await del(
+      { paths: [tree], recursive: true },
+      {
+        fs: new CancelsOnFirstRead(await makeGuard([root]), capture),
+        signal: controller.signal,
+        confirm: choose('delete'),
+      },
+    );
+
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    assert.strictEqual(reads, 1, 'the walk stops at the cancel');
+    assert.strictEqual(capture.unavailableReason(), undefined, 'no overflow abandoned the capture');
+    assert.strictEqual(capture.records.length, 0);
+    await access(join(tree, 'a.txt'));
+    capture.release();
+  });
+
   it('rejects when an abort lands during the protected-file walk', async () => {
     const dir = join(root, 'walk_abort');
     await mkdir(dir, { recursive: true });

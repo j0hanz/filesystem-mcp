@@ -977,7 +977,7 @@ export class GuardedFileSystem {
     // recursive rm can fail halfway with files already gone.
     const capture = this.#capture;
     if (capture) {
-      await snapshotTree(capture, this, validPath);
+      await snapshotTree(capture, this, validPath, signal);
     }
     // The snapshot can run long. A cancel during it stops here, the last point
     // where nothing is gone, and no undo id is offered for a delete that never ran.

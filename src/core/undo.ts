@@ -290,15 +290,18 @@ export class UndoCapture {
    * its records. The batch refuses nested paths, so no other entry sits under `dir`.
    */
   dropUnder(dir: string): void {
-    const kept = this.records.filter((record) => {
-      if (record.op === 'rename' || !isPathInsideDirectory(dir, record.path)) return true;
+    // In place: a large batch overflows the call stack if spread into `push`.
+    let kept = 0;
+    for (const record of this.records) {
+      if (record.op === 'rename' || !isPathInsideDirectory(dir, record.path)) {
+        this.records[kept++] = record;
+        continue;
+      }
       const weight = recordWeight(record);
       this.#bytes -= weight;
       this.#pool.bytes -= weight;
-      return false;
-    });
-    this.records.length = 0;
-    this.records.push(...kept);
+    }
+    this.records.length = kept;
   }
 
   push(...records: UndoRecord[]): void {
@@ -378,8 +381,10 @@ export async function snapshotTree(
   capture: UndoCapture,
   fs: GuardedFileSystem,
   validPath: string,
+  /** A cancel ends the walk, so it cannot overflow the budget; the caller drops what it pushed. */
+  signal?: AbortSignal,
 ): Promise<void> {
-  if (capture.unavailableReason() !== undefined) return;
+  if (capture.unavailableReason() !== undefined || signal?.aborted) return;
   try {
     const stats = await unlessMissing(fsLstat(validPath, { bigint: true }));
     // ENOENT on the root (the `force` case): nothing will be deleted.
@@ -423,8 +428,8 @@ export async function snapshotTree(
     if (stats.isDirectory()) {
       const children = await fsReaddir(validPath);
       for (const name of children) {
-        await snapshotTree(capture, fs, join(validPath, name));
-        if (capture.unavailableReason() !== undefined) return;
+        await snapshotTree(capture, fs, join(validPath, name), signal);
+        if (capture.unavailableReason() !== undefined || signal?.aborted) return;
       }
       capture.push({
         op: 'mkdir',
