@@ -95,7 +95,7 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
 
 interface ReadContinuation {
   tool: 'read';
-  args: { path: string; startLine: number; endLine: number };
+  args: { path: string; startLine: number; endLine: number; lineNumbers?: true };
   hint: string;
 }
 
@@ -145,6 +145,7 @@ function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
 function buildReadContinuation(
   result: ReadFileResult,
   requestedPath: string,
+  lineNumbers: boolean,
 ): ReadContinuation | undefined {
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
@@ -162,7 +163,12 @@ function buildReadContinuation(
   const nextEnd = Math.min(nextStart + chunkSize - 1, MAX_LINE_NUMBER);
   return {
     tool: 'read',
-    args: { path: requestedPath, startLine: nextStart, endLine: nextEnd },
+    args: {
+      path: requestedPath,
+      startLine: nextStart,
+      endLine: nextEnd,
+      ...(lineNumbers ? { lineNumbers: true as const } : {}),
+    },
     hint: `More lines remain from ${String(nextStart)}. Read next chunk with these args.`,
   };
 }
@@ -251,12 +257,17 @@ async function collectFileBudget(
 
 function buildPerPathReadValue(
   result: ReadFileResult,
-  options: { includeHash?: boolean; requestedPath: string; transport: Transport },
+  options: {
+    includeHash?: boolean;
+    lineNumbers: boolean;
+    requestedPath: string;
+    transport: Transport;
+  },
 ): PerPathReadValue {
   const mimeInfo = detectMimeFromContent(result.path, result.content);
   const continuation =
     result.hasMoreLines && result.readMode !== 'tail'
-      ? buildReadContinuation(result, options.requestedPath)
+      ? buildReadContinuation(result, options.requestedPath, options.lineNumbers)
       : undefined;
   const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
@@ -290,12 +301,16 @@ function buildPerPathReadValue(
   };
 }
 
-/** `cat -n` for `read`; the empty piece after a final newline is not a line. */
-function numberLines(content: string, firstLine: number): string {
-  if (content === '') return '';
-  const ending = content.endsWith('\n') ? '\n' : '';
-  const lines = (ending ? content.slice(0, -1) : content).split('\n');
-  return lines.map((line, i) => `${String(firstLine + i)}\t${line}`).join('\n') + ending;
+/**
+ * `cat -n` for `read`. `count` decides what is a line: a final newline ends one
+ * in a whole file but separates a blank last line in a slice, and the text alone
+ * cannot tell them apart.
+ */
+function numberLines(content: string, firstLine: number, count: number): string {
+  return content
+    .split('\n')
+    .map((line, i) => (i < count ? `${String(firstLine + i)}\t${line}` : line))
+    .join('\n');
 }
 
 /** A partial read the size limit cut short, as opposed to a slice returned whole. */
@@ -429,6 +444,7 @@ async function readOnePath(
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
+    lineNumbers: args.lineNumbers,
     // The continuation is args the caller pastes back, so it echoes the path
     // they wrote, or the root-resolved one a relative path was rewritten to.
     // `result.path` is the real path — on Windows that is a backslash-doubling
@@ -548,7 +564,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       // A media or binary placeholder is a note about the file, not its lines.
       const content =
         args.lineNumbers && v.mediaData === undefined && v.blobData === undefined
-          ? numberLines(bytes, v.startLine ?? 1)
+          ? numberLines(bytes, v.startLine ?? 1, v.linesRead ?? 0)
           : bytes;
       const trailer = readTrailer(v);
       if (trailer.length === 0) return content;

@@ -489,6 +489,14 @@ describe('read body', () => {
     assert.ok(batch.text?.includes(`// ${advice}`));
   });
 
+  it('gives a sensitive file inside a root no advice about leaving the roots', async () => {
+    const secret = await writeTestFile(root, 'advice/.env', 'SECRET=1\n');
+    const refused = await read({ path: secret }, { guard });
+    assert.strictEqual(refused.isError, true);
+    assert.match(refused.text ?? '', /^ACCESS_DENIED: Sensitive file blocked/);
+    assert.ok(!(refused.text ?? '').includes('allowed root'), refused.text);
+  });
+
   describe('lineNumbers', () => {
     it('numbers whole files, heads and ranges from their real first line', async () => {
       const file = await writeTestFile(root, 'numbered.txt', 'a\nb\nc\nd\n');
@@ -526,6 +534,41 @@ describe('read body', () => {
       assert.strictEqual(
         valueOf(numbered.structured.results[0])?.contentHash,
         valueOf(plain.structured.results[0])?.contentHash,
+      );
+    });
+
+    it('numbers a blank line that ends a slice', async () => {
+      const file = await writeTestFile(root, 'numbered-blank.txt', 'a\n\nb\n\n\nc\n');
+      const text = async (args: Partial<ReadArgs>) =>
+        (await read({ path: file, lineNumbers: true, ...args }, { guard })).text ?? '';
+      assert.ok((await text({ head: 2 })).startsWith('1\ta\n2\t\n\n// more lines from 3.'));
+      assert.ok(
+        (await text({ startLine: 2, endLine: 2 })).startsWith('2\t\n\n// more lines from 3.'),
+      );
+      assert.ok(
+        (await text({ startLine: 4, endLine: 5 })).startsWith('4\t\n5\t\n\n// more lines from 6.'),
+      );
+      const crlf = await writeTestFile(root, 'numbered-blank-crlf.txt', 'a\r\n\r\nb\r\n');
+      const slice = await read(
+        { path: crlf, startLine: 1, endLine: 2, lineNumbers: true },
+        { guard },
+      );
+      assert.match(slice.text ?? '', /^1\ta\r?\n2\t\r?\n/);
+    });
+
+    it('stays on through the continuation', async () => {
+      const file = await writeTestFile(root, 'numbered-paged.txt', 'a\nb\nc\nd\n');
+      const first = await read({ path: file, head: 2, lineNumbers: true }, { guard });
+      const continuation = valueOf(first.structured.results[0])?.continuation;
+      assert.ok(continuation);
+      assert.strictEqual(continuation.args.lineNumbers, true);
+      assert.match(first.text ?? '', /"lineNumbers":true\}$/m);
+      const next = await read(continuation.args, { guard });
+      assert.strictEqual(next.text, '3\tc\n4\td');
+
+      const plain = await read({ path: file, head: 2 }, { guard });
+      assert.ok(
+        !('lineNumbers' in (valueOf(plain.structured.results[0])?.continuation?.args ?? {})),
       );
     });
 

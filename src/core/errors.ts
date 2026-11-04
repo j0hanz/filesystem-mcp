@@ -65,9 +65,11 @@ export const Problem = {
 /** One path's outcome: either a value or the Problem that stopped it. */
 export type PerPathResult<T> = { path: string; value: T } | { path: string; error: Problem };
 
+/** For a path outside the roots only: other ACCESS_DENIED refusals explain themselves. */
+export const OUTSIDE_ROOTS_SUGGESTION =
+  'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.';
+
 const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
-  [ErrorCode.ACCESS_DENIED]:
-    'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.',
   [ErrorCode.NOT_FOUND]: 'Run list or find_files to verify the path.',
   [ErrorCode.NOT_FILE]: 'Target is a directory, not a file.',
   [ErrorCode.NOT_DIRECTORY]: 'Target is a file, not a directory.',

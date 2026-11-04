@@ -21,6 +21,7 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
+  OUTSIDE_ROOTS_SUGGESTION,
   rethrowIfAborted,
 } from './errors.ts';
 import { Logger } from './observability.ts';
@@ -1092,6 +1093,8 @@ export class PathGuard {
       ErrorCode.ACCESS_DENIED,
       hint ? `Outside allowed directories. ${hint}` : 'Outside allowed directories.',
       requestedPath,
+      undefined,
+      OUTSIDE_ROOTS_SUGGESTION,
     );
   }
   private async resolveNearestExistingAncestor(
