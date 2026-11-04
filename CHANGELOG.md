@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A large `delete` no longer freezes the server.** The check for a path inside another path in the batch compared every pair, taking 585 ms of blocked time at the 1,000-path limit. It now groups paths by parent chain and finishes in a fraction of that, with the same refusals.
 - **`edit` no longer blocks the server on a repetitive file.** On a large repetitive file that never matched, the `ignoreWhitespace` walk, and the exact search for a long `oldText` without whitespace, ran for seconds without yielding, so a cancel could not land and every client stalled. The search now yields to the event loop, honours cancel and times out at the tool deadline, leaving the file unchanged. A cancel or deadline also ends the wait behind another writer of the same file, for `edit`, `patch` and `replace_text`.
 - **A batch cut off by a deadline names what it finished.** When the deadline or a cancel fired before the last items of an `edit`, `create`, `read` or `stat` batch started, the call answered with the error alone, so a client could not tell which files were already written. It now returns every finished result, and each item that never started fails with its own error.
 - **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`, including through a hard link. They now answer the same refusal.

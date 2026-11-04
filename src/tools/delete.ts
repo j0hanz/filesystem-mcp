@@ -1,7 +1,7 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -17,7 +17,7 @@ import {
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { type FileType, type GuardedFileSystem, identityOf, sameIdentity } from '../core/fs.ts';
-import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
+import { normalizeCaseForComparison, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, summarize } from './batch.ts';
@@ -272,17 +272,8 @@ async function handleDelete(
   // One entry inside another would race the other's recursive delete, and
   // accepting the parent would remove a child whose own prompt was skipped.
   // Refuse both sides before any prompt or mutation.
-  const nested = new Set<number>();
-  for (const [i, a] of plans.entries()) {
-    for (const b of plans.slice(i + 1)) {
-      if (
-        isPathInsideDirectory(a.plan.validPath, b.plan.validPath) ||
-        isPathInsideDirectory(b.plan.validPath, a.plan.validPath)
-      ) {
-        nested.add(a.index).add(b.index);
-      }
-    }
-  }
+  const hits = nestedIndexes(plans.map(({ plan }) => plan.validPath));
+  const nested = new Set(plans.flatMap(({ index }, i) => (hits.has(i) ? [index] : [])));
   if (nested.size > 0) {
     for (const { plan, index } of plans) {
       if (!nested.has(index)) continue;
@@ -404,3 +395,27 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
     return { structured, text: text.join('\n'), isError };
   },
 });
+
+/** Positions of every path that contains, equals or sits inside another. Linear in paths x depth. */
+export function nestedIndexes(paths: readonly string[]): Set<number> {
+  const groups = new Map<string, number[]>();
+  for (const [i, path] of paths.entries()) {
+    const key = normalizeCaseForComparison(path);
+    const group = groups.get(key);
+    if (group) group.push(i);
+    else groups.set(key, [i]);
+  }
+  const nested = new Set<number>();
+  for (const group of groups.values()) if (group.length > 1) for (const i of group) nested.add(i);
+  for (const [i, path] of paths.entries()) {
+    for (let dir = dirname(path), up = dirname(dir); ; dir = up, up = dirname(dir)) {
+      const group = groups.get(normalizeCaseForComparison(dir));
+      if (group) {
+        nested.add(i);
+        for (const j of group) nested.add(j);
+      }
+      if (up === dir) break;
+    }
+  }
+  return nested;
+}
