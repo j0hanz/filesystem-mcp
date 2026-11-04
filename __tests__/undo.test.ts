@@ -1291,6 +1291,38 @@ describe('restoreEntry', () => {
     assert.strictEqual((await fsPromises.stat(empty)).mode & 0o777, 0o700);
   });
 
+  it('a recursive delete that fails halfway can still be undone', async (t) => {
+    const tree = join(tmpDir, 'halfway');
+    const gone = join(tree, 'gone.txt');
+    await mkdir(tree);
+    await writeFile(gone, 'bytes');
+    await writeFile(join(tree, 'kept.txt'), 'kept');
+    const realRm = fsModule.rm;
+    t.mock.method(fsModule, 'rm', async () => {
+      await realRm(gone);
+      throw new Error('rm failed');
+    });
+    syncBuiltinESMExports();
+    const entry = await captureOne(async (fs) => {
+      await assert.rejects(fs.rm(tree, { recursive: true }), /rm failed/u);
+    });
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await assert.rejects(lstat(gone));
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(gone, 'utf8'), 'bytes');
+    assert.strictEqual(await readFile(join(tree, 'kept.txt'), 'utf8'), 'kept');
+  });
+
+  it('an empty folder removed by rmdir comes back on undo', async () => {
+    const empty = join(tmpDir, 'rmdir-empty');
+    await mkdir(empty);
+    const entry = await captureOne((fs) => fs.rmdir(empty));
+    await assert.rejects(lstat(empty));
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.ok((await lstat(empty)).isDirectory());
+  });
+
   it('a restored directory keeps owner rwx so its children come back', async (t) => {
     if (process.platform === 'win32') {
       t.skip('directory mode bits are POSIX-only');
