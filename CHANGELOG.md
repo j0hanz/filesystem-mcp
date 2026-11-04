@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fewer 502s behind a reverse proxy.** Idle HTTP connections closed after 5 s, so a proxy with a longer idle timeout could reuse one the server had already closed. They now stay open 65 s, past the 60 s default of AWS ALB and nginx. The 10 s limit on sending request headers is unchanged.
 - **Appending to a large file no longer scans it.** Every `create` append counted the whole file's lines for its result, while holding the file's write lock: 5.9 s on a 2 GiB log, for an append that took 3 ms. Past the size limit (`FS_MAX_FILE_SIZE`) the count is skipped and `lineCount` is 0.
 - **A cancel during a recursive `delete` keeps the folder.** The delete first saves the tree for undo, and a cancel that landed during that save was ignored, so the folder was removed anyway. It now stops before removing anything, and the call offers no undo id.
 - **More private keys and credential files are blocked.** `.envrc`, `*.ppk`, `*.jks`, `*.keystore`, `*.p8`, `.dockercfg`, `.s3cfg` and `.htpasswd` were readable, though the README says private keys and cloud credentials are blocked. They now answer `ACCESS_DENIED`. `--allow` lifts one, for example `--allow debug.keystore`.

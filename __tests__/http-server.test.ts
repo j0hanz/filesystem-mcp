@@ -2,11 +2,12 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import type { ClientRequest, OutgoingHttpHeaders, Server } from 'node:http';
-import { request } from 'node:http';
+import { Agent, request } from 'node:http';
 import { type AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { json } from 'node:stream/consumers';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { getMaxInboundMessageBytes, MIB } from '../src/core/util.ts';
@@ -495,6 +496,54 @@ describe('the api key travels as config, not env', () => {
       body: '{}',
     });
     assert.notStrictEqual(anon.status, 401, 'env is read at the CLI boundary, not here');
+  });
+});
+
+describe('keep-alive', () => {
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+  });
+
+  after(async () => {
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('outlasts a 60 s proxy idle timeout and keeps the header limit', async () => {
+    const server = await startHttpServer(0, { cliAllowedDirs: [tmpDir] });
+    try {
+      assert.ok(server.keepAliveTimeout > 60_000);
+      assert.strictEqual(server.headersTimeout, 10_000);
+    } finally {
+      await server[Symbol.asyncDispose]();
+    }
+  });
+
+  // Slow on purpose: idle past the 10 s headersTimeout must not end the connection.
+  it('answers on a connection idle past the header limit', async () => {
+    const server = await startHttpServer(0, { cliAllowedDirs: [tmpDir] });
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const { port } = server.address() as AddressInfo;
+    const get = () =>
+      new Promise<{ status: number | undefined; reused: boolean }>((resolve, reject) => {
+        const req = request({ port, path: '/healthz', agent }, (res) => {
+          res.resume();
+          res.on('end', () => {
+            resolve({ status: res.statusCode, reused: req.reusedSocket });
+          });
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    try {
+      assert.strictEqual((await get()).status, 200);
+      await sleep(11_000);
+      assert.deepStrictEqual(await get(), { status: 200, reused: true });
+    } finally {
+      agent.destroy();
+      await server[Symbol.asyncDispose]();
+    }
   });
 });
 

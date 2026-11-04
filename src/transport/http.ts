@@ -45,7 +45,10 @@ import { jsonRpcRequestId, listenSubscriptionUris, prepareListenWatchers } from 
 
 // Must exceed the idle timeout of any proxy in front of this server, or the
 // proxy reuses connections the server already closed (intermittent 502s).
-const KEEPALIVE_TIMEOUT_MS = 5_000;
+// 65 s clears the 60 s default of AWS ALB and nginx.
+const KEEPALIVE_TIMEOUT_MS = 65_000;
+// A slow client's limit on sending headers; idle keep-alive time does not count.
+const HEADERS_TIMEOUT_MS = 10_000;
 
 /** Body-parser rejections and anything else that reaches the end of the chain. */
 function errorHandlerMiddleware(
@@ -340,7 +343,7 @@ export async function startHttpServer(
 
   const httpServer = createHttpServer(app);
   httpServer.keepAliveTimeout = KEEPALIVE_TIMEOUT_MS;
-  httpServer.headersTimeout = KEEPALIVE_TIMEOUT_MS + 5_000;
+  httpServer.headersTimeout = HEADERS_TIMEOUT_MS;
   httpServer.requestTimeout = DEFAULT_REQUEST_TIMEOUT_MSEC;
 
   const onHttpServerError = (error: Error): void => {
