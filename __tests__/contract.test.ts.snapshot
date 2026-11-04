@@ -646,7 +646,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names. A named file prints its path once, as a header.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1149,7 +1149,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names. A named file prints its path once, as a header.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -1028,9 +1028,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // size in _meta and points at stat's tokenEstimate; measured 20913 / 10010.
   // Raised 2026-11-04 to 21100 full and 10200 read-only: read gains lineNumbers;
   // measured 21085 / 10182.
+  // Raised 2026-11-04 to 21150 full and 10250 read-only: list names .git among its
+  // skips, and search_text says a named file prints once; measured 21139 / 10236.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 21_100;
-    const BUDGET_CHARS_READ_ONLY = 10_200;
+    const BUDGET_CHARS = 21_150;
+    const BUDGET_CHARS_READ_ONLY = 10_250;
 
     const full = await createTestClientPair([tmpDir]);
     try {

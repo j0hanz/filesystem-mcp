@@ -25,7 +25,11 @@ import { defineTool } from './define.ts';
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 type SearchMatchPayload = SearchResultValue['matches'][number];
 /** The engine's own summary, plus the root the match paths are relative to. */
-type SearchContentPageMetadata = SearchResultValue['summary'] & { readonly root: string };
+type SearchContentPageMetadata = SearchResultValue['summary'] & {
+  readonly root: string;
+  /** Rides the snapshot: a cursor replay never reruns the scan. */
+  readonly namedFile: boolean;
+};
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
@@ -79,8 +83,8 @@ interface SearchOutput {
   nextCursor?: string;
 }
 
-function matchRow(m: SearchMatchPayload): string {
-  return `${m.file}:${String(m.line)}: ${m.content}`;
+function matchRow(m: SearchMatchPayload, namedFile: boolean): string {
+  return `${namedFile ? '' : `${m.file}:`}${String(m.line)}: ${m.content}`;
 }
 
 /**
@@ -90,22 +94,29 @@ function matchRow(m: SearchMatchPayload): string {
  * and as a match when it is one. The maps iterate in line order without a
  * sort: matches arrive sorted, each window is contiguous, and setting an
  * existing key keeps its slot. Without context the rows are the bare match
- * lines, byte-identical to before the option existed.
+ * lines, byte-identical to before the option existed. A named file prints its
+ * path once, as a header, and its rows drop it.
  */
-function renderRows(matches: readonly SearchMatchPayload[], withContext: boolean): string[] {
-  if (!withContext) return matches.map(matchRow);
+function renderRows(
+  matches: readonly SearchMatchPayload[],
+  withContext: boolean,
+  namedFile: boolean,
+): string[] {
+  const [first] = matches;
+  const header = namedFile && first ? [`// ${first.file}`] : [];
+  if (!withContext) return [...header, ...matches.map((m) => matchRow(m, namedFile))];
   const byFile = new Map<string, Map<number, string>>();
   for (const m of matches) {
     const lines = byFile.get(m.file) ?? new Map<number, string>();
     byFile.set(m.file, lines);
     const setContext = (n: number, text: string): void => {
-      if (!lines.has(n)) lines.set(n, `${m.file}-${String(n)}- ${text}`);
+      if (!lines.has(n)) lines.set(n, `${namedFile ? '' : `${m.file}-`}${String(n)}- ${text}`);
     };
     const before = m.before ?? [];
     before.forEach((text, k) => {
       setContext(m.line - before.length + k, text);
     });
-    lines.set(m.line, matchRow(m));
+    lines.set(m.line, matchRow(m, namedFile));
     (m.after ?? []).forEach((text, k) => {
       setContext(m.line + 1 + k, text);
     });
@@ -119,7 +130,7 @@ function renderRows(matches: readonly SearchMatchPayload[], withContext: boolean
       prev = n;
     }
   }
-  return rows;
+  return [...header, ...rows];
 }
 
 function buildSearchMatchDetail(totalMatches: number, filesMatched: number): string {
@@ -184,7 +195,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
     'and paths relative to the root, ready to pass to read. ' +
     'searchPattern is the text to find, matched within one line; pattern filters files by glob. ' +
-    'find_files matches file names.',
+    'find_files matches file names. A named file prints its path once, as a header.',
   input: GrepInputSchema,
   readOnlyHint: true,
   deadline: true,
@@ -235,7 +246,11 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           const paths = ctx.fs.pathGuard.resultPaths(scope.root);
           return {
             items: buildSortedPayloads(result, paths),
-            metadata: { ...result.summary, root: paths.root },
+            metadata: {
+              ...result.summary,
+              root: paths.root,
+              namedFile: scope.explicitFile !== undefined,
+            },
             truncated: result.summary.truncated,
           };
         },
@@ -252,7 +267,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
       paged.nextCursor,
       paged.resource?.entry.uri,
     );
-    const rows = renderRows(structured.matches, args.context > 0);
+    const rows = renderRows(structured.matches, args.context > 0, paged.metadata.namedFile);
     const body =
       rows.length > 0
         ? rows.join('\n')
