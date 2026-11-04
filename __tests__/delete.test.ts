@@ -9,6 +9,7 @@ import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { DELETE, nestedIndexes } from '../src/tools/delete.ts';
 import {
   cleanupTestRoot,
@@ -359,6 +360,36 @@ describe('delete body', () => {
     assert.strictEqual(asked, false);
     assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
     await access(join(dir, '.env'));
+  });
+
+  it('a cancel during the undo snapshot deletes nothing and offers no undo', async () => {
+    const tree = join(root, 'cancelled_tree');
+    await mkdir(tree);
+    await writeFile(join(tree, 'a.txt'), 'a');
+    const controller = new AbortController();
+    const capture = new UndoJournal().beginCapture();
+    class CancelsDuringSnapshot extends GuardedFileSystem {
+      override async readSaved(path: string): Promise<Buffer> {
+        controller.abort();
+        return super.readSaved(path);
+      }
+    }
+
+    const result = await del(
+      { paths: [tree], recursive: true },
+      {
+        fs: new CancelsDuringSnapshot(await makeGuard([root]), capture),
+        signal: controller.signal,
+        confirm: choose('delete'),
+      },
+    );
+
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    await access(join(tree, 'a.txt'));
+    assert.strictEqual(capture.records.length, 0);
+    assert.match(capture.unavailableReason() ?? '', /cancelled before anything was deleted/u);
+    capture.release();
   });
 
   it('rejects when an abort lands during the protected-file walk', async () => {

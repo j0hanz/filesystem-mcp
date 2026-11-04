@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cancel during a recursive `delete` keeps the folder.** The delete first saves the tree for undo, and a cancel that landed during that save was ignored, so the folder was removed anyway. It now stops before removing anything, and the call offers no undo id.
 - **More private keys and credential files are blocked.** `.envrc`, `*.ppk`, `*.jks`, `*.keystore`, `*.p8`, `.dockercfg`, `.s3cfg` and `.htpasswd` were readable, though the README says private keys and cloud credentials are blocked. They now answer `ACCESS_DENIED`. `--allow` lifts one, for example `--allow debug.keystore`.
 - **Moving a large folder to a new location is fast again.** The pre-move walk re-checked every entry against the disk although the destination did not exist, so 8,000 files took 14.8 s. A missing destination now skips the per-entry disk checks; read-only and sensitive-file rules still apply to every entry.
 - **A large `delete` no longer freezes the server.** The check for a path inside another path in the batch compared every pair, taking 585 ms of blocked time at the 1,000-path limit. It now groups paths by parent chain and finishes in a fraction of that, with the same refusals.

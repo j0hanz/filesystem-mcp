@@ -976,13 +976,23 @@ export class GuardedFileSystem {
     return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
   }
 
-  async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
+  async rm(
+    filePath: string,
+    options?: Parameters<typeof fsRm>[1],
+    signal?: AbortSignal,
+  ): Promise<void> {
     const validPath = await this.#guard('delete', filePath);
     // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
     // recursive rm can fail halfway with files already gone.
     const capture = this.#capture;
     if (capture) {
       await snapshotTree(capture, this, validPath);
+    }
+    // The snapshot can run long. A cancel during it stops here, the last point
+    // where nothing is gone, and no undo id is offered for a delete that never ran.
+    if (signal?.aborted) {
+      capture?.abandon('cancelled before anything was deleted');
+      signal.throwIfAborted();
     }
     await fsRm(validPath, options);
   }
