@@ -22,7 +22,7 @@ import {
   utimes as fsUtimes,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -259,15 +259,16 @@ export class GuardedFileSystem {
     if (filter && !(await filter(entry, destination))) return;
     // A missing destination holds no link, so only the read-only rule can differ
     // per entry, and it reads no disk. Its ancestors can still change while a
-    // Confirmation is open, so where it lands is resolved once, here.
+    // Confirmation is open, so that rule runs under where it lands, resolved once.
+    // The protection check below stays on the spelling: a re-spelling can change it.
     const fresh = (await unlessMissing(fsLstat(destination))) === undefined;
     const landing = fresh ? await this.#guard('relocate', destination) : destination;
     const relocate = fresh
-      ? (name: string) => {
-          this.pathGuard.assertWritable(join(landing, name));
+      ? (path: string) => {
+          this.pathGuard.assertWritable(join(landing, relative(destination, path)));
           return Promise.resolve();
         }
-      : (name: string) => this.#guard('relocate', join(destination, name));
+      : (path: string) => this.#guard('relocate', path);
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
       for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
@@ -287,7 +288,7 @@ export class GuardedFileSystem {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
           if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
-          await relocate(name);
+          await relocate(join(destination, name));
           yield name;
           if (dirent.isDirectory()) pending.push(name);
         }
@@ -296,7 +297,7 @@ export class GuardedFileSystem {
     const keeps = await this.pathGuard.relocationKeepsProtection(
       names(),
       { from: entry, requestedFrom },
-      landing,
+      destination,
     );
     if (!keeps) {
       throw new FsError(

@@ -917,25 +917,6 @@ describe('relocation walk', () => {
     await access(x);
   });
 
-  it('refuses when a link redirects the destination under a denied name after the plan', async (t) => {
-    await withEnv({ FS_DENYLIST: 'dn-target/new/**' }, async () => {
-      const guard = await guardFor();
-      const x = await writeTestFile(root, 'dn/x.txt', 'x');
-      const parent = join(root, 'dn-parent');
-      await mkdir(parent);
-      await mkdir(join(root, 'dn-target'));
-      const fs = new GuardedFileSystem(guard);
-      const plan = await fs.planTransfer('move', {
-        source: join(root, 'dn'),
-        destination: join(parent, 'new'),
-      });
-      await rmdir(parent);
-      if (!(await trySymlink(join(root, 'dn-target'), parent, () => t.skip('no symlinks')))) return;
-      await assert.rejects(fs.executeTransfer(plan), { code: 'ACCESS_DENIED' });
-      await access(x);
-    });
-  });
-
   it('still refuses an entry landing in a read-only folder', async () => {
     const guard = await guardFor([join(root, 'out', 'pkg2', 'sub')]);
     const x = await writeTestFile(root, 'ro/sub/x.txt', 'x');
