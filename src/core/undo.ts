@@ -20,7 +20,12 @@ import {
 } from './errors.ts';
 import { joinRoster, pathLabel } from './fmt.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
+import {
+  IS_CASE_INSENSITIVE_FS,
+  IS_WINDOWS,
+  isPathInsideDirectory,
+  normalizeCaseForComparison,
+} from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
 /**
@@ -228,8 +233,8 @@ interface LivePool {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   #unavailable: string | undefined;
-  /** `<path>: <reason>` for each path that lost its own undo; the rest of the call keeps theirs. */
-  readonly #refused: string[] = [];
+  /** Each path that lost its own undo, with why; the rest of the call keeps theirs. */
+  readonly #refused = new Map<string, string>();
   /** Set on a `forPath` capture: where `commit` hands its records. */
   #owner: { parent: UndoCapture; path: string } | undefined;
   #bytes = 0;
@@ -254,7 +259,36 @@ export class UndoCapture {
    */
   unavailableReason(): string | undefined {
     if (this.#unavailable !== undefined) return this.#unavailable;
-    return this.#refused.length > 0 ? joinRoster(this.#refused, '; ') : undefined;
+    if (this.#refused.size === 0) return undefined;
+    // A bare name that another path in the call shares would not say which file stayed as written.
+    const uses = new Map<string, number>();
+    const others = this.journalRecords().map((r) => (r.op === 'rename' ? r.to : r.path));
+    for (const path of [...this.#refused.keys(), ...others]) {
+      uses.set(pathLabel(path), (uses.get(pathLabel(path)) ?? 0) + 1);
+    }
+    const lines = [...this.#refused].map(([path, reason]) => {
+      const label = pathLabel(path);
+      return `${uses.get(label) === 1 ? label : path}: ${reason}`;
+    });
+    return joinRoster(lines, '; ');
+  }
+
+  /**
+   * What an undo id restores. A refused path stays as it is: no record may change
+   * it, as when a call reaches one file through a link, or remove a folder it sits in.
+   */
+  journalRecords(): UndoRecord[] {
+    if (this.#refused.size === 0) return this.records;
+    const paths = [...this.#refused.keys()];
+    const refused = new Set(paths.map(normalizeCaseForComparison));
+    return this.records.filter((record) => {
+      if (record.op === 'rmdir') {
+        return !paths.some((path) => isPathInsideDirectory(record.path, path));
+      }
+      return !refused.has(
+        normalizeCaseForComparison(record.op === 'rename' ? record.to : record.path),
+      );
+    });
   }
 
   /**
@@ -274,7 +308,7 @@ export class UndoCapture {
     const { parent, path } = this.#owner;
     if (this.#unavailable !== undefined || parent.#unavailable !== undefined) {
       if (parent.#unavailable === undefined) {
-        parent.#refused.push(`${pathLabel(path)}: ${String(this.#unavailable)}`);
+        parent.#refused.set(path, String(this.#unavailable));
       }
       this.release();
       return;

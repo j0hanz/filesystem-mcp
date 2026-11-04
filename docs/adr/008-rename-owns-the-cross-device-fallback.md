@@ -29,8 +29,8 @@ staged copy, the rename into place and the removal of the source.
 failed rename, as the public helper did, before it copies.
 `performRenameWithFallback` is deleted; the move tool calls `rename`.
 
-A move completed by a copy abandons the Capture, as a copy does: a
-cross-device move is not undoable yet. Undo's restore (`world.rename` in
+A move completed by a copy abandons its own capture: a cross-device move is not
+undoable yet. Undo's restore (`world.rename` in
 `src/core/undo.ts`) opts out of the fallback and rethrows `EXDEV`: a copy
 gives every descendant a new identity, and an older record that tracks one of
 them would then read as modified since. The source is validated once more
