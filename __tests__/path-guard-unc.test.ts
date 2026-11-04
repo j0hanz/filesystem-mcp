@@ -3,18 +3,24 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import assert from 'node:assert/strict';
 import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { suggestPaths } from '../src/core/path-completer.ts';
 import {
+  isPathInsideDirectory,
   isPathWithinDirectories,
+  isSamePath,
   isUncOrDevicePath,
   normalizePath,
 } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
+import { snapshotTree, UndoJournal } from '../src/core/undo.ts';
+import { LIST } from '../src/tools/index.ts';
 import { seedRootsFromClient } from '../src/transport/stdio.ts';
 import {
   cleanupTestRoot,
@@ -23,7 +29,9 @@ import {
   createTestServer,
   fsErrorMatcher,
   makeGuard,
+  trySymlink,
 } from './helpers.ts';
+import { runToolBodyResult } from './tool-harness.ts';
 
 const OUT_OF_ROOT = [
   String.raw`\\fs-mcp-test.invalid\share\x.txt`,
@@ -65,6 +73,70 @@ function stubFilesystem(t: TestContext, { echoRealpath = false } = {}) {
     stat,
     total: () =>
       [realpath, stat, ...others].reduce((sum, method) => sum + method.mock.callCount(), 0),
+  };
+}
+
+const UNC_TARGET = String.raw`\\fs-mcp-test.invalid\share\x.txt`;
+const REAL_FS = {
+  lstat: fsPromises.lstat.bind(fsPromises),
+  readlink: fsPromises.readlink.bind(fsPromises),
+  realpath: fsPromises.realpath.bind(fsPromises),
+  stat: fsPromises.stat.bind(fsPromises),
+};
+
+/**
+ * `links` exist only to `lstat` and `readlink`, as a link and its target. Other
+ * paths reach the real call, except a UNC one, which fails as missing so no path
+ * here can dial a host. `touched` names the calls that would have opened a link's
+ * target: `realpath` or `stat` on it or below it, `lstat` only below it.
+ */
+function stubLinks(
+  t: TestContext,
+  links: Readonly<Record<string, string>>,
+  { echoRealpath = false } = {},
+) {
+  const targets = new Map(
+    Object.entries(links).map(([link, target]) => [normalizePath(link), target]),
+  );
+  const targetOf = (path: string) => targets.get(normalizePath(path));
+  const isRemote = (path: string) => path.startsWith('\\\\');
+  const lstat = t.mock.method(fsPromises, 'lstat', (path: string, options?: never) => {
+    if (targetOf(path) !== undefined) {
+      return Promise.resolve({
+        isSymbolicLink: () => true,
+        isDirectory: () => false,
+        isFile: () => false,
+      });
+    }
+    return isRemote(path) ? missing() : REAL_FS.lstat(path, options);
+  });
+  t.mock.method(fsPromises, 'readlink', (path: string) => {
+    const target = targetOf(path);
+    return target === undefined ? REAL_FS.readlink(path) : Promise.resolve(target);
+  });
+  const realpath = t.mock.method(fsPromises, 'realpath', (path: string) => {
+    if (echoRealpath) return Promise.resolve(path);
+    return isRemote(path) ? missing() : REAL_FS.realpath(path);
+  });
+  const stat = t.mock.method(fsPromises, 'stat', (path: string) =>
+    isRemote(path) ? missing() : REAL_FS.stat(path),
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const argsOf = (method: { mock: { calls: readonly { arguments: readonly unknown[] }[] } }) =>
+    method.mock.calls.map((call) => normalizePath(String(call.arguments[0])));
+  return {
+    touched: (link: string) => {
+      const inside = (path: string) => isPathInsideDirectory(normalizePath(link), path);
+      return [
+        ...argsOf(realpath).filter(inside),
+        ...argsOf(stat).filter(inside),
+        ...argsOf(lstat).filter((path) => inside(path) && !isSamePath(path, link)),
+      ];
+    },
   };
 }
 
@@ -278,6 +350,164 @@ describe(
       const normalized = normalizePath(String.raw`\\server`);
       assert.equal(isUncOrDevicePath(normalized), false);
       assert.match(normalized, /^[a-z]:\\/u);
+    });
+  },
+);
+
+describe(
+  'a link to a network path',
+  { skip: process.platform !== 'win32' && 'Windows path shapes' },
+  () => {
+    let root: string;
+    let other: string;
+    let guard: PathGuard;
+    let link: string;
+
+    before(async () => {
+      root = await createTestRoot();
+      other = await createTestRoot();
+      guard = await makeGuard([root]);
+      link = join(root, 'looks-normal');
+    });
+
+    after(async () => {
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(other);
+    });
+
+    const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED, /network or device path/u);
+
+    it('refuses the link and a path through it, without following', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      await assert.rejects(guard.validateExistingPath(link), denied);
+      await assert.rejects(guard.validateExistingPath(join(link, 'a.txt')), denied);
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('refuses a write through it, without following', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      await assert.rejects(guard.validatePathForWrite(join(link, 'new.txt')), denied);
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('refuses a delete through it, without following', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      await assert.rejects(guard.validatePathForDelete(join(link, 'a.txt')), denied);
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('entryVerdict calls it inaccessible, without following', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      assert.equal(await guard.entryVerdict(link), 'inaccessible');
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('finds the host at the end of a chain', async (t) => {
+      const one = join(root, 'one');
+      const two = join(root, 'two');
+      const fs = stubLinks(t, { [one]: two, [two]: UNC_TARGET });
+      await assert.rejects(guard.validateExistingPath(one), denied);
+      assert.deepEqual(fs.touched(one), []);
+      assert.deepEqual(fs.touched(two), []);
+    });
+
+    it('finds the host through a relative target', async (t) => {
+      const rel = join(root, 'rel');
+      const hop = join(other, 'hop');
+      const fs = stubLinks(t, {
+        [rel]: join('..', basename(other), 'hop'),
+        [hop]: UNC_TARGET,
+      });
+      await assert.rejects(guard.validateExistingPath(rel), denied);
+      assert.deepEqual(fs.touched(rel), []);
+      assert.deepEqual(fs.touched(hop), []);
+    });
+
+    it('treats a link cycle as reaching a host', async (t) => {
+      const a = join(root, 'cycle-a');
+      const b = join(root, 'cycle-b');
+      stubLinks(t, { [a]: b, [b]: a });
+      assert.equal(await guard.reachesRemoteLink(a), true);
+    });
+
+    it('refuses a link found under another Unicode spelling', async (t) => {
+      const onDisk = 'café-link';
+      const fs = stubLinks(t, { [join(root, onDisk)]: UNC_TARGET });
+      t.mock.method(fsPromises, 'readdir', () => Promise.resolve([onDisk]));
+      syncBuiltinESMExports();
+      await assert.rejects(guard.validateExistingPath(join(root, 'café-link')), denied);
+      assert.deepEqual(fs.touched(join(root, onDisk)), []);
+    });
+
+    it('offers and applies no grant to one outside the roots', async (t) => {
+      const outside = join(other, 'link');
+      const fs = stubLinks(t, { [outside]: UNC_TARGET });
+      assert.deepEqual(await guard.precheckAccess([outside]), []);
+      assert.equal(await guard.applyGrant(outside), false);
+      assert.deepEqual(fs.touched(outside), []);
+    });
+
+    it('still deletes the link itself', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      assert.ok(isSamePath(await guard.validatePathForDelete(link), link));
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('still moves the link itself', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      const plan = await new GuardedFileSystem(guard).planTransfer('move', {
+        source: link,
+        destination: join(root, 'moved'),
+      });
+      assert.equal(plan.landing, plan.entry);
+      assert.ok(isSamePath(plan.entry, link));
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('abandons an undo capture without typing the link', async (t) => {
+      const fs = stubLinks(t, { [link]: UNC_TARGET });
+      const capture = new UndoJournal(32 * 1024 * 1024).beginCapture();
+      await snapshotTree(capture, new GuardedFileSystem(guard), link);
+      assert.equal(capture.unavailableReason(), 'a link to a network path');
+      assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('follows a link between two places on a share root', async (t) => {
+      const shared = new PathGuard();
+      shared.initialize([PROJECT_ROOT]);
+      const inside = join(PROJECT_ROOT, 'link');
+      stubLinks(t, { [inside]: join(PROJECT_ROOT, 'real.txt') }, { echoRealpath: true });
+      assert.equal(await shared.validateExistingPath(inside), inside);
+    });
+
+    it('list skips a real link and never resolves it', async (t) => {
+      const listed = await createTestRoot();
+      t.after(() => cleanupTestRoot(listed));
+      const real = join(listed, 'looks-normal');
+      const made = await trySymlink(
+        UNC_TARGET,
+        real,
+        () => {
+          t.skip('symlinks need elevation here');
+        },
+        'file',
+      );
+      if (!made) return;
+      const listGuard = await makeGuard([listed]);
+      const realpath = t.mock.method(fsPromises, 'realpath');
+      syncBuiltinESMExports();
+      t.after(() => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      const result = await runToolBodyResult(LIST, { path: listed }, { guard: listGuard });
+      assert.match(String(result.text), /skipped 1 inaccessible entry/u);
+      assert.deepEqual(
+        realpath.mock.calls.filter((call) =>
+          isPathInsideDirectory(real, normalizePath(String(call.arguments[0]))),
+        ),
+        [],
+      );
     });
   },
 );

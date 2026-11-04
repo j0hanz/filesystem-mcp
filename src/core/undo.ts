@@ -377,6 +377,10 @@ export async function snapshotTree(
       return;
     }
     if (stats.isSymbolicLink()) {
+      if (await fs.pathGuard.reachesRemoteLink(validPath)) {
+        capture.abandon('a link to a network path');
+        return;
+      }
       const target = await fsReadlink(validPath);
       // The follow-stat types the link (junction vs file). A win32 link
       // whose target is gone cannot be typed, so it refuses capture rather

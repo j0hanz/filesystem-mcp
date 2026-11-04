@@ -1,7 +1,17 @@
 import type { Stats } from 'node:fs';
 import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
@@ -416,6 +426,7 @@ export class PathGuard {
         ) {
           return 'inaccessible';
         }
+        if (await this.reachesRemoteLink(normalized)) return 'inaccessible';
         // The denylist and the out-of-root check share this code; the real path tells them apart.
         try {
           return this.isSensitive(await realpath(entryPath)) ? 'sensitive' : 'inaccessible';
@@ -444,12 +455,12 @@ export class PathGuard {
    * into the allowed set, so a lexical-only check let a symlink or junction
    * aliasing $HOME/C:\Windows in under an innocuous name — and the confirmation
    * prompt showed the alias, not the target. A target that cannot be resolved
-   * is judged lexically; it does not exist to escape into. A UNC or device path
-   * is refused before any filesystem call, which could reach the named host.
+   * is judged lexically; it does not exist to escape into. A UNC or device path,
+   * or a link to one, is refused before any call that could reach the named host.
    */
   private async isUnsafeGrantTarget(targetDir: string): Promise<boolean> {
     const normalized = normalizePath(targetDir);
-    if (isUncOrDevicePath(normalized)) return true;
+    if (isUncOrDevicePath(normalized) || (await this.reachesRemoteLink(normalized))) return true;
     if (isUnsafeCwdPath(normalized)) return true;
     let resolved: string;
     try {
@@ -461,6 +472,51 @@ export class PathGuard {
       !isSamePath(resolved, normalized) &&
       (isUnsafeCwdPath(resolved) || isUncOrDevicePath(resolved))
     );
+  }
+
+  /**
+   * True when resolving `normalizedPath` would follow a link to a network or
+   * device path outside the roots. Windows opens a link's target to resolve it,
+   * which can connect to the named host and send the user's NTLM credentials,
+   * so this reads each link with `lstat` and `readlink`, which open no target.
+   */
+  // shortcut: one lstat per path part per validation on Windows (31 us each); cache link-free directories if large searches start hitting the tool deadline.
+  async reachesRemoteLink(normalizedPath: string): Promise<boolean> {
+    if (!IS_WINDOWS) return false;
+    let current = this.allowedRootContaining(normalizedPath) ?? parse(normalizedPath).root;
+    const partsOf = (from: string, to: string) => relative(from, to).split(sep).filter(Boolean);
+    let rest = partsOf(current, normalizedPath);
+    let hops = 0;
+    while (rest.length > 0) {
+      const next = join(current, rest[0] ?? '');
+      rest = rest.slice(1);
+      let isLink: boolean;
+      try {
+        isLink = (await lstat(next)).isSymbolicLink();
+      } catch {
+        return false; // Missing or unreadable: realpath reaches nothing past it.
+      }
+      if (!isLink) {
+        current = next;
+        continue;
+      }
+      if (++hops > MAX_SYMLINK_HOPS) return true;
+      let target: string;
+      try {
+        target = normalizePath(resolve(dirname(next), await readlink(next)));
+      } catch {
+        return true;
+      }
+      if (
+        isUncOrDevicePath(target) &&
+        !isPathWithinDirectories(target, this.allowedDirectoriesState ?? [])
+      ) {
+        return true;
+      }
+      current = parse(target).root;
+      rest = [...partsOf(current, target), ...rest];
+    }
+    return false;
   }
 
   /** Walk up from a blocked path to the closest existing ancestor directory. */
@@ -743,6 +799,13 @@ export class PathGuard {
   async validateExistingPathDetailed(requestedPath: string): Promise<ValidatedPathDetails> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccess(requestedPath);
+
+    if (await this.reachesRemoteLink(normalizedRequested)) {
+      this.throwAccessDenied(
+        requestedPath,
+        `${accessDeniedHint} A link on this path points at a network or device path.`,
+      );
+    }
 
     let spelled = normalizedRequested;
     let realPath: string;
@@ -1153,6 +1216,12 @@ export class PathGuard {
       if (onDisk === undefined) break;
       spelled.push(onDisk);
       if (!resolveLast && index === missing.length - 1) break;
+      if (await this.reachesRemoteLink(join(ancestor, ...spelled))) {
+        this.throwAccessDenied(
+          requestedPath,
+          `${accessDeniedHint} A link on this path points at a network or device path.`,
+        );
+      }
       try {
         real = normalizePath(await realpath(join(ancestor, ...spelled)));
       } catch {
@@ -1217,6 +1286,13 @@ export class PathGuard {
       requestedPath,
       allowSensitive,
     );
+
+    if (await this.reachesRemoteLink(normalizedRequested)) {
+      this.throwAccessDenied(
+        requestedPath,
+        `${accessDeniedHint} A link on this path points at a network or device path.`,
+      );
+    }
 
     let { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
       requestedPath,
@@ -1310,6 +1386,15 @@ export class PathGuard {
         ErrorCode.ACCESS_DENIED,
         'Deleting a workspace root directory is not allowed',
         requestedPath,
+      );
+    }
+
+    // The parent only, so the link itself stays deletable. Before the lstat below,
+    // which follows a link in the parent; respellMissing checks what it re-spells.
+    if (await this.reachesRemoteLink(dirname(normalizedRequested))) {
+      this.throwAccessDenied(
+        requestedPath,
+        `${accessDeniedHint} A link on this path points at a network or device path.`,
       );
     }
 

@@ -79,14 +79,14 @@ connects to the named host and never prompts. A share you configure as a root,
 or a working directory on a share that you admit with `--allow-cwd` or
 `--walk-cwd`, keeps working, but folders on it outside that root are refused too.
 
-Resolving a local link does touch its target. A link inside an allowed root or a
-granted folder, or a local link outside any root, is resolved during the grant
-check, before any prompt, so one that points at a share can still reach that
-host. The grant is refused, the lookup is not. A mapped network drive that
-resolves to a share counts as a share, so it is never granted and must be
-configured as a root. The grant check reads such a path before it refuses it,
-which contacts the server you mapped that drive to. WSL paths such as
-`\\wsl.localhost\Ubuntu\...` count as shares too.
+A link to a network or device path is refused the same way, without being
+followed, unless its target is inside a configured root. You can still delete or
+move the link.
+
+A mapped network drive that resolves to a share counts as a share, so it is never
+granted and must be configured as a root. The grant check reads such a path before
+it refuses it, which contacts the server you mapped that drive to. WSL paths such
+as `\\wsl.localhost\Ubuntu\...` count as shares too.
 
 ## Secret files
 
