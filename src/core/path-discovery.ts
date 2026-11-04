@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 
@@ -129,7 +129,8 @@ export async function findProjectRoot(startDir: string, ceiling: string[]): Prom
     for (const marker of markers) {
       const markerPath = join(current, marker);
       try {
-        const s = await stat(markerPath);
+        // lstat: a marker linked to a share must not be opened at startup.
+        const s = await lstat(markerPath);
         if (s.isDirectory() || s.isFile()) {
           return current;
         }
