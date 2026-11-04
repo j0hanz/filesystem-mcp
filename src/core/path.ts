@@ -514,7 +514,7 @@ export class PathGuard {
       ) {
         return true;
       }
-      current = parse(target).root;
+      current = this.allowedRootContaining(target) ?? parse(target).root;
       rest = [...partsOf(current, target), ...rest];
     }
     return false;

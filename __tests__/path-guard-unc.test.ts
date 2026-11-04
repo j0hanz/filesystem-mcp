@@ -1,7 +1,8 @@
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
-import fsPromises from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import fsPromises, { lstat, mkdir, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -24,6 +25,7 @@ import { LIST } from '../src/tools/index.ts';
 import { seedRootsFromClient } from '../src/transport/stdio.ts';
 import {
   cleanupTestRoot,
+  copyVia,
   createTestClientPair,
   createTestRoot,
   createTestServer,
@@ -478,6 +480,109 @@ describe(
       const inside = join(PROJECT_ROOT, 'link');
       stubLinks(t, { [inside]: join(PROJECT_ROOT, 'real.txt') }, { echoRealpath: true });
       assert.equal(await shared.validateExistingPath(inside), inside);
+    });
+
+    it('keeps in-root links under a local root reached through a link to a share', async (t) => {
+      const aliased = join(root, 'alias', 'proj');
+      const shared = new PathGuard();
+      shared.initialize([aliased]);
+      const rel = join(aliased, 'rel');
+      const abs = join(aliased, 'abs');
+      stubLinks(
+        t,
+        {
+          [join(root, 'alias')]: String.raw`\\fs-mcp-test.invalid\share`,
+          [rel]: 'real.txt',
+          [abs]: join(aliased, 'real.txt'),
+        },
+        { echoRealpath: true },
+      );
+      assert.equal(await shared.reachesRemoteLink(normalizePath(rel)), false);
+      assert.equal(await shared.reachesRemoteLink(normalizePath(abs)), false);
+      assert.ok(isSamePath(await shared.validateExistingPath(rel), rel));
+      assert.ok(isSamePath(await shared.validateExistingPath(abs), abs));
+    });
+
+    it('keeps in-root links under a share root reached through another folder', async (t) => {
+      const share = String.raw`\\fs-mcp-test.invalid\share`;
+      const aliased = join(share, 'alias', 'proj');
+      const shared = new PathGuard();
+      shared.initialize([aliased]);
+      const rel = join(aliased, 'rel');
+      stubLinks(
+        t,
+        { [join(share, 'alias')]: join(share, 'real'), [rel]: 'real.txt' },
+        { echoRealpath: true },
+      );
+      assert.equal(await shared.reachesRemoteLink(rel), false);
+      assert.equal(await shared.validateExistingPath(rel), rel);
+    });
+
+    /** A fresh root's folder holding a file and a real link; undefined where links need elevation. */
+    const folderWithLink = async (t: TestContext) => {
+      const base = await createTestRoot();
+      t.after(() => cleanupTestRoot(base));
+      const folder = join(base, 'folder');
+      await mkdir(folder);
+      await writeFile(join(folder, 'keep.txt'), 'kept');
+      const real = join(folder, 'looks-normal');
+      const made = await trySymlink(
+        UNC_TARGET,
+        real,
+        () => {
+          t.skip('symlinks need elevation here');
+        },
+        'file',
+      );
+      return made ? { base, folder, real, folderGuard: await makeGuard([base]) } : undefined;
+    };
+
+    it('refuses a folder copy holding one, before copying', async (t) => {
+      const made = await folderWithLink(t);
+      if (!made) return;
+      const fs = stubLinks(t, {});
+      const destination = join(made.base, 'copied');
+      await assert.rejects(
+        copyVia(new GuardedFileSystem(made.folderGuard), made.folder, destination),
+        denied,
+      );
+      assert.equal(existsSync(destination), false);
+      assert.deepEqual(fs.touched(made.real), []);
+    });
+
+    it('lets a copy filter that refuses the link copy the rest', async (t) => {
+      const made = await folderWithLink(t);
+      if (!made) return;
+      const destination = join(made.base, 'copied');
+      await copyVia(new GuardedFileSystem(made.folderGuard), made.folder, destination, {
+        filter: (source) => basename(source) !== 'looks-normal',
+      });
+      assert.equal(existsSync(join(destination, 'keep.txt')), true);
+      await assert.rejects(lstat(join(destination, 'looks-normal')), { code: 'ENOENT' });
+    });
+
+    it('still moves a folder holding one on the same device', async (t) => {
+      const made = await folderWithLink(t);
+      if (!made) return;
+      const fs = stubLinks(t, {});
+      const destination = join(made.base, 'moved');
+      await new GuardedFileSystem(made.folderGuard).rename(made.folder, destination);
+      assert.equal((await lstat(join(destination, 'looks-normal'))).isSymbolicLink(), true);
+      assert.deepEqual(fs.touched(made.real), []);
+    });
+
+    it('refuses a cross-device move of a folder holding one, or of the link', async (t) => {
+      const made = await folderWithLink(t);
+      if (!made) return;
+      const fs = stubLinks(t, {});
+      const across = new GuardedFileSystem(made.folderGuard, undefined, {
+        rename: () => Promise.reject(Object.assign(new Error('stubbed'), { code: 'EXDEV' })),
+      });
+      await assert.rejects(across.rename(made.folder, join(made.base, 'moved')), denied);
+      await assert.rejects(across.rename(made.real, join(made.base, 'moved-link')), denied);
+      assert.equal(existsSync(join(made.base, 'moved')), false);
+      assert.equal((await lstat(made.real)).isSymbolicLink(), true);
+      assert.deepEqual(fs.touched(made.real), []);
     });
 
     it('list skips a real link and never resolves it', async (t) => {

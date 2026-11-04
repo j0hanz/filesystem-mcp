@@ -244,6 +244,9 @@ export class GuardedFileSystem {
    * any other non-directory, has nothing under it to relocate. A directory
    * that cannot be listed fails closed. A copy's `filter` prunes what it
    * would not copy, as `fs.cp` does: a refused directory takes its subtree.
+   * `fs.cp` stats a link to type it, which opens the target, so anything that
+   * copies (a copy, or a move with `acrossDevices`) refuses a link to a network
+   * or device path; a rename follows nothing.
    */
   async #relocationWalk(
     op: TransferOp,
@@ -252,8 +255,21 @@ export class GuardedFileSystem {
     destination: string,
     signal?: AbortSignal,
     filter?: CopyFilter,
+    acrossDevices = false,
   ): Promise<void> {
-    if (!(await fsLstat(entry)).isDirectory()) return;
+    const refuseRemoteLink = async (path: string): Promise<void> => {
+      if (await this.pathGuard.reachesRemoteLink(normalizePath(path))) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          `${TRANSFER_VERB[op]} refused: ${path} is a link to a network or device path.`,
+          requestedFrom,
+        );
+      }
+    };
+    const copying = op === 'copy' || acrossDevices;
+    const entryStats = await fsLstat(entry);
+    if (copying && entryStats.isSymbolicLink()) await refuseRemoteLink(entry);
+    if (!entryStats.isDirectory()) return;
     if (filter && !(await filter(entry, destination))) return;
     const relocate = (path: string) => this.#guard('relocate', path);
     async function* names(): AsyncGenerator<string> {
@@ -275,6 +291,7 @@ export class GuardedFileSystem {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
           if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
+          if (copying && dirent.isSymbolicLink()) await refuseRemoteLink(join(entry, name));
           await relocate(join(destination, name));
           yield name;
           if (dirent.isDirectory()) pending.push(name);
@@ -1030,7 +1047,7 @@ export class GuardedFileSystem {
     // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.#guard('delete', source);
     const validDest = await this.#guard('write', destination);
-    await this.#relocationWalk('move', validSource, label, validDest);
+    await this.#relocationWalk('move', validSource, label, validDest, undefined, undefined, true);
     let copied = false;
     try {
       await this.#copyIntoPlace(validSource, validDest, undefined);
