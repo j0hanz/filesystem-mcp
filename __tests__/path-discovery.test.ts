@@ -61,9 +61,7 @@ describe('findProjectRoot (--walk-cwd)', () => {
     assert.equal(await findProjectRoot(start, [root]), normalizePath(start));
   });
 
-  // Windows temp lives under the user profile, which isUnsafeCwdPath always
-  // refuses, so a safe temporary cwd exists only on POSIX.
-  it('the walk sets the root', { skip: process.platform === 'win32' }, async () => {
+  it('the walk sets the root', async () => {
     const proj = await dir('f', 'proj');
     await writeFile(join(proj, 'package.json'), '{}');
     const start = await dir('f', 'proj', 'src');
