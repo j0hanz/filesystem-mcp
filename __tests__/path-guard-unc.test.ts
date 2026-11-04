@@ -10,6 +10,7 @@ import type { TestContext } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { globEntries } from '../src/core/glob.ts';
 import { Logger } from '../src/core/observability.ts';
 import { suggestPaths } from '../src/core/path-completer.ts';
 import { findProjectRoot } from '../src/core/path-discovery.ts';
@@ -22,7 +23,7 @@ import {
 } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { snapshotTree, UndoJournal } from '../src/core/undo.ts';
-import { LIST } from '../src/tools/index.ts';
+import { FIND_FILES, LIST } from '../src/tools/index.ts';
 import { seedRootsFromClient } from '../src/transport/stdio.ts';
 import {
   cleanupTestRoot,
@@ -439,6 +440,72 @@ describe(
       const b = join(root, 'cycle-b');
       stubLinks(t, { [a]: b, [b]: a });
       assert.equal(await guard.reachesRemoteLink(a), true);
+    });
+
+    it('resolves a relative target from the real folder under an aliased root', async (t) => {
+      const base = await createTestRoot();
+      t.after(() => cleanupTestRoot(base));
+      const skip = () => t.skip('symlink creation not permitted');
+      const repo = join(base, 'physical', 'repo');
+      await mkdir(repo, { recursive: true });
+      const alias = join(base, 'alias');
+      if (!(await trySymlink(repo, alias, skip))) return;
+      if (!(await trySymlink(UNC_TARGET, join(base, 'physical', 'hop'), skip, 'file'))) return;
+      if (!(await trySymlink(join('..', 'hop'), join(repo, 'escape'), skip, 'file'))) return;
+      const aliased = await makeGuard([alias]);
+      assert.equal(await aliased.reachesRemoteLink(normalizePath(join(alias, 'escape'))), true);
+    });
+
+    const drain = async (pattern: string): Promise<string[]> => {
+      const paths: string[] = [];
+      for await (const entry of globEntries({ cwd: root, pattern, pathGuard: guard })) {
+        paths.push(entry.path);
+      }
+      return paths;
+    };
+
+    for (const pattern of [
+      'looks-normal/*',
+      './looks-normal/*',
+      'sub/../looks-normal/*',
+      'looks-normal/deep/*.txt',
+    ]) {
+      it(`refuses the glob ${pattern} before it walks`, async (t) => {
+        const fs = stubLinks(t, { [link]: UNC_TARGET });
+        await assert.rejects(drain(pattern), denied);
+        assert.deepEqual(fs.touched(link), []);
+      });
+    }
+
+    it('a search names the refused pattern', async (t) => {
+      stubLinks(t, { [link]: UNC_TARGET });
+      await assert.rejects(
+        runToolBodyResult(FIND_FILES, { path: root, pattern: 'looks-normal/*' }, { guard }),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED, /looks-normal\/\*.*network or device path/u),
+      );
+    });
+
+    it('no glob passes through a link named without a letter', async (t) => {
+      const base = await createTestRoot();
+      t.after(() => cleanupTestRoot(base));
+      const target = join(base, 'outside');
+      await mkdir(target);
+      await writeFile(join(target, 'x.txt'), 'x');
+      const cwd = join(base, 'cwd');
+      await mkdir(join(cwd, 'a'), { recursive: true });
+      const skip = () => t.skip('symlink creation not permitted');
+      if (!(await trySymlink(target, join(cwd, '123'), skip))) return;
+      if (!(await trySymlink(target, join(cwd, 'a', '123'), skip))) return;
+      const walk = async (pattern: string): Promise<string[]> => {
+        const paths: string[] = [];
+        for await (const entry of globEntries({ cwd, pattern })) paths.push(entry.path);
+        return paths;
+      };
+      for (const pattern of ['123/x.txt', '{123,x}/*', '*/123/*', '*/{123,x}/*']) {
+        assert.deepEqual(await walk(pattern), [], pattern);
+      }
+      // A literal leading folder stays a way into a local link.
+      assert.equal((await walk('123/*')).length, 1);
     });
 
     it('refuses a link found under another Unicode spelling', async (t) => {

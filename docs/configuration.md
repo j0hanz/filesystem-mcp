@@ -83,9 +83,10 @@ A link to a network or device path is refused the same way, without being
 followed, unless its target is inside a configured root. You can still delete the
 link, or move it or a folder holding it on one drive. Copying a folder that holds
 one is refused, and so is moving either to another drive, because that copies. Some
-routes stay open and can still contact the host: a glob pattern that names the
-link by a literal folder (`link/*`, `{link,x}/*`), a link to a mapped drive, and
-the folder check of an undo dry run on a journaled path.
+routes stay open and can still contact the host: a link to a mapped drive, the
+folder check of an undo dry run on a journaled path, and a glob that names a link
+after a wildcard when its name has no ASCII letter, digit or `_` (`*/日本/*`).
+A glob whose literal leading folders pass through such a link is refused.
 
 A mapped network drive that resolves to a share counts as a share, so it is never
 granted and must be configured as a root. The grant check reads such a path before

@@ -10,7 +10,7 @@ import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
 import { processInParallel } from './concurrency.ts';
-import { formatUnknownErrorMessage } from './errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import {
@@ -18,6 +18,7 @@ import {
   IS_WINDOWS,
   isPathInsideDirectory,
   normalizeCaseForComparison,
+  normalizePath,
   toPosixPath,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
@@ -457,7 +458,7 @@ export interface GlobEntriesOptions {
    * never descends into them nor yields them. Opt-in — a walk that must see
    * sensitive entries (the move-protection check) does not pass it.
    */
-  pathGuard?: Pick<PathGuard, 'isSensitive'>;
+  pathGuard?: Pick<PathGuard, 'isSensitive' | 'reachesRemoteLink'>;
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
   /**
@@ -517,6 +518,12 @@ export function foldPatternCase(pattern: string): string {
       } else out += ch;
     } else if (/[A-Za-z]/u.test(ch)) {
       out += `[${ch.toLowerCase()}${ch.toUpperCase()}]`;
+      // A class even where case cannot differ: fs.glob descends a directory link
+      // only under a literal segment, and that opens a link to a network path
+      // with no exclude call first. Doubled, as `[1]` alone collapses to a literal.
+      // shortcut: a segment with none of these characters (`日本`) stays literal; class those too if clients can be steered into such patterns.
+    } else if (/[0-9_]/u.test(ch)) {
+      out += `[${ch}${ch}]`;
     } else out += ch;
   }
   return out;
@@ -569,6 +576,33 @@ async function foldPatternInWalk(pattern: string, cwd: string): Promise<string> 
   const { prefix, remainder } = splitPatternPrefix(pattern);
   if (prefix === '') return foldPatternCase(pattern);
   return (await resolvePrefixOnDisk(prefix, cwd)) + foldPatternCase(remainder);
+}
+
+/**
+ * Refuses a pattern whose literal leading folders pass through a link to a
+ * network or device path. fs.glob and resolvePrefixOnDisk read those folders
+ * with no exclude call first, which connects to the host named by the link.
+ */
+async function assertLeadingFoldersStayLocal(
+  patterns: readonly string[],
+  cwd: string,
+  pathGuard: Pick<PathGuard, 'reachesRemoteLink'>,
+): Promise<void> {
+  for (const pattern of patterns) {
+    const segments = pattern.split(SEP);
+    const magic = segments.findIndex((seg) => GLOB_MAGIC_RE.test(seg));
+    const literal = magic === -1 ? segments : segments.slice(0, magic);
+    if (
+      literal.length > 0 &&
+      (await pathGuard.reachesRemoteLink(normalizePath(join(cwd, ...literal))))
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        `Pattern "${pattern}" passes through a link to a network or device path.`,
+        pattern,
+      );
+    }
+  }
 }
 
 /**
@@ -778,6 +812,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
   // One walk for every variant: fs.glob reads each directory once and matches
   // all of them, where a walk per variant re-read the tree for each.
   const patterns = options.includeHidden ? buildHiddenPatterns(pattern) : [pattern];
+  if (options.pathGuard) await assertLeadingFoldersStayLocal(patterns, cwd, options.pathGuard);
   const seen = new Set<string>();
   const onlyFiles = options.onlyFiles ?? true;
   const filter = createWalkFilter(

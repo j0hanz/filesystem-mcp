@@ -116,6 +116,7 @@ describe('globEntries', () => {
       assert.strictEqual(folded('[]a]b'), '[]a][bB]');
       assert.strictEqual(folded('[!]a]b'), '[!]a][bB]');
       assert.strictEqual(folded('[a-c]x'), '[a-c][xX]');
+      assert.strictEqual(folded('{1..3}a1_'), '{1..3}[aA][11][__]');
     } else {
       assert.strictEqual(folded('{a..c}.txt'), '{a..c}.txt');
     }
