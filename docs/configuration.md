@@ -81,7 +81,8 @@ or a working directory on a share that you admit with `--allow-cwd` or
 
 A link to a network or device path is refused the same way, without being
 followed, unless its target is inside a configured root. You can still delete or
-move the link.
+move the link. One route stays open: a glob pattern that names the link by a
+literal folder (`link/*`) still reaches it, and so can still contact the host.
 
 A mapped network drive that resolves to a share counts as a share, so it is never
 granted and must be configured as a root. The grant check reads such a path before

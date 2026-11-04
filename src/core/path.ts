@@ -481,6 +481,7 @@ export class PathGuard {
    * so this reads each link with `lstat` and `readlink`, which open no target.
    */
   // shortcut: one lstat per path part per validation on Windows (31 us each); cache link-free directories if large searches start hitting the tool deadline.
+  // shortcut: a glob pattern that names a link by a literal folder (`link/*`) still reaches it through fs.glob and resolvePrefixOnDisk, check each literal segment of the expanded pattern before the walk if clients can be steered into such patterns.
   async reachesRemoteLink(normalizedPath: string): Promise<boolean> {
     if (!IS_WINDOWS) return false;
     let current = this.allowedRootContaining(normalizedPath) ?? parse(normalizedPath).root;
