@@ -12,6 +12,7 @@ import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { suggestPaths } from '../src/core/path-completer.ts';
+import { findProjectRoot } from '../src/core/path-discovery.ts';
 import {
   isPathInsideDirectory,
   isPathWithinDirectories,
@@ -91,11 +92,12 @@ const REAL_FS = {
  * paths reach the real call, except a UNC one, which fails as missing so no path
  * here can dial a host. `touched` names the calls that would have opened a link's
  * target: `realpath` or `stat` on it or below it, `lstat` only below it.
+ * `uncDirs` makes every other UNC path a real folder, so a walk reaches past it.
  */
 function stubLinks(
   t: TestContext,
   links: Readonly<Record<string, string>>,
-  { echoRealpath = false } = {},
+  { echoRealpath = false, uncDirs = false } = {},
 ) {
   const targets = new Map(
     Object.entries(links).map(([link, target]) => [normalizePath(link), target]),
@@ -107,6 +109,13 @@ function stubLinks(
       return Promise.resolve({
         isSymbolicLink: () => true,
         isDirectory: () => false,
+        isFile: () => false,
+      });
+    }
+    if (uncDirs && isRemote(path)) {
+      return Promise.resolve({
+        isSymbolicLink: () => false,
+        isDirectory: () => true,
         isFile: () => false,
       });
     }
@@ -482,6 +491,33 @@ describe(
       assert.equal(await shared.validateExistingPath(inside), inside);
     });
 
+    describe('with an operator root on a share', () => {
+      const dir = join(PROJECT_ROOT, 'dir');
+      const viaLink = join(dir, 'link', 'f.txt');
+      const shared = (): PathGuard => {
+        const g = new PathGuard();
+        g.initialize([PROJECT_ROOT]);
+        return g;
+      };
+
+      for (const [name, target] of [
+        ['another host', '//other.fs-mcp-test.invalid/share/x'],
+        ['a sibling on the same share, outside the root', '//fs-mcp-test.invalid/share/sibling/x'],
+      ] as const) {
+        it('refuses a link to ' + name, async (t) => {
+          const fs = stubLinks(
+            t,
+            { [join(dir, 'link')]: target },
+            { echoRealpath: true, uncDirs: true },
+          );
+          const g = shared();
+          assert.equal(await g.reachesRemoteLink(normalizePath(viaLink)), true);
+          await assert.rejects(g.validateExistingPath(viaLink), denied);
+          assert.deepEqual(fs.touched(join(dir, 'link')), []);
+        });
+      }
+    });
+
     it('keeps in-root links under a local root reached through a link to a share', async (t) => {
       const aliased = join(root, 'alias', 'proj');
       const shared = new PathGuard();
@@ -516,6 +552,24 @@ describe(
       );
       assert.equal(await shared.reachesRemoteLink(rel), false);
       assert.equal(await shared.validateExistingPath(rel), rel);
+    });
+
+    it('findProjectRoot does not open a marker linked to a share', async (t) => {
+      const base = await createTestRoot();
+      t.after(() => cleanupTestRoot(base));
+      const start = join(base, 'proj');
+      await mkdir(start);
+      const marker = join(start, 'package.json');
+      const made = await trySymlink(
+        UNC_TARGET,
+        marker,
+        () => t.skip('symlinks need elevation here'),
+        'file',
+      );
+      if (!made) return;
+      const fs = stubLinks(t, {});
+      assert.equal(await findProjectRoot(start, [base]), normalizePath(start));
+      assert.deepEqual(fs.touched(marker), []);
     });
 
     /** A fresh root's folder holding a file and a real link; undefined where links need elevation. */
