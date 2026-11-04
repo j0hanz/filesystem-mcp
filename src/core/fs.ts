@@ -22,7 +22,7 @@ import {
   utimes as fsUtimes,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -239,7 +239,9 @@ export class GuardedFileSystem {
   /**
    * The Relocation walk: one pass under a directory `entry` that checks both
    * rules a transfer of it must keep. Every mapped destination must pass the
-   * write check (read-only dirs, the denylist), and every entry must keep its
+   * write check (read-only dirs, the denylist), or, when the destination does
+   * not exist yet, only the read-only rule under where it now resolves (a
+   * missing destination holds no link). Every entry must keep its
    * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
    * any other non-directory, has nothing under it to relocate. A directory
    * that cannot be listed fails closed. A copy's `filter` prunes what it
@@ -255,7 +257,18 @@ export class GuardedFileSystem {
   ): Promise<void> {
     if (!(await fsLstat(entry)).isDirectory()) return;
     if (filter && !(await filter(entry, destination))) return;
-    const relocate = (path: string) => this.#guard('relocate', path);
+    // A missing destination holds no link, so only the read-only rule can differ
+    // per entry, and it reads no disk. Its ancestors can still change while a
+    // Confirmation is open, so that rule runs under where it lands, resolved once.
+    // The protection check below stays on the spelling: a re-spelling can change it.
+    const fresh = (await unlessMissing(fsLstat(destination))) === undefined;
+    const landing = fresh ? await this.#guard('relocate', destination) : destination;
+    const relocate = fresh
+      ? (path: string) => {
+          this.pathGuard.assertWritable(join(landing, relative(destination, path)));
+          return Promise.resolve();
+        }
+      : (path: string) => this.#guard('relocate', path);
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
       for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
