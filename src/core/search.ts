@@ -16,7 +16,7 @@ import {
 } from './matcher.ts';
 import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
-import type { ScanScope, StoppedReason } from './scan.ts';
+import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
 import { readText, scan, ScanSkip, skipOf } from './scan.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
@@ -130,6 +130,7 @@ export interface SearchContentOutcome {
     /** Files skipped because read calls them binary, or a NUL byte follows their leading bytes. */
     skippedBinary: number;
     stoppedReason?: StoppedReason;
+    excludedDirs?: ExcludedDirs;
   };
 }
 
@@ -354,6 +355,7 @@ export async function searchContent(
         skippedTooLarge,
         skippedBinary,
         ...(stoppedReason ? { stoppedReason } : {}),
+        ...(outcome.excludedDirs ? { excludedDirs: outcome.excludedDirs } : {}),
       },
     };
   } finally {

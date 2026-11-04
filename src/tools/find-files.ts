@@ -4,7 +4,13 @@ import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import { resolveScanScope, scan, type ScanOutcome, type StoppedReason } from '../core/scan.ts';
+import {
+  type ExcludedDirs,
+  resolveScanScope,
+  scan,
+  type ScanOutcome,
+  type StoppedReason,
+} from '../core/scan.ts';
 import {
   CursorSchema,
   IncludeHidden,
@@ -51,6 +57,7 @@ interface SearchFilesOutput {
   totalMatches?: number;
   filesScanned?: number;
   skippedInaccessible?: number;
+  excludedDirs?: ExcludedDirs;
   stoppedReason?: StoppedReason;
   resourceUri?: string;
   nextCursor?: string;
@@ -62,6 +69,7 @@ interface SearchFilesPageMetadata {
   filesScanned: number;
   truncated: boolean;
   skippedInaccessible: number;
+  excludedDirs?: ExcludedDirs;
   stoppedReason?: StoppedReason;
 }
 
@@ -143,6 +151,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             truncated: stoppedReason !== undefined,
             skippedInaccessible: scanned.skippedInaccessible,
             ...(stoppedReason ? { stoppedReason } : {}),
+            ...(scanned.excludedDirs ? { excludedDirs: scanned.excludedDirs } : {}),
           },
           truncated: stoppedReason !== undefined,
         };
@@ -164,6 +173,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
       ...(metadata.skippedInaccessible
         ? { skippedInaccessible: metadata.skippedInaccessible }
         : {}),
+      ...(metadata.excludedDirs ? { excludedDirs: metadata.excludedDirs } : {}),
       ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
       ...(paged.resource ? { resourceUri: paged.resource.entry.uri } : {}),
       ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
@@ -184,6 +194,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         nextArgs: args,
         stoppedReason: structured.stoppedReason,
         skippedInaccessible: structured.skippedInaccessible,
+        excludedDirs: structured.excludedDirs,
       });
     return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
   },

@@ -46,6 +46,32 @@ describe('search_text body', () => {
   const search = (args: SearchArgs, options: Partial<ToolBodyOptions> = {}) =>
     runToolBodyResult(SEARCH_TEXT, args, { guard, pageStore, resourceStore, ...options });
 
+  it('says which default-named folder it skipped', async () => {
+    await writeTestFile(root, 'build/gen.ts', 'needle\n');
+    await writeTestFile(root, 'src/a.ts', 'other\n');
+    const result = await search({ path: root, searchPattern: 'needle' });
+    assert.equal(
+      result.text,
+      "No matches for 'needle'\n\n// skipped 1 folder by default name (build); pass includeIgnored: true to search it.",
+    );
+  });
+
+  it('caps the skipped folder names at five', async () => {
+    for (let i = 1; i <= 7; i++) await writeTestFile(root, `p${String(i)}/dist/x.ts`, 'needle\n');
+    const result = await search({ path: root, searchPattern: 'needle' });
+    assert.match(
+      result.text ?? '',
+      /skipped 7 folders by default name \(.*, \+2 more\); pass includeIgnored: true to search them\./,
+    );
+  });
+
+  it('stays silent about a gitignored default-named folder', async () => {
+    await writeTestFile(root, '.gitignore', 'build/\n');
+    await writeTestFile(root, 'build/gen.ts', 'needle\n');
+    const result = await search({ path: root, searchPattern: 'needle' });
+    assert.ok(!(result.text ?? '').includes('by default name'));
+  });
+
   it('finds literal matches and renders root-relative paths and line numbers', async () => {
     const dir = join(root, 'grep_dir');
     await writeTestFile(dir, 'target.txt', 'line one\nNEEDLE_MARK here\nline three\n');

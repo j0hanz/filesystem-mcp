@@ -69,6 +69,16 @@ describe('scan', () => {
     for (const name of names) await writeTestFile(root, name, 'x');
   };
 
+  it('excludedDirs names default-named folders the gitignore does not cover', async () => {
+    await files('build/a.ts', 'src/out/b.ts', 'node_modules/c.ts', '.cache/d.ts', 'keep.ts');
+    await writeTestFile(root, '.gitignore', 'node_modules/\n');
+    const out = await scan({ root }, base(), byPath);
+    assert.equal(out.excludedDirs?.total, 2);
+    assert.deepEqual(out.excludedDirs?.first.toSorted(), ['build', 'src/out']);
+    const all = await scan({ root }, base({ includeIgnored: true }), byPath);
+    assert.equal(all.excludedDirs, undefined);
+  });
+
   it('sensitive leaf is never counted', async () => {
     await files('a.txt', '.env');
     const out = await scan({ root }, base(), byPath);

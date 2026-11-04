@@ -51,6 +51,17 @@ describe('replace_text body', () => {
     return { ...result, rows: result.structured.results as readonly Row[] };
   };
 
+  it('says which default-named folder it skipped', async () => {
+    await writeTestFile(root, 'build/gen.ts', 'needle\n');
+    await writeTestFile(root, 'src/a.ts', 'other\n');
+    const result = await replace({ path: root, searchPattern: 'needle', replacement: 'pin' });
+    assert.ok(
+      (result.text ?? '').includes(
+        '// skipped 1 folder by default name (build); pass includeIgnored: true to search it.',
+      ),
+    );
+  });
+
   it('expands $ tokens exactly like String.prototype.replace', async () => {
     const twelve = '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)';
     const cases: { input: string; pattern: string; replacement: string }[] = [

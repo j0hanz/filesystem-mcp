@@ -14,6 +14,7 @@ import {
 } from '../core/diff-budget.ts';
 import { ErrorCode, isSkippable, Problem } from '../core/errors.ts';
 import {
+  excludedLine,
   skippedLine,
   stoppedEarlyLine,
   truncateProgressPattern,
@@ -29,7 +30,7 @@ import {
 import type { ResultPaths } from '../core/path.ts';
 import type { Rewritten } from '../core/rewrite.ts';
 import { rewriteEntry } from '../core/rewrite.ts';
-import type { ScanOutcome, StoppedReason } from '../core/scan.ts';
+import type { ExcludedDirs, ScanOutcome, StoppedReason } from '../core/scan.ts';
 import { resolveScanScope, scan, ScanSkip } from '../core/scan.ts';
 import {
   defaultFalseBoolean,
@@ -109,6 +110,7 @@ type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
   skippedBinary?: number;
   skippedTooLarge?: number;
   skippedInaccessible?: number;
+  excludedDirs?: ExcludedDirs;
   resultsTruncated?: boolean;
   diff?: string;
   diffTruncated?: boolean;
@@ -339,6 +341,7 @@ function buildSearchAndReplaceStructuredResult(
     ...(outcome.skippedBinary ? { skippedBinary: outcome.skippedBinary } : {}),
     ...(outcome.skippedTooLarge ? { skippedTooLarge: outcome.skippedTooLarge } : {}),
     ...(outcome.skippedInaccessible ? { skippedInaccessible: outcome.skippedInaccessible } : {}),
+    ...(outcome.excludedDirs ? { excludedDirs: outcome.excludedDirs } : {}),
     // Failures are capped at MAX_FAILURES independently of the changed-file
     // cap, so either cap can leave `results` shorter than `summary.total`.
     ...(summary.changedFilesTruncated || summary.failures.length < summary.failedFiles
@@ -522,6 +525,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     if (stop !== undefined) lines.push(stoppedEarlyLine(stop));
     const skipped = skippedLine(structured);
     if (skipped) lines.push(skipped);
+    if (structured.excludedDirs) lines.push(excludedLine(structured.excludedDirs));
     if (stop === 'timeout') {
       // A live run writes as it scans, so a timeout leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name
@@ -552,7 +556,8 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
               structured.summary.failed > 0 ||
               Boolean(structured.skippedBinary) ||
               Boolean(structured.skippedTooLarge) ||
-              Boolean(structured.skippedInaccessible),
+              Boolean(structured.skippedInaccessible) ||
+              structured.excludedDirs !== undefined,
           })
         : undefined;
     if (hint) lines.push(hint);

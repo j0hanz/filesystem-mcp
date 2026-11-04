@@ -263,6 +263,12 @@ export interface ScanOptions<R> {
   readonly window?: number;
 }
 
+/** Default-named folders a walk skipped; `first` holds at most 5. */
+export interface ExcludedDirs {
+  readonly total: number;
+  readonly first: readonly string[];
+}
+
 export interface ScanOutcome<R> {
   /** Walk order; undefined returns are dropped. */
   readonly results: readonly R[];
@@ -274,6 +280,8 @@ export interface ScanOutcome<R> {
   /** Skips whose verdict was too large. */
   readonly skippedTooLarge: number;
   readonly stoppedReason?: StoppedReason;
+  /** Absent when the walk skipped none. */
+  readonly excludedDirs?: ExcludedDirs;
 }
 
 /**
@@ -309,6 +317,8 @@ export async function scan<R>(
     counted.add(key);
     skippedInaccessible++;
   };
+  const excludedFirst: string[] = [];
+  let excludedTotal = 0;
   let total = 0;
   let started = 0;
   let capped: StoppedReason | undefined;
@@ -491,6 +501,10 @@ export async function scan<R>(
     suppressErrors: true,
     // Runs inside fs.glob's exclude callback, so it only queues.
     onDirectory: (dir) => probes.push(dir),
+    onExcludedDir: (rel) => {
+      excludedTotal++;
+      if (excludedFirst.length < 5) excludedFirst.push(rel);
+    },
   });
 
   let walkError: unknown;
@@ -534,6 +548,7 @@ export async function scan<R>(
     skippedBinary,
     skippedTooLarge,
     ...(stoppedReason ? { stoppedReason } : {}),
+    ...(excludedTotal > 0 ? { excludedDirs: { total: excludedTotal, first: excludedFirst } } : {}),
   };
 }
 
