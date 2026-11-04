@@ -864,6 +864,21 @@ describe('replace_text body', () => {
       assert.strictEqual(result.structured.stoppedReason, 'maxFiles');
     });
 
+    it('a dry run stopped by maxFiles keeps the higher-limit advice', async () => {
+      const dir = join(root, 'replace_max_files_advice');
+      await writeTestFile(dir, 'a.txt', 'needle');
+      await writeTestFile(dir, 'b.txt', 'needle');
+      const result = await replace({
+        path: dir,
+        searchPattern: 'needle',
+        replacement: 'pin',
+        dryRun: true,
+        maxFiles: 1,
+      });
+      assert.match(result.text ?? '', /hit the maxFiles limit; later files were not scanned./u);
+      assert.ok((result.text ?? '').includes('// A higher maxFiles reaches them.'));
+    });
+
     it('a named file stops at an explicit maxMatches mid-file', async () => {
       const file = await writeTestFile(root, 'replace_named_cap/a.txt', 'x x x x\n');
       const result = await replace({
