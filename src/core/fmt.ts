@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import type { StoppedReason } from './scan.ts';
+import type { ExcludedDirs, StoppedReason } from './scan.ts';
 import { MAX_SEARCH_RESULTS } from './util.ts';
 
 export interface ProgressCtx {
@@ -150,6 +150,17 @@ export function skippedLine(counts: SkipCounts): string {
   return skipped.length > 0 ? `// skipped ${skipped.join(', ')}; results may be incomplete.` : '';
 }
 
+/** `// skipped N folders by default name (...); pass includeIgnored: true ...`. */
+export function excludedLine(
+  excluded: ExcludedDirs,
+  advice: (many: boolean) => string = (many) =>
+    `pass includeIgnored: true to search ${many ? 'them' : 'it'}`,
+): string {
+  const rest = excluded.total - excluded.first.length;
+  const more = rest > 0 ? `, +${String(rest)} more` : '';
+  return `// skipped ${formatCount(excluded.total, 'folder')} by default name (${excluded.first.join(', ')}${more}); ${advice(excluded.total !== 1)}.`;
+}
+
 export function pageTrailer(
   p: SkipCounts & {
     offset: number;
@@ -161,6 +172,7 @@ export function pageTrailer(
     /** The call's own arguments; printed merged with the cursor so the hint is sendable as-is. */
     nextArgs?: Record<string, unknown> | undefined;
     stoppedReason?: StoppedReason | undefined;
+    excludedDirs?: ExcludedDirs | undefined;
   },
 ): string {
   const lines: string[] = [];
@@ -178,6 +190,7 @@ export function pageTrailer(
   if (p.stoppedReason !== undefined) lines.push(stoppedEarlyLine(p.stoppedReason));
   const skipped = skippedLine(p);
   if (skipped) lines.push(skipped);
+  if (p.excludedDirs) lines.push(excludedLine(p.excludedDirs));
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
 }
 

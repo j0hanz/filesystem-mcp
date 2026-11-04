@@ -1,7 +1,7 @@
 import { isUtf8 } from 'node:buffer';
 import type { Stats } from 'node:fs';
 import { opendir, realpath } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
@@ -263,6 +263,12 @@ export interface ScanOptions<R> {
   readonly window?: number;
 }
 
+/** Default-named folders a walk skipped; `first` holds at most 5. */
+export interface ExcludedDirs {
+  readonly total: number;
+  readonly first: readonly string[];
+}
+
 export interface ScanOutcome<R> {
   /** Walk order; undefined returns are dropped. */
   readonly results: readonly R[];
@@ -274,6 +280,8 @@ export interface ScanOutcome<R> {
   /** Skips whose verdict was too large. */
   readonly skippedTooLarge: number;
   readonly stoppedReason?: StoppedReason;
+  /** Absent when the walk skipped none. */
+  readonly excludedDirs?: ExcludedDirs;
 }
 
 /**
@@ -309,6 +317,8 @@ export async function scan<R>(
     counted.add(key);
     skippedInaccessible++;
   };
+  const excludedFirst: string[] = [];
+  let excludedTotal = 0;
   let total = 0;
   let started = 0;
   let capped: StoppedReason | undefined;
@@ -475,6 +485,8 @@ export async function scan<R>(
     }
   };
 
+  // As the tool prints its results: a later call resolves the name from the root, not this walk.
+  const shown = pathGuard.resultPaths(scope.root);
   const ceiling = pathGuard.allowedRootContaining(scope.root);
   // shortcut: a pattern's literal prefix dir is not probed; probe it if clients scope by prefix
   const entries = globEntries({
@@ -491,6 +503,10 @@ export async function scan<R>(
     suppressErrors: true,
     // Runs inside fs.glob's exclude callback, so it only queues.
     onDirectory: (dir) => probes.push(dir),
+    onExcludedDir: (rel) => {
+      excludedTotal++;
+      if (excludedFirst.length < 5) excludedFirst.push(shown.show(join(scope.root, rel)));
+    },
   });
 
   let walkError: unknown;
@@ -534,6 +550,7 @@ export async function scan<R>(
     skippedBinary,
     skippedTooLarge,
     ...(stoppedReason ? { stoppedReason } : {}),
+    ...(excludedTotal > 0 ? { excludedDirs: { total: excludedTotal, first: excludedFirst } } : {}),
   };
 }
 
