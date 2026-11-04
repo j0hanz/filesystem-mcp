@@ -56,6 +56,12 @@ describe('search_text body', () => {
     );
   });
 
+  it('names a skipped folder as a path a later call can use', async () => {
+    await writeTestFile(root, 'src/build/gen.ts', 'needle\n');
+    const result = await search({ path: join(root, 'src'), searchPattern: 'needle' });
+    assert.match(result.text ?? '', /by default name \(src\/build\);/);
+  });
+
   it('caps the skipped folder names at five', async () => {
     for (let i = 1; i <= 7; i++) await writeTestFile(root, `p${String(i)}/dist/x.ts`, 'needle\n');
     const result = await search({ path: root, searchPattern: 'needle' });

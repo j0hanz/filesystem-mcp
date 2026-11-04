@@ -1,7 +1,7 @@
 import { isUtf8 } from 'node:buffer';
 import type { Stats } from 'node:fs';
 import { opendir, realpath } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
@@ -485,6 +485,8 @@ export async function scan<R>(
     }
   };
 
+  // As the tool prints its results: a later call resolves the name from the root, not this walk.
+  const shown = pathGuard.resultPaths(scope.root);
   const ceiling = pathGuard.allowedRootContaining(scope.root);
   // shortcut: a pattern's literal prefix dir is not probed; probe it if clients scope by prefix
   const entries = globEntries({
@@ -503,7 +505,7 @@ export async function scan<R>(
     onDirectory: (dir) => probes.push(dir),
     onExcludedDir: (rel) => {
       excludedTotal++;
-      if (excludedFirst.length < 5) excludedFirst.push(rel);
+      if (excludedFirst.length < 5) excludedFirst.push(shown.show(join(scope.root, rel)));
     },
   });
 
