@@ -255,7 +255,16 @@ export class UndoCapture {
   unavailableReason(): string | undefined {
     if (this.#unavailable !== undefined) return this.#unavailable;
     if (this.#refused.size === 0) return undefined;
-    const lines = [...this.#refused].map(([path, reason]) => `${pathLabel(path)}: ${reason}`);
+    // A bare name that another path in the call shares would not say which file stayed as written.
+    const uses = new Map<string, number>();
+    const others = this.records.map((r) => (r.op === 'rename' ? r.to : r.path));
+    for (const path of [...this.#refused.keys(), ...others]) {
+      uses.set(pathLabel(path), (uses.get(pathLabel(path)) ?? 0) + 1);
+    }
+    const lines = [...this.#refused].map(([path, reason]) => {
+      const label = pathLabel(path);
+      return `${uses.get(label) === 1 ? label : path}: ${reason}`;
+    });
     return joinRoster(lines, '; ');
   }
 

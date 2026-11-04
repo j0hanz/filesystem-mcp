@@ -2802,6 +2802,62 @@ describe('undo tool over the wire', () => {
     }
   });
 
+  it('a refused file that shares its name with another path in the call is named in full', async () => {
+    const tmp = await createTestRoot();
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
+    try {
+      await mkdir(join(tmp, 'refused'));
+      await mkdir(join(tmp, 'saved'));
+      await writeFile(join(tmp, 'refused', 'x.txt'), `old${'x'.repeat(4000)}`);
+      await writeFile(join(tmp, 'saved', 'x.txt'), 'old');
+      const result = await call(pair.client, 'replace_text', {
+        path: tmp,
+        searchPattern: 'old',
+        replacement: 'new',
+      });
+      const meta = result._meta as { undoUnavailable?: string };
+      assert.ok(
+        meta.undoUnavailable
+          ?.toLowerCase()
+          .endsWith(`${join(tmp, 'refused', 'x.txt')}: too large to keep for undo`.toLowerCase()),
+        meta.undoUnavailable,
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('undo of a create keeps the folder a refused file uses, and says nothing of it', async () => {
+    const tmp = await createTestRoot();
+    // rmdir + one remove = 1024 bytes; the second remove would make 1536.
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '1100' }, () => createTestClientPair([tmp]));
+    try {
+      const folder = join(tmp, 'new');
+      const created = await call(pair.client, 'create', {
+        directories: [folder],
+        files: ['a.txt', 'b.txt'].map((name) => ({ path: join(folder, name), content: name })),
+      });
+      const meta = created.structuredContent as { undo?: string; undoUnavailable?: string };
+      const refused = /^([ab]\.txt): too many changes/u.exec(meta.undoUnavailable ?? '')?.[1];
+      assert.ok(refused, meta.undoUnavailable);
+      const saved = refused === 'a.txt' ? 'b.txt' : 'a.txt';
+
+      for (const dryRun of [true, false]) {
+        const undone = await call(pair.client, 'undo', { id: meta.undo, dryRun });
+        assert.notStrictEqual(undone.isError, true);
+        const text = firstTextBlock(undone) ?? '';
+        assert.ok(text.includes(saved), text);
+        assert.doesNotMatch(text, /SKIPPED/u);
+      }
+      assert.strictEqual(await readFile(join(folder, refused), 'utf8'), refused);
+      await assert.rejects(lstat(join(folder, saved)));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
   it('a partial move names the refused destination and undoes the other', async () => {
     const tmp = await createTestRoot();
     const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () =>
