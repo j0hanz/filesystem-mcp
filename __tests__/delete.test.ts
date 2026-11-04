@@ -436,33 +436,62 @@ describe('delete body', () => {
     capture.release();
   });
 
-  it('dropping records under a path gives their budget back', () => {
-    const capture = new UndoJournal(2000).beginCapture();
-    const fill = (): void => {
-      capture.push(
-        ...['x', 'y', 'z'].map((name) => ({
-          op: 'rmdir' as const,
-          path: join(root, 'dropped', name),
-        })),
-      );
-    };
-    fill();
-    capture.dropUnder(join(root, 'dropped'));
-    assert.strictEqual(capture.records.length, 0);
-    fill();
-    assert.strictEqual(capture.unavailableReason(), undefined, 'the second fill still fits');
-    assert.strictEqual(capture.records.length, 3);
+  it('a path that cannot be captured costs only its own undo', async () => {
+    const kept = join(root, 'kept_tree');
+    const refused = join(root, 'refused_tree');
+    for (const tree of [kept, refused]) {
+      await mkdir(tree);
+      await writeFile(join(tree, 'a.txt'), 'a');
+    }
+    await writeFile(join(refused, '.env'), 'SECRET=1');
+    const capture = new UndoJournal().beginCapture();
+
+    const result = await del(
+      { paths: [kept, refused], recursive: true },
+      { fs: new GuardedFileSystem(await makeGuard([root]), capture), confirm: choose('delete') },
+    );
+
+    assert.deepStrictEqual(
+      result.structured.results.map((r) => r.value?.deleted),
+      [true, true],
+    );
+    assert.strictEqual(capture.unavailableReason(), 'refused_tree: contains protected files');
+    const paths = capture.records.map((record) => ('path' in record ? record.path : ''));
+    assert.strictEqual(paths.length, 2, 'the folder and the file of the kept tree');
+    assert.ok(paths.every((path) => path.includes('kept_tree')));
     capture.release();
   });
 
-  it('dropping one path keeps a sibling batch too large to spread into a call', () => {
+  it('a path capture that is refused or released gives its budget back', () => {
+    const capture = new UndoJournal(2000).beginCapture();
+    const fill = (name: string): ReturnType<typeof capture.forPath> => {
+      const own = capture.forPath(join(root, name));
+      own.push(
+        ...['x', 'y', 'z'].map((entry) => ({
+          op: 'rmdir' as const,
+          path: join(root, name, entry),
+        })),
+      );
+      return own;
+    };
+    fill('released').release();
+    const refused = fill('refused');
+    refused.abandon('no');
+    refused.commit();
+    fill('kept').commit();
+    assert.strictEqual(capture.unavailableReason(), 'refused: no');
+    assert.strictEqual(capture.records.length, 3, 'the last fill still fits');
+    capture.release();
+  });
+
+  it('a committed path too large to spread into a call keeps every record', () => {
     const capture = new UndoJournal(1024 * 1024 * 1024).beginCapture();
     const kept = 200_000;
+    const own = capture.forPath(join(root, 'kept'));
     for (let i = 0; i < kept; i++) {
-      capture.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
+      own.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
     }
-    capture.push({ op: 'rmdir', path: join(root, 'cancelled', 'x') });
-    capture.dropUnder(join(root, 'cancelled'));
+    own.commit();
     assert.strictEqual(capture.records.length, kept);
     assert.strictEqual(capture.unavailableReason(), undefined);
     capture.release();

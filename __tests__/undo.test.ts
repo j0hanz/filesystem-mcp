@@ -278,7 +278,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailableReason(), 'contains protected files');
+    assert.strictEqual(cap.unavailableReason(), 'protected-tree: contains protected files');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -300,7 +300,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = new UndoJournal(3 * 1024).beginCapture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailableReason(), 'too many changes to keep for undo');
+    assert.strictEqual(cap.unavailableReason(), 'empty-entries: too many changes to keep for undo');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -321,7 +321,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(tree, { recursive: true, force: true });
-    assert.strictEqual(cap.unavailableReason(), 'cannot capture a non-regular entry');
+    assert.strictEqual(cap.unavailableReason(), 'fifo-tree: cannot capture a non-regular entry');
     assert.deepStrictEqual(cap.records, []);
   });
 
@@ -402,7 +402,10 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.rm(link);
-    assert.strictEqual(cap.unavailableReason(), 'could not type a link whose target is gone');
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'dir-link: could not type a link whose target is gone',
+    );
   });
 
   it('a move records the exact file id, so batch siblings stay apart', async () => {
@@ -2312,6 +2315,36 @@ describe('undo tool over the wire', () => {
       const result = await call(pair.client, 'undo', {});
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(firstTextBlock(result), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a delete with one oversized path reports it and still undoes the other', async () => {
+    const tmp = await createTestRoot();
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
+    try {
+      const small = join(tmp, 'small.txt');
+      const big = join(tmp, 'big.txt');
+      await writeFile(small, 'keep');
+      await writeFile(big, 'x'.repeat(4000));
+
+      const deleted = await call(pair.client, 'delete', { paths: [small, big] });
+      assert.notStrictEqual(deleted.isError, true);
+      const firstLine = (firstTextBlock(deleted) ?? '').split('\n')[0] ?? '';
+      assert.match(
+        firstLine,
+        / · undo [a-z0-9]{4} · not undoable: big\.txt: too large to keep for undo$/u,
+      );
+      const meta = deleted._meta as { undo?: string; undoUnavailable?: string };
+      assert.strictEqual(meta.undo, undoId(deleted));
+      assert.strictEqual(meta.undoUnavailable, 'big.txt: too large to keep for undo');
+
+      const undone = await call(pair.client, 'undo', { id: undoId(deleted) });
+      assert.notStrictEqual(undone.isError, true);
+      assert.strictEqual(await readFile(small, 'utf8'), 'keep');
+      await assert.rejects(readFile(big, 'utf8'));
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);

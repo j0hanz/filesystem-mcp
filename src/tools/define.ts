@@ -333,25 +333,28 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
 
   /**
    * The undo suffix for a captured call, minted once: ` · undo <id>` when the
-   * capture holds records, ` · not undoable: <reason>` when it was abandoned,
-   * `''` for a capture that recorded nothing (dry run, early failure) or a
-   * read-only call. Sets `undo`/`undoUnavailable` on `structured` when given.
+   * capture holds records, ` · not undoable: <reason>` when it was abandoned or
+   * a path lost its own undo (both parts when only some paths did), `''` for a
+   * capture that recorded nothing (dry run, early failure) or a read-only call.
+   * Sets `undo`/`undoUnavailable` on `structured` when given.
    */
   #undoSuffix(structured?: Record<string, unknown>): string {
     const capture = this.capture;
     if (capture === undefined) return '';
     const reason = capture.unavailableReason();
+    let suffix = '';
+    if (capture.records.length > 0) {
+      // Minted once: the catch path re-runs this after the success path, and a
+      // second add would double-journal the same records under a fresh id.
+      this.#undoId ??= this.toolCtx.undoJournal.add(this.def.name, capture.records);
+      if (structured !== undefined) structured['undo'] = this.#undoId;
+      suffix = ` · undo ${this.#undoId}`;
+    }
     if (reason !== undefined) {
       if (structured !== undefined) structured['undoUnavailable'] = reason;
-      return ` · not undoable: ${reason}`;
+      suffix += ` · not undoable: ${reason}`;
     }
-    if (capture.records.length === 0) return '';
-    // Minted once: the catch path re-runs this after the success path, and a
-    // second add would double-journal the same records under a fresh id.
-    this.#undoId ??= this.toolCtx.undoJournal.add(this.def.name, capture.records);
-    const id = this.#undoId;
-    if (structured !== undefined) structured['undo'] = id;
-    return ` · undo ${id}`;
+    return suffix;
   }
 
   /** `suffix` goes at the end of the text's first line, not the end of the text. */
