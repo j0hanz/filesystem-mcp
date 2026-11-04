@@ -93,13 +93,13 @@ which contacts the server you mapped that drive to. WSL paths such as
 By default, the server blocks these names inside every allowed folder, for
 reading, writing, searching, and listing:
 
-| Kind                  | Patterns                                                                                                                                                                                                                       |
-| :-------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Environment files     | `.env`, `.env.*`                                                                                                                                                                                                               |
-| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`                                                                                                 |
-| Cloud and tools       | `.aws/credentials`, `.aws/config`, `.docker/config.json`, `.kube/config`, `application_default_credentials.json`, `.mcpregistry_*_token`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate`, `*.tfstate.*` |
-| Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`                                                                                                                                                                           |
-| SSH private keys      | `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                                                                                                           |
+| Kind                  | Patterns                                                                                                                                                                                                                                                               |
+| :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Environment files     | `.env`, `.env.*`                                                                                                                                                                                                                                                       |
+| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`                                                                                                                                         |
+| Cloud and tools       | `.aws/**`, `.kube/**`, `.terraform.d/credentials*`, `.cargo/credentials*`, `.vault-token`, `.docker/config.json`, `application_default_credentials.json`, `.mcpregistry_*_token`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate`, `*.tfstate.*` |
+| Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`                                                                                                                                                                                                                   |
+| SSH and GPG           | `.ssh/**`, `.gnupg/**`, `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                                                                                                                           |
 
 Matching ignores case, so `.ENV` is blocked too. It also ignores Unicode
 spelling: a pattern blocks a name stored decomposed (NFD) or with a
