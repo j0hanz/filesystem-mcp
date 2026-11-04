@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A batch cut off by a deadline names what it finished.** When the deadline or a cancel fired before the last items of an `edit`, `create`, `read` or `stat` batch started, the call answered with the error alone, so a client could not tell which files were already written. It now returns every finished result, and each item that never started fails with its own error.
 - **Dry runs refuse read-only roots.** `edit`, `patch` and `replace_text` with `dryRun` previewed changes that the live call refuses under `--read-only-root`, including through a hard link. They now answer the same refusal.
 - **UNC and device paths are refused before any filesystem call.** On Windows, the access-grant check on a path such as `\\server\share\x.txt` touched it first, which could connect to the named host and send the user's NTLM credentials. Paths outside the allowed roots on a share or under `\\?\` or `\\.\` now answer `ACCESS_DENIED` without a connection or a prompt, and a client's workspace root on a share is no longer added. A share configured as a root keeps working.
+- **Re-running a stopped `replace_text` no longer applies it twice without warning.** A live run writes as it scans, so a stop at the match cap or `maxFiles` left files rewritten, and the text said only to raise the cap. A stop of any kind now names the files already rewritten and warns that re-running applies the replacement to them again. Dry runs do not warn.
 
 ### Changed
 
