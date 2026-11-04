@@ -535,10 +535,10 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       const more = total > 5 ? `, and ${String(total - 5)} more` : '';
       lines.push(
         `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
-          'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or name the remaining files as path.',
+          'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
       );
     } else if (stop === 'maxMatches' || stop === 'maxFiles') {
-      lines.push(`// A higher ${stop} reaches them.`);
+      lines.push(`// Raise ${stop} to reach them.`);
     }
     const hint =
       structured.totalMatches === 0

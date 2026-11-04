@@ -876,7 +876,7 @@ describe('replace_text body', () => {
         maxFiles: 1,
       });
       assert.match(result.text ?? '', /hit the maxFiles limit; later files were not scanned./u);
-      assert.ok((result.text ?? '').includes('// A higher maxFiles reaches them.'));
+      assert.ok((result.text ?? '').includes('// Raise maxFiles to reach them.'));
     });
 
     it('a named file stops at an explicit maxMatches mid-file', async () => {
@@ -1240,7 +1240,7 @@ describe('replace_text body', () => {
           }
           if (dryRun) {
             assert.doesNotMatch(text, /already rewritten/u);
-            assert.doesNotMatch(text, /A higher timeout/u);
+            assert.doesNotMatch(text, /Raise timeout/u);
             assert.strictEqual(text.match(/scan stopped early/gu)?.length, 1);
             assert.strictEqual(written, 0);
             return;
