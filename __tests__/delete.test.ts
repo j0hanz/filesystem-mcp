@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { access, lstat, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import type * as z from 'zod/v4';
 
@@ -9,6 +10,7 @@ import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { DELETE, nestedIndexes } from '../src/tools/delete.ts';
 import {
   cleanupTestRoot,
@@ -359,6 +361,147 @@ describe('delete body', () => {
     assert.strictEqual(asked, false);
     assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
     await access(join(dir, '.env'));
+  });
+
+  it('a cancel during the undo snapshot deletes nothing and offers no undo', async () => {
+    const tree = join(root, 'cancelled_tree');
+    await mkdir(tree);
+    await writeFile(join(tree, 'a.txt'), 'a');
+    const controller = new AbortController();
+    const capture = new UndoJournal().beginCapture();
+    class CancelsDuringSnapshot extends GuardedFileSystem {
+      override async readSaved(path: string): Promise<Buffer> {
+        controller.abort();
+        return super.readSaved(path);
+      }
+    }
+
+    const result = await del(
+      { paths: [tree], recursive: true },
+      {
+        fs: new CancelsDuringSnapshot(await makeGuard([root]), capture),
+        signal: controller.signal,
+        confirm: choose('delete'),
+      },
+    );
+
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    await access(join(tree, 'a.txt'));
+    assert.strictEqual(capture.records.length, 0, 'no undo id for a delete that never ran');
+    assert.strictEqual(capture.unavailableReason(), undefined);
+    capture.release();
+  });
+
+  it('a cancel on one path keeps the undo of a sibling already deleted', async () => {
+    const treeA = join(root, 'sibling_tree_a');
+    const treeB = join(root, 'sibling_tree_b');
+    for (const tree of [treeA, treeB]) {
+      await mkdir(tree);
+      await writeFile(join(tree, 'a.txt'), 'a');
+    }
+    const controller = new AbortController();
+    const capture = new UndoJournal().beginCapture();
+    const gone = async (path: string): Promise<boolean> =>
+      access(path).then(
+        () => false,
+        () => true,
+      );
+    class CancelsOnB extends GuardedFileSystem {
+      override async readSaved(path: string): Promise<Buffer> {
+        if (path.includes('sibling_tree_b')) {
+          while (!(await gone(treeA))) await sleep(5);
+          controller.abort();
+        }
+        return super.readSaved(path);
+      }
+    }
+
+    const result = await del(
+      { paths: [treeA, treeB], recursive: true },
+      {
+        fs: new CancelsOnB(await makeGuard([root]), capture),
+        signal: controller.signal,
+        confirm: choose('delete'),
+      },
+    );
+
+    assert.strictEqual(result.structured.results[0]?.value?.deleted, true);
+    assert.strictEqual(result.structured.results[1]?.error?.code, ErrorCode.CANCELLED);
+    await access(join(treeB, 'a.txt'));
+    assert.strictEqual(capture.unavailableReason(), undefined);
+    const paths = capture.records.map((record) => ('path' in record ? record.path : ''));
+    assert.strictEqual(paths.length, 2, 'the folder and the file of tree A');
+    assert.ok(paths.every((path) => path.includes('sibling_tree_a')));
+    capture.release();
+  });
+
+  it('dropping records under a path gives their budget back', () => {
+    const capture = new UndoJournal(2000).beginCapture();
+    const fill = (): void => {
+      capture.push(
+        ...['x', 'y', 'z'].map((name) => ({
+          op: 'rmdir' as const,
+          path: join(root, 'dropped', name),
+        })),
+      );
+    };
+    fill();
+    capture.dropUnder(join(root, 'dropped'));
+    assert.strictEqual(capture.records.length, 0);
+    fill();
+    assert.strictEqual(capture.unavailableReason(), undefined, 'the second fill still fits');
+    assert.strictEqual(capture.records.length, 3);
+    capture.release();
+  });
+
+  it('dropping one path keeps a sibling batch too large to spread into a call', () => {
+    const capture = new UndoJournal(1024 * 1024 * 1024).beginCapture();
+    const kept = 200_000;
+    for (let i = 0; i < kept; i++) {
+      capture.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
+    }
+    capture.push({ op: 'rmdir', path: join(root, 'cancelled', 'x') });
+    capture.dropUnder(join(root, 'cancelled'));
+    assert.strictEqual(capture.records.length, kept);
+    assert.strictEqual(capture.unavailableReason(), undefined);
+    capture.release();
+  });
+
+  it('a cancel stops the snapshot walk before it can overflow the budget', async () => {
+    const tree = join(root, 'walk_stops');
+    await mkdir(tree);
+    // Each file costs more than half the budget, so a second one would abandon the capture.
+    const size = 1000;
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      await writeFile(join(tree, name), 'x'.repeat(size));
+    }
+    const controller = new AbortController();
+    const capture = new UndoJournal(2000).beginCapture();
+    let reads = 0;
+    class CancelsOnFirstRead extends GuardedFileSystem {
+      override async readSaved(path: string): Promise<Buffer> {
+        reads += 1;
+        controller.abort();
+        return super.readSaved(path);
+      }
+    }
+
+    const result = await del(
+      { paths: [tree], recursive: true },
+      {
+        fs: new CancelsOnFirstRead(await makeGuard([root]), capture),
+        signal: controller.signal,
+        confirm: choose('delete'),
+      },
+    );
+
+    assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
+    assert.strictEqual(reads, 1, 'the walk stops at the cancel');
+    assert.strictEqual(capture.unavailableReason(), undefined, 'no overflow abandoned the capture');
+    assert.strictEqual(capture.records.length, 0);
+    await access(join(tree, 'a.txt'));
+    capture.release();
   });
 
   it('rejects when an abort lands during the protected-file walk', async () => {

@@ -14,7 +14,6 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import type { cp } from 'node:fs/promises';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -157,13 +156,8 @@ export async function copyVia(
   fs: GuardedFileSystem,
   source: string,
   destination: string,
-  options?: Parameters<typeof cp>[2],
 ): Promise<void> {
-  const plan = await fs.planTransfer(
-    'copy',
-    { source, destination },
-    options ? { copy: options } : {},
-  );
+  const plan = await fs.planTransfer('copy', { source, destination });
   await fs.executeTransfer(plan);
 }
 

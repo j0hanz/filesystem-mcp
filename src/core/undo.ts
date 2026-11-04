@@ -284,6 +284,26 @@ export class UndoCapture {
     this.#bytes = this.#reserved;
   }
 
+  /**
+   * Forget what one path's snapshot pushed, when its delete will not run. Only
+   * that path: the rest of a parallel batch may already be gone and still needs
+   * its records. The batch refuses nested paths, so no other entry sits under `dir`.
+   */
+  dropUnder(dir: string): void {
+    // In place: a large batch overflows the call stack if spread into `push`.
+    let kept = 0;
+    for (const record of this.records) {
+      if (record.op === 'rename' || !isPathInsideDirectory(dir, record.path)) {
+        this.records[kept++] = record;
+        continue;
+      }
+      const weight = recordWeight(record);
+      this.#bytes -= weight;
+      this.#pool.bytes -= weight;
+    }
+    this.records.length = kept;
+  }
+
   push(...records: UndoRecord[]): void {
     if (this.#unavailable !== undefined) return;
     for (const record of records) {
@@ -361,8 +381,10 @@ export async function snapshotTree(
   capture: UndoCapture,
   fs: GuardedFileSystem,
   validPath: string,
+  /** A cancel ends the walk, so it cannot overflow the budget; the caller drops what it pushed. */
+  signal?: AbortSignal,
 ): Promise<void> {
-  if (capture.unavailableReason() !== undefined) return;
+  if (capture.unavailableReason() !== undefined || signal?.aborted) return;
   try {
     const stats = await unlessMissing(fsLstat(validPath, { bigint: true }));
     // ENOENT on the root (the `force` case): nothing will be deleted.
@@ -406,8 +428,8 @@ export async function snapshotTree(
     if (stats.isDirectory()) {
       const children = await fsReaddir(validPath);
       for (const name of children) {
-        await snapshotTree(capture, fs, join(validPath, name));
-        if (capture.unavailableReason() !== undefined) return;
+        await snapshotTree(capture, fs, join(validPath, name), signal);
+        if (capture.unavailableReason() !== undefined || signal?.aborted) return;
       }
       capture.push({
         op: 'mkdir',

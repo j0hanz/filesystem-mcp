@@ -146,7 +146,7 @@ async function planPath(
 async function finalizeDeletion(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'log'>,
+  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal'>,
 ): Promise<{ deleted: string } | { failure: DeleteFailure }> {
   let currentStats: LstatResult;
   try {
@@ -183,7 +183,11 @@ async function finalizeDeletion(
   try {
     if (currentStats.stats.isDirectory() && !args.recursive) await ctx.fs.rmdir(plan.validPath);
     else
-      await ctx.fs.rm(plan.validPath, { recursive: args.recursive, force: args.ignoreIfNotExists });
+      await ctx.fs.rm(
+        plan.validPath,
+        { recursive: args.recursive, force: args.ignoreIfNotExists },
+        ctx.signal,
+      );
   } catch (error) {
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
@@ -202,7 +206,7 @@ async function finalizeDeletion(
 async function executePlan(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'log'>,
+  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal'>,
   confirmed: Confirmed,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   const verdict = confirmed.verdict(plan.validPath);

@@ -671,17 +671,6 @@ describe(
       assert.deepEqual(fs.touched(made.real), []);
     });
 
-    it('lets a copy filter that refuses the link copy the rest', async (t) => {
-      const made = await folderWithLink(t);
-      if (!made) return;
-      const destination = join(made.base, 'copied');
-      await copyVia(new GuardedFileSystem(made.folderGuard), made.folder, destination, {
-        filter: (source) => basename(source) !== 'looks-normal',
-      });
-      assert.equal(existsSync(join(destination, 'keep.txt')), true);
-      await assert.rejects(lstat(join(destination, 'looks-normal')), { code: 'ENOENT' });
-    });
-
     it('still moves a folder holding one on the same device', async (t) => {
       const made = await folderWithLink(t);
       if (!made) return;

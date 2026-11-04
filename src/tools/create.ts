@@ -15,13 +15,7 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import {
-  destExists,
-  destIdentity,
-  type EntryIdentity,
-  sameIdentity,
-  type Stats,
-} from '../core/fs.ts';
+import { destIdentity, type EntryIdentity, sameIdentity, type Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
@@ -153,13 +147,20 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // append never destroys, and overwrite: true is that word given up front.
     // A path that fails validation here is left for runOverPaths to report.
     // A file that appears between rounds is asked about again on the retry.
+    // A folder can never be replaced, so no answer could help: it fails below, unasked.
+    const folders = new Set<string>();
     const { results: planned } = await processInParallel(
       files,
       async (entry) => {
-        if (entry.append || entry.overwrite) return undefined;
+        if (entry.append) return undefined;
         try {
           const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
           const identity = await destIdentity(ctx.fs, validPath, 'create');
+          if (identity?.itemType === 'directory') {
+            folders.add(entry.path);
+            return undefined;
+          }
+          if (entry.overwrite) return undefined;
           return identity && { validPath, identity };
         } catch (error) {
           rethrowIfAborted(error);
@@ -207,6 +208,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
     >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
+      if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
       const pending = pendingByPath.get(path);
       if (pending !== undefined) {
         const verdict = confirmed.verdict(pending.validPath);
@@ -242,7 +244,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
           !append &&
           !overwrite &&
           pending === undefined &&
-          (await destExists(ctx.fs, resolvedTarget, 'create'))
+          (await destIdentity(ctx.fs, resolvedTarget, 'create')) !== undefined
         ) {
           throw new FsError(
             ErrorCode.CANCELLED,
@@ -355,7 +357,11 @@ async function createOne(
       const mimeInfo = detectMimeFromContent(appended.validPath, sample);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
-      lineCount = await ctx.fs.countFileLines(appended.validPath);
+      // Past the limit the scan costs seconds per append (5.9 s at 2 GiB), so
+      // the count stays the unknown-as-zero the catch below also reports.
+      if (stats.size <= getMaxTextFileSize()) {
+        lineCount = await ctx.fs.countFileLines(appended.validPath);
+      }
     } catch (error) {
       ctx.log(
         'warning',
