@@ -982,7 +982,7 @@ export class GuardedFileSystem {
     // The snapshot can run long. A cancel during it stops here, the last point
     // where nothing is gone, and no undo id is offered for a delete that never ran.
     if (signal?.aborted) {
-      capture?.abandon('cancelled before anything was deleted');
+      capture?.dropUnder(validPath);
       signal.throwIfAborted();
     }
     await fsRm(validPath, options);

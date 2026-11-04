@@ -284,6 +284,23 @@ export class UndoCapture {
     this.#bytes = this.#reserved;
   }
 
+  /**
+   * Forget what one path's snapshot pushed, when its delete will not run. Only
+   * that path: the rest of a parallel batch may already be gone and still needs
+   * its records. The batch refuses nested paths, so no other entry sits under `dir`.
+   */
+  dropUnder(dir: string): void {
+    const kept = this.records.filter((record) => {
+      if (record.op === 'rename' || !isPathInsideDirectory(dir, record.path)) return true;
+      const weight = recordWeight(record);
+      this.#bytes -= weight;
+      this.#pool.bytes -= weight;
+      return false;
+    });
+    this.records.length = 0;
+    this.records.push(...kept);
+  }
+
   push(...records: UndoRecord[]): void {
     if (this.#unavailable !== undefined) return;
     for (const record of records) {
