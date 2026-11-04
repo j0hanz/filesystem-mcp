@@ -343,10 +343,11 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     if (capture === undefined) return '';
     const reason = capture.unavailableReason();
     let suffix = '';
-    if (capture.records.length > 0) {
+    const records = capture.journalRecords();
+    if (records.length > 0) {
       // Minted once: the catch path re-runs this after the success path, and a
       // second add would double-journal the same records under a fresh id.
-      this.#undoId ??= this.toolCtx.undoJournal.add(this.def.name, capture.records);
+      this.#undoId ??= this.toolCtx.undoJournal.add(this.def.name, records);
       if (structured !== undefined) structured['undo'] = this.#undoId;
       suffix = ` · undo ${this.#undoId}`;
     }

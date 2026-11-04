@@ -228,8 +228,8 @@ interface LivePool {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   #unavailable: string | undefined;
-  /** `<path>: <reason>` for each path that lost its own undo; the rest of the call keeps theirs. */
-  readonly #refused: string[] = [];
+  /** Each path that lost its own undo, with why; the rest of the call keeps theirs. */
+  readonly #refused = new Map<string, string>();
   /** Set on a `forPath` capture: where `commit` hands its records. */
   #owner: { parent: UndoCapture; path: string } | undefined;
   #bytes = 0;
@@ -254,7 +254,19 @@ export class UndoCapture {
    */
   unavailableReason(): string | undefined {
     if (this.#unavailable !== undefined) return this.#unavailable;
-    return this.#refused.length > 0 ? joinRoster(this.#refused, '; ') : undefined;
+    if (this.#refused.size === 0) return undefined;
+    const lines = [...this.#refused].map(([path, reason]) => `${pathLabel(path)}: ${reason}`);
+    return joinRoster(lines, '; ');
+  }
+
+  /** What an undo id restores: the folder of a refused path stays, since that path still sits in it. */
+  journalRecords(): UndoRecord[] {
+    if (this.#refused.size === 0) return this.records;
+    const kept = [...this.#refused.keys()];
+    return this.records.filter(
+      (record) =>
+        record.op !== 'rmdir' || !kept.some((path) => isPathInsideDirectory(record.path, path)),
+    );
   }
 
   /**
@@ -274,7 +286,7 @@ export class UndoCapture {
     const { parent, path } = this.#owner;
     if (this.#unavailable !== undefined || parent.#unavailable !== undefined) {
       if (parent.#unavailable === undefined) {
-        parent.#refused.push(`${pathLabel(path)}: ${String(this.#unavailable)}`);
+        parent.#refused.set(path, String(this.#unavailable));
       }
       this.release();
       return;

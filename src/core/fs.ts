@@ -486,14 +486,19 @@ export class GuardedFileSystem {
     const validPath = await this.#guard('write', filePath);
     // Undo capture: collect the chain of directories this call is about to
     // create (each one currently absent), outermost first.
-    const capture = this.#capture;
+    const capture = this.#capture?.forPath(validPath);
     let created: string[] = [];
     if (capture) {
       created = await plannedMkdirChain(capture, validPath);
     }
-    await fsMkdir(validPath, options);
-    if (capture) {
-      capture.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
+    try {
+      await fsMkdir(validPath, options);
+      if (capture) {
+        capture.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
+        capture.commit();
+      }
+    } finally {
+      capture?.release();
     }
   }
 
@@ -854,8 +859,24 @@ export class GuardedFileSystem {
     content: string,
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
-    const { signal } = options;
     const validPath = await this.#guard('write', filePath);
+    const capture = this.#capture?.forPath(validPath);
+    try {
+      await this.#appendValid(validPath, filePath, content, options.signal, capture);
+      capture?.commit();
+      return { validPath };
+    } finally {
+      capture?.release();
+    }
+  }
+
+  async #appendValid(
+    validPath: string,
+    filePath: string,
+    content: string,
+    signal: AbortSignal | undefined,
+    capture: UndoCapture | undefined,
+  ): Promise<void> {
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
     // the call would hang unabortable and pin its concurrency slot. The
@@ -874,11 +895,11 @@ export class GuardedFileSystem {
     // append goes over the budget and reads as not undoable.
     // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
     let saved: SavedFile | undefined;
-    if (this.#capture && existing) {
+    if (capture && existing) {
       try {
-        saved = await saveOld(this.#capture, this, validPath, existing);
+        saved = await saveOld(capture, this, validPath, existing);
       } catch {
-        this.#capture.abandon('could not read the old content');
+        capture.abandon('could not read the old content');
       }
     }
     // fs.promises.appendFile takes no signal, so a withAbort race would
@@ -906,11 +927,13 @@ export class GuardedFileSystem {
         handle = await fsOpen(validPath, APPEND_NOFOLLOW);
       }
     }
+    let writing = false;
     try {
       signal?.throwIfAborted();
       // A file we just O_EXCL-created is a fresh regular file; only an existing one
       // can have been reached through a swapped ancestor.
       if (!created) await this.#assertFdWithinRoots(handle, filePath);
+      writing = true;
       // Ceiling: an append is not transactional, so an abort landing
       // mid-write can leave a prefix of the content on disk. Unwiring the
       // signal would trade that for a silently-completed write; a client
@@ -918,22 +941,27 @@ export class GuardedFileSystem {
       // write stays.
       await handle.writeFile(content, { signal });
     } catch (error) {
-      // A failure after the open can leave a prefix of the content behind,
-      // which no record covers; the call is then not undoable.
-      this.#capture?.abandon('the append failed part-way');
+      // A failed write can leave a prefix of the content behind, which no record
+      // covers, so this path is not undoable. A file this call made and removed again leaves nothing.
+      let remains = writing && !created;
       if (created) {
         await fsUnlink(validPath).catch((unlinkError: unknown) => {
+          remains = true;
           Logger.warn(
             `Failed to remove newly created ${validPath} after a failed append: ${formatUnknownErrorMessage(unlinkError)}`,
           );
         });
       }
+      if (remains) {
+        capture?.abandon('the append failed part-way');
+        capture?.commit();
+      }
       throw error;
     } finally {
       await handle.close();
     }
-    if (this.#capture) {
-      this.#capture.push(
+    if (capture) {
+      capture.push(
         saved
           ? {
               op: 'write',
@@ -944,7 +972,6 @@ export class GuardedFileSystem {
           : { op: 'remove', path: validPath, expect: sha256Hex(content) },
       );
     }
-    return { validPath };
   }
 
   /**
