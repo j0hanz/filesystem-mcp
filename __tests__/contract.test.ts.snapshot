@@ -448,7 +448,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -511,6 +511,9 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
       "annotations": {
         "readOnlyHint": true,
         "openWorldHint": false
+      },
+      "_meta": {
+        "anthropic/maxResultSizeChars": 200000
       }
     },
     {
@@ -1050,7 +1053,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1113,6 +1116,9 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "annotations": {
         "readOnlyHint": true,
         "openWorldHint": false
+      },
+      "_meta": {
+        "anthropic/maxResultSizeChars": 200000
       }
     },
     {

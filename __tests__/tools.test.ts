@@ -249,6 +249,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(!/more than the maximum of \d+ elements/.test(text), text.slice(0, 300));
   });
 
+  it('read alone declares the client result-size hint in tools/list', async () => {
+    const harness = await createTestClientPair([tmpDir]);
+    try {
+      const { tools } = await harness.client.listTools();
+      const key = 'anthropic/maxResultSizeChars';
+      assert.strictEqual(tools.find((tool) => tool.name === 'read')?._meta?.[key], 200_000);
+      for (const tool of tools.filter((candidate) => candidate.name !== 'read')) {
+        assert.strictEqual(tool._meta?.[key], undefined, tool.name);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('tools/list publishes slimmed schemas and preserves Zod runtime semantics', async () => {
     const pinHarness = await createTestClientPair([tmpDir]);
     try {

@@ -149,6 +149,8 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
    * that knows better than the generic advice (see `refuseOversized`).
    */
   readonly oversizeRemedy?: (result: RunResult<O>) => string;
+  /** Published as the tool's `_meta` in `tools/list`. */
+  readonly listMeta?: Record<string, unknown>;
 }
 
 export interface DefinedTool {
@@ -564,6 +566,7 @@ export function defineTool<I extends z.ZodType, O extends object>(
     // the model reads. `TOOL-SURFACE-001` pins this for the whole surface.
     // Result shapes are checked by TypeScript, not unused runtime schemas.
     annotations: publishedAnnotations,
+    ...(def.listMeta ? { _meta: def.listMeta } : {}),
   };
 
   return {

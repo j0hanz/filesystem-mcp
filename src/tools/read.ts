@@ -405,8 +405,12 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.',
+    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. ' +
+    'A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.',
   input: ReadFileInputSchema,
+  // Claude Code spills a text result over 50,000 characters to a file, which
+  // may sit outside the roots where this server's own tools cannot read it.
+  listMeta: { 'anthropic/maxResultSizeChars': 200_000 },
   readOnlyHint: true,
   deadline: true,
   defaultErrorCode: ErrorCode.NOT_FILE,
