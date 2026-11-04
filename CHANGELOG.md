@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A refused cursor says why it may have gone stale.**
 - **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
 - **`list` says what it left out.** A raised `maxDepth` reports how many directories it did not expand, and a walk that skips ignored folders names them.
 - **`read` errors carry their code and next step.** They now match what `stat` and `create` report. `ACCESS_DENIED` says what to do when the path must stay outside the roots.

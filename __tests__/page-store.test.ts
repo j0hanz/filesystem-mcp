@@ -3,10 +3,17 @@ import { describe, it } from 'node:test';
 
 import { paginate } from '../src/core/cursor.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
-import { PageSnapshotStore } from '../src/core/store.ts';
+import { invalidCursor, PageSnapshotStore } from '../src/core/store.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
 describe('PageSnapshotStore', () => {
+  it('a refused cursor names both ways it goes stale and the remedy', () => {
+    assert.strictEqual(
+      invalidCursor().message,
+      'Invalid cursor: a page expires after 60 seconds, and a cursor works only with the query that made it. Request the first page without a cursor.',
+    );
+  });
+
   it('stores pages, rejects old and malformed cursors, and checks query keys', async () => {
     const store = new PageSnapshotStore();
     const queryKeyOne = '{"method":"list","path":"one"}';

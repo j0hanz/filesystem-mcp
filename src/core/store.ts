@@ -275,7 +275,7 @@ export interface PageSnapshot<T = unknown, M = unknown> {
 export function invalidCursor(): FsError {
   return new FsError(
     ErrorCode.INVALID_INPUT,
-    'Invalid cursor. Request the first page without a cursor.',
+    `Invalid cursor: a page expires after ${String(ENTRY_TTL_MS / 1000)} seconds, and a cursor works only with the query that made it. Request the first page without a cursor.`,
   );
 }
 
