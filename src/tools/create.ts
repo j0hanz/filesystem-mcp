@@ -15,12 +15,7 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import {
-  destIdentity,
-  type EntryIdentity,
-  sameIdentity,
-  type Stats,
-} from '../core/fs.ts';
+import { destIdentity, type EntryIdentity, sameIdentity, type Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';

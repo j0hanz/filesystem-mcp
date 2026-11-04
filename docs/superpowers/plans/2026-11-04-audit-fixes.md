@@ -54,7 +54,14 @@ Expected: `Switched to a new branch 'fix/audit-2026-11-04'`
 
 ```ts
 const NEW_SECRET_NAMES = [
-  '.envrc', 'deploy.ppk', 'app.jks', 'app.keystore', 'key.p8', '.dockercfg', '.s3cfg', '.htpasswd',
+  '.envrc',
+  'deploy.ppk',
+  'app.jks',
+  'app.keystore',
+  'key.p8',
+  '.dockercfg',
+  '.s3cfg',
+  '.htpasswd',
 ];
 
 it('blocks private key and credential files by default', () => {
@@ -139,8 +146,12 @@ it('a cancel during the undo snapshot deletes nothing and offers no undo', async
     { fs: cancelling, signal: controller.signal, confirm: choose('delete') },
   );
   assert.strictEqual(result.isError, true);
-  assert.strictEqual(result.structured.results[0] && 'error' in result.structured.results[0]
-    ? result.structured.results[0].error.code : undefined, ErrorCode.CANCELLED);
+  assert.strictEqual(
+    result.structured.results[0] && 'error' in result.structured.results[0]
+      ? result.structured.results[0].error.code
+      : undefined,
+    ErrorCode.CANCELLED,
+  );
   await access(join(tree, 'a.txt'));
   assert.strictEqual(capture.records.length, 0);
   assert.match(capture.unavailableReason() ?? '', /cancelled before anything was deleted/u);
@@ -347,7 +358,10 @@ it('refuses a folder as NOT_FILE without asking', async () => {
   const other = join(root, 'beside_folder.txt');
   for (const overwrite of [undefined, true]) {
     const result = await create({
-      files: [{ path: dir, content: 'x', ...(overwrite ? { overwrite } : {}) }, { path: other, content: 'y', overwrite: true }],
+      files: [
+        { path: dir, content: 'x', ...(overwrite ? { overwrite } : {}) },
+        { path: other, content: 'y', overwrite: true },
+      ],
     });
     assert.strictEqual(result.structured.failures?.[0]?.error.code, ErrorCode.NOT_FILE);
     assert.strictEqual(result.structured.files.length, 1, 'the other entry still writes');
