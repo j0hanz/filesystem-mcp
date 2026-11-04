@@ -20,9 +20,15 @@ import { ErrorCode, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
+import type { PathCapture, UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
-import { plannedMkdirChain, restoreEntry, UndoJournal, UndoPreview } from '../src/core/undo.ts';
+import {
+  NOT_RECORDING,
+  plannedMkdirChain,
+  restoreEntry,
+  UndoJournal,
+  UndoPreview,
+} from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import { CREATE } from '../src/tools/create.ts';
@@ -504,7 +510,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     cap.release();
   });
 
-  it('journalRecords drops every record that would change a refused path', () => {
+  it('journalRecords drops every record that would change a refused path', async () => {
     const refusedPath = join(tmpDir, 'refused-record.txt');
     const other = join(tmpDir, 'other-record.txt');
     const identity = { dev: 0n, ino: 0n, birthtimeNs: 0n };
@@ -515,12 +521,16 @@ describe('UndoCapture via GuardedFileSystem', () => {
       { op: 'remove', path: other, expect: 'x' },
     ];
     const cap = capture();
-    const saved = cap.forPath(other);
-    saved.push(...records);
-    saved.commit();
-    const refused = cap.forPath(refusedPath);
-    refused.abandon('no');
-    refused.commit();
+    await cap.forMutation(other, (own) => {
+      own.push(...records);
+      own.changed();
+      return Promise.resolve();
+    });
+    await cap.forMutation(refusedPath, (own) => {
+      own.abandon('no');
+      own.changed();
+      return Promise.resolve();
+    });
     assert.deepStrictEqual(cap.journalRecords(), [{ op: 'remove', path: other, expect: 'x' }]);
     cap.release();
   });
@@ -612,19 +622,45 @@ describe('UndoCapture via GuardedFileSystem', () => {
     });
   });
 
-  it('journalRecords does not depend on which path committed first', () => {
+  it('journalRecords does not depend on which path committed first', async () => {
     const dir = join(tmpDir, 'order');
     const file = join(dir, 'refused.txt');
     for (const refusedFirst of [true, false]) {
       const cap = new UndoJournal(1024 * 1024).beginCapture();
-      const survivor = cap.forPath(dir);
-      survivor.push({ op: 'rmdir', path: dir });
-      const refused = cap.forPath(file);
-      refused.abandon('no');
-      for (const own of refusedFirst ? [refused, survivor] : [survivor, refused]) own.commit();
+      const survive = (own: PathCapture): Promise<void> => {
+        own.push({ op: 'rmdir', path: dir });
+        own.changed();
+        return Promise.resolve();
+      };
+      const refuse = (own: PathCapture): Promise<void> => {
+        own.abandon('no');
+        own.changed();
+        return Promise.resolve();
+      };
+      if (refusedFirst) {
+        await cap.forMutation(file, refuse);
+        await cap.forMutation(dir, survive);
+      } else {
+        await cap.forMutation(dir, survive);
+        await cap.forMutation(file, refuse);
+      }
       assert.deepStrictEqual(cap.journalRecords(), []);
       cap.release();
     }
+  });
+
+  it('every mutation works with no capture', async () => {
+    const fs = new GuardedFileSystem(ctx.pathGuard);
+    const dir = join(tmpDir, 'plain', 'deep');
+    const file = join(dir, 'f.txt');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(file, 'one');
+    await fs.writeFile(file, 'two');
+    await fs.appendFile(file, '!');
+    assert.strictEqual(await readFile(file, 'utf8'), 'two!');
+    await fs.rm(file);
+    await fs.rmdir(dir);
+    await assert.rejects(lstat(dir));
   });
 
   it('a directories entry keeps its folder when a file under it is refused', async () => {
@@ -843,13 +879,16 @@ describe('UndoCapture via GuardedFileSystem', () => {
 
   it('a folder chain that cannot be inspected costs only that folder, and names it', async () => {
     const cap = capture();
-    const refused = cap.forPath(join(tmpDir, 'sub'));
-    // A NUL makes lstat reject on every platform.
-    assert.deepStrictEqual(await plannedMkdirChain(refused, join(tmpDir, 'bad\0name')), []);
-    refused.commit();
-    const kept = cap.forPath(join(tmpDir, 'other'));
-    kept.push({ op: 'rmdir', path: join(tmpDir, 'other') });
-    kept.commit();
+    await cap.forMutation(join(tmpDir, 'sub'), async (own) => {
+      // A NUL makes lstat reject on every platform.
+      assert.deepStrictEqual(await plannedMkdirChain(own, join(tmpDir, 'bad\0name')), []);
+      own.changed();
+    });
+    await cap.forMutation(join(tmpDir, 'other'), (own) => {
+      own.push({ op: 'rmdir', path: join(tmpDir, 'other') });
+      own.changed();
+      return Promise.resolve();
+    });
     assert.strictEqual(cap.unavailableReason(), 'sub: could not inspect the parent folders');
     assert.strictEqual(cap.records.length, 1);
     cap.release();
@@ -891,6 +930,161 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const rec = cap.records[0];
     if (!isRename(rec)) assert.fail('expected a rename record');
     await rm(upper);
+  });
+});
+
+describe('forMutation settles every exit', () => {
+  const path = join('/root', 'a');
+  const record: UndoRecord = { op: 'rmdir', path: join(path, 'x') };
+  const body =
+    (fn: (own: PathCapture) => void) =>
+    (own: PathCapture): Promise<void> => {
+      fn(own);
+      return Promise.resolve();
+    };
+  const boom = new Error('boom');
+
+  it('returns what run returns', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    assert.strictEqual(await cap.forMutation(path, () => Promise.resolve(7)), 7);
+    cap.release();
+  });
+
+  const exits: {
+    name: string;
+    run: (own: PathCapture) => void;
+    rejects: boolean;
+    records: number;
+    reason: string | undefined;
+  }[] = [
+    {
+      name: 'no change',
+      run: (o) => {
+        o.push(record);
+      },
+      rejects: false,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'throw before change',
+      run: (o) => {
+        o.push(record);
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'abandon, then throw before change',
+      run: (o) => {
+        o.abandon('no');
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'change',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'throw after change keeps records',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'abandon and change report the path',
+      run: (o) => {
+        o.abandon('no');
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: 'a: no',
+    },
+    {
+      name: 'a second change hands over once',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
+  ];
+
+  for (const { name, run, rejects, records, reason } of exits) {
+    it(name, async () => {
+      const cap = new UndoJournal(1024 * 1024).beginCapture();
+      const settled = cap.forMutation(path, body(run));
+      if (rejects) await assert.rejects(settled, boom);
+      else await settled;
+      assert.strictEqual(cap.records.length, records);
+      assert.strictEqual(cap.unavailableReason(), reason);
+      cap.release();
+    });
+  }
+
+  it('returns a reservation to the pool when run throws', async () => {
+    // reserve adds a record's overhead, so the budget leaves room for one such charge, not two.
+    const journal = new UndoJournal(4000);
+    const cap = journal.beginCapture();
+    await assert.rejects(
+      cap.forMutation(
+        path,
+        body((own) => {
+          assert.ok(own.reserve(3000));
+          throw boom;
+        }),
+      ),
+      boom,
+    );
+    const probe = journal.beginCapture();
+    assert.ok(probe.reserve(3000), 'the reservation came back');
+    probe.release();
+    cap.release();
+  });
+
+  it('keeps no records and no second reason when the call was abandoned mid-mutation', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    await cap.forMutation(
+      path,
+      body((own) => {
+        own.push(record);
+        cap.abandon('copies are not undoable yet');
+        own.changed();
+      }),
+    );
+    assert.strictEqual(cap.records.length, 0);
+    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+    cap.release();
+  });
+
+  it('NOT_RECORDING records nothing and never throws', () => {
+    assert.strictEqual(NOT_RECORDING.recording, false);
+    assert.strictEqual(NOT_RECORDING.reserve(1), false);
+    NOT_RECORDING.abandon('no');
+    NOT_RECORDING.push(record);
+    NOT_RECORDING.changed();
+    assert.strictEqual(NOT_RECORDING.unavailableReason(), undefined);
   });
 });
 
@@ -1095,6 +1289,38 @@ describe('restoreEntry', () => {
     assert.strictEqual((await fsPromises.stat(tree)).mode & 0o777, 0o700);
     assert.strictEqual((await fsPromises.stat(join(tree, 'inner'))).mode & 0o777, 0o700);
     assert.strictEqual((await fsPromises.stat(empty)).mode & 0o777, 0o700);
+  });
+
+  it('a recursive delete that fails halfway can still be undone', async (t) => {
+    const tree = join(tmpDir, 'halfway');
+    const gone = join(tree, 'gone.txt');
+    await mkdir(tree);
+    await writeFile(gone, 'bytes');
+    await writeFile(join(tree, 'kept.txt'), 'kept');
+    const realRm = fsModule.rm;
+    t.mock.method(fsModule, 'rm', async () => {
+      await realRm(gone);
+      throw new Error('rm failed');
+    });
+    syncBuiltinESMExports();
+    const entry = await captureOne(async (fs) => {
+      await assert.rejects(fs.rm(tree, { recursive: true }), /rm failed/u);
+    });
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await assert.rejects(lstat(gone));
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(gone, 'utf8'), 'bytes');
+    assert.strictEqual(await readFile(join(tree, 'kept.txt'), 'utf8'), 'kept');
+  });
+
+  it('an empty folder removed by rmdir comes back on undo', async () => {
+    const empty = join(tmpDir, 'rmdir-empty');
+    await mkdir(empty);
+    const entry = await captureOne((fs) => fs.rmdir(empty));
+    await assert.rejects(lstat(empty));
+    await restoreEntry(entry, newFs(), { dryRun: false });
+    assert.ok((await lstat(empty)).isDirectory());
   });
 
   it('a restored directory keeps owner rwx so its children come back', async (t) => {

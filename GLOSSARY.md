@@ -79,7 +79,8 @@ mutation until the result is returned; abandoned, with a reason, when undo
 becomes impossible or not worth the budget. A capture that is unavailable
 records nothing further, and the mutation still runs. Each path a call changes
 has its own capture, so abandoning one costs only that path's undo; a copy
-abandons the whole call.
+abandons the whole call. A path's capture reports only once that path has, or
+may have, changed; an exit before that reports nothing.
 _Avoid_: undo session, transaction, undo buffer
 
 ## Approval

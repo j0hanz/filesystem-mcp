@@ -10,7 +10,7 @@ import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
-import { UndoJournal } from '../src/core/undo.ts';
+import { type PathCapture, UndoJournal } from '../src/core/undo.ts';
 import { DELETE, nestedIndexes } from '../src/tools/delete.ts';
 import {
   cleanupTestRoot,
@@ -462,36 +462,42 @@ describe('delete body', () => {
     capture.release();
   });
 
-  it('a path capture that is refused or released gives its budget back', () => {
+  it('a path capture that is refused or released gives its budget back', async () => {
     const capture = new UndoJournal(2000).beginCapture();
-    const fill = (name: string): ReturnType<typeof capture.forPath> => {
-      const own = capture.forPath(join(root, name));
-      own.push(
-        ...['x', 'y', 'z'].map((entry) => ({
-          op: 'rmdir' as const,
-          path: join(root, name, entry),
-        })),
-      );
-      return own;
-    };
-    fill('released').release();
-    const refused = fill('refused');
-    refused.abandon('no');
-    refused.commit();
-    fill('kept').commit();
+    const fill = (name: string, settle: (own: PathCapture) => void): Promise<void> =>
+      capture.forMutation(join(root, name), (own) => {
+        own.push(
+          ...['x', 'y', 'z'].map((entry) => ({
+            op: 'rmdir' as const,
+            path: join(root, name, entry),
+          })),
+        );
+        settle(own);
+        return Promise.resolve();
+      });
+    await fill('released', () => undefined);
+    await fill('refused', (own) => {
+      own.abandon('no');
+      own.changed();
+    });
+    await fill('kept', (own) => {
+      own.changed();
+    });
     assert.strictEqual(capture.unavailableReason(), 'refused: no');
     assert.strictEqual(capture.records.length, 3, 'the last fill still fits');
     capture.release();
   });
 
-  it('a committed path too large to spread into a call keeps every record', () => {
+  it('a committed path too large to spread into a call keeps every record', async () => {
     const capture = new UndoJournal(1024 * 1024 * 1024).beginCapture();
     const kept = 200_000;
-    const own = capture.forPath(join(root, 'kept'));
-    for (let i = 0; i < kept; i++) {
-      own.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
-    }
-    own.commit();
+    await capture.forMutation(join(root, 'kept'), (own) => {
+      for (let i = 0; i < kept; i++) {
+        own.push({ op: 'rmdir', path: join(root, 'kept', String(i)) });
+      }
+      own.changed();
+      return Promise.resolve();
+    });
     assert.strictEqual(capture.records.length, kept);
     assert.strictEqual(capture.unavailableReason(), undefined);
     capture.release();
