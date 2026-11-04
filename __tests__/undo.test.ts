@@ -20,9 +20,15 @@ import { ErrorCode, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import type { UndoCapture, UndoRecord } from '../src/core/undo.ts';
+import type { PathCapture, UndoCapture, UndoRecord } from '../src/core/undo.ts';
 import type { UndoEntry } from '../src/core/undo.ts';
-import { plannedMkdirChain, restoreEntry, UndoJournal, UndoPreview } from '../src/core/undo.ts';
+import {
+  NOT_RECORDING,
+  plannedMkdirChain,
+  restoreEntry,
+  UndoJournal,
+  UndoPreview,
+} from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import { CREATE } from '../src/tools/create.ts';
@@ -891,6 +897,161 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const rec = cap.records[0];
     if (!isRename(rec)) assert.fail('expected a rename record');
     await rm(upper);
+  });
+});
+
+describe('forMutation settles every exit', () => {
+  const path = join('/root', 'a');
+  const record: UndoRecord = { op: 'rmdir', path: join(path, 'x') };
+  const body =
+    (fn: (own: PathCapture) => void) =>
+    (own: PathCapture): Promise<void> => {
+      fn(own);
+      return Promise.resolve();
+    };
+  const boom = new Error('boom');
+
+  it('returns what run returns', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    assert.strictEqual(await cap.forMutation(path, () => Promise.resolve(7)), 7);
+    cap.release();
+  });
+
+  const exits: {
+    name: string;
+    run: (own: PathCapture) => void;
+    rejects: boolean;
+    records: number;
+    reason: string | undefined;
+  }[] = [
+    {
+      name: 'no change',
+      run: (o) => {
+        o.push(record);
+      },
+      rejects: false,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'throw before change',
+      run: (o) => {
+        o.push(record);
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'abandon, then throw before change',
+      run: (o) => {
+        o.abandon('no');
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'change',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'throw after change keeps records',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'abandon and change report the path',
+      run: (o) => {
+        o.abandon('no');
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: 'a: no',
+    },
+    {
+      name: 'a second change hands over once',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
+  ];
+
+  for (const { name, run, rejects, records, reason } of exits) {
+    it(name, async () => {
+      const cap = new UndoJournal(1024 * 1024).beginCapture();
+      const settled = cap.forMutation(path, body(run));
+      if (rejects) await assert.rejects(settled, boom);
+      else await settled;
+      assert.strictEqual(cap.records.length, records);
+      assert.strictEqual(cap.unavailableReason(), reason);
+      cap.release();
+    });
+  }
+
+  it('returns a reservation to the pool when run throws', async () => {
+    // reserve adds a record's overhead, so the budget leaves room for one such charge, not two.
+    const journal = new UndoJournal(4000);
+    const cap = journal.beginCapture();
+    await assert.rejects(
+      cap.forMutation(
+        path,
+        body((own) => {
+          assert.ok(own.reserve(3000));
+          throw boom;
+        }),
+      ),
+      boom,
+    );
+    const probe = journal.beginCapture();
+    assert.ok(probe.reserve(3000), 'the reservation came back');
+    probe.release();
+    cap.release();
+  });
+
+  it('keeps no records and no second reason when the call was abandoned mid-mutation', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    await cap.forMutation(
+      path,
+      body((own) => {
+        own.push(record);
+        cap.abandon('copies are not undoable yet');
+        own.changed();
+      }),
+    );
+    assert.strictEqual(cap.records.length, 0);
+    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+    cap.release();
+  });
+
+  it('NOT_RECORDING records nothing and never throws', () => {
+    assert.strictEqual(NOT_RECORDING.recording, false);
+    assert.strictEqual(NOT_RECORDING.reserve(1), false);
+    NOT_RECORDING.abandon('no');
+    NOT_RECORDING.push(record);
+    NOT_RECORDING.changed();
+    assert.strictEqual(NOT_RECORDING.unavailableReason(), undefined);
   });
 });
 

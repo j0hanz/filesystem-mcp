@@ -230,7 +230,29 @@ interface LivePool {
   bytes: number;
 }
 
-export class UndoCapture {
+/** What a mutation holds for its path while `UndoCapture.forMutation` runs it. */
+export interface PathCapture {
+  /** False only for NOT_RECORDING; stays true after abandon. */
+  readonly recording: boolean;
+  reserve(n: number): boolean;
+  abandon(reason: string): void;
+  push(...records: UndoRecord[]): void;
+  unavailableReason(): string | undefined;
+  /** This path has, or may have, changed: hand records and charge to the call, or report why it has none. */
+  changed(): void;
+}
+
+/** The PathCapture of a call with no Capture: it records nothing. */
+export const NOT_RECORDING: PathCapture = {
+  recording: false,
+  reserve: () => false,
+  abandon: () => undefined,
+  push: () => undefined,
+  unavailableReason: () => undefined,
+  changed: () => undefined,
+};
+
+export class UndoCapture implements PathCapture {
   readonly records: UndoRecord[] = [];
   #unavailable: string | undefined;
   /** Each path that lost its own undo, with why; the rest of the call keeps theirs. */
@@ -246,6 +268,10 @@ export class UndoCapture {
   constructor(maxBytes: number, pool: LivePool) {
     this.maxBytes = maxBytes;
     this.#pool = pool;
+  }
+
+  get recording(): boolean {
+    return true;
   }
 
   #charge(n: number): void {
@@ -302,10 +328,29 @@ export class UndoCapture {
     return own;
   }
 
-  /** Hand this path's records and charge to the call, or report why it has none. */
+  /**
+   * Run one path's mutation under its own capture, so abandoning it costs only
+   * that path's undo. The mutation calls `changed()` at its point of no return.
+   */
+  async forMutation<T>(path: string, run: (own: PathCapture) => Promise<T>): Promise<T> {
+    const own = this.forPath(path);
+    try {
+      return await run(own);
+    } finally {
+      // After changed() this does nothing. Any other exit changed nothing, so nothing is reported.
+      own.release();
+    }
+  }
+
   commit(): void {
+    this.changed();
+  }
+
+  changed(): void {
     if (this.#owner === undefined) return;
     const { parent, path } = this.#owner;
+    // Once only: a second hand-over would run the records twice on restore.
+    this.#owner = undefined;
     if (this.#unavailable !== undefined || parent.#unavailable !== undefined) {
       if (parent.#unavailable === undefined) {
         parent.#refused.set(path, String(this.#unavailable));
@@ -379,7 +424,7 @@ export class UndoCapture {
  * the chain cannot be determined.
  */
 export async function plannedMkdirChain(
-  capture: UndoCapture,
+  capture: PathCapture,
   validPath: string,
 ): Promise<string[]> {
   try {
@@ -408,7 +453,7 @@ export interface SavedFile {
 
 /** Read `path`'s current bytes for undo; `undefined` once they would go over the budget. */
 export async function saveOld(
-  capture: UndoCapture,
+  capture: PathCapture,
   fs: GuardedFileSystem,
   path: string,
   stats: Stats | BigIntStats,
@@ -431,7 +476,7 @@ export async function saveOld(
  * sensitive path anywhere in the tree refuses to be captured.
  */
 export async function snapshotTree(
-  capture: UndoCapture,
+  capture: PathCapture,
   fs: GuardedFileSystem,
   validPath: string,
   /** A cancel ends the walk, so it cannot overflow the budget; the caller drops what it pushed. */
