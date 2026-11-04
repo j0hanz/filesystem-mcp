@@ -355,7 +355,11 @@ async function createOne(
       const mimeInfo = detectMimeFromContent(appended.validPath, sample);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
-      lineCount = await ctx.fs.countFileLines(appended.validPath);
+      // Past the limit the scan costs seconds per append (5.9 s at 2 GiB), so
+      // the count stays the unknown-as-zero the catch below also reports.
+      if (stats.size <= getMaxTextFileSize()) {
+        lineCount = await ctx.fs.countFileLines(appended.validPath);
+      }
     } catch (error) {
       ctx.log(
         'warning',

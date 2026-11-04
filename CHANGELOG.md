@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Appending to a large file no longer scans it.** Every `create` append counted the whole file's lines for its result, while holding the file's write lock: 5.9 s on a 2 GiB log, for an append that took 3 ms. Past the size limit (`FS_MAX_FILE_SIZE`) the count is skipped and `lineCount` is 0.
 - **A cancel during a recursive `delete` keeps the folder.** The delete first saves the tree for undo, and a cancel that landed during that save was ignored, so the folder was removed anyway. It now stops before removing anything, and the call offers no undo id.
 - **More private keys and credential files are blocked.** `.envrc`, `*.ppk`, `*.jks`, `*.keystore`, `*.p8`, `.dockercfg`, `.s3cfg` and `.htpasswd` were readable, though the README says private keys and cloud credentials are blocked. They now answer `ACCESS_DENIED`. `--allow` lifts one, for example `--allow debug.keystore`.
 - **Moving a large folder to a new location is fast again.** The pre-move walk re-checked every entry against the disk although the destination did not exist, so 8,000 files took 14.8 s. A missing destination now skips the per-entry disk checks; read-only and sensitive-file rules still apply to every entry.

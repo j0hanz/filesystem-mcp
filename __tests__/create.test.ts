@@ -6,7 +6,7 @@ import { after, before, describe, it } from 'node:test';
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { getMaxTextFileSize } from '../src/core/util.ts';
+import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import { CREATE } from '../src/tools/create.ts';
 import {
   cleanupTestRoot,
@@ -215,6 +215,26 @@ describe('create body', () => {
     const modified = result.structured.files[0]?.modified;
     const at = Date.parse(modified ?? '');
     assert.ok(at >= before && at <= after, modified);
+  });
+
+  it('counts lines up to the size limit and not past it', async (t) => {
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      const count = t.mock.method(GuardedFileSystem.prototype, 'countFileLines');
+      const content = 'x\n';
+      const atLimit = await writeTestFile(root, 'at_limit.log', 'a'.repeat(MIB - content.length));
+      const at = await create({ files: [{ path: atLimit, content, append: true }] });
+      assert.strictEqual(at.structured.files[0]?.lineCount, 1);
+      assert.strictEqual(count.mock.callCount(), 1);
+
+      const over = await writeTestFile(
+        root,
+        'over_limit.log',
+        'a'.repeat(MIB - content.length + 1),
+      );
+      const past = await create({ files: [{ path: over, content, append: true }] });
+      assert.strictEqual(past.structured.files[0]?.lineCount, 0);
+      assert.strictEqual(count.mock.callCount(), 1, 'no scan past the limit');
+    });
   });
 
   it('creates a missing file with append:true', async () => {
