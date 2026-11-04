@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, FsError } from '../core/errors.ts';
+import { ErrorCode, formatDetailedError, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import {
   detectMimeFromContent,
@@ -559,13 +559,15 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     const text =
       ordered.length === 1 && firstOrdered !== undefined
         ? 'error' in firstOrdered
-          ? firstOrdered.error.message
+          ? formatDetailedError(firstOrdered.error)
           : body(firstOrdered.value)
         : ordered
             .map((r) => {
               const header = `// ${r.path}`;
               if ('value' in r) return `${header}\n${body(r.value)}`;
-              return `${header}\n// Error: ${r.error.message}`;
+              const { code, message, suggestion } = r.error;
+              const next = suggestion ? `\n// ${suggestion}` : '';
+              return `${header}\n// Error: ${code}: ${message}${next}`;
             })
             .join('\n\n');
 

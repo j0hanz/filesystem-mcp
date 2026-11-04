@@ -136,7 +136,7 @@ describe('read body', () => {
     const whole = await read({ path: file }, { guard });
     assert.strictEqual(whole.isError, true);
     assert.strictEqual(errorOf(whole.structured.results[0])?.code, 'BINARY_FILE');
-    assert.match(whole.text ?? '', /^Binary file detected\. Pass binary: true/);
+    assert.match(whole.text ?? '', /^BINARY_FILE: Binary file detected\. Pass binary: true/);
 
     const ranged = await read({ path: file, head: 1 }, { guard });
     assert.strictEqual(ranged.isError, true);
@@ -471,6 +471,22 @@ describe('read body', () => {
     const tailText = tail.text ?? '';
     assert.match(tailText, /^\/\/ more lines above: showing last 10 lines$/m);
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
+  });
+
+  it('names the code and the next step for a refused path', async () => {
+    const outside = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/hostname';
+    const other = process.platform === 'win32' ? 'C:\\Windows\\system.ini' : '/etc/hosts';
+    const advice =
+      'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.';
+
+    const single = await read({ path: outside }, { guard });
+    assert.strictEqual(single.isError, true);
+    assert.match(single.text ?? '', /^ACCESS_DENIED: Outside allowed directories\./);
+    assert.ok(single.text?.includes(advice));
+
+    const batch = await read({ paths: [outside, other] }, { guard });
+    assert.match(batch.text ?? '', /^\/\/ Error: ACCESS_DENIED: Outside allowed directories\./m);
+    assert.ok(batch.text?.includes(`// ${advice}`));
   });
 
   describe('lineNumbers', () => {

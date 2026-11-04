@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`read` errors carry their code and next step.** They now match what `stat` and `create` report. `ACCESS_DENIED` says what to do when the path must stay outside the roots.
 - **`read` tells the client how large its results can be.** Claude Code keeps results up to 200,000 characters inline instead of saving them to a file outside the roots.
 
 ### Fixed
