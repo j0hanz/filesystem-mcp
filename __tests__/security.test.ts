@@ -317,6 +317,33 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('server.pem'), false);
     });
 
+    it('blocks private key and credential files by default', () => {
+      const matcher = new SensitiveMatcher();
+      for (const name of [
+        '.envrc',
+        'deploy.ppk',
+        'app.jks',
+        'app.keystore',
+        'key.p8',
+        '.dockercfg',
+        '.s3cfg',
+        '.htpasswd',
+      ]) {
+        assert.strictEqual(matcher.isSensitive(`/w/${name}`), true, name);
+      }
+      assert.strictEqual(matcher.isSensitive('/w/DEPLOY.PPK'), true, 'case-folded');
+      assert.strictEqual(matcher.isSensitive('/w/key.p8.md'), false, 'a suffix is another name');
+      assert.strictEqual(matcher.isSensitive('/w/.envrc.example'), false);
+    });
+
+    it('lets --allow lift a new built-in pattern', async () => {
+      await withEnv({ FS_ALLOWLIST: 'debug.keystore' }, () => {
+        const matcher = new SensitiveMatcher();
+        assert.strictEqual(matcher.isSensitive('/w/debug.keystore'), false);
+        assert.strictEqual(matcher.isSensitive('/w/release.keystore'), true);
+      });
+    });
+
     it('TC-SEC-013: Custom FS_DENYLIST rules', () => {
       const matcher = new SensitiveMatcher(['*.secret']);
       assert.strictEqual(matcher.isSensitive('data.secret'), true, 'Should match custom pattern');
@@ -644,6 +671,14 @@ describe('Security (P0)', () => {
       const fixtures: Record<string, string> = {
         '.env': '/r/.env',
         '.env.*': '/r/.env.local',
+        '.envrc': '/r/.envrc',
+        '.htpasswd': '/r/.htpasswd',
+        '.dockercfg': '/home/u/.dockercfg',
+        '.s3cfg': '/home/u/.s3cfg',
+        '*.ppk': '/r/deploy.ppk',
+        '*.jks': '/r/app.jks',
+        '*.keystore': '/r/app.keystore',
+        '*.p8': '/r/key.p8',
         '.npmrc': '/r/.npmrc',
         '.pypirc': '/r/.pypirc',
         '.netrc': '/r/.netrc',
