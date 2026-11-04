@@ -728,7 +728,6 @@ export class GuardedFileSystem {
     const capture = this.#capture?.forPath(validPath);
     try {
       await this.#writeValid(validPath, filePath, content, options, capture);
-      capture?.commit();
       return { validPath };
     } finally {
       // After a commit this does nothing. Any other exit changed nothing, so nothing is reported.
@@ -788,6 +787,18 @@ export class GuardedFileSystem {
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
     const mode = existingMode ?? options.mode;
+    // Called once the bytes have landed, before a descriptor closes: a failed close must not hide them.
+    const recordWrite = (): void => {
+      if (!capture) return;
+      // A string hashes as its UTF-8 bytes, which is what the write stored.
+      const expect = sha256Hex(content);
+      capture.push(
+        saved
+          ? { op: 'write', path: validPath, ...saved, expect }
+          : { op: 'remove', path: validPath, expect },
+      );
+      capture.commit();
+    };
 
     if (inPlace) {
       // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
@@ -808,6 +819,7 @@ export class GuardedFileSystem {
           capture?.commit();
           throw error;
         }
+        recordWrite();
       });
     } else {
       try {
@@ -844,15 +856,7 @@ export class GuardedFileSystem {
         }
         throw error;
       }
-    }
-    if (capture) {
-      // A string hashes as its UTF-8 bytes, which is what the write stored.
-      const expect = sha256Hex(content);
-      capture.push(
-        saved
-          ? { op: 'write', path: validPath, ...saved, expect }
-          : { op: 'remove', path: validPath, expect },
-      );
+      recordWrite();
     }
   }
 
@@ -871,7 +875,6 @@ export class GuardedFileSystem {
     const capture = this.#capture?.forPath(validPath);
     try {
       await this.#appendValid(validPath, filePath, content, options.signal, capture);
-      capture?.commit();
       return { validPath };
     } finally {
       capture?.release();
@@ -948,6 +951,20 @@ export class GuardedFileSystem {
       // that retries is double-appending either way, so the abortable
       // write stays.
       await handle.writeFile(content, { signal });
+      // Before the close in `finally`: a failed close must not hide bytes that landed.
+      if (capture) {
+        capture.push(
+          saved
+            ? {
+                op: 'write',
+                path: validPath,
+                ...saved,
+                expect: sha256Hex(Buffer.concat([saved.bytes, Buffer.from(content, 'utf8')])),
+              }
+            : { op: 'remove', path: validPath, expect: sha256Hex(content) },
+        );
+        capture.commit();
+      }
     } catch (error) {
       // A failed write can leave a prefix of the content behind, which no record
       // covers, so this path is not undoable. A file this call made and removed again leaves nothing.
@@ -967,18 +984,6 @@ export class GuardedFileSystem {
       throw error;
     } finally {
       await handle.close();
-    }
-    if (capture) {
-      capture.push(
-        saved
-          ? {
-              op: 'write',
-              path: validPath,
-              ...saved,
-              expect: sha256Hex(Buffer.concat([saved.bytes, Buffer.from(content, 'utf8')])),
-            }
-          : { op: 'remove', path: validPath, expect: sha256Hex(content) },
-      );
     }
   }
 

@@ -20,7 +20,12 @@ import {
 } from './errors.ts';
 import { joinRoster, pathLabel } from './fmt.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
+import {
+  IS_CASE_INSENSITIVE_FS,
+  IS_WINDOWS,
+  isPathInsideDirectory,
+  normalizeCaseForComparison,
+} from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
 
 /**
@@ -257,7 +262,7 @@ export class UndoCapture {
     if (this.#refused.size === 0) return undefined;
     // A bare name that another path in the call shares would not say which file stayed as written.
     const uses = new Map<string, number>();
-    const others = this.records.map((r) => (r.op === 'rename' ? r.to : r.path));
+    const others = this.journalRecords().map((r) => (r.op === 'rename' ? r.to : r.path));
     for (const path of [...this.#refused.keys(), ...others]) {
       uses.set(pathLabel(path), (uses.get(pathLabel(path)) ?? 0) + 1);
     }
@@ -268,14 +273,22 @@ export class UndoCapture {
     return joinRoster(lines, '; ');
   }
 
-  /** What an undo id restores: the folder of a refused path stays, since that path still sits in it. */
+  /**
+   * What an undo id restores. A refused path stays as it is: no record may change
+   * it, as when a call reaches one file through a link, or remove a folder it sits in.
+   */
   journalRecords(): UndoRecord[] {
     if (this.#refused.size === 0) return this.records;
-    const kept = [...this.#refused.keys()];
-    return this.records.filter(
-      (record) =>
-        record.op !== 'rmdir' || !kept.some((path) => isPathInsideDirectory(record.path, path)),
-    );
+    const paths = [...this.#refused.keys()];
+    const refused = new Set(paths.map(normalizeCaseForComparison));
+    return this.records.filter((record) => {
+      if (record.op === 'rmdir') {
+        return !paths.some((path) => isPathInsideDirectory(record.path, path));
+      }
+      return !refused.has(
+        normalizeCaseForComparison(record.op === 'rename' ? record.to : record.path),
+      );
+    });
   }
 
   /**

@@ -1,9 +1,18 @@
 import type { Client } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
-import { rename as fsRename, link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import fsModule, {
+  rename as fsRename,
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, type TestContext } from 'node:test';
 
 import type * as z from 'zod/v4';
 
@@ -493,6 +502,114 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await assert.rejects(readFile(a, 'utf8'));
     assert.strictEqual(await readFile(b, 'utf8'), 'b');
     cap.release();
+  });
+
+  it('journalRecords drops every record that would change a refused path', () => {
+    const refusedPath = join(tmpDir, 'refused-record.txt');
+    const other = join(tmpDir, 'other-record.txt');
+    const identity = { dev: 0n, ino: 0n, birthtimeNs: 0n };
+    const records: UndoRecord[] = [
+      { op: 'remove', path: refusedPath, expect: 'x' },
+      { op: 'write', path: refusedPath, bytes: Buffer.alloc(1), mode: 0o644, expect: null },
+      { op: 'rename', from: other, to: refusedPath, identity },
+      { op: 'remove', path: other, expect: 'x' },
+    ];
+    const cap = capture();
+    const saved = cap.forPath(other);
+    saved.push(...records);
+    saved.commit();
+    const refused = cap.forPath(refusedPath);
+    refused.abandon('no');
+    refused.commit();
+    assert.deepStrictEqual(cap.journalRecords(), [{ op: 'remove', path: other, expect: 'x' }]);
+    cap.release();
+  });
+
+  it('a file written twice, then refused, has no record left to undo', async () => {
+    const file = join(tmpDir, 'written-twice.txt');
+    const big = 'x'.repeat(4000);
+    const cap = new UndoJournal(2000).beginCapture();
+    const fs = makeFs(cap);
+    await fs.writeFile(file, big);
+    await fs.writeFile(file, big);
+    assert.strictEqual(cap.unavailableReason(), 'written-twice.txt: too large to keep for undo');
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
+  });
+
+  it('a refused file then written again does not go back to the refused write', async () => {
+    const file = join(tmpDir, 'refused-then-saved.txt');
+    await writeFile(file, 'x'.repeat(4000));
+    const cap = new UndoJournal(2000).beginCapture();
+    const fs = makeFs(cap);
+    await fs.writeFile(file, 'small');
+    await fs.writeFile(file, 'smaller');
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'refused-then-saved.txt: too large to keep for undo',
+    );
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
+  });
+
+  describe('when the file handle will not close', () => {
+    const failClose = (t: TestContext): (() => void) => {
+      const realOpen = fsModule.open.bind(fsModule);
+      t.mock.method(fsModule, 'open', async (...args: Parameters<typeof fsModule.open>) => {
+        const handle = await realOpen(...args);
+        const close = handle.close.bind(handle);
+        handle.close = async () => {
+          await close();
+          throw new Error('close failed');
+        };
+        return handle;
+      });
+      syncBuiltinESMExports();
+      return () => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      };
+    };
+
+    it('a refused in-place write still reports', async (t) => {
+      const file = join(tmpDir, 'close-write.txt');
+      await writeFile(file, 'x'.repeat(4000));
+      await link(file, join(tmpDir, 'close-write-twin.txt'));
+      const cap = new UndoJournal(2000).beginCapture();
+      const restore = failClose(t);
+      await assert.rejects(makeFs(cap).writeFile(file, 'new'), /close failed/u);
+      restore();
+      assert.strictEqual(await readFile(file, 'utf8'), 'new');
+      assert.strictEqual(cap.unavailableReason(), 'close-write.txt: too large to keep for undo');
+      cap.release();
+    });
+
+    it('a refused append still reports', async (t) => {
+      const file = join(tmpDir, 'close-append.txt');
+      await writeFile(file, 'x'.repeat(4000));
+      const cap = new UndoJournal(2000).beginCapture();
+      const restore = failClose(t);
+      await assert.rejects(makeFs(cap).appendFile(file, 'more'), /close failed/u);
+      restore();
+      assert.ok((await readFile(file, 'utf8')).endsWith('more'));
+      assert.strictEqual(cap.unavailableReason(), 'close-append.txt: too large to keep for undo');
+      cap.release();
+    });
+
+    it('an append that made a file keeps its one record', async (t) => {
+      const file = join(tmpDir, 'close-append-new.txt');
+      const cap = capture();
+      const restore = failClose(t);
+      await assert.rejects(makeFs(cap).appendFile(file, 'new'), /close failed/u);
+      restore();
+      assert.strictEqual(await readFile(file, 'utf8'), 'new');
+      assert.strictEqual(cap.unavailableReason(), undefined);
+      assert.deepStrictEqual(
+        cap.records.map((r) => r.op),
+        ['remove'],
+      );
+      cap.release();
+    });
   });
 
   it('journalRecords does not depend on which path committed first', () => {
@@ -2796,6 +2913,36 @@ describe('undo tool over the wire', () => {
       assert.notStrictEqual(undone.isError, true);
       await assert.rejects(lstat(top));
       assert.ok((await readFile(log, 'utf8')).endsWith('more'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('a create that reaches one file through a link does not delete it on undo', async (t) => {
+    const tmp = await createTestRoot();
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
+    try {
+      const real = join(tmp, 'real');
+      const alias = join(tmp, 'alias');
+      const kept = join(tmp, 'kept.txt');
+      await mkdir(real);
+      if (!(await trySymlink(real, alias, () => t.skip('no symlink privilege')))) return;
+      const content = 'x'.repeat(4000);
+      const created = await call(pair.client, 'create', {
+        files: [
+          { path: join(real, 'f.txt'), content, overwrite: true },
+          { path: join(alias, 'f.txt'), content, overwrite: true },
+          { path: kept, content: 'kept', overwrite: true },
+        ],
+      });
+      const meta = created.structuredContent as { undo?: string; undoUnavailable?: string };
+      assert.match(meta.undoUnavailable ?? '', /f\.txt: too large to keep for undo$/u);
+
+      const undone = await call(pair.client, 'undo', { id: meta.undo });
+      assert.notStrictEqual(undone.isError, true);
+      assert.strictEqual(await readFile(join(real, 'f.txt'), 'utf8'), content);
+      await assert.rejects(lstat(kept));
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
