@@ -29,7 +29,7 @@ type SearchContentPageMetadata = SearchResultValue['summary'] & { readonly root:
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to search, or directory to search under (default: the whole first allowed root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
+    'File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
   ),
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
