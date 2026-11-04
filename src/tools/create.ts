@@ -16,7 +16,6 @@ import {
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import {
-  destExists,
   destIdentity,
   type EntryIdentity,
   sameIdentity,
@@ -250,7 +249,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
           !append &&
           !overwrite &&
           pending === undefined &&
-          (await destExists(ctx.fs, resolvedTarget, 'create'))
+          (await destIdentity(ctx.fs, resolvedTarget, 'create')) !== undefined
         ) {
           throw new FsError(
             ErrorCode.CANCELLED,

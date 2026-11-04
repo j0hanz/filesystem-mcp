@@ -27,7 +27,6 @@ import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import {
   atomicTempPath,
-  destExists,
   destIdentity,
   GuardedFileSystem,
   identityOf,
@@ -2064,11 +2063,11 @@ describe('GuardedFileSystem.stat', () => {
     },
   );
 
-  it('STAT-FD-006: destExists counts a refused stat as present', async () => {
+  it('STAT-FD-006: destIdentity counts a refused stat as present', async () => {
     const refused = new FsError(ErrorCode.ACCESS_DENIED, 'refused', 'x');
     const refusingFs = { stat: () => Promise.reject(refused) };
-    assert.strictEqual(await destExists(refusingFs, 'x', 'test'), true);
-    assert.strictEqual(await destExists(fs, join(root, 'never-created.txt'), 'test'), false);
+    assert.notStrictEqual(await destIdentity(refusingFs, 'x', 'test'), undefined);
+    assert.strictEqual(await destIdentity(fs, join(root, 'never-created.txt'), 'test'), undefined);
   });
 
   it(
@@ -2168,9 +2167,9 @@ describe('GuardedFileSystem.stat', () => {
     },
   );
 
-  it('STAT-FD-010: destExists counts a path under a regular file as absent', async () => {
+  it('STAT-FD-010: destIdentity counts a path under a regular file as absent', async () => {
     const file = await writeTestFile(root, 'plain-file.txt', 'x');
-    assert.strictEqual(await destExists(fs, join(file, 'child.txt'), 'test'), false);
+    assert.strictEqual(await destIdentity(fs, join(file, 'child.txt'), 'test'), undefined);
   });
 
   it('STAT-FD-011: destIdentity names the landing of an existing file', async () => {

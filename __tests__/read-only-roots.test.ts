@@ -248,23 +248,6 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     assert.equal(await readFile(protectedFile, 'utf8'), 'original');
   });
 
-  it('RO-COPY-FILTER-001: preserves a caller-supplied fs.cp filter', async () => {
-    const source = join(ro, 'filtered-source');
-    const destination = join(rw, 'filtered-destination');
-    await mkdir(source);
-    await writeFile(join(source, 'keep.txt'), 'keep');
-    await writeFile(join(source, 'skip.txt'), 'skip');
-
-    const fs = new GuardedFileSystem(await guardFor([]));
-    await copyVia(fs, source, destination, {
-      recursive: true,
-      filter: (sourcePath) => !sourcePath.endsWith('skip.txt'),
-    });
-
-    assert.equal(await readFile(join(destination, 'keep.txt'), 'utf8'), 'keep');
-    assert.equal(existsSync(join(destination, 'skip.txt')), false);
-  });
-
   it('RO-MOVE-DESC-001: refuses directory moves that populate a missing protected subtree', async () => {
     const source = join(rw, 'move-source');
     const destination = join(rw, 'move-destination');

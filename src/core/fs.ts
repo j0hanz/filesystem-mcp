@@ -127,8 +127,6 @@ export interface TransferPlan {
   readonly destination: string;
   /** What sat at the destination when planned; undefined when absent or a Respelling. */
   readonly existing: EntryIdentity | undefined;
-  /** Copy only: extra `fs.cp` options over the fixed copy defaults; the walks honour its filter. */
-  readonly copy?: Parameters<typeof fsCp>[2];
 }
 
 export interface ExecuteTransferOptions {
@@ -138,8 +136,6 @@ export interface ExecuteTransferOptions {
   readonly crossDevice?: boolean;
   readonly signal?: AbortSignal;
 }
-
-type CopyFilter = NonNullable<NonNullable<Parameters<typeof fsCp>[2]>['filter']>;
 
 /**
  * The validation regime: what an operation does to a path decides which
@@ -244,8 +240,7 @@ export class GuardedFileSystem {
    * missing destination holds no link). Every entry must keep its
    * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
    * any other non-directory, has nothing under it to relocate. A directory
-   * that cannot be listed fails closed. A copy's `filter` prunes what it
-   * would not copy, as `fs.cp` does: a refused directory takes its subtree.
+   * that cannot be listed fails closed.
    * `fs.cp` stats a link to type it, which opens the target, so anything that
    * copies (a copy, or a move with `acrossDevices`) refuses a link to a network
    * or device path; a rename follows nothing.
@@ -256,7 +251,6 @@ export class GuardedFileSystem {
     requestedFrom: string,
     destination: string,
     signal?: AbortSignal,
-    filter?: CopyFilter,
     acrossDevices = false,
   ): Promise<void> {
     const refuseRemoteLink = async (path: string): Promise<void> => {
@@ -272,7 +266,6 @@ export class GuardedFileSystem {
     const entryStats = await fsLstat(entry);
     if (copying && entryStats.isSymbolicLink()) await refuseRemoteLink(entry);
     if (!entryStats.isDirectory()) return;
-    if (filter && !(await filter(entry, destination))) return;
     // A missing destination holds no link, so only the read-only rule can differ
     // per entry, and it reads no disk. Its ancestors can still change while a
     // Confirmation is open, so that rule runs under where it lands, resolved once.
@@ -303,7 +296,6 @@ export class GuardedFileSystem {
         for (const dirent of dirents) {
           signal?.throwIfAborted();
           const name = rel === '' ? dirent.name : join(rel, dirent.name);
-          if (filter && !(await filter(join(entry, name), join(destination, name)))) continue;
           if (copying && dirent.isSymbolicLink()) await refuseRemoteLink(join(entry, name));
           await relocate(join(destination, name));
           yield name;
@@ -519,7 +511,7 @@ export class GuardedFileSystem {
   async planTransfer(
     op: TransferOp,
     pair: { source: string; destination: string },
-    { signal, copy }: { signal?: AbortSignal; copy?: Parameters<typeof fsCp>[2] } = {},
+    { signal }: { signal?: AbortSignal } = {},
   ): Promise<TransferPlan> {
     const { entry, landing } = await this.#transferSource(op, pair.source, signal);
     const { destination, kind } = await this.pathGuard.resolveTransferDestination(
@@ -533,7 +525,6 @@ export class GuardedFileSystem {
       entry,
       landing,
       destination,
-      ...(op === 'copy' && copy ? { copy } : {}),
     };
     // A copy onto its own Respelling is the same file; the same rename is
     // real work for a move and proceeds.
@@ -549,7 +540,7 @@ export class GuardedFileSystem {
     }
     // On the final destination spelling: a re-spelled directory moves its
     // entries in or out of a spelling-specific allow or deny rule.
-    await this.#relocationWalk(op, entry, pair.source, destination, signal, copy?.filter);
+    await this.#relocationWalk(op, entry, pair.source, destination, signal);
     const existing = respelling ? undefined : await destIdentity(this, destination, op);
     return { ...base, noop: false, respelling, existing };
   }
@@ -587,7 +578,7 @@ export class GuardedFileSystem {
         );
       }
     }
-    await this.#relocationWalk(op, entry, request.source, destination, signal, plan.copy?.filter);
+    await this.#relocationWalk(op, entry, request.source, destination, signal);
     if (!plan.respelling) {
       const now = await destIdentity(this, destination, op);
       if (plan.existing === undefined && now !== undefined) {
@@ -607,7 +598,7 @@ export class GuardedFileSystem {
       }
     }
     if (createParents) await this.mkdir(dirname(destination), { recursive: true });
-    if (op === 'copy') await this.#copy(entry, destination, plan.copy);
+    if (op === 'copy') await this.#copy(entry, destination);
     else await this.#move(plan, crossDevice);
     return done;
   }
@@ -1017,11 +1008,7 @@ export class GuardedFileSystem {
   }
 
   /** The copy half of `executeTransfer`. */
-  async #copy(
-    source: string,
-    destination: string,
-    options: Parameters<typeof fsCp>[2] | undefined,
-  ): Promise<void> {
+  async #copy(source: string, destination: string): Promise<void> {
     const validSource = await this.#guard('probe', source);
     const validDest = await this.#guard('write', destination);
     // Undoing a forced cp means telling new files apart from overwritten ones
@@ -1029,31 +1016,19 @@ export class GuardedFileSystem {
     // ponytail: upgrade path is snapshotting destination entries here before
     // fsCp, the way snapshotTree does.
     this.#capture?.abandon('copies are not undoable yet');
-    const callerFilter = options?.filter;
     // One file copied over one existing file stages instead: fs.cp with force
     // unlinks the destination before it copies, so a failed copy lost the old
     // bytes. The staged copy renames into place, leaving the destination
     // untouched on any failure (and no temporary file behind).
-    if (!callerFilter && (await fileOverFile(validSource, validDest))) {
-      return this.#copyIntoPlace(validSource, validDest, options);
-    }
+    const kind = await bothOfKind(validSource, validDest);
+    if (kind === 'file') return this.#copyIntoPlace(validSource, validDest);
     // A directory merged into an existing one cannot stage as a whole (a
     // rename never merges), so it walks: only the entries that would lose old
     // bytes stage; everything else copies exactly as the plain cp did.
-    // recursive: false keeps the plain cp's refusal of a directory copy.
-    if (
-      !callerFilter &&
-      options?.force !== false &&
-      options?.recursive !== false &&
-      (await directoryIntoDirectory(validSource, validDest))
-    ) {
-      return this.#copyMerging(validSource, validDest, options);
-    }
+    if (kind === 'directory') return this.#copyMerging(validSource, validDest);
     await fsCp(validSource, validDest, {
       ...TRANSFER_COPY_OPTIONS,
-      ...options,
-      filter: async (sourcePath, destinationPath) => {
-        if (callerFilter && !(await callerFilter(sourcePath, destinationPath))) return false;
+      filter: async (_sourcePath, destinationPath) => {
         await this.#guard('relocate', destinationPath);
         return true;
       },
@@ -1070,10 +1045,10 @@ export class GuardedFileSystem {
     // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.#guard('delete', source);
     const validDest = await this.#guard('write', destination);
-    await this.#relocationWalk('move', validSource, label, validDest, undefined, undefined, true);
+    await this.#relocationWalk('move', validSource, label, validDest, undefined, true);
     let copied = false;
     try {
-      await this.#copyIntoPlace(validSource, validDest, undefined);
+      await this.#copyIntoPlace(validSource, validDest);
       copied = true;
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
@@ -1103,14 +1078,9 @@ export class GuardedFileSystem {
    * beside `validDest`, then rename it into place. That rename stays on one
    * device, so it refuses what a plain rename would (a non-empty directory is
    * never merged into), and a partial copy never reaches the destination. The
-   * staging directory is removed either way. The caller's copy options ride
-   * along, over the defaults, so an overwrite honors them as a plain cp did.
+   * staging directory is removed either way.
    */
-  async #copyIntoPlace(
-    validSource: string,
-    validDest: string,
-    options: Parameters<typeof fsCp>[2] | undefined,
-  ): Promise<void> {
+  async #copyIntoPlace(validSource: string, validDest: string): Promise<void> {
     // Not validated on its own: it sits under the validated destination's
     // parent, and the denylist has ruled on the destination, which a rooted
     // allow or deny entry names exactly and the staged spelling would miss.
@@ -1124,7 +1094,6 @@ export class GuardedFileSystem {
         recursive: true,
         verbatimSymlinks: true,
         preserveTimestamps: true,
-        ...options,
       });
       // Raw, not this.rename: both ends are validated, and the guarded rename
       // would read a relative link that now resolves to the destination as a
@@ -1148,13 +1117,9 @@ export class GuardedFileSystem {
    * merged destination directory keeps the source's times, as `fs.cp` set
    * them.
    */
-  async #copyMerging(
-    validSource: string,
-    validDest: string,
-    options: Parameters<typeof fsCp>[2] | undefined,
-  ): Promise<void> {
+  async #copyMerging(validSource: string, validDest: string): Promise<void> {
     try {
-      await this.#copyMergedDir(validSource, validDest, options);
+      await this.#copyMergedDir(validSource, validDest);
     } catch (error) {
       rethrowIfAborted(error);
       const baseProblem = Problem.fromUnknown(error, ErrorCode.UNKNOWN, validSource);
@@ -1167,14 +1132,9 @@ export class GuardedFileSystem {
     }
   }
 
-  async #copyMergedDir(
-    source: string,
-    destination: string,
-    options: Parameters<typeof fsCp>[2] | undefined,
-  ): Promise<void> {
+  async #copyMergedDir(source: string, destination: string): Promise<void> {
     const dirents = await fsReaddir(source, { withFileTypes: true });
-    const preserveTimestamps = options?.preserveTimestamps ?? true;
-    const sourceStats = preserveTimestamps ? await fsLstat(source) : undefined;
+    const sourceStats = await fsLstat(source);
     for (const dirent of dirents) {
       const srcChild = join(source, dirent.name);
       const destChild = join(destination, dirent.name);
@@ -1190,13 +1150,12 @@ export class GuardedFileSystem {
         // not steer the staged rename outside the roots. The delegated
         // branch's filter revalidates its entries the same way.
         await this.#guard('relocate', destChild);
-        await this.#copyIntoPlace(srcChild, destChild, options);
+        await this.#copyIntoPlace(srcChild, destChild);
       } else if (dirent.isDirectory() && destStats?.isDirectory()) {
-        await this.#copyMergedDir(srcChild, destChild, options);
+        await this.#copyMergedDir(srcChild, destChild);
       } else {
         await fsCp(srcChild, destChild, {
           ...TRANSFER_COPY_OPTIONS,
-          ...options,
           filter: async (_sourcePath, destinationPath) => {
             await this.#guard('relocate', destinationPath);
             return true;
@@ -1204,9 +1163,7 @@ export class GuardedFileSystem {
         });
       }
     }
-    if (sourceStats) {
-      await fsUtimes(destination, sourceStats.atime, sourceStats.mtime);
-    }
+    await fsUtimes(destination, sourceStats.atime, sourceStats.mtime);
   }
 
   async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
@@ -1507,31 +1464,22 @@ export function crossDeviceStagingPath(validDest: string): string {
 }
 
 /**
- * True when a copy hands one regular file over one existing regular file: the
- * one shape where a forced `fs.cp` unlinks the destination and a failure
- * after that loses the old bytes. Everything else — directories, missing
- * ends, links at either end — keeps the plain cp path it had.
+ * The kind both ends of a copy share, for the two shapes that can lose old bytes:
+ * a file over a file (a forced `fs.cp` unlinks the destination first, so a failure
+ * after that loses it) and a directory into a directory (a whole-tree `fs.cp`
+ * overwrites entry by entry). Anything else, links and missing ends included, keeps
+ * the plain cp path.
  */
-async function fileOverFile(source: string, destination: string): Promise<boolean> {
+async function bothOfKind(
+  source: string,
+  destination: string,
+): Promise<'file' | 'directory' | undefined> {
   try {
     const [src, dst] = await Promise.all([fsLstat(source), fsLstat(destination)]);
-    return src.isFile() && dst.isFile();
+    if (src.isFile() && dst.isFile()) return 'file';
+    return src.isDirectory() && dst.isDirectory() ? 'directory' : undefined;
   } catch {
-    return false;
-  }
-}
-
-/**
- * True when a copy merges one directory into an existing one: the tree shape
- * where a whole-tree `fs.cp` overwrites existing files entry by entry and a
- * failure loses old bytes.
- */
-async function directoryIntoDirectory(source: string, destination: string): Promise<boolean> {
-  try {
-    const [src, dst] = await Promise.all([fsLstat(source), fsLstat(destination)]);
-    return src.isDirectory() && dst.isDirectory();
-  } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -1600,16 +1548,4 @@ export async function destIdentity(
     Logger.warn(`${label}: dest stat failed unexpectedly for "${path}": ${String(err)}`);
     return UNKNOWN_IDENTITY;
   }
-}
-
-/**
- * Returns whether `path` exists, treating "not found" as absent. Used for TOCTOU
- * re-checks between plan and execute phases; see `destIdentity` for refused stats.
- */
-export async function destExists(
-  fs: Pick<GuardedFileSystem, 'stat'>,
-  path: string,
-  label: string,
-): Promise<boolean> {
-  return (await destIdentity(fs, path, label)) !== undefined;
 }
