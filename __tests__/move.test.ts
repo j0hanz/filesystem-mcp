@@ -8,6 +8,7 @@ import fsPromises, {
   readFile,
   readlink,
   rename,
+  rmdir,
   stat,
   utimes,
   writeFile,
@@ -19,6 +20,7 @@ import { after, before, describe, it } from 'node:test';
 import type * as z from 'zod/v4';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { PathGuard } from '../src/core/path.ts';
 import { MOVE } from '../src/tools/move.ts';
 import { READ } from '../src/tools/read.ts';
 import {
@@ -866,5 +868,105 @@ describe('move body', () => {
       assert.strictEqual(await readFile(join(root, 'indX2'), 'utf-8'), 'X\n');
       assert.strictEqual(await readFile(join(root, 'indY2'), 'utf-8'), 'Y\n');
     });
+  });
+});
+
+describe('relocation walk', () => {
+  let root: string;
+  let outside: string;
+  before(async () => {
+    root = await createTestRoot();
+    outside = await createTestRoot();
+  });
+  after(async () => {
+    await cleanupTestRoot(root);
+    await cleanupTestRoot(outside);
+  });
+
+  const guardFor = async (readOnlyDirs: string[] = []): Promise<PathGuard> => {
+    const guard = new PathGuard({ cliAllowedDirs: [root], readOnlyDirs });
+    await guard.recomputeAllowedDirectories();
+    return guard;
+  };
+
+  it('checks the disk once, not per entry, when the destination is missing', async (t) => {
+    const guard = await guardFor();
+    const spy = t.mock.method(guard, 'validateTransferPathForWrite');
+    for (const n of ['1', '2', '3']) await writeTestFile(root, `pkg/${n}.txt`, n);
+    await new GuardedFileSystem(guard).planTransfer('move', {
+      source: join(root, 'pkg'),
+      destination: join(root, 'a', 'b', 'pkg2'),
+    });
+    assert.strictEqual(spy.mock.callCount(), 1);
+  });
+
+  it('refuses when a link redirects the destination into a read-only folder after the plan', async (t) => {
+    const guard = await guardFor([join(root, 'rt-target', 'new', 'sub')]);
+    const x = await writeTestFile(root, 'rt/sub/x.txt', 'x');
+    const parent = join(root, 'rt-parent');
+    await mkdir(parent);
+    await mkdir(join(root, 'rt-target'));
+    const fs = new GuardedFileSystem(guard);
+    const plan = await fs.planTransfer('move', {
+      source: join(root, 'rt'),
+      destination: join(parent, 'new'),
+    });
+    await rmdir(parent);
+    if (!(await trySymlink(join(root, 'rt-target'), parent, () => t.skip('no symlinks')))) return;
+    await assert.rejects(fs.executeTransfer(plan), { code: 'ACCESS_DENIED' });
+    await access(x);
+  });
+
+  it('still refuses an entry landing in a read-only folder', async () => {
+    const guard = await guardFor([join(root, 'out', 'pkg2', 'sub')]);
+    const x = await writeTestFile(root, 'ro/sub/x.txt', 'x');
+    await assert.rejects(
+      new GuardedFileSystem(guard).planTransfer('move', {
+        source: join(root, 'ro'),
+        destination: join(root, 'out', 'pkg2'),
+      }),
+      { code: 'ACCESS_DENIED' },
+    );
+    await access(x);
+  });
+
+  it('still refuses when an entry would change protection', async () => {
+    const guard = await guardFor();
+    await writeTestFile(root, '.aws/credentials', 'key');
+    await assert.rejects(
+      new GuardedFileSystem(guard).planTransfer('move', {
+        source: join(root, '.aws'),
+        destination: join(root, 'plain'),
+      }),
+      { code: 'ACCESS_DENIED' },
+    );
+  });
+
+  it('keeps the full check for a copy into an existing folder', async (t) => {
+    const guard = await guardFor();
+    const spy = t.mock.method(guard, 'validateTransferPathForWrite');
+    for (const n of ['1', '2']) await writeTestFile(root, `cp/${n}.txt`, n);
+    await mkdir(join(root, 'cpdest'));
+    await new GuardedFileSystem(guard).planTransfer('copy', {
+      source: join(root, 'cp'),
+      destination: join(root, 'cpdest'),
+    });
+    assert.strictEqual(spy.mock.callCount(), 2);
+  });
+
+  it('refuses a merge through a link in the destination', async (t) => {
+    const guard = await guardFor();
+    await writeTestFile(root, 'mg/sub/x.txt', 'x');
+    await mkdir(join(root, 'mgdest'));
+    if (!(await trySymlink(outside, join(root, 'mgdest', 'sub'), () => t.skip('no symlinks')))) {
+      return;
+    }
+    await assert.rejects(
+      new GuardedFileSystem(guard).planTransfer('copy', {
+        source: join(root, 'mg'),
+        destination: join(root, 'mgdest'),
+      }),
+      { code: 'ACCESS_DENIED' },
+    );
   });
 });

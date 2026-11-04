@@ -383,7 +383,8 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     const edit = (path: string) =>
       harness.client.callTool(
         { name: 'edit', arguments: { path, edits: [{ oldText: 'HEAD', newText: 'HEAD2' }] } },
-        { timeout: 5000 },
+        // Rewriting 10 MB took 2.6 to 4.1 s on Windows CI, and over 5 s once.
+        { timeout: 30_000 },
       );
     const bigResult = await edit(big);
     assert.ok(!bigResult.isError, firstTextBlock(bigResult).text);

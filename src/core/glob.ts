@@ -469,6 +469,12 @@ export interface GlobEntriesOptions {
    * directories to probe.
    */
   onDirectory?: (absolutePath: string) => void;
+  /**
+   * Called once per directory `skipIgnored` pruned by a default name that has no
+   * leading dot and that `.gitignore` does not already ignore: the folders a
+   * caller would not expect to be skipped. Gets the posix path relative to `cwd`.
+   */
+  onExcludedDir?: (posixRelativePath: string) => void;
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
@@ -714,9 +720,11 @@ function createWalkFilter(
   signal: AbortSignal | undefined,
   pathGuard: Pick<PathGuard, 'isSensitive'> | undefined,
   onDirectory: ((absolutePath: string) => void) | undefined,
+  onExcludedDir: ((posixRelativePath: string) => void) | undefined,
 ): WalkFilter {
   // fs.glob asks once per pattern variant, so a directory is asked about repeatedly.
   const reportedDirs = new Set<string>();
+  const reportedExcluded = new Set<string>();
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
   // name also exists in the process cwd. Resolving against `cwd` names the
@@ -769,7 +777,22 @@ function createWalkFilter(
       if (!isPathInsideDirectory(cwd, absoluteOf(match))) return true;
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
-      if (excluded(posixRel, isDir)) return true;
+      if (excluded(posixRel, isDir)) {
+        if (isDir && onExcludedDir && !reportedExcluded.has(posixRel)) {
+          const name = posixRel.slice(posixRel.lastIndexOf('/') + 1);
+          if (
+            isDefaultExcludedName(name) &&
+            !name.startsWith('.') &&
+            !sensitiveDir(match) &&
+            !sensitiveTree(posixRel) &&
+            gitignoreMatcher?.isIgnored(posixRel, true) !== true
+          ) {
+            reportedExcluded.add(posixRel);
+            onExcludedDir(posixRel);
+          }
+        }
+        return true;
+      }
       if (sensitiveDir(match) || sensitiveTree(posixRel)) return true;
       // Stop descent one level past the depth bound. Pruning a directory *at*
       // the bound would drop it where fs.glob treats it as top-level, so prune
@@ -823,6 +846,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     signal,
     options.pathGuard,
     options.onDirectory,
+    options.onExcludedDir,
   );
 
   const iterable = fsGlob(await Promise.all(patterns.map((p) => foldPatternInWalk(p, cwd))), {
