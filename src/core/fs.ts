@@ -975,16 +975,18 @@ export class GuardedFileSystem {
     const validPath = await this.#guard('delete', filePath);
     // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
     // recursive rm can fail halfway with files already gone.
-    const capture = this.#capture;
+    // Its own capture: a path that cannot be saved must not cost its siblings their undo.
+    const capture = this.#capture?.forPath(validPath);
     if (capture) {
       await snapshotTree(capture, this, validPath, signal);
     }
     // The snapshot can run long. A cancel during it stops here, the last point
     // where nothing is gone, and no undo id is offered for a delete that never ran.
     if (signal?.aborted) {
-      capture?.dropUnder(validPath);
+      capture?.release();
       signal.throwIfAborted();
     }
+    capture?.commit();
     await fsRm(validPath, options);
   }
 
@@ -994,12 +996,14 @@ export class GuardedFileSystem {
       ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
       : undefined;
     await fsRmdir(validPath, options);
-    this.#capture?.push({
+    const capture = this.#capture?.forPath(validPath);
+    capture?.push({
       op: 'mkdir',
       path: validPath,
       mode: before && Number(before.mode) & 0o777,
       was: before && fileIdentityOf(before),
     });
+    capture?.commit();
   }
 
   async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {

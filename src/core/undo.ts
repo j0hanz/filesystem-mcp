@@ -18,6 +18,7 @@ import {
   Problem,
   unlessMissing,
 } from './errors.ts';
+import { joinRoster, pathLabel } from './fmt.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS, isPathInsideDirectory } from './path-utils.ts';
 import { getMaxUndoBytes, sha256Hex } from './util.ts';
@@ -227,6 +228,10 @@ interface LivePool {
 export class UndoCapture {
   readonly records: UndoRecord[] = [];
   #unavailable: string | undefined;
+  /** `<path>: <reason>` for each path that lost its own undo; the rest of the call keeps theirs. */
+  readonly #refused: string[] = [];
+  /** Set on a `forPath` capture: where `commit` hands its records. */
+  #owner: { parent: UndoCapture; path: string } | undefined;
   #bytes = 0;
   /** Part of #bytes reserved for reads still in flight; a write record's push draws it down. */
   #reserved = 0;
@@ -243,9 +248,43 @@ export class UndoCapture {
     this.#pool.bytes += n;
   }
 
-  /** The abandon reason once this capture is unavailable, else undefined; the undo suffix reports it. */
+  /**
+   * The abandon reason once this capture is unavailable, or the paths that lost
+   * their own undo, else undefined; the undo suffix reports it.
+   */
   unavailableReason(): string | undefined {
-    return this.#unavailable;
+    if (this.#unavailable !== undefined) return this.#unavailable;
+    return this.#refused.length > 0 ? joinRoster(this.#refused, '; ') : undefined;
+  }
+
+  /**
+   * A capture for one path of a parallel batch, so abandoning it costs only that
+   * path's undo. End it with `commit()`, or `release()` when the path never ran.
+   */
+  forPath(path: string): UndoCapture {
+    const own = new UndoCapture(this.maxBytes, this.#pool);
+    own.#unavailable = this.#unavailable;
+    own.#owner = { parent: this, path };
+    return own;
+  }
+
+  /** Hand this path's records and charge to the call, or report why it has none. */
+  commit(): void {
+    if (this.#owner === undefined) return;
+    const { parent, path } = this.#owner;
+    if (this.#unavailable !== undefined || parent.#unavailable !== undefined) {
+      if (parent.#unavailable === undefined) {
+        parent.#refused.push(`${pathLabel(path)}: ${String(this.#unavailable)}`);
+      }
+      this.release();
+      return;
+    }
+    // One at a time: a large tree overflows the call stack if spread into `push`.
+    for (const record of this.records) parent.records.push(record);
+    parent.#bytes += this.#bytes;
+    parent.#reserved += this.#reserved;
+    this.#bytes = 0;
+    this.#reserved = 0;
   }
 
   /** Return this capture's charge to the shared pool; call when the call ends. */
@@ -282,26 +321,6 @@ export class UndoCapture {
     // release(): a read reserved before the abandon may still be in flight.
     this.#pool.bytes -= this.#bytes - this.#reserved;
     this.#bytes = this.#reserved;
-  }
-
-  /**
-   * Forget what one path's snapshot pushed, when its delete will not run. Only
-   * that path: the rest of a parallel batch may already be gone and still needs
-   * its records. The batch refuses nested paths, so no other entry sits under `dir`.
-   */
-  dropUnder(dir: string): void {
-    // In place: a large batch overflows the call stack if spread into `push`.
-    let kept = 0;
-    for (const record of this.records) {
-      if (record.op === 'rename' || !isPathInsideDirectory(dir, record.path)) {
-        this.records[kept++] = record;
-        continue;
-      }
-      const weight = recordWeight(record);
-      this.#bytes -= weight;
-      this.#pool.bytes -= weight;
-    }
-    this.records.length = kept;
   }
 
   push(...records: UndoRecord[]): void {
