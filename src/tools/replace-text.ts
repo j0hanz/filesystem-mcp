@@ -525,7 +525,13 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     if (stop !== undefined) lines.push(stoppedEarlyLine(stop));
     const skipped = skippedLine(structured);
     if (skipped) lines.push(skipped);
-    if (structured.excludedDirs) lines.push(excludedLine(structured.excludedDirs));
+    if (structured.excludedDirs)
+      lines.push(
+        excludedLine(
+          structured.excludedDirs,
+          (many) => `name ${many ? 'one' : 'it'} as path to rewrite it`,
+        ),
+      );
     if (stop === 'timeout') {
       // A live run writes as it scans, so a timeout leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name

@@ -47,6 +47,17 @@ describe('find_files body', () => {
     assert.strictEqual(structured.filesScanned, 3);
   });
 
+  it('says which default-named folder it skipped', async () => {
+    await writeTestFile(root, 'build/gen.ts', 'x');
+    await writeTestFile(root, 'src/a.ts', 'x');
+    const { text } = await find({ path: root, pattern: '**/*.ts' });
+    assert.ok(
+      (text ?? '').includes(
+        '// skipped 1 folder by default name (build); pass includeIgnored: true to search it.',
+      ),
+    );
+  });
+
   const find = (args: FindArgs, signal?: AbortSignal) =>
     runToolBodyResult(FIND_FILES, args, {
       guard,

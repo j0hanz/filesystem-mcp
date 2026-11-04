@@ -749,6 +749,8 @@ function createWalkFilter(
           if (
             isDefaultExcludedName(name) &&
             !name.startsWith('.') &&
+            !sensitiveDir(match) &&
+            !sensitiveTree(posixRel) &&
             gitignoreMatcher?.isIgnored(posixRel, true) !== true
           ) {
             reportedExcluded.add(posixRel);

@@ -57,7 +57,7 @@ describe('replace_text body', () => {
     const result = await replace({ path: root, searchPattern: 'needle', replacement: 'pin' });
     assert.ok(
       (result.text ?? '').includes(
-        '// skipped 1 folder by default name (build); pass includeIgnored: true to search it.',
+        '// skipped 1 folder by default name (build); name it as path to rewrite it.',
       ),
     );
   });

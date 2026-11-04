@@ -152,11 +152,14 @@ export function skippedLine(counts: SkipCounts): string {
 }
 
 /** `// skipped N folders by default name (...); pass includeIgnored: true ...`. */
-export function excludedLine(excluded: ExcludedDirs): string {
+export function excludedLine(
+  excluded: ExcludedDirs,
+  advice: (many: boolean) => string = (many) =>
+    `pass includeIgnored: true to search ${many ? 'them' : 'it'}`,
+): string {
   const rest = excluded.total - excluded.first.length;
   const more = rest > 0 ? `, +${String(rest)} more` : '';
-  const target = excluded.total === 1 ? 'it' : 'them';
-  return `// skipped ${formatCount(excluded.total, 'folder')} by default name (${excluded.first.join(', ')}${more}); pass includeIgnored: true to search ${target}.`;
+  return `// skipped ${formatCount(excluded.total, 'folder')} by default name (${excluded.first.join(', ')}${more}); ${advice(excluded.total !== 1)}.`;
 }
 
 export function pageTrailer(
