@@ -153,13 +153,20 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // append never destroys, and overwrite: true is that word given up front.
     // A path that fails validation here is left for runOverPaths to report.
     // A file that appears between rounds is asked about again on the retry.
+    // A folder can never be replaced, so no answer could help: it fails below, unasked.
+    const folders = new Set<string>();
     const { results: planned } = await processInParallel(
       files,
       async (entry) => {
-        if (entry.append || entry.overwrite) return undefined;
+        if (entry.append) return undefined;
         try {
           const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
           const identity = await destIdentity(ctx.fs, validPath, 'create');
+          if (identity?.itemType === 'directory') {
+            folders.add(entry.path);
+            return undefined;
+          }
+          if (entry.overwrite) return undefined;
           return identity && { validPath, identity };
         } catch (error) {
           rethrowIfAborted(error);
@@ -207,6 +214,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
     >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
+      if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
       const pending = pendingByPath.get(path);
       if (pending !== undefined) {
         const verdict = confirmed.verdict(pending.validPath);

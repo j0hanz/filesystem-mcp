@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { access, chmod, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import { CREATE } from '../src/tools/create.ts';
@@ -235,6 +236,33 @@ describe('create body', () => {
       assert.strictEqual(past.structured.files[0]?.lineCount, 0);
       assert.strictEqual(count.mock.callCount(), 1, 'no scan past the limit');
     });
+  });
+
+  it('refuses a folder as NOT_FILE without asking', async () => {
+    const dir = join(root, 'a_folder');
+    await mkdir(dir);
+    const other = join(root, 'beside_folder.txt');
+    for (const overwrite of [undefined, true]) {
+      // No confirm option: a prompt makes the harness throw.
+      const result = await create({
+        files: [
+          { path: dir, content: 'x', ...(overwrite ? { overwrite } : {}) },
+          { path: other, content: 'y', overwrite: true },
+        ],
+      });
+      assert.strictEqual(result.structured.failures?.[0]?.error.code, ErrorCode.NOT_FILE);
+      assert.strictEqual(result.structured.files.length, 1, 'the other entry still writes');
+      assert.ok((await stat(dir)).isDirectory());
+    }
+  });
+
+  it('refuses a link to a folder the same way', async (t) => {
+    const dir = join(root, 'link_target');
+    await mkdir(dir);
+    const link = join(root, 'folder_link');
+    if (!(await trySymlink(dir, link, () => t.skip('symlinks not permitted')))) return;
+    const result = await create({ files: [{ path: link, content: 'x' }] });
+    assert.strictEqual(result.structured.failures?.[0]?.error.code, ErrorCode.NOT_FILE);
   });
 
   it('creates a missing file with append:true', async () => {

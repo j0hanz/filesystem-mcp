@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`create` on a folder fails without asking.** A path that is a folder got an "already exists. Overwrite it?" prompt it could never honour, and the write failed after a yes. It now answers `NOT_FILE` at once, with or without `overwrite: true`, and the other entries in the call still run.
 - **Fewer 502s behind a reverse proxy.** Idle HTTP connections closed after 5 s, so a proxy with a longer idle timeout could reuse one the server had already closed. They now stay open 65 s, past the 60 s default of AWS ALB and nginx. The 10 s limit on sending request headers is unchanged.
 - **Appending to a large file no longer scans it.** Every `create` append counted the whole file's lines for its result, while holding the file's write lock: 5.9 s on a 2 GiB log, for an append that took 3 ms. Past the size limit (`FS_MAX_FILE_SIZE`) the count is skipped and `lineCount` is 0.
 - **A cancel during a recursive `delete` keeps the folder.** The delete first saves the tree for undo, and a cancel that landed during that save was ignored, so the folder was removed anyway. It now stops before removing anything, and the call offers no undo id.
