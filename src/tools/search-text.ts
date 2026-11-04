@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { ResultPaths } from '../core/path.ts';
-import { resolveScanScope, type StoppedReason } from '../core/scan.ts';
+import { type ExcludedDirs, resolveScanScope, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -29,7 +29,7 @@ type SearchContentPageMetadata = SearchResultValue['summary'] & { readonly root:
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to search, or directory to search under (default: the whole first allowed root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
+    'File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
   ),
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
@@ -72,6 +72,7 @@ interface SearchOutput {
   skippedInaccessible?: number;
   skippedTooLarge?: number;
   skippedBinary?: number;
+  excludedDirs?: ExcludedDirs;
   truncated?: boolean;
   stoppedReason?: StoppedReason;
   resourceUri?: string;
@@ -144,6 +145,7 @@ function searchContentOutput(
     ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
     ...(metadata.skippedTooLarge ? { skippedTooLarge: metadata.skippedTooLarge } : {}),
     ...(metadata.skippedBinary ? { skippedBinary: metadata.skippedBinary } : {}),
+    ...(metadata.excludedDirs ? { excludedDirs: metadata.excludedDirs } : {}),
     ...(resourceUri !== undefined ? { resourceUri } : {}),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
@@ -265,7 +267,8 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
                 Boolean(
                   structured.stoppedReason ??
                   structured.skippedTooLarge ??
-                  structured.skippedInaccessible,
+                  structured.skippedInaccessible ??
+                  structured.excludedDirs,
                 ) ||
                 (structured.skippedBinary !== undefined &&
                   structured.skippedBinary === structured.filesScanned),
@@ -287,6 +290,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         skippedTooLarge: structured.skippedTooLarge,
         skippedBinary: structured.skippedBinary,
         skippedInaccessible: structured.skippedInaccessible,
+        excludedDirs: structured.excludedDirs,
       });
     return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
   },

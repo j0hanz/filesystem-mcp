@@ -249,7 +249,7 @@ function summaryLine(metadata: ListPageMetadata, totalBytes: number): string {
 const DEFAULT_LIST_DEPTH = 1;
 
 const ListInputSchema = z.strictObject({
-  path: OptionalPath.describe('Directory to list (default: first allowed root)'),
+  path: OptionalPath.describe('Directory to list (default: the only root)'),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
     .default(DEFAULT_LIST_DEPTH)
     .describe(

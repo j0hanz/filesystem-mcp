@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { cli } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
-import type { PathGuard } from '../src/core/path.ts';
+import { PathGuard } from '../src/core/path.ts';
 import { describeSensitivePolicy, SensitiveMatcher } from '../src/core/sensitive.ts';
 import {
   cleanupTestRoot,
@@ -650,10 +650,14 @@ describe('Security (P0)', () => {
         _netrc: '/r/_netrc',
         '.git-credentials': '/r/.git-credentials',
         '.pgpass': '/r/.pgpass',
-        '.aws/credentials': '/home/u/.aws/credentials',
-        '.aws/config': '/home/u/.aws/config',
+        '.ssh/**': '/home/u/.ssh/config',
+        '.gnupg/**': '/home/u/.gnupg/secring.gpg',
+        '.aws/**': '/home/u/.aws/sso/cache/abc.json',
+        '.kube/**': '/home/u/.kube/cache/token',
+        '.vault-token': '/home/u/.vault-token',
+        '.terraform.d/credentials*': '/home/u/.terraform.d/credentials.tfrc.json',
+        '.cargo/credentials*': '/home/u/.cargo/credentials.toml',
         '.docker/config.json': '/home/u/.docker/config.json',
-        '.kube/config': '/home/u/.kube/config',
         'application_default_credentials.json': '/r/application_default_credentials.json',
         '.mcpregistry_*_token': '/r/.mcpregistry_github_token',
         '.git/config': '/r/.git/config',
@@ -670,10 +674,10 @@ describe('Security (P0)', () => {
         '*.pfx': '/r/cert.pfx',
         '*.crt': '/r/cert.crt',
         '*.cer': '/r/cert.cer',
-        '*id_rsa*': '/r/.ssh/id_rsa',
-        '*id_dsa*': '/r/.ssh/id_dsa',
-        '*id_ecdsa*': '/r/.ssh/id_ecdsa',
-        '*id_ed25519*': '/r/.ssh/id_ed25519',
+        '*id_rsa*': '/r/id_rsa',
+        '*id_dsa*': '/r/id_dsa',
+        '*id_ecdsa*': '/r/id_ecdsa',
+        '*id_ed25519*': '/r/id_ed25519',
       };
       await withEnv(
         { FS_ALLOW_SENSITIVE: undefined, FS_DENYLIST: undefined, FS_ALLOWLIST: undefined },
@@ -908,6 +912,58 @@ describe('Security (P0)', () => {
         assert.strictEqual(matcher.isSensitive('/r/secrets/a/b/credentials'), true);
         assert.strictEqual(matcher.isSensitive('/r/credentials'), false);
       });
+    });
+  });
+
+  describe('credential folders', () => {
+    const credentialPaths = [
+      '.ssh/deploy_key',
+      '.ssh/config',
+      '.aws/sso/cache/abc.json',
+      '.gnupg/secring.gpg',
+      '.vault-token',
+      '.terraform.d/credentials.tfrc.json',
+      '.cargo/credentials.toml',
+      '.kube/cache/token',
+    ];
+
+    it('blocks each file', async () => {
+      await withEnv(
+        { FS_ALLOWLIST: undefined, FS_DENYLIST: undefined, FS_ALLOW_SENSITIVE: undefined },
+        () => {
+          const guard = new PathGuard();
+          for (const p of credentialPaths) {
+            assert.strictEqual(guard.isSensitive(join(homedir(), p)), true, p);
+          }
+        },
+      );
+    });
+
+    it('does not block a folder that only ends the same way', async () => {
+      await withEnv(
+        { FS_ALLOWLIST: undefined, FS_DENYLIST: undefined, FS_ALLOW_SENSITIVE: undefined },
+        () => {
+          const guard = new PathGuard();
+          for (const p of ['my.ssh/x', 'not.aws/x', 'vault-token']) {
+            assert.strictEqual(guard.isSensitive(join(homedir(), p)), false, p);
+          }
+        },
+      );
+    });
+
+    it('one allow entry relieves one file', async () => {
+      await withEnv(
+        {
+          FS_ALLOWLIST: '.ssh/known_hosts',
+          FS_DENYLIST: undefined,
+          FS_ALLOW_SENSITIVE: undefined,
+        },
+        () => {
+          const guard = new PathGuard();
+          assert.strictEqual(guard.isSensitive(join(homedir(), '.ssh/known_hosts')), false);
+          assert.strictEqual(guard.isSensitive(join(homedir(), '.ssh/deploy_key')), true);
+        },
+      );
     });
   });
 
