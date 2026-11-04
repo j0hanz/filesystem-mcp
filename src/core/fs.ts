@@ -239,7 +239,9 @@ export class GuardedFileSystem {
   /**
    * The Relocation walk: one pass under a directory `entry` that checks both
    * rules a transfer of it must keep. Every mapped destination must pass the
-   * write check (read-only dirs, the denylist), and every entry must keep its
+   * write check (read-only dirs, the denylist), or, when the destination does
+   * not exist yet, only the read-only rule (the root was validated, and a
+   * missing destination holds no link). Every entry must keep its
    * sensitive-file status (`PathGuard.relocationKeepsProtection`). A link, or
    * any other non-directory, has nothing under it to relocate. A directory
    * that cannot be listed fails closed. A copy's `filter` prunes what it
