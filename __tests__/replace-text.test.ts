@@ -1241,6 +1241,50 @@ describe('replace_text body', () => {
     }
   });
 
+  describe('a run stopped early', () => {
+    const makeFoos = async (dir: string, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await writeTestFile(dir, `f${String(i).padStart(2, '0')}.txt`, 'foo\n'.repeat(10));
+      }
+    };
+
+    it('warns after the default match cap', async () => {
+      const dir = join(root, 'stopped-default-cap');
+      await makeFoos(dir, 30);
+      const result = await replace({ path: dir, searchPattern: 'foo', replacement: 'foobar' });
+      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
+      assert.match(result.text ?? '', /already rewritten/u);
+      assert.match(result.text ?? '', /applies it to them again/u);
+    });
+
+    it('warns after maxFiles', async () => {
+      const dir = join(root, 'stopped-max-files');
+      await makeFoos(dir, 2);
+      const result = await replace({
+        path: dir,
+        searchPattern: 'foo',
+        replacement: 'foobar',
+        maxFiles: 1,
+      });
+      assert.strictEqual(result.structured.stoppedReason, 'maxFiles');
+      assert.match(result.text ?? '', /already rewritten/u);
+      assert.match(result.text ?? '', /applies it to them again/u);
+    });
+
+    it('does not warn on a dry run', async () => {
+      const dir = join(root, 'stopped-dry-run');
+      await makeFoos(dir, 30);
+      const result = await replace({
+        path: dir,
+        searchPattern: 'foo',
+        replacement: 'foobar',
+        dryRun: true,
+      });
+      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
+      assert.doesNotMatch(result.text ?? '', /already rewritten/u);
+    });
+  });
+
   it('a dry run previews through a held write lock; a live run waits for it', async () => {
     const file = await writeTestFile(root, 'locked.txt', 'needle\n');
     const gate = Promise.withResolvers<undefined>();
