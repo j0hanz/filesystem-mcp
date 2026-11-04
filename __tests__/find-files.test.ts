@@ -66,6 +66,15 @@ describe('find_files body', () => {
       ...(signal ? { signal } : {}),
     });
 
+  it('a trailing globstar keeps sensitive and ignored dotfiles out', async () => {
+    await writeTestFile(root, '.gitignore', '*.log\n');
+    await writeTestFile(root, 'a/hooks/.env', 'SECRET=1\n');
+    await writeTestFile(root, 'a/hooks/.noise.log', 'x');
+    await writeTestFile(root, 'a/hooks/.keep', 'x');
+    const { structured } = await find({ pattern: '**/hooks/**', includeHidden: true });
+    assert.deepStrictEqual(structured.results, [{ path: 'a/hooks/.keep' }]);
+  });
+
   it('finds matching files relative to the allowed root', async () => {
     await writeTestFile(root, 'sub/findme.txt', 'x');
     const { structured, text } = await find({ pattern: '**/findme.txt' });

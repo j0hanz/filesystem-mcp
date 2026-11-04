@@ -749,6 +749,46 @@ describe('globEntries characterization', () => {
     );
   });
 
+  it('a pattern ending in a globstar finds dot entries with includeHidden', async () => {
+    const root = await createTestRoot();
+    try {
+      const files = [
+        '.h/hooks/.inner',
+        'a/hooks/.d/x.txt',
+        'a/hooks/.dot',
+        'a/hooks/n.txt',
+        'a/hooks/sub/.deep',
+      ];
+      for (const file of files) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      for (const pattern of ['**/hooks/**', '**/{hooks,lib}/**', '**/hooks/**/*']) {
+        assert.deepStrictEqual(
+          await walk({ cwd: root, pattern, skipIgnored: true, includeHidden: true }),
+          files,
+          pattern,
+        );
+      }
+      const wildcard = await walk({
+        cwd: root,
+        pattern: '*/hooks/**',
+        skipIgnored: true,
+        includeHidden: true,
+      });
+      assert.deepStrictEqual(
+        wildcard.filter((path) => path.startsWith('a/')),
+        files.slice(1),
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/hooks/**', skipIgnored: true, includeHidden: false }),
+        ['a/hooks/n.txt'],
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('a default-excluded name below a dot-directory is excluded too', async () => {
     const root = await createTestRoot();
     try {

@@ -645,6 +645,8 @@ function addFirstDotSegment(patterns: Set<string>, prefix: string, remainder: st
   }
 }
 
+const TRAILING_GLOBSTAR_RE = /^(.+\/)\*\*(?:\/\*)?$/u;
+
 function expandHiddenGlobstars(patterns: Set<string>, prefix: string, remainder: string): void {
   // Trailing bare globstar — `src/**`, `**` (remainder is exactly `**`, no
   // following segment). The pattern itself already matches every non-dot
@@ -656,6 +658,14 @@ function expandHiddenGlobstars(patterns: Set<string>, prefix: string, remainder:
     return;
   }
 
+  // A globstar ending a longer remainder (`**/hooks/**`, `*/hooks/**/*`) skips
+  // the same two complements under its stem.
+  const stem = TRAILING_GLOBSTAR_RE.exec(remainder)?.[1];
+  if (stem) {
+    patterns.add(`${prefix}${stem}**/.*`);
+    patterns.add(`${prefix}${stem}**/.*/**`);
+  }
+
   if (!remainder.startsWith('**/')) return;
 
   const afterGlobstar = remainder.slice(3);
@@ -665,6 +675,10 @@ function expandHiddenGlobstars(patterns: Set<string>, prefix: string, remainder:
   // unroll did: contents of dot-directories anywhere, and dotfiles/dotdirs
   // anywhere (when the first segment after the globstar can match a dot).
   patterns.add(`${prefix}**/.*/**/${afterGlobstar}`);
+  if (stem?.startsWith('**/')) {
+    patterns.add(`${prefix}**/.*/**/${stem.slice(3)}**/.*`);
+    patterns.add(`${prefix}**/.*/**/${stem.slice(3)}**/.*/**`);
+  }
   const [firstSegment = '', ...rest] = afterGlobstar.split(SEP);
   const dotted = dotVariant(firstSegment);
   if (dotted) patterns.add(`${prefix}**/${[dotted, ...rest].join(SEP)}`);

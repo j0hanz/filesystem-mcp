@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`includeHidden` reaches dotfiles under `**/name/**`.** `find_files`, `search_text` and `replace_text` skipped them silently when a wildcard came before a trailing globstar. `replace_text` with such a pattern and `includeHidden: true` now also changes those files.
+
 ## [2.16.0] - 2026-11-04
 
 A hardening release. Network paths and more credential files are refused, one
