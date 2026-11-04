@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { crossDeviceStagingPath, GuardedFileSystem, type RawOps } from '../src/core/fs.ts';
 import type { PathGuard } from '../src/core/path.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard, trySymlink, withEnv } from './helpers.ts';
 
 const errno = (code: string): NodeJS.ErrnoException =>
@@ -128,6 +129,58 @@ describe('rename across devices (EXDEV)', () => {
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
     );
     assert.deepStrictEqual(await readdir(root), []);
+  });
+
+  it('a cross-device move costs only its own undo', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    const captured = new GuardedFileSystem(guard, cap, exdevOnce());
+    const [x, y] = [join(root, 'x.txt'), join(root, 'y.txt')];
+    await writeFile(x, 'x');
+    await writeFile(y, 'y');
+    await captured.rename(x, join(root, 'x-dest.txt'));
+    await captured.rename(y, join(root, 'y-dest.txt'));
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'x-dest.txt: a move across devices is not undoable yet',
+    );
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op === 'rename' && basename(r.from)),
+      ['y.txt'],
+    );
+    cap.release();
+  });
+
+  it('a cross-device move whose source removal fails still reports the lost undo', async () => {
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    const stuck = new GuardedFileSystem(
+      guard,
+      cap,
+      exdevOnce({ rm: () => Promise.reject(errno('EPERM')) }),
+    );
+    const x = join(root, 'x.txt');
+    await writeFile(x, 'x');
+    await assert.rejects(stuck.rename(x, join(root, 'x-dest.txt')));
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'x-dest.txt: a move across devices is not undoable yet',
+    );
+    cap.release();
+  });
+
+  it('a cross-device move whose copy fails reports nothing', async () => {
+    const x = join(root, 'x.txt');
+    await writeFile(x, 'x');
+    const cap = new UndoJournal(1024 * 1024).beginCapture();
+    // The source vanishes between validation and the copy, so the copy fails.
+    const vanishing = new GuardedFileSystem(guard, cap, {
+      rename: async () => {
+        await rm(x);
+        throw errno('EXDEV');
+      },
+    });
+    await assert.rejects(vanishing.rename(x, join(root, 'x-dest.txt')));
+    assert.strictEqual(cap.unavailableReason(), undefined);
+    cap.release();
   });
 
   it('copy ok but remove failed says the destination holds a copy', async () => {

@@ -667,46 +667,54 @@ export class GuardedFileSystem {
       : await this.#guard('write', plan.destination);
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
-    const capture = this.#capture;
-    let saved: SavedFile | undefined;
-    if (capture && !plan.respelling) {
-      try {
-        const dest = await unlessMissing(fsLstat(validNew));
-        if (dest === undefined) {
-          // absent: nothing to save, the rename record alone restores it.
-        } else if (dest.isDirectory()) {
-          capture.abandon('move replaced a directory');
-        } else if (dest.isFile()) {
-          saved = await saveOld(capture, this, validNew, dest);
-        } else {
-          capture.abandon('could not inspect the move destination');
-        }
-      } catch {
-        capture.abandon('could not read the old content');
-      }
-    }
+    // Its own capture: a destination that cannot be saved must not cost its siblings their undo.
+    const capture = this.#capture?.forPath(validNew);
     try {
-      await this.#rawRename(validOld, validNew);
-    } catch (error: unknown) {
-      rethrowIfAborted(error);
-      if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
-      await this.#moveAcrossDevices(validOld, validNew, plan.request.source);
-      return;
-    }
-    // ponytail: the rename check is identity only. A moved directory whose
-    // contents changed after the move is still moved back; upgrade by hashing
-    // the tree under `to` before recording it.
-    if (this.#capture) {
-      if (saved) this.#capture.push({ op: 'write', path: validNew, ...saved, expect: null });
-      const identity = await fsLstat(validNew, { bigint: true }).then(
-        fileIdentityOf,
-        () => undefined,
-      );
-      if (identity !== undefined) {
-        this.#capture.push({ op: 'rename', from: validOld, to: validNew, identity });
-      } else {
-        this.#capture.abandon('could not inspect the moved entry');
+      let saved: SavedFile | undefined;
+      if (capture && !plan.respelling) {
+        try {
+          const dest = await unlessMissing(fsLstat(validNew));
+          if (dest === undefined) {
+            // absent: nothing to save, the rename record alone restores it.
+          } else if (dest.isDirectory()) {
+            capture.abandon('move replaced a directory');
+          } else if (dest.isFile()) {
+            saved = await saveOld(capture, this, validNew, dest);
+          } else {
+            capture.abandon('could not inspect the move destination');
+          }
+        } catch {
+          capture.abandon('could not read the old content');
+        }
       }
+      try {
+        await this.#rawRename(validOld, validNew);
+      } catch (error: unknown) {
+        rethrowIfAborted(error);
+        if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
+        capture?.abandon('a move across devices is not undoable yet');
+        await this.#moveAcrossDevices(validOld, validNew, plan.request.source, capture);
+        return;
+      }
+      // ponytail: the rename check is identity only. A moved directory whose
+      // contents changed after the move is still moved back; upgrade by hashing
+      // the tree under `to` before recording it.
+      if (capture) {
+        if (saved) capture.push({ op: 'write', path: validNew, ...saved, expect: null });
+        const identity = await fsLstat(validNew, { bigint: true }).then(
+          fileIdentityOf,
+          () => undefined,
+        );
+        if (identity !== undefined) {
+          capture.push({ op: 'rename', from: validOld, to: validNew, identity });
+        } else {
+          capture.abandon('could not inspect the moved entry');
+        }
+        capture.commit();
+      }
+    } finally {
+      // After a commit this does nothing. Any other exit changed nothing, so nothing is reported.
+      capture?.release();
     }
   }
 
@@ -1091,7 +1099,12 @@ export class GuardedFileSystem {
    * copy into place on the destination's device, and only then remove the
    * source.
    */
-  async #moveAcrossDevices(source: string, destination: string, label: string): Promise<void> {
+  async #moveAcrossDevices(
+    source: string,
+    destination: string,
+    label: string,
+    capture: UndoCapture | undefined,
+  ): Promise<void> {
     // Validated again after the failed rename, as the public copy helper did:
     // an ancestor swapped for a link in between must not steer the copy.
     const validSource = await this.#guard('delete', source);
@@ -1101,6 +1114,8 @@ export class GuardedFileSystem {
     try {
       await this.#copyIntoPlace(validSource, validDest);
       copied = true;
+      // The destination has changed by now, so a failed source removal still reports.
+      capture?.commit();
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
       await this.#guard('delete', validSource);
@@ -1136,8 +1151,6 @@ export class GuardedFileSystem {
     // parent, and the denylist has ruled on the destination, which a rooted
     // allow or deny entry names exactly and the staged spelling would miss.
     const staged = crossDeviceStagingPath(validDest);
-    // As in cp: a forced copy across a merged tree cannot be told apart for undo.
-    this.#capture?.abandon('copies are not undoable yet');
     const stagingDir = dirname(staged);
     await fsMkdir(stagingDir, { mode: 0o700 });
     try {

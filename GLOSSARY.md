@@ -77,8 +77,9 @@ _Avoid_: edit (one tool), transaction, write (`create` also writes)
 The record of a tool call's filesystem changes, held from before the first
 mutation until the result is returned; abandoned, with a reason, when undo
 becomes impossible or not worth the budget. A capture that is unavailable
-records nothing further, and the mutation still runs. Each path of a `delete`
-has its own capture, so abandoning one costs only that path's undo.
+records nothing further, and the mutation still runs. Each path a call changes
+has its own capture, so abandoning one costs only that path's undo; a copy
+abandons the whole call.
 _Avoid_: undo session, transaction, undo buffer
 
 ## Approval

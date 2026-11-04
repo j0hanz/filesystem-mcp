@@ -35,14 +35,14 @@
 
 ## File Structure
 
-| File                       | Change                                                         |
-| :------------------------- | :------------------------------------------------------------- |
-| `src/core/undo.ts`         | `#refused` becomes a `Map`; add `journalRecords()`             |
-| `src/core/fs.ts`           | Per-operation captures; cross-device reason moves to `#move`   |
-| `src/tools/define.ts`      | `#undoSuffix` journals `journalRecords()`                      |
-| `__tests__/undo.test.ts`   | fs-level and wire tests                                        |
-| `__tests__/move-exdev.test.ts` | Cross-device move costs only its own undo                  |
-| `CHANGELOG.md`, `GLOSSARY.md`, `docs/client-guide.md`, `docs/adr/008-rename-owns-the-cross-device-fallback.md` | Describe the wider behaviour |
+| File                                                                                                           | Change                                                       |
+| :------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------- |
+| `src/core/undo.ts`                                                                                             | `#refused` becomes a `Map`; add `journalRecords()`           |
+| `src/core/fs.ts`                                                                                               | Per-operation captures; cross-device reason moves to `#move` |
+| `src/tools/define.ts`                                                                                          | `#undoSuffix` journals `journalRecords()`                    |
+| `__tests__/undo.test.ts`                                                                                       | fs-level and wire tests                                      |
+| `__tests__/move-exdev.test.ts`                                                                                 | Cross-device move costs only its own undo                    |
+| `CHANGELOG.md`, `GLOSSARY.md`, `docs/client-guide.md`, `docs/adr/008-rename-owns-the-cross-device-fallback.md` | Describe the wider behaviour                                 |
 
 The shared shape for every operation below:
 
@@ -61,10 +61,12 @@ try {
 ### Task 1: One file that can't be saved costs only its own undo (#228)
 
 **Files:**
+
 - Modify: `src/core/fs.ts:708-824` (`writeFile`)
 - Test: `__tests__/undo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `UndoCapture.forPath(path)`, `commit()`, `release()`, `abandon(reason)`.
 - Produces: `GuardedFileSystem.writeFile` keeps its signature. Refusal text is now `<basename>: <reason>`, also for a one-file call.
 
@@ -85,7 +87,10 @@ it('a file over the budget costs only its own undo and returns its charge', asyn
   await fs.writeFile(big, 'new');
   await fs.writeFile(small, 'new');
   assert.strictEqual(cap.unavailableReason(), 'over-budget.txt: too large to keep for undo');
-  assert.deepStrictEqual(cap.records.map((r) => r.op === 'write' && pathLabel(r.path)), ['after-big.txt']);
+  assert.deepStrictEqual(
+    cap.records.map((r) => r.op === 'write' && pathLabel(r.path)),
+    ['after-big.txt'],
+  );
   cap.release();
 });
 
@@ -113,7 +118,10 @@ it('a write that fails part-way reports only that file', async () => {
   // Not a string or Buffer: handle.writeFile throws after the truncate.
   await assert.rejects(fs.writeFile(linked, 42 as unknown as string));
   assert.strictEqual(cap.unavailableReason(), 'partway-linked.txt: the write failed part-way');
-  assert.deepStrictEqual(cap.records.map((r) => r.op === 'write' && pathLabel(r.path)), ['partway-kept.txt']);
+  assert.deepStrictEqual(
+    cap.records.map((r) => r.op === 'write' && pathLabel(r.path)),
+    ['partway-kept.txt'],
+  );
   cap.release();
 });
 ```
@@ -130,12 +138,18 @@ In `describe('undo tool over the wire')`, next to the `delete` test at line 2324
 ```ts
 for (const [tool, args] of [
   ['replace_text', (root: string) => ({ path: root, searchPattern: 'old', replacement: 'new' })],
-  ['edit', (_root: string, small: string, big: string) => ({
-    files: [small, big].map((path) => ({ path, edits: [{ oldText: 'old', newText: 'new' }] })),
-  })],
-  ['create', (_root: string, small: string, big: string) => ({
-    files: [small, big].map((path) => ({ path, content: 'new', overwrite: true })),
-  })],
+  [
+    'edit',
+    (_root: string, small: string, big: string) => ({
+      files: [small, big].map((path) => ({ path, edits: [{ oldText: 'old', newText: 'new' }] })),
+    }),
+  ],
+  [
+    'create',
+    (_root: string, small: string, big: string) => ({
+      files: [small, big].map((path) => ({ path, content: 'new', overwrite: true })),
+    }),
+  ],
 ] as const) {
   it(`${tool}: one file over the budget stays as written, the other is restored`, async () => {
     // small.txt holds 'old'; big.txt holds 'old' + 4000 'x'; FS_MAX_UNDO_BYTES is 2000.
@@ -202,12 +216,14 @@ Body: `Closes #228`, `Refs #227`.
 ### Task 2: One create entry that can't be undone costs only its own undo (#229)
 
 **Files:**
+
 - Modify: `src/core/undo.ts:231-258` (`#refused`, `unavailableReason`, `commit`), plus new `journalRecords`
 - Modify: `src/core/fs.ts:485-498` (`mkdir`), `src/core/fs.ts:832-928` (`appendFile`)
 - Modify: `src/tools/define.ts:342-352` (`#undoSuffix`)
 - Test: `__tests__/undo.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1's capture shape.
 - Produces: `UndoCapture.journalRecords(): UndoRecord[]`, the records an undo id restores. It drops each `rmdir` whose folder holds a refused path or is one. It reads final state, so commit order does not matter.
 
@@ -228,14 +244,23 @@ it('undo keeps a folder a refused entry still uses, and removes what survivors m
   await fs.writeFile(b, 'b');
   assert.strictEqual(cap.unavailableReason(), 'b.txt: too many changes to keep for undo');
   const records = cap.journalRecords();
-  assert.deepStrictEqual(records.map((r) => r.op), ['remove']);
+  assert.deepStrictEqual(
+    records.map((r) => r.op),
+    ['remove'],
+  );
 
   const entry = { id: 'x', tool: 'create', createdAt: 0, records };
   const plain = new GuardedFileSystem(ctx.pathGuard);
   const preview = await restoreEntry(entry, plain, { dryRun: true });
   const real = await restoreEntry(entry, plain, { dryRun: false });
-  assert.deepStrictEqual(preview.results.map((r) => pathLabel(r.path)), ['a.txt']);
-  assert.deepStrictEqual(real.results.map((r) => pathLabel(r.path)), ['a.txt']);
+  assert.deepStrictEqual(
+    preview.results.map((r) => pathLabel(r.path)),
+    ['a.txt'],
+  );
+  assert.deepStrictEqual(
+    real.results.map((r) => pathLabel(r.path)),
+    ['a.txt'],
+  );
   assert.deepStrictEqual(real.remaining, []);
   await assert.rejects(readFile(a, 'utf8'));
   assert.strictEqual(await readFile(b, 'utf8'), 'b');
@@ -380,11 +405,13 @@ Body: `Closes #229`, `Refs #227`.
 ### Task 3: One move that can't be saved costs only its own undo (#230)
 
 **Files:**
+
 - Modify: `src/core/fs.ts:657-706` (`#move`), `src/core/fs.ts:1093` (remove the abandon in `#copyIntoPlace`)
 - Test: `__tests__/undo.test.ts`, `__tests__/move-exdev.test.ts`
 - Docs: `CHANGELOG.md`, `GLOSSARY.md`, `docs/client-guide.md`, `docs/adr/008-rename-owns-the-cross-device-fallback.md`
 
 **Interfaces:**
+
 - Consumes: Task 1's capture shape; Task 2's `journalRecords()`.
 - Produces: the new reason `a move across devices is not undoable yet`.
 

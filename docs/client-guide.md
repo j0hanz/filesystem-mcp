@@ -306,9 +306,10 @@ the same data is available as JSON, in one of two places:
   in `structuredContent`, and the text block is the same JSON.
 - Every call that changes files carries `undo` (the undo id) or
   `undoUnavailable` (the reason) in its `_meta`, or in `structuredContent` for
-  `create`. A `delete` can carry both: the id restores the paths it could save,
-  and `undoUnavailable` reads `<path>: <reason>` for each path it could not, with
-  the paths joined by `; `, up to 20 of them.
+  `create`. A call can carry both: the id restores the paths it could save, and
+  `undoUnavailable` reads `<path>: <reason>` for each path it could not, with the
+  paths joined by `; `, up to 20 of them. A move names its destination. A copy
+  reports one reason with no path, and has no id.
 
 So read `result.structuredContent ?? result._meta` (Python:
 `result.structured_content or result.meta`). On 2026-07-28 connections
