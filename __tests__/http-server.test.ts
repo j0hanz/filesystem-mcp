@@ -561,6 +561,50 @@ describe('rate limiting', () => {
   });
 });
 
+describe('FS_TRUST_PROXY wiring', () => {
+  let root: string;
+  let http: HttpTestContext;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+  });
+
+  afterEach(async () => {
+    await http.close();
+    await cleanupTestRoot(root);
+  });
+
+  const forwardedStatuses = async (): Promise<number[]> => {
+    const statuses: number[] = [];
+    for (const ip of ['203.0.113.1', '203.0.113.2']) {
+      const response = await fetch(http.base, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${TEST_API_KEY}`,
+          'X-Forwarded-For': ip,
+        },
+        body: '{}',
+      });
+      await response.text();
+      statuses.push(response.status);
+    }
+    return statuses;
+  };
+
+  it('FS_TRUST_PROXY gives each forwarded client its own limit', async () => {
+    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: '1' });
+    const statuses = await forwardedStatuses();
+    assert.ok(!statuses.includes(429), `statuses: ${statuses.join(',')}`);
+  });
+
+  it('without FS_TRUST_PROXY the header is ignored', async () => {
+    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1' });
+    const statuses = await forwardedStatuses();
+    assert.strictEqual(statuses[1], 429);
+  });
+});
+
 describe('Browser recovery response headers', () => {
   let root: string;
   let http: HttpTestContext;
