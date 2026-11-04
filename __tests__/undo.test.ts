@@ -1464,16 +1464,17 @@ describe('restoreEntry', () => {
     });
 
     it('protection checked on the tree the earlier steps leave', async () => {
-      // `.aws/config` is denylisted by default; `aws-old/config` is not.
+      // `.docker/config.json` is denylisted by default; `docker-old/config.json` is not.
+      // (`.aws` is not used: its folder is itself a credential folder now, so a move refuses.)
       for (const external of [false, true]) {
-        const aws = join(tmpDir, `oracle-policy-${String(external)}`, '.aws');
-        const old = join(dirname(aws), 'aws-old');
-        await mkdir(aws, { recursive: true });
-        await writeFile(join(aws, 'notes.txt'), 'n');
-        const moved = await captureOne((fs) => fs.rename(aws, old));
-        if (external) await writeFile(join(old, 'config'), 'outside the server');
+        const docker = join(tmpDir, `oracle-policy-${String(external)}`, '.docker');
+        const old = join(dirname(docker), 'docker-old');
+        await mkdir(docker, { recursive: true });
+        await writeFile(join(docker, 'notes.txt'), 'n');
+        const moved = await captureOne((fs) => fs.rename(docker, old));
+        if (external) await writeFile(join(old, 'config.json'), 'outside the server');
         const later = await captureOne((fs) =>
-          external ? fs.rm(join(old, 'config')) : fs.writeFile(join(old, 'config'), 'c'),
+          external ? fs.rm(join(old, 'config.json')) : fs.writeFile(join(old, 'config.json'), 'c'),
         );
         const { dry, real } = await previewThenUndo([moved, later]);
         assert.deepStrictEqual(dry, real, `external: ${String(external)}`);
