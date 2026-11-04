@@ -710,8 +710,27 @@ export class GuardedFileSystem {
     content: string | Buffer,
     options: { signal?: AbortSignal | undefined; mode?: number | undefined } = {},
   ): Promise<{ validPath: string }> {
-    const { signal } = options;
     const validPath = await this.#guard('write', filePath);
+    // Its own capture: a file that cannot be saved must not cost its siblings their undo.
+    const capture = this.#capture?.forPath(validPath);
+    try {
+      await this.#writeValid(validPath, filePath, content, options, capture);
+      capture?.commit();
+      return { validPath };
+    } finally {
+      // After a commit this does nothing. Any other exit changed nothing, so nothing is reported.
+      capture?.release();
+    }
+  }
+
+  async #writeValid(
+    validPath: string,
+    filePath: string,
+    content: string | Buffer,
+    options: { signal?: AbortSignal | undefined; mode?: number | undefined },
+    capture: UndoCapture | undefined,
+  ): Promise<void> {
+    const { signal } = options;
 
     const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const tempPath = atomicTempPath(validPath, tempSuffix);
@@ -735,11 +754,11 @@ export class GuardedFileSystem {
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
       // entry is gone — so the capture refuses instead of lying.
-      if (this.#capture) {
+      if (capture) {
         if (!existing.isFile()) {
-          this.#capture.abandon('cannot capture a write over a non-regular file');
+          capture.abandon('cannot capture a write over a non-regular file');
         } else {
-          saved = await saveOld(this.#capture, this, validPath, existing);
+          saved = await saveOld(capture, this, validPath, existing);
         }
       }
     } catch (error) {
@@ -751,7 +770,7 @@ export class GuardedFileSystem {
         Logger.warn(
           `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
         );
-        this.#capture?.abandon('could not read the old content');
+        capture?.abandon('could not read the old content');
       }
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
@@ -771,7 +790,9 @@ export class GuardedFileSystem {
           await handle.writeFile(content);
           await handle.sync();
         } catch (error) {
-          this.#capture?.abandon('the write failed part-way');
+          // The old bytes are gone, so this exit reports.
+          capture?.abandon('the write failed part-way');
+          capture?.commit();
           throw error;
         }
       });
@@ -811,16 +832,15 @@ export class GuardedFileSystem {
         throw error;
       }
     }
-    if (this.#capture) {
+    if (capture) {
       // A string hashes as its UTF-8 bytes, which is what the write stored.
       const expect = sha256Hex(content);
-      this.#capture.push(
+      capture.push(
         saved
           ? { op: 'write', path: validPath, ...saved, expect }
           : { op: 'remove', path: validPath, expect },
       );
     }
-    return { validPath };
   }
 
   /**

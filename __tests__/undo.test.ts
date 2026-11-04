@@ -366,7 +366,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.writeFile(file, 'replacement');
-    assert.strictEqual(cap.unavailableReason(), 'could not read the old content');
+    assert.strictEqual(cap.unavailableReason(), 'write-only.txt: could not read the old content');
     await import('node:fs/promises').then((m) => m.chmod(file, 0o644));
   });
 
@@ -385,7 +385,10 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const cap = capture();
     const fs = makeFs(cap);
     await fs.writeFile(fifo, 'replacement');
-    assert.strictEqual(cap.unavailableReason(), 'cannot capture a write over a non-regular file');
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'pipe.fifo: cannot capture a write over a non-regular file',
+    );
   });
 
   it('win32 only: deleting a directory link whose target is gone abandons', async (t) => {
@@ -406,6 +409,53 @@ describe('UndoCapture via GuardedFileSystem', () => {
       cap.unavailableReason(),
       'dir-link: could not type a link whose target is gone',
     );
+  });
+
+  it('a file over the budget costs only its own undo and returns its charge', async () => {
+    const big = join(tmpDir, 'over-budget.txt');
+    const small = join(tmpDir, 'after-big.txt');
+    await writeFile(big, 'x'.repeat(4000));
+    await writeFile(small, 'old');
+    const cap = new UndoJournal(2000).beginCapture();
+    const fs = makeFs(cap);
+    await fs.writeFile(big, 'new');
+    await fs.writeFile(small, 'new');
+    assert.strictEqual(cap.unavailableReason(), 'over-budget.txt: too large to keep for undo');
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op === 'write' && pathLabel(r.path)),
+      ['after-big.txt'],
+    );
+    cap.release();
+  });
+
+  it('a refused write that never ran reports nothing', async () => {
+    const big = join(tmpDir, 'never-written.txt');
+    await writeFile(big, 'x'.repeat(4000));
+    const cap = new UndoJournal(2000).beginCapture();
+    await assert.rejects(makeFs(cap).writeFile(big, 'new', { signal: AbortSignal.abort() }));
+    assert.strictEqual(cap.unavailableReason(), undefined);
+    assert.deepStrictEqual(cap.records, []);
+    assert.strictEqual(await readFile(big, 'utf8'), 'x'.repeat(4000));
+    cap.release();
+  });
+
+  it('a write that fails part-way reports only that file', async () => {
+    const kept = join(tmpDir, 'partway-kept.txt');
+    const linked = join(tmpDir, 'partway-linked.txt');
+    await writeFile(kept, 'old');
+    await writeFile(linked, 'old');
+    await link(linked, join(tmpDir, 'partway-other-name.txt')); // nlink > 1 writes in place
+    const cap = capture();
+    const fs = makeFs(cap);
+    await fs.writeFile(kept, 'new');
+    // Not a string or Buffer: handle.writeFile throws after the truncate.
+    await assert.rejects(fs.writeFile(linked, 42 as unknown as string));
+    assert.strictEqual(cap.unavailableReason(), 'partway-linked.txt: the write failed part-way');
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op === 'write' && pathLabel(r.path)),
+      ['partway-kept.txt'],
+    );
+    cap.release();
   });
 
   it('a move records the exact file id, so batch siblings stay apart', async () => {
@@ -2345,6 +2395,97 @@ describe('undo tool over the wire', () => {
       assert.notStrictEqual(undone.isError, true);
       assert.strictEqual(await readFile(small, 'utf8'), 'keep');
       await assert.rejects(readFile(big, 'utf8'));
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  const OVERSIZED_WRITES: readonly {
+    readonly tool: string;
+    readonly args: (root: string, small: string, big: string) => Record<string, unknown>;
+    readonly suffix: boolean;
+  }[] = [
+    {
+      tool: 'replace_text',
+      args: (root) => ({ path: root, searchPattern: 'old', replacement: 'new' }),
+      suffix: true,
+    },
+    {
+      tool: 'edit',
+      args: (_root, small, big) => ({
+        files: [small, big].map((path) => ({
+          path,
+          edits: [{ oldText: 'old', newText: 'new' }],
+        })),
+      }),
+      suffix: true,
+    },
+    {
+      tool: 'create',
+      args: (_root, small, big) => ({
+        files: [small, big].map((path) => ({ path, content: 'new', overwrite: true })),
+      }),
+      suffix: false,
+    },
+  ];
+
+  for (const { tool, args, suffix } of OVERSIZED_WRITES) {
+    it(`${tool}: one file over the budget stays as written, the other is restored`, async () => {
+      const tmp = await createTestRoot();
+      const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
+      try {
+        const small = join(tmp, 'small.txt');
+        const big = join(tmp, 'big.txt');
+        await writeFile(small, 'old');
+        await writeFile(big, `old${'x'.repeat(4000)}`);
+
+        const result = await call(pair.client, tool, args(tmp, small, big));
+        assert.notStrictEqual(result.isError, true);
+        const meta = (result.structuredContent ?? result._meta) as {
+          undo?: string;
+          undoUnavailable?: string;
+        };
+        assert.strictEqual(meta.undoUnavailable, 'big.txt: too large to keep for undo');
+        assert.match(meta.undo ?? '', /^[a-z0-9]{4}$/u);
+        if (suffix) {
+          assert.match(
+            (firstTextBlock(result) ?? '').split('\n')[0] ?? '',
+            / · undo [a-z0-9]{4} · not undoable: big\.txt: too large to keep for undo$/u,
+          );
+        }
+        const written = await readFile(big, 'utf8');
+
+        const undone = await call(pair.client, 'undo', { id: meta.undo });
+        assert.notStrictEqual(undone.isError, true);
+        assert.strictEqual(await readFile(small, 'utf8'), 'old');
+        assert.strictEqual(await readFile(big, 'utf8'), written);
+      } finally {
+        await pair.close();
+        await cleanupTestRoot(tmp);
+      }
+    });
+  }
+
+  it('a replace_text in which no file could be saved has no undo id and reports each file', async () => {
+    const tmp = await createTestRoot();
+    const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
+    try {
+      for (const name of ['a.txt', 'b.txt']) {
+        await writeFile(join(tmp, name), `old${'x'.repeat(4000)}`);
+      }
+      const result = await call(pair.client, 'replace_text', {
+        path: tmp,
+        searchPattern: 'old',
+        replacement: 'new',
+      });
+      assert.notStrictEqual(result.isError, true);
+      const meta = result._meta as { undo?: string; undoUnavailable?: string };
+      assert.strictEqual(meta.undo, undefined);
+      assert.deepStrictEqual(meta.undoUnavailable?.split('; ').sort(), [
+        'a.txt: too large to keep for undo',
+        'b.txt: too large to keep for undo',
+      ]);
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
