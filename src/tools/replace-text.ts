@@ -55,8 +55,7 @@ import { defineTool, type ToolCtx } from './define.ts';
 
 const SearchAndReplaceInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — ' +
-      'scope it deliberately, and pair a wide scope with dryRun=true first',
+    'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE root when there is only one; scope it deliberately, and pair a wide scope with dryRun=true first',
   ),
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
@@ -532,23 +531,23 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
           (many) => `name ${many ? 'one' : 'it'} as path to rewrite it`,
         ),
       );
-    if (stop === 'timeout') {
-      // A live run writes as it scans, so a timeout leaves the files it reached
+    if (stop !== undefined && !args.dryRun && structured.summary.succeeded > 0) {
+      // A live run writes as it scans, so any early stop leaves the files it reached
       // rewritten. The paths ship under `_meta`, which the model does not see; name
       // them here, or a re-run of a self-matching replacement applies it twice.
-      if (!args.dryRun && structured.summary.succeeded > 0) {
-        const total = structured.summary.succeeded;
-        const shown = structured.results
-          .filter((x) => !('error' in x))
-          .slice(0, 5)
-          .map((x) => x.path)
-          .join(', ');
-        const more = total > 5 ? `, and ${String(total - 5)} more` : '';
-        lines.push(
-          `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
-            'Re-running the same replacement applies it to them again; exclude them, or use dryRun first.',
-        );
-      }
+      const total = structured.summary.succeeded;
+      const shown = structured.results
+        .filter((x) => !('error' in x))
+        .slice(0, 5)
+        .map((x) => x.path)
+        .join(', ');
+      const more = total > 5 ? `, and ${String(total - 5)} more` : '';
+      lines.push(
+        `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
+          'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
+      );
+    } else if (stop === 'maxMatches' || stop === 'maxFiles') {
+      lines.push(`// Raise ${stop} to reach them.`);
     }
     const hint =
       structured.totalMatches === 0

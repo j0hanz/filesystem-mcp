@@ -886,6 +886,21 @@ describe('replace_text body', () => {
       assert.strictEqual(result.structured.stoppedReason, 'maxFiles');
     });
 
+    it('a dry run stopped by maxFiles keeps the higher-limit advice', async () => {
+      const dir = join(root, 'replace_max_files_advice');
+      await writeTestFile(dir, 'a.txt', 'needle');
+      await writeTestFile(dir, 'b.txt', 'needle');
+      const result = await replace({
+        path: dir,
+        searchPattern: 'needle',
+        replacement: 'pin',
+        dryRun: true,
+        maxFiles: 1,
+      });
+      assert.match(result.text ?? '', /hit the maxFiles limit; later files were not scanned./u);
+      assert.ok((result.text ?? '').includes('// Raise maxFiles to reach them.'));
+    });
+
     it('a named file stops at an explicit maxMatches mid-file', async () => {
       const file = await writeTestFile(root, 'replace_named_cap/a.txt', 'x x x x\n');
       const result = await replace({
@@ -1247,7 +1262,7 @@ describe('replace_text body', () => {
           }
           if (dryRun) {
             assert.doesNotMatch(text, /already rewritten/u);
-            assert.doesNotMatch(text, /A higher timeout/u);
+            assert.doesNotMatch(text, /Raise timeout/u);
             assert.strictEqual(text.match(/scan stopped early/gu)?.length, 1);
             assert.strictEqual(written, 0);
             return;
@@ -1261,6 +1276,50 @@ describe('replace_text body', () => {
         },
       );
     }
+  });
+
+  describe('a run stopped early', () => {
+    const makeFoos = async (dir: string, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await writeTestFile(dir, `f${String(i).padStart(2, '0')}.txt`, 'foo\n'.repeat(10));
+      }
+    };
+
+    it('warns after the default match cap', async () => {
+      const dir = join(root, 'stopped-default-cap');
+      await makeFoos(dir, 30);
+      const result = await replace({ path: dir, searchPattern: 'foo', replacement: 'foobar' });
+      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
+      assert.match(result.text ?? '', /already rewritten/u);
+      assert.match(result.text ?? '', /applies it to them again/u);
+    });
+
+    it('warns after maxFiles', async () => {
+      const dir = join(root, 'stopped-max-files');
+      await makeFoos(dir, 2);
+      const result = await replace({
+        path: dir,
+        searchPattern: 'foo',
+        replacement: 'foobar',
+        maxFiles: 1,
+      });
+      assert.strictEqual(result.structured.stoppedReason, 'maxFiles');
+      assert.match(result.text ?? '', /already rewritten/u);
+      assert.match(result.text ?? '', /applies it to them again/u);
+    });
+
+    it('does not warn on a dry run', async () => {
+      const dir = join(root, 'stopped-dry-run');
+      await makeFoos(dir, 30);
+      const result = await replace({
+        path: dir,
+        searchPattern: 'foo',
+        replacement: 'foobar',
+        dryRun: true,
+      });
+      assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
+      assert.doesNotMatch(result.text ?? '', /already rewritten/u);
+    });
   });
 
   it('a dry run previews through a held write lock; a live run waits for it', async () => {

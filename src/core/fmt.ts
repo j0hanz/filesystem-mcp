@@ -115,9 +115,8 @@ const NARROW = 'That total is a floor, not the count. Narrow path or pattern for
 const STOP_REASON_TEXT: Record<StoppedReason, string> = {
   maxResults: `hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults. ${NARROW}`,
   timeout: `hit the time limit, or the request was cancelled. ${NARROW}`,
-  maxMatches:
-    'hit the maxMatches limit; later matches were not replaced. A higher maxMatches reaches them.',
-  maxFiles: 'hit the maxFiles limit; later files were not scanned. A higher maxFiles reaches them.',
+  maxMatches: 'hit the maxMatches limit; later matches were not replaced.',
+  maxFiles: 'hit the maxFiles limit; later files were not scanned.',
 };
 
 /**

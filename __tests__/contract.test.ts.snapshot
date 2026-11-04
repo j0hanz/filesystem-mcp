@@ -292,7 +292,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "Directory to list (default: first allowed root)",
+            "description": "Directory to list (default: the only root)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -521,7 +521,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE first allowed root — scope it deliberately, and pair a wide scope with dryRun=true first",
+            "description": "File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE root when there is only one; scope it deliberately, and pair a wide scope with dryRun=true first",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -643,7 +643,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to search, or directory to search under (default: the whole first allowed root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
+            "description": "File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -730,7 +730,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "Base directory to search under (default: first allowed root)",
+            "description": "Base directory to search under (default: the only root)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -990,7 +990,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "Directory to list (default: first allowed root)",
+            "description": "Directory to list (default: the only root)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -1138,7 +1138,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to search, or directory to search under (default: the whole first allowed root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
+            "description": "File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -1225,7 +1225,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
         "type": "object",
         "properties": {
           "path": {
-            "description": "Base directory to search under (default: first allowed root)",
+            "description": "Base directory to search under (default: the only root)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
