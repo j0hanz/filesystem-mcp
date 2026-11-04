@@ -993,7 +993,7 @@ export class PathGuard {
    * `entryLockKey`) — by design; the write-side validation still denies
    * those calls.
    */
-  private assertWritable(path: string): void {
+  assertWritable(path: string): void {
     const normalized = normalizePath(path);
     if (!this.isReadOnlyPath(normalized)) return;
     const ro = this.readOnlySpellings.find((dir) => isPathInsideDirectory(dir, normalized));

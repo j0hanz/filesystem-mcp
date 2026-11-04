@@ -255,7 +255,15 @@ export class GuardedFileSystem {
   ): Promise<void> {
     if (!(await fsLstat(entry)).isDirectory()) return;
     if (filter && !(await filter(entry, destination))) return;
-    const relocate = (path: string) => this.#guard('relocate', path);
+    // A missing destination holds no link and was validated: only the
+    // read-only rule can differ per entry, and it reads no disk.
+    const fresh = (await unlessMissing(fsLstat(destination))) === undefined;
+    const relocate = fresh
+      ? (path: string) => {
+          this.pathGuard.assertWritable(path);
+          return Promise.resolve();
+        }
+      : (path: string) => this.#guard('relocate', path);
     async function* names(): AsyncGenerator<string> {
       const pending = [''];
       for (let rel = pending.pop(); rel !== undefined; rel = pending.pop()) {
