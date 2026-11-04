@@ -451,23 +451,34 @@ describe('read body', () => {
 
     const head = await read({ path: file, head: 10, includeHash: true }, { guard });
     const headText = head.text ?? '';
-    assert.match(headText, /^\/\/ truncated: .*"startLine":11,"endLine":20\}$/m);
+    assert.match(
+      headText,
+      /^\/\/ more lines from 11\. Continue: read .*"startLine":11,"endLine":20\}$/m,
+    );
     assert.match(headText, /^\/\/ sha256: [0-9a-f]{64}$/m);
     // The file's own lines survive ahead of the trailer, unaltered.
     assert.ok(headText.startsWith('line1\nline2\n'), headText.slice(0, 40));
-    assert.ok(headText.indexOf('line10') < headText.indexOf('// truncated'));
+    assert.ok(headText.indexOf('line10') < headText.indexOf('// more lines'));
 
     // A whole-file read is not truncated and was not asked for a hash.
     const full = await read({ path: file }, { guard });
     const fullText = full.text ?? '';
-    assert.ok(!fullText.includes('// truncated'), 'a full read is not truncated');
+    assert.ok(!fullText.includes('// more lines'), 'a full read has no more lines');
     assert.ok(!fullText.includes('// sha256'), 'no hash unless includeHash');
 
     // tail has no args that read backwards, so it reports what it showed.
     const tail = await read({ path: file, tail: 10 }, { guard });
     const tailText = tail.text ?? '';
-    assert.match(tailText, /^\/\/ truncated: showing last 10 lines$/m);
+    assert.match(tailText, /^\/\/ more lines above: showing last 10 lines$/m);
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
+  });
+
+  it('a slice ending on the last line carries no trailer', async () => {
+    const file = await writeTestFile(root, 'exact-end.txt', 'a\nb\nc\n');
+    for (const args of [{ head: 3 }, { startLine: 2, endLine: 3 }, { startLine: 2, endLine: 99 }]) {
+      const result = await read({ path: file, ...args }, { guard });
+      assert.ok(!(result.text ?? '').includes('\n// '), JSON.stringify(args));
+    }
   });
 
   it('continuations remain usable beyond line 100,000', async () => {
@@ -489,6 +500,7 @@ describe('read body', () => {
       const file = await writeTestFile(root, 'max-end.txt', `${'z'.repeat(99)}\n`.repeat(20000));
       const first = await read({ path: file, startLine: 1, endLine: 2147483647 }, { guard });
       assert.strictEqual(first.isError, false);
+      assert.match(first.text ?? '', /^\/\/ truncated: More lines remain from /m);
       const continuation = valueOf(first.structured.results[0])?.continuation;
       assert.ok(continuation);
       assert.strictEqual(continuation.args.endLine, 2147483647);

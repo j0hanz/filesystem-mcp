@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`read` no longer calls a complete slice truncated.** `// truncated:` now means the size limit cut the read short.
 - **`includeHidden` reaches dotfiles under `**/name/**`.** `find_files`, `search_text` and `replace_text` skipped them silently when a wildcard came before a trailing globstar. `replace_text` with such a pattern and `includeHidden: true` now also changes those files.
 
 ## [2.16.0] - 2026-11-04

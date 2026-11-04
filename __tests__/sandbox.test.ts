@@ -173,7 +173,7 @@ async function lifecycle(client: Client, root: string, outside: string) {
   assert.ok(content && 'text' in content);
   assert.equal(content.text, original);
   const range = await call(client, 'read', { path, startLine: 2, endLine: 2 });
-  assert.equal(firstTextBlock(range).text?.split('\n\n// truncated:')[0], 'status: draft');
+  assert.equal(firstTextBlock(range).text?.split('\n\n// more lines from')[0], 'status: draft');
   const continuation =
     metadata<Batch<{ continuation: { tool: string; args: Record<string, unknown> } }>>(range)
       .results[0]?.value?.continuation;

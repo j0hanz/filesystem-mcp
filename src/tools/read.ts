@@ -279,23 +279,42 @@ function buildPerPathReadValue(
   };
 }
 
+/** A partial read the size limit cut short, as opposed to a slice returned whole. */
+function wasCut(v: PerPathReadValue): boolean {
+  const asked =
+    v.head ??
+    v.tail ??
+    (v.startLine !== undefined && v.endLine !== undefined
+      ? v.endLine - v.startLine + 1
+      : undefined);
+  return asked === undefined || (v.linesRead ?? 0) < asked;
+}
+
 /**
- * The two facts the model cannot act on without: that lines were dropped, and
- * the exact args to get the next chunk. Both used to live only in the structured
- * half, which no longer reaches the model. Each line is `//` prefixed and set
- * off by a blank line so it cannot be read as file bytes — do not drop either
- * guard.
+ * The two facts the model cannot act on without: that lines remain, and the
+ * exact args to get the next chunk. Both used to live only in the structured
+ * half, which no longer reaches the model. `truncated` means the size limit cut
+ * the read; a slice returned as asked only says more lines remain. Each line is
+ * `//` prefixed and set off by a blank line so it cannot be read as file bytes —
+ * do not drop either guard.
  */
 function readTrailer(v: PerPathReadValue): string[] {
   const lines: string[] = [];
   if (v.continuation) {
+    const args = JSON.stringify(v.continuation.args);
     lines.push(
-      `// truncated: ${v.continuation.hint} Continue: read ${JSON.stringify(v.continuation.args)}`,
+      wasCut(v)
+        ? `// truncated: ${v.continuation.hint} Continue: read ${args}`
+        : `// more lines from ${String(v.continuation.args.startLine)}. Continue: read ${args}`,
     );
   } else if (v.hasMoreLines && v.linesRead !== undefined) {
     // A tail read gets no continuation — there are no args that read *backwards*
-    // — so say what was shown rather than leaving the truncation silent.
-    lines.push(`// truncated: showing last ${String(v.linesRead)} lines`);
+    // — so say what was shown rather than leaving the rest silent.
+    lines.push(
+      wasCut(v)
+        ? `// truncated: showing last ${String(v.linesRead)} lines`
+        : `// more lines above: showing last ${String(v.linesRead)} lines`,
+    );
   }
   if (v.contentHash !== undefined) lines.push(`// sha256: ${v.contentHash}`);
   return lines;
