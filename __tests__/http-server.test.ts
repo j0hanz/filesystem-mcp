@@ -596,10 +596,13 @@ describe('FS_TRUST_PROXY wiring', () => {
     http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: '1' });
     const statuses = await forwardedStatuses();
     assert.ok(!statuses.includes(429), `statuses: ${statuses.join(',')}`);
+    // Each client spent its own single request, so the limiter ran for both.
+    assert.deepStrictEqual(await forwardedStatuses(), [429, 429]);
   });
 
   it('without FS_TRUST_PROXY the header is ignored', async () => {
-    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1' });
+    // Empty, not omitted: bootHttpTest leaves a value the process inherited in place.
+    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: '' });
     const statuses = await forwardedStatuses();
     assert.strictEqual(statuses[1], 429);
   });
