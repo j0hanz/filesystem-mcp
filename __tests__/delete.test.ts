@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { access, lstat, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
-import { DELETE } from '../src/tools/delete.ts';
+import { DELETE, nestedIndexes } from '../src/tools/delete.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
@@ -426,5 +427,26 @@ describe('delete body', () => {
     assert.match(error?.message ?? '', /declined by the user/);
     assert.match(result.text ?? '', /FAILED — Delete cancelled/);
     await access(join(dir, 'sub', 'f.txt'));
+  });
+});
+
+describe('nestedIndexes', () => {
+  const root = resolve('nested-root');
+  const p = (...names: string[]) => names.map((n) => resolve(root, n));
+
+  it('a parent and its child', () => {
+    assert.deepEqual(nestedIndexes(p('a', 'a/b')), new Set([0, 1]));
+  });
+  it('a deep descendant', () => {
+    assert.deepEqual(nestedIndexes(p('a', 'x', 'a/b/c/d')), new Set([0, 2]));
+  });
+  it('a shared name prefix is no nesting', () => {
+    assert.equal(nestedIndexes(p('a', 'ab')).size, 0);
+  });
+  it('case-folded where the filesystem folds', { skip: !IS_CASE_INSENSITIVE_FS }, () => {
+    assert.deepEqual(nestedIndexes(p('A', 'a/b')), new Set([0, 1]));
+  });
+  it('1,000 siblings', () => {
+    assert.equal(nestedIndexes(p(...Array.from({ length: 1000 }, (_, i) => `d${i}`))).size, 0);
   });
 });
