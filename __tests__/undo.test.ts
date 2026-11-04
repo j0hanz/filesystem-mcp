@@ -633,6 +633,20 @@ describe('UndoCapture via GuardedFileSystem', () => {
     }
   });
 
+  it('every mutation works with no capture', async () => {
+    const fs = new GuardedFileSystem(ctx.pathGuard);
+    const dir = join(tmpDir, 'plain', 'deep');
+    const file = join(dir, 'f.txt');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(file, 'one');
+    await fs.writeFile(file, 'two');
+    await fs.appendFile(file, '!');
+    assert.strictEqual(await readFile(file, 'utf8'), 'two!');
+    await fs.rm(file);
+    await fs.rmdir(dir);
+    await assert.rejects(lstat(dir));
+  });
+
   it('a directories entry keeps its folder when a file under it is refused', async () => {
     const folder = join(tmpDir, 'dirs-entry');
     // rmdir + one remove = 1024 bytes; the second remove would make 1536.

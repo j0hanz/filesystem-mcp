@@ -59,7 +59,14 @@ import {
   readProbe,
   WRITE_NOFOLLOW,
 } from './read.ts';
-import { identityOf as fileIdentityOf, plannedMkdirChain, saveOld, snapshotTree } from './undo.ts';
+import {
+  identityOf as fileIdentityOf,
+  NOT_RECORDING,
+  type PathCapture,
+  plannedMkdirChain,
+  saveOld,
+  snapshotTree,
+} from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
@@ -185,6 +192,11 @@ export class GuardedFileSystem {
   }
 
   /** Validate `path` for an operation of `kind`; see GUARD_REGIME. */
+  /** Run one path's mutation under its own capture; with no Capture it records nothing. */
+  #forMutation<T>(path: string, run: (own: PathCapture) => Promise<T>): Promise<T> {
+    return this.#capture ? this.#capture.forMutation(path, run) : run(NOT_RECORDING);
+  }
+
   #guard<K extends GuardKind>(kind: K, path: string): Promise<Guarded<K>> {
     return GUARD_REGIME[kind](this.pathGuard, path) as Promise<Guarded<K>>;
   }
@@ -486,20 +498,12 @@ export class GuardedFileSystem {
     const validPath = await this.#guard('write', filePath);
     // Undo capture: collect the chain of directories this call is about to
     // create (each one currently absent), outermost first.
-    const capture = this.#capture?.forPath(validPath);
-    let created: string[] = [];
-    if (capture) {
-      created = await plannedMkdirChain(capture, validPath);
-    }
-    try {
+    await this.#forMutation(validPath, async (own) => {
+      const created = own.recording ? await plannedMkdirChain(own, validPath) : [];
       await fsMkdir(validPath, options);
-      if (capture) {
-        capture.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
-        capture.commit();
-      }
-    } finally {
-      capture?.release();
-    }
+      own.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
+      own.changed();
+    });
   }
 
   /**
@@ -668,23 +672,22 @@ export class GuardedFileSystem {
     // Undo capture: snapshot the destination before the rename replaces it.
     // A spelling-only rename IS the source; there is no second entry to save.
     // Its own capture: a destination that cannot be saved must not cost its siblings their undo.
-    const capture = this.#capture?.forPath(validNew);
-    try {
+    await this.#forMutation(validNew, async (own) => {
       let saved: SavedFile | undefined;
-      if (capture && !plan.respelling) {
+      if (own.recording && !plan.respelling) {
         try {
           const dest = await unlessMissing(fsLstat(validNew));
           if (dest === undefined) {
             // absent: nothing to save, the rename record alone restores it.
           } else if (dest.isDirectory()) {
-            capture.abandon('move replaced a directory');
+            own.abandon('move replaced a directory');
           } else if (dest.isFile()) {
-            saved = await saveOld(capture, this, validNew, dest);
+            saved = await saveOld(own, this, validNew, dest);
           } else {
-            capture.abandon('could not inspect the move destination');
+            own.abandon('could not inspect the move destination');
           }
         } catch {
-          capture.abandon('could not read the old content');
+          own.abandon('could not read the old content');
         }
       }
       try {
@@ -692,30 +695,27 @@ export class GuardedFileSystem {
       } catch (error: unknown) {
         rethrowIfAborted(error);
         if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
-        capture?.abandon('a move across devices is not undoable yet');
-        await this.#moveAcrossDevices(validOld, validNew, plan.request.source, capture);
+        own.abandon('a move across devices is not undoable yet');
+        await this.#moveAcrossDevices(validOld, validNew, plan.request.source, own);
         return;
       }
       // ponytail: the rename check is identity only. A moved directory whose
       // contents changed after the move is still moved back; upgrade by hashing
       // the tree under `to` before recording it.
-      if (capture) {
-        if (saved) capture.push({ op: 'write', path: validNew, ...saved, expect: null });
+      if (own.recording) {
+        if (saved) own.push({ op: 'write', path: validNew, ...saved, expect: null });
         const identity = await fsLstat(validNew, { bigint: true }).then(
           fileIdentityOf,
           () => undefined,
         );
         if (identity !== undefined) {
-          capture.push({ op: 'rename', from: validOld, to: validNew, identity });
+          own.push({ op: 'rename', from: validOld, to: validNew, identity });
         } else {
-          capture.abandon('could not inspect the moved entry');
+          own.abandon('could not inspect the moved entry');
         }
-        capture.commit();
+        own.changed();
       }
-    } finally {
-      // After a commit this does nothing. Any other exit changed nothing, so nothing is reported.
-      capture?.release();
-    }
+    });
   }
 
   async writeFile(
@@ -725,14 +725,10 @@ export class GuardedFileSystem {
   ): Promise<{ validPath: string }> {
     const validPath = await this.#guard('write', filePath);
     // Its own capture: a file that cannot be saved must not cost its siblings their undo.
-    const capture = this.#capture?.forPath(validPath);
-    try {
-      await this.#writeValid(validPath, filePath, content, options, capture);
-      return { validPath };
-    } finally {
-      // After a commit this does nothing. Any other exit changed nothing, so nothing is reported.
-      capture?.release();
-    }
+    await this.#forMutation(validPath, (own) =>
+      this.#writeValid(validPath, filePath, content, options, own),
+    );
+    return { validPath };
   }
 
   async #writeValid(
@@ -740,7 +736,7 @@ export class GuardedFileSystem {
     filePath: string,
     content: string | Buffer,
     options: { signal?: AbortSignal | undefined; mode?: number | undefined },
-    capture: UndoCapture | undefined,
+    own: PathCapture,
   ): Promise<void> {
     const { signal } = options;
 
@@ -766,11 +762,11 @@ export class GuardedFileSystem {
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
       // entry is gone — so the capture refuses instead of lying.
-      if (capture) {
+      if (own.recording) {
         if (!existing.isFile()) {
-          capture.abandon('cannot capture a write over a non-regular file');
+          own.abandon('cannot capture a write over a non-regular file');
         } else {
-          saved = await saveOld(capture, this, validPath, existing);
+          saved = await saveOld(own, this, validPath, existing);
         }
       }
     } catch (error) {
@@ -782,22 +778,22 @@ export class GuardedFileSystem {
         Logger.warn(
           `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
         );
-        capture?.abandon('could not read the old content');
+        own.abandon('could not read the old content');
       }
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
     const mode = existingMode ?? options.mode;
     // Called once the bytes have landed, before a descriptor closes: a failed close must not hide them.
     const recordWrite = (): void => {
-      if (!capture) return;
+      if (!own.recording) return;
       // A string hashes as its UTF-8 bytes, which is what the write stored.
       const expect = sha256Hex(content);
-      capture.push(
+      own.push(
         saved
           ? { op: 'write', path: validPath, ...saved, expect }
           : { op: 'remove', path: validPath, expect },
       );
-      capture.commit();
+      own.changed();
     };
 
     if (inPlace) {
@@ -815,8 +811,8 @@ export class GuardedFileSystem {
           await handle.sync();
         } catch (error) {
           // The old bytes are gone, so this exit reports.
-          capture?.abandon('the write failed part-way');
-          capture?.commit();
+          own.abandon('the write failed part-way');
+          own.changed();
           throw error;
         }
         recordWrite();
@@ -872,13 +868,10 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const validPath = await this.#guard('write', filePath);
-    const capture = this.#capture?.forPath(validPath);
-    try {
-      await this.#appendValid(validPath, filePath, content, options.signal, capture);
-      return { validPath };
-    } finally {
-      capture?.release();
-    }
+    await this.#forMutation(validPath, (own) =>
+      this.#appendValid(validPath, filePath, content, options.signal, own),
+    );
+    return { validPath };
   }
 
   async #appendValid(
@@ -886,7 +879,7 @@ export class GuardedFileSystem {
     filePath: string,
     content: string,
     signal: AbortSignal | undefined,
-    capture: UndoCapture | undefined,
+    own: PathCapture,
   ): Promise<void> {
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
@@ -906,11 +899,11 @@ export class GuardedFileSystem {
     // append goes over the budget and reads as not undoable.
     // ponytail: upgrade path is a `truncate` record with a streamed after-hash.
     let saved: SavedFile | undefined;
-    if (capture && existing) {
+    if (own.recording && existing) {
       try {
-        saved = await saveOld(capture, this, validPath, existing);
+        saved = await saveOld(own, this, validPath, existing);
       } catch {
-        capture.abandon('could not read the old content');
+        own.abandon('could not read the old content');
       }
     }
     // fs.promises.appendFile takes no signal, so a withAbort race would
@@ -952,8 +945,8 @@ export class GuardedFileSystem {
       // write stays.
       await handle.writeFile(content, { signal });
       // Before the close in `finally`: a failed close must not hide bytes that landed.
-      if (capture) {
-        capture.push(
+      if (own.recording) {
+        own.push(
           saved
             ? {
                 op: 'write',
@@ -963,7 +956,7 @@ export class GuardedFileSystem {
               }
             : { op: 'remove', path: validPath, expect: sha256Hex(content) },
         );
-        capture.commit();
+        own.changed();
       }
     } catch (error) {
       // A failed write can leave a prefix of the content behind, which no record
@@ -978,8 +971,8 @@ export class GuardedFileSystem {
         });
       }
       if (remains) {
-        capture?.abandon('the append failed part-way');
-        capture?.commit();
+        own.abandon('the append failed part-way');
+        own.changed();
       }
       throw error;
     } finally {
@@ -1036,34 +1029,33 @@ export class GuardedFileSystem {
     // Undo capture: the tree snapshot is pushed BEFORE the raw call — a
     // recursive rm can fail halfway with files already gone.
     // Its own capture: a path that cannot be saved must not cost its siblings their undo.
-    const capture = this.#capture?.forPath(validPath);
-    if (capture) {
-      await snapshotTree(capture, this, validPath, signal);
-    }
-    // The snapshot can run long. A cancel during it stops here, the last point
-    // where nothing is gone, and no undo id is offered for a delete that never ran.
-    if (signal?.aborted) {
-      capture?.release();
-      signal.throwIfAborted();
-    }
-    capture?.commit();
-    await fsRm(validPath, options);
+    await this.#forMutation(validPath, async (own) => {
+      if (own.recording) {
+        await snapshotTree(own, this, validPath, signal);
+      }
+      // The snapshot can run long. A cancel during it stops here, the last point
+      // where nothing is gone, and no undo id is offered for a delete that never ran.
+      signal?.throwIfAborted();
+      own.changed();
+      await fsRm(validPath, options);
+    });
   }
 
   async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
     const validPath = await this.#guard('delete', filePath);
-    const before = this.#capture
-      ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
-      : undefined;
-    await fsRmdir(validPath, options);
-    const capture = this.#capture?.forPath(validPath);
-    capture?.push({
-      op: 'mkdir',
-      path: validPath,
-      mode: before && Number(before.mode) & 0o777,
-      was: before && fileIdentityOf(before),
+    await this.#forMutation(validPath, async (own) => {
+      const before = own.recording
+        ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
+        : undefined;
+      await fsRmdir(validPath, options);
+      own.push({
+        op: 'mkdir',
+        path: validPath,
+        mode: before && Number(before.mode) & 0o777,
+        was: before && fileIdentityOf(before),
+      });
+      own.changed();
     });
-    capture?.commit();
   }
 
   async symlink(target: string, linkPath: string, type: 'file' | 'junction'): Promise<void> {
@@ -1108,7 +1100,7 @@ export class GuardedFileSystem {
     source: string,
     destination: string,
     label: string,
-    capture: UndoCapture | undefined,
+    own: PathCapture,
   ): Promise<void> {
     // Validated again after the failed rename, as the public copy helper did:
     // an ancestor swapped for a link in between must not steer the copy.
@@ -1120,7 +1112,7 @@ export class GuardedFileSystem {
       await this.#copyIntoPlace(validSource, validDest);
       copied = true;
       // The destination has changed by now, so a failed source removal still reports.
-      capture?.commit();
+      own.changed();
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
       await this.#guard('delete', validSource);

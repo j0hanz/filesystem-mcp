@@ -36,10 +36,12 @@
 ### Task 1: `forMutation` scope on `UndoCapture`
 
 **Files:**
+
 - Modify: `src/core/undo.ts:233-378`
 - Test: `__tests__/undo.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces, exported from `src/core/undo.ts`:
 
@@ -99,13 +101,76 @@ describe('forMutation settles every exit', () => {
     records: number;
     reason: string | undefined;
   }[] = [
-    { name: 'no change', run: (o) => o.push(record), rejects: false, records: 0, reason: undefined },
-    { name: 'throw before change', run: (o) => { o.push(record); throw boom; }, rejects: true, records: 0, reason: undefined },
-    { name: 'abandon, then throw before change', run: (o) => { o.abandon('no'); throw boom; }, rejects: true, records: 0, reason: undefined },
-    { name: 'change', run: (o) => { o.push(record); o.changed(); }, rejects: false, records: 1, reason: undefined },
-    { name: 'throw after change keeps records', run: (o) => { o.push(record); o.changed(); throw boom; }, rejects: true, records: 1, reason: undefined },
-    { name: 'abandon and change report the path', run: (o) => { o.abandon('no'); o.changed(); throw boom; }, rejects: true, records: 0, reason: 'a: no' },
-    { name: 'a second change hands over once', run: (o) => { o.push(record); o.changed(); o.changed(); }, rejects: false, records: 1, reason: undefined },
+    {
+      name: 'no change',
+      run: (o) => o.push(record),
+      rejects: false,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'throw before change',
+      run: (o) => {
+        o.push(record);
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'abandon, then throw before change',
+      run: (o) => {
+        o.abandon('no');
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: undefined,
+    },
+    {
+      name: 'change',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'throw after change keeps records',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 1,
+      reason: undefined,
+    },
+    {
+      name: 'abandon and change report the path',
+      run: (o) => {
+        o.abandon('no');
+        o.changed();
+        throw boom;
+      },
+      rejects: true,
+      records: 0,
+      reason: 'a: no',
+    },
+    {
+      name: 'a second change hands over once',
+      run: (o) => {
+        o.push(record);
+        o.changed();
+        o.changed();
+      },
+      rejects: false,
+      records: 1,
+      reason: undefined,
+    },
   ];
 
   for (const { name, run, rejects, records, reason } of exits) {
@@ -125,10 +190,13 @@ describe('forMutation settles every exit', () => {
     const journal = new UndoJournal(4000);
     const cap = journal.beginCapture();
     await assert.rejects(
-      cap.forMutation(path, body((own) => {
-        assert.ok(own.reserve(3000));
-        throw boom;
-      })),
+      cap.forMutation(
+        path,
+        body((own) => {
+          assert.ok(own.reserve(3000));
+          throw boom;
+        }),
+      ),
       boom,
     );
     const probe = journal.beginCapture();
@@ -139,11 +207,14 @@ describe('forMutation settles every exit', () => {
 
   it('keeps no records and no second reason when the call was abandoned mid-mutation', async () => {
     const cap = new UndoJournal(1024 * 1024).beginCapture();
-    await cap.forMutation(path, body((own) => {
-      own.push(record);
-      cap.abandon('copies are not undoable yet');
-      own.changed();
-    }));
+    await cap.forMutation(
+      path,
+      body((own) => {
+        own.push(record);
+        cap.abandon('copies are not undoable yet');
+        own.changed();
+      }),
+    );
     assert.strictEqual(cap.records.length, 0);
     assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
     cap.release();
@@ -200,10 +271,12 @@ git commit -m "refactor(undo): add forMutation scope for a path's capture"
 ### Task 2: Run every mutation through the scope
 
 **Files:**
+
 - Modify: `src/core/fs.ts:485-503` (`mkdir`), `:662-719` (`#move`), `:721-866` (`writeFile`, `#writeValid`), `:869-990` (`appendFile`, `#appendValid`), `:1030-1067` (`rm`, `rmdir`), `:1107-1147` (`#moveAcrossDevices`)
 - Test: `__tests__/undo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PathCapture`, `NOT_RECORDING`, `UndoCapture.forMutation` from Task 1.
 - Produces: private `#forMutation<T>(path: string, run: (own: PathCapture) => Promise<T>): Promise<T>` on `GuardedFileSystem`. It calls `this.#capture.forMutation` when there is a Capture, else `run(NOT_RECORDING)`.
 
@@ -236,15 +309,15 @@ Expected: PASS. It passes today and must still pass after the move, because this
 
 Replace `capture` with `own: PathCapture`, and `capture?.x` or `if (capture)` as this table says. Keep existing comments except the repeated `After a commit this does nothing`, which now lives in `forMutation`.
 
-| Mutation | Undo-only work guarded by `own.recording` | `own.changed()` goes |
-| :------------------ | :------------------------------------------ | :--------------------------------------- |
-| `mkdir` | `plannedMkdirChain` | after `fsMkdir`, after the `rmdir` pushes |
-| `#move` | destination save, moved entry's `fsLstat` | after the rename records |
-| `#moveAcrossDevices` | none | where `capture?.commit()` is now |
-| `#writeValid` | `saveOld`, `sha256Hex` in `recordWrite` | where `commit` is now, both exits |
-| `#appendValid` | `saveOld`, `sha256Hex` | where `commit` is now, both exits |
-| `rm` | `snapshotTree` | before `fsRm`, as today |
-| `rmdir` | the `before` lstat | after `fsRmdir` and its push |
+| Mutation             | Undo-only work guarded by `own.recording` | `own.changed()` goes                      |
+| :------------------- | :---------------------------------------- | :---------------------------------------- |
+| `mkdir`              | `plannedMkdirChain`                       | after `fsMkdir`, after the `rmdir` pushes |
+| `#move`              | destination save, moved entry's `fsLstat` | after the rename records                  |
+| `#moveAcrossDevices` | none                                      | where `capture?.commit()` is now          |
+| `#writeValid`        | `saveOld`, `sha256Hex` in `recordWrite`   | where `commit` is now, both exits         |
+| `#appendValid`       | `saveOld`, `sha256Hex`                    | where `commit` is now, both exits         |
+| `rm`                 | `snapshotTree`                            | before `fsRm`, as today                   |
+| `rmdir`              | the `before` lstat                        | after `fsRmdir` and its push              |
 
 `rm` drops its hand-written `capture?.release()`: the abort check becomes `signal?.throwIfAborted()` and the scope releases. `rmdir` now opens the scope before its raw call, which holds no charge.
 
@@ -270,10 +343,12 @@ git commit -m "refactor(fs): run mutations through the capture scope"
 ### Task 3: Remove the old protocol
 
 **Files:**
+
 - Modify: `src/core/undo.ts`
 - Test: `__tests__/delete.test.ts:466-498`, `__tests__/undo.test.ts:518-524`, `:620-624`, `:846-852`
 
 **Interfaces:**
+
 - Consumes: `forMutation`, `PathCapture` from Task 1.
 - Produces: `forPath` becomes private `#forPath`; `commit` is deleted. `release` stays public.
 

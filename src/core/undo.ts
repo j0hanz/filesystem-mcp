@@ -264,14 +264,11 @@ export class UndoCapture implements PathCapture {
   #reserved = 0;
   readonly maxBytes: number;
   readonly #pool: LivePool;
+  readonly recording = true;
 
   constructor(maxBytes: number, pool: LivePool) {
     this.maxBytes = maxBytes;
     this.#pool = pool;
-  }
-
-  get recording(): boolean {
-    return true;
   }
 
   #charge(n: number): void {
