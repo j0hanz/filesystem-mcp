@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-11-05
+
+Easier settings for the Claude Desktop extension, with a folder picker for
+read-only folders, and clearer answers from `read`, `list` and `move`. Before
+upgrading, read Fixed: the registry's Docker entry no longer lists write tools,
+a directory move onto a non-empty directory answers `INVALID_INPUT` without a
+prompt, and `replace_text` with `includeHidden: true` can now change dotfiles
+under `**/name/**`. Read Changed: `search_text` rows from a single-file search no
+longer repeat the path.
+
 ### Added
 
 - **`--read-only-roots` takes any number of read-only folders, one per argument.** Every argument after it is read-only, so it must come last. A folder that does not exist yet is accepted and protected once it appears.
@@ -18,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Claude Desktop extension's settings explain themselves.** They name what is blocked by default, link the full list, and show examples with several items. Saved settings carry over.
 - **The Claude Desktop extension picks read-only folders with a folder picker.** There are no paths or separators to type. Folders saved in the typed field keep working, and both settings apply.
 - **Refusing a secret file names the extension setting.** The message offered only a restart with a flag, which a Claude Desktop user cannot do.
+- **`create` says that `append` adds no newline.** The text is written verbatim, so send the newline as part of the content.
 - **A refused cursor says why it may have gone stale.**
 - **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
 - **`list` says what it left out.** A raised `maxDepth` reports how many directories it did not expand, and a walk that skips ignored folders names them.
