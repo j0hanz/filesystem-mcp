@@ -115,7 +115,8 @@ describe('search_text body', () => {
     await writeTestFile(root, 'pages/a.txt', 'NEEDLE one\n');
     await writeTestFile(root, 'pages/b.txt', 'NEEDLE two\n');
     const { text } = await search({ path: root, searchPattern: 'NEEDLE', maxResults: 1 });
-    assert.doesNotMatch(text ?? '', /\/\/ \d+ matches/u);
+    // Singular and plural: `1 match` would be a count line too.
+    assert.doesNotMatch(text ?? '', /\/\/ \d+ match/u);
     assert.match(text ?? '', /showing 1-/u);
   });
 
@@ -124,6 +125,7 @@ describe('search_text body', () => {
     const { text } = await search({ path: root, searchPattern: 'NEEDLE' });
     assert.match(text ?? '', /No matches/u);
     assert.doesNotMatch(text ?? '', /matches ·/u);
+    assert.doesNotMatch(text ?? '', /\/\/ 0 match/u);
   });
 
   it("honors the allowed root's .gitignore below it", async () => {

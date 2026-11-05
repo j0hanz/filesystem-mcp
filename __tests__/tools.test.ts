@@ -1035,13 +1035,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Raised 2026-11-04 to 21150 full and 10250 read-only: list names .git among its
   // skips, and search_text says a named file prints once; measured 21139 / 10236.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    // Raised from 21,150 for the report-gap wording: create/delete/search_text/
-    // replace_text/undo say what happens without a prompt and how previews
-    // assume reverts; stat's Windows created note still to land (~170 chars).
-    const BUDGET_CHARS = 21_900;
-    // Raised from 10,250 alongside the full budget: search_text's case-default
-    // sentence, with stat's Windows created note still to land.
-    const BUDGET_CHARS_READ_ONLY = 10_550;
+    // Raised 2026-11-05 to 22100 full and 10650 read-only: the report-gap
+    // wording (create, delete, search_text, replace_text, undo, stat) says
+    // what happens without a prompt, how previews assume reverts, and
+    // Windows creation times; measured 21993 / 10579.
+    const BUDGET_CHARS = 22_100;
+    const BUDGET_CHARS_READ_ONLY = 10_650;
 
     const full = await createTestClientPair([tmpDir]);
     try {
