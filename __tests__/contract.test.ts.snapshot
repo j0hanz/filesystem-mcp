@@ -45,7 +45,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "boolean"
                 },
                 "overwrite": {
-                  "description": "Replace an existing file without asking the user; without it an existing file prompts for confirmation",
+                  "description": "Replace an existing file without asking the user; without it an existing file prompts for confirmation. A client that cannot show a prompt fails with INVALID_INPUT and a workaround instead.",
                   "type": "boolean"
                 }
               },
@@ -99,7 +99,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "recursive": {
             "default": false,
-            "description": "Delete directory contents recursively (required for non-empty directories)",
+            "description": "Delete directory contents recursively (required for non-empty directories). Deleting a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT and nothing in the call is deleted.",
             "type": "boolean"
           },
           "ignoreIfNotExists": {
