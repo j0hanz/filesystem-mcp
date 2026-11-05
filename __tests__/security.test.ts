@@ -344,6 +344,16 @@ describe('Security (P0)', () => {
       });
     });
 
+    it('an empty or unfilled FS_ALLOWLIST lifts nothing', async () => {
+      for (const value of ['', '${user_config.allow_patterns}']) {
+        await withEnv({ FS_ALLOWLIST: value }, () => {
+          const matcher = new SensitiveMatcher();
+          assert.strictEqual(matcher.isSensitive('/w/.env'), true);
+          assert.strictEqual(matcher.isSensitive('/w/.env.example'), true);
+        });
+      }
+    });
+
     it('TC-SEC-013: Custom FS_DENYLIST rules', () => {
       const matcher = new SensitiveMatcher(['*.secret']);
       assert.strictEqual(matcher.isSensitive('data.secret'), true, 'Should match custom pattern');

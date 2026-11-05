@@ -23,7 +23,8 @@
       "env": {
         "FS_READ_ONLY": "${user_config.read_only}",
         "FS_READ_ONLY_DIRS": "${user_config.read_only_dirs}",
-        "FS_DENYLIST": "${user_config.deny_patterns}"
+        "FS_DENYLIST": "${user_config.deny_patterns}",
+        "FS_ALLOWLIST": "${user_config.allow_patterns}"
       }
     }
   },
@@ -78,6 +79,13 @@
       "type": "string",
       "title": "Extra blocked files",
       "description": "Comma-separated patterns to block, for example private/**,*.sqlite. Secret files such as .env and private keys are already blocked.",
+      "default": "",
+      "required": false
+    },
+    "allow_patterns": {
+      "type": "string",
+      "title": "Unblocked secret files",
+      "description": "Comma-separated built-in secret-file patterns to unblock, for example .env.example. The AI can then read matching files, so list only what it should see. Extra blocked files always win.",
       "default": "",
       "required": false
     }
