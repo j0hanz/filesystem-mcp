@@ -16,7 +16,7 @@ import { after, afterEach, before, beforeEach, describe, it, type TestContext } 
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode, type Problem } from '../src/core/errors.ts';
+import { ErrorCode, FsError, type Problem } from '../src/core/errors.ts';
 import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { PathGuard } from '../src/core/path.ts';
@@ -3019,6 +3019,32 @@ describe('undo body', () => {
     );
   });
 
+  it('an unknown id points at the dry run, not at the path tools', async () => {
+    await assert.rejects(undo({ id: 'zzzz' }), (error) => {
+      assert.ok(error instanceof FsError);
+      assert.strictEqual(
+        error.problem.suggestion,
+        'Run undo with dryRun: true and no id to list the ids.',
+      );
+      return true;
+    });
+  });
+
+  it('a dry run lists one step per line', async () => {
+    const [a, b] = [join(root, 'lines-a.txt'), join(root, 'lines-b.txt')];
+    await writeFile(a, 'a\n');
+    await writeFile(b, 'b\n');
+    const first = await journaled(EDIT, { path: a, edits: [{ oldText: 'a', newText: 'A' }] });
+    const second = await journaled(EDIT, { path: b, edits: [{ oldText: 'b', newText: 'B' }] });
+
+    const lines = ((await undo({ dryRun: true })).text ?? '').split('\n');
+
+    assert.deepStrictEqual(lines.slice(0, 2), [
+      `undo: ${second} (edit) would revert lines-b.txt [dry run]`,
+      `undo: ${first} (edit) would revert lines-a.txt [dry run]`,
+    ]);
+  });
+
   it('dryRun lists ids, tools and paths without changing bytes', async () => {
     const file = join(root, 'dry.txt');
     await writeFile(file, 'a\n');
@@ -3081,6 +3107,22 @@ describe('undo tool over the wire', () => {
       const result = await call(pair.client, 'undo', {});
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(firstTextBlock(result), 'undo: nothing to undo');
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
+  it('an unknown id reaches the client with its code and hint', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await call(pair.client, 'undo', { id: 'zzzz' });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        firstTextBlock(result),
+        'NOT_FOUND: Unknown or expired undo id "zzzz".\nRun undo with dryRun: true and no id to list the ids.',
+      );
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);

@@ -79,7 +79,11 @@ export async function confirm(
     );
 
   if (sealed === undefined) {
-    assertCanElicit(op, ctx.clientCapabilities);
+    assertCanElicit(
+      op,
+      ctx.clientCapabilities,
+      pending.map((item) => item.path),
+    );
     return freshRound(false);
   }
 

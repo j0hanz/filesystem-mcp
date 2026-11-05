@@ -221,6 +221,65 @@ describe('delete body', () => {
     });
   });
 
+  describe('on a client that cannot confirm', () => {
+    const cannotConfirm = { clientCapabilities: {} };
+
+    it('does not point a non-recursive delete at recursive', async () => {
+      const dir = await nonEmptyDir('del_noconfirm_plain');
+      const result = await del({ paths: [dir] }, cannotConfirm);
+
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(only(result).error?.code, ErrorCode.INVALID_INPUT);
+      assert.match(result.text ?? '', /Directory not empty/);
+      assert.match(result.text ?? '', /Ask the person to delete the folder/);
+      assert.match(result.text ?? '', /Only the person can remove protected files/);
+      assert.doesNotMatch(result.text ?? '', /recursive/);
+      await access(join(dir, 'sub', 'f.txt'));
+    });
+
+    it('refuses a recursive delete with the same way forward', async () => {
+      const dir = await nonEmptyDir('del_noconfirm_recursive');
+      await assert.rejects(del({ paths: [dir], recursive: true }, cannotConfirm), (error) => {
+        assert.ok(error instanceof FsError);
+        assert.strictEqual(error.code, ErrorCode.INVALID_INPUT);
+        assert.match(error.message, /Ask the person to delete the folder/);
+        assert.doesNotMatch(error.message, /Connect a client/);
+        return true;
+      });
+      await access(join(dir, 'sub', 'f.txt'));
+    });
+
+    it('names only the folders that block a batch', async () => {
+      const [a, b] = [await nonEmptyDir('del_noconfirm_a'), await nonEmptyDir('del_noconfirm_b')];
+      const plain = await writeTestFile(root, 'del_noconfirm_plain.txt', 'x');
+      await assert.rejects(
+        del({ paths: [plain, a, b], recursive: true }, cannotConfirm),
+        (error) => {
+          assert.ok(error instanceof FsError);
+          const named = /Applies to: (.+)\.$/u.exec(error.message)?.[1]?.toLowerCase() ?? '';
+          assert.ok(named.includes('del_noconfirm_a'), error.message);
+          assert.ok(named.includes('del_noconfirm_b'), error.message);
+          assert.ok(!named.includes('del_noconfirm_plain'), error.message);
+          return true;
+        },
+      );
+      await access(plain);
+    });
+  });
+
+  for (const [name, clientCapabilities] of [
+    ['declares elicitation', { elicitation: { form: {} } }],
+    ['cannot report its capabilities', undefined],
+  ] as const) {
+    it(`still names recursive when the client ${name}`, async () => {
+      const dir = await nonEmptyDir(`del_canconfirm_${String(clientCapabilities === undefined)}`);
+      const result = await del({ paths: [dir] }, clientCapabilities ? { clientCapabilities } : {});
+
+      assert.strictEqual(only(result).error?.message, 'Directory not empty. Set recursive: true.');
+      await access(join(dir, 'sub', 'f.txt'));
+    });
+  }
+
   it('leaves the directory in place when the user picks Skip', async () => {
     const dir = await nonEmptyDir('del_skip_dir');
     const asked: string[] = [];

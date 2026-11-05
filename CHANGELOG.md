@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`undo` lists one step per line.** A reply covering several calls used to join them on one line with `·`. Each step in a dry run now also ends in `[dry run]`.
+
+### Fixed
+
+- **`delete` errors no longer lead to a dead end.** On a client that cannot confirm, a non-empty folder's error no longer suggests `recursive: true`. Both refusals now say to ask the person to delete the folder, or to agree to emptying it first. Clients that can confirm see no change.
+- **An unknown `undo` id says how to find the ids.** The hint now says to run `undo` with `dryRun: true`. It used to say to verify a path.
+- **`replace_text` diff headers are plain on Windows.** A path shown in full, as with several roots, came out as `"c:\\app\\index.html"`. It now reads `c:/app/index.html`.
+
 ## [2.18.0] - 2026-11-05
 
 Tool replies that say what happened, and refusals and docs that match what the
