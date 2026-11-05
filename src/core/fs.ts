@@ -547,9 +547,6 @@ export class GuardedFileSystem {
         pair.source,
       );
     }
-    if (op === 'move' && !respelling) {
-      await this.#refuseDirectoryMerge(entry, destination, pair.destination);
-    }
     // On the final destination spelling: a re-spelled directory moves its
     // entries in or out of a spelling-specific allow or deny rule.
     await this.#relocationWalk(op, entry, pair.source, destination, signal);
@@ -609,7 +606,7 @@ export class GuardedFileSystem {
         );
       }
       // A destination filled while a Confirmation was open keeps its identity.
-      if (op === 'move') await this.#refuseDirectoryMerge(entry, destination, request.destination);
+      await this.refuseDirectoryMerge(plan);
     }
     if (createParents) await this.mkdir(dirname(destination), { recursive: true });
     if (op === 'copy') await this.#copy(entry, destination);
@@ -634,12 +631,13 @@ export class GuardedFileSystem {
    * A rename never merges directories, so refuse before a prompt or a
    * cross-device copy is spent on one. `entry` is read as itself, since moving
    * a link renames the link; `destination` is already resolved through links.
+   * Not part of `planTransfer`: a batch asks only after its overlap check, as
+   * another pair may be moving this destination away.
    */
-  async #refuseDirectoryMerge(
-    entry: string,
-    destination: string,
-    requested: string,
-  ): Promise<void> {
+  async refuseDirectoryMerge(plan: TransferPlan): Promise<void> {
+    if (plan.op !== 'move' || plan.noop || plan.respelling) return;
+    const { entry, destination } = plan;
+    const requested = plan.request.destination;
     const [source, dest] = await Promise.all([
       unlessMissing(fsLstat(entry)),
       unlessMissing(fsLstat(destination)),

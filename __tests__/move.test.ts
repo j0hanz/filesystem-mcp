@@ -895,6 +895,23 @@ describe('move body', () => {
       await assertUntouched(src, dst);
     });
 
+    it('a chain that moves the full destination away is refused as dependent', async () => {
+      const { dir, src, dst } = await pair('merge_chain');
+      const other = join(dir, 'other');
+      const result = await move({
+        moves: [
+          { source: src, destination: dst },
+          { source: dst, destination: other },
+        ],
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(result.structured.failures?.length, 2);
+      assert.match(result.text ?? '', /one at a time/);
+      assert.doesNotMatch(result.text ?? '', MERGE);
+      await assertUntouched(src, dst);
+      await assert.rejects(lstat(other));
+    });
+
     it('refuses a destination filled while the prompt was open', async () => {
       const dir = join(root, 'merge_late');
       const [src, dst] = [join(dir, 'src'), join(dir, 'dst')];

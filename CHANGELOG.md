@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The docs say what happens when a client cannot ask.** The "Allowed folders" setting and the README promised a prompt; a client that cannot show one gets a refusal. The README also says `overwrite: true` replaces a file without asking.
 - **The `find_files` and `search_text` descriptions mention absolute paths.** A path comes back absolute when a relative one would not read back, and either can be passed to `read`.
+- **A `move` chain batch gets the right refusal.** `[src→dst, dst→other]` with a full `dst` moved `dst` and then refused `src`, saying `dst` was non-empty. Both pairs are now refused with "Issue dependent moves one at a time", and nothing moves.
+- **Refusals name the Claude Desktop extension's settings.** The read-only refusals name "Read-only folders". The secret-file refusal says `--allow-sensitive` applies outside the extension, and that "Extra blocked files" stays blocked.
+- **`--read-only-roots` warns about a folder that does not exist.** The server still starts and protects that path, but a typo no longer goes unnoticed.
+- **The configuration guide and README describe the extension's settings.** They cover "Read-only folders", "Extra blocked files" and "Unblocked secret files".
 
 ## [2.17.0] - 2026-11-05
 

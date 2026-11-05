@@ -6,7 +6,7 @@ import {
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -327,8 +327,31 @@ describe('CLI (real subprocess)', () => {
 
     it('CLI-ROS-005: a missing folder still starts and stays listed', async () => {
       const gone = join(root, 'ros5gone');
-      const config = await printConfig('--read-only-roots', gone);
+      const { code, stdout, stderr } = await runCli([
+        '--print-config',
+        root,
+        '--read-only-roots',
+        gone,
+      ]);
+      assert.strictEqual(code, 0, stderr);
+      const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
       assert.ok(config.readOnlyDirs.includes(normalizePath(gone)));
+      assert.ok(stderr.includes(`Read-only folder not found: ${normalizePath(gone)}`), stderr);
+    });
+
+    it('CLI-ROS-010: a folder that exists logs no warning', async () => {
+      const [folder = ''] = await folders('ros10');
+      const { code, stderr } = await runCli(['--print-config', root, '--read-only-roots', folder]);
+      assert.strictEqual(code, 0, stderr);
+      assert.doesNotMatch(stderr, /Read-only folder not found/);
+    });
+
+    it('CLI-ROS-011: a folder replaced by a file stops the server', async () => {
+      const file = join(root, 'ros11file');
+      await writeFile(file, 'x');
+      const { code, stderr } = await runCli(['--print-config', root, '--read-only-roots', file]);
+      assert.notStrictEqual(code, 0);
+      assert.match(stderr, /is not a directory/);
     });
 
     it('CLI-ROS-006: an option after the list is refused, not taken as a folder', async () => {

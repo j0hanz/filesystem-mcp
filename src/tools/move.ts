@@ -177,22 +177,45 @@ async function runTransfers(
       }
     }
   }
-  const safe: TransferPlan[] = [];
+  const independent: TransferPlan[] = [];
   for (const plan of ready) {
-    if (!overlapping.has(plan)) {
-      safe.push(plan);
+    if (overlapping.has(plan)) {
+      failures.push(
+        pairFailure(
+          plan.request,
+          new FsError(
+            ErrorCode.INVALID_INPUT,
+            `${VERB[op]} cancelled: "${plan.request.source}" or "${plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+            plan.request.source,
+          ),
+        ),
+      );
       continue;
     }
-    failures.push(
-      pairFailure(
-        plan.request,
-        new FsError(
-          ErrorCode.INVALID_INPUT,
-          `${VERB[op]} cancelled: "${plan.request.source}" or "${plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
-          plan.request.source,
-        ),
-      ),
-    );
+    independent.push(plan);
+  }
+
+  const { results: mergeChecked, errors: mergeErrors } = await processInParallel(
+    independent,
+    async (plan): Promise<TransferPlan | MoveFailureItem> => {
+      try {
+        await ctx.fs.refuseDirectoryMerge(plan);
+        return plan;
+      } catch (error) {
+        rethrowIfAborted(error);
+        return pairFailure(plan.request, error);
+      }
+    },
+    PARALLEL_CONCURRENCY,
+    ctx.signal,
+  );
+  const firstMergeError = mergeErrors[0];
+  if (firstMergeError) throw firstMergeError.error;
+
+  const safe: TransferPlan[] = [];
+  for (const { value } of mergeChecked) {
+    if ('error' in value) failures.push(value);
+    else safe.push(value);
   }
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
