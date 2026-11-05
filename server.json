@@ -108,10 +108,9 @@
       ],
       "packageArguments": [
         {
-          "type": "named",
-          "name": "--read-only",
+          "type": "positional",
+          "value": "--read-only",
           "description": "Remove every tool that writes, to match the read-only mount.",
-          "format": "boolean",
           "isRequired": true
         },
         {

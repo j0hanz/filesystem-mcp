@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 interface RegistryArgument {
+  type: string;
   name?: string;
   value?: string;
   valueHint?: string;
@@ -18,9 +19,12 @@ describe('registry manifest', () => {
     assert.ok(oci);
     const mount = oci.runtimeArguments?.find((a) => a.name === '-v');
     assert.match(mount?.value ?? '', /:ro$/);
-    const names = (oci.packageArguments ?? []).map((a) => a.name ?? a.valueHint);
-    assert.ok(names.includes('--read-only'));
+    const args = oci.packageArguments ?? [];
+    // Positional with a fixed value: the schema lets a client render a named boolean as
+    // `--read-only=true`, which the server refuses at startup.
+    const flag = args.findIndex((a) => a.type === 'positional' && a.value === '--read-only');
+    assert.notStrictEqual(flag, -1);
     // Flags come before the positional folder, as in the README's Docker example.
-    assert.ok(names.indexOf('--read-only') < names.indexOf('/workspace'));
+    assert.ok(flag < args.findIndex((a) => a.valueHint === '/workspace'));
   });
 });
