@@ -79,7 +79,9 @@ const SearchAndReplaceInputSchema = z.strictObject({
   caseSensitive: z
     .boolean()
     .default(true)
-    .describe('Match case exactly (default: true). Pass false to ignore case.'),
+    .describe(
+      'Match case exactly (default: true). Pass false to ignore case. search_text ignores case by default, so matches it reports can include case variants this call does not replace.',
+    ),
   wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
   dryRun: defaultFalseBoolean(
     'Preview replacements without writing to disk (default: false = apply changes)',
@@ -138,6 +140,25 @@ function keepFailure(rows: FailureRow[], row: FailureRow): void {
   rows.push(row);
   rows.sort((a, b) => a.index - b.index);
   if (rows.length > MAX_FAILURES) rows.pop();
+}
+
+/**
+ * A path as the roster shows it. A comma would read as two paths, and a quote
+ * or a control character renders badly, so those names go by their JSON
+ * spelling; every other name stays as written.
+ */
+const rosterName = (path: string): string =>
+  // eslint-disable-next-line no-control-regex -- a control character is exactly what gets quoted
+  path === '' || /["\r\n,\u0000-\u001f]/u.test(path) ? JSON.stringify(path) : path;
+
+/** Up to five changed paths, then a count of the rest, for the summary lines. */
+function changedPathList(results: SearchAndReplaceOutput['results'], total: number): string {
+  const shown = results
+    .filter((x) => !('error' in x))
+    .slice(0, 5)
+    .map((x) => rosterName(x.path))
+    .join(', ');
+  return total > 5 ? `${shown}, and ${String(total - 5)} more` : shown;
 }
 
 function recordChangedFile(
@@ -540,18 +561,25 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       // rewritten. The paths ship under `_meta`, which the model does not see; name
       // them here, or a re-run of a self-matching replacement applies it twice.
       const total = structured.summary.succeeded;
-      const shown = structured.results
-        .filter((x) => !('error' in x))
-        .slice(0, 5)
-        .map((x) => x.path)
-        .join(', ');
-      const more = total > 5 ? `, and ${String(total - 5)} more` : '';
       lines.push(
-        `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
+        `// ${String(total)} file(s) were already rewritten and stay changed: ${changedPathList(structured.results, total)}. ` +
           'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
       );
     } else if (stop === 'maxMatches' || stop === 'maxFiles') {
       lines.push(`// Raise ${stop} to reach them.`);
+    } else if (
+      stop === undefined &&
+      !args.dryRun &&
+      (!args.returnDiff || structured.diffTruncated === true) &&
+      structured.summary.succeeded > 0
+    ) {
+      // The cases nothing else names the files: the early-stop warning above
+      // lists them, a dry run or a complete returned diff ships the diff, and
+      // the per-file results sit under `_meta`, which the model does not see.
+      // A diff the size budget or deadline cut short does not name them all.
+      lines.push(
+        `// changed: ${changedPathList(structured.results, structured.summary.succeeded)}`,
+      );
     }
     const hint =
       structured.totalMatches === 0

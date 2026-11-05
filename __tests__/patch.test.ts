@@ -61,6 +61,102 @@ describe('patch body', () => {
     assert.strictEqual(await readFile(f, 'utf-8'), 'q\nb\nc\n');
   });
 
+  it('names the failing hunk', async () => {
+    const f = join(root, 'patch_stale_hunk.txt');
+    await writeFile(f, 'a\nb\nc\nZ\ne\nf\n');
+    const diff =
+      '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n@@ -4,3 +4,3 @@\n-d\n+Y\n e\n f\n';
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /did not apply cleanly: hunk 2 \(starting at line 4\) does not match/u,
+      ),
+    );
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\nZ\ne\nf\n');
+  });
+
+  it('keeps the generic refusal when the diagnosis is over budget', async () => {
+    const f = join(root, 'patch_big_stale.txt');
+    const lines = Array.from({ length: 10_000 }, (_, i) => `l${String(i)}`);
+    await writeFile(f, `${lines.join('\n')}\n`);
+    // 3 diff lines in hunk 1, 598 stale context lines in hunk 2: the line
+    // product (10,000 x 601) passes the apply guard, but times the hunk count
+    // it is over MAX_PATCH_LINE_PRODUCT, so no prefix diagnosis runs.
+    const stale = Array.from({ length: 598 }, (_, i) => ` nope${String(i)}`).join('\n');
+    const diff =
+      '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-l0\n+L0\n l1\n@@ -5000,598 +5000,598 @@\n' +
+      stale +
+      '\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      const message = error.message ?? '';
+      assert.match(message, /did not apply cleanly: hunk context does not match/u);
+      assert.doesNotMatch(message, /hunk 2/u);
+      return true;
+    });
+  });
+
+  it('names the failing hunk across thousands of empty-target hunks', async () => {
+    const f = join(root, 'patch_empty_many.txt');
+    await writeFile(f, '');
+    const hunks = Array.from(
+      { length: 4_000 },
+      (_, i) => `@@ -${String(i + 1)},0 +${String(i + 1)},1 @@\n+l${String(i)}\n`,
+    );
+    // A stale context line the empty file cannot match, so the apply fails.
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -500,1 +500,2 @@\n nope\n+X\n`;
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 4001/u),
+    );
+  });
+
+  it('bounds the diagnosis on a huge single-line target', async () => {
+    const f = join(root, 'patch_big_single.txt');
+    await writeFile(f, `${'x'.repeat(8 * 1024 * 1024)}\n`);
+    const hunks = Array.from({ length: 1_500 }, () => '@@ -1,0 +1,1 @@\n+l\n');
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -1,1 +1,2 @@\n nope\n+X\n`;
+    const started = Date.now();
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 1501/u),
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2_000, `diagnosis took ${String(elapsed)}ms`);
+  });
+
+  it('names the failing hunk among zero-line hunks', async () => {
+    const f = join(root, 'patch_zero_line.txt');
+    await writeFile(f, 'seed\n');
+    const hunks = Array.from(
+      { length: 20_000 },
+      (_, i) => `@@ -${String(i + 1)},0 +${String(i + 1)},0 @@\n`,
+    );
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -1,1 +1,2 @@\n nope\n+X\n`;
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 20001/u),
+    );
+  });
+
+  it('names the failing hunk by its submitted start line', async () => {
+    const f = join(root, 'patch_order_line.txt');
+    await writeFile(f, 'a\nb\nc\nd\ne\nf\ng\nh\n');
+    // Hunk 1 consumes lines 1-2, so the clamp moves hunk 2's search start to
+    // 2; its header still says 1, and the refusal names the header, the line
+    // the caller can find in the diff they submitted.
+    const diff =
+      '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n@@ -1,3 +1,3 @@\n-z\n+Y\n c\n d\n';
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /did not apply cleanly: hunk 2 \(starting at line 1\) does not match/u,
+      ),
+    );
+  });
+
   it('refuses a zero-context hunk past the end of the file and writes nothing', async () => {
     const f = join(root, 'patch_past_end.txt');
     await writeFile(f, 'a\nb\n');

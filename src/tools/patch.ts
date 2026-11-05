@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -130,6 +131,45 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   };
 }
 
+/** The binary search's applies: one per step, plus the one it starts from. */
+const diagnosisApplies = (hunks: number): number => 1 + Math.ceil(Math.log2(hunks));
+
+/** Whether the prefix search stays within one apply's cost, times its length. */
+function diagnoseFits(
+  content: string,
+  fileLines: number,
+  diffLines: number,
+  hunks: number,
+): boolean {
+  const applies = diagnosisApplies(hunks);
+  return (
+    Math.max(fileLines, 1) * diffLines * applies <= MAX_PATCH_LINE_PRODUCT &&
+    Buffer.byteLength(content) * applies <= 256 * MIB
+  );
+}
+
+/**
+ * The first hunk whose prefix fails to apply, by binary search: the smallest
+ * prefix that fails, which the caller already knows exists (the full set failed).
+ */
+function firstFailingHunk(
+  content: string,
+  parsedPatch: ReturnType<typeof parsePatch>[number],
+  hunks: ReturnType<typeof parsePatch>[number]['hunks'],
+): number {
+  let lo = 0;
+  let hi = hunks.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, mid + 1) }) === false) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return hi;
+}
+
 /** The transform: parse, clamp, apply, and the line-count backstop. */
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
@@ -185,9 +225,28 @@ function patchContent(
   // so `=== false` distinguishes a no-op patch ('') from a failed one.
   const patched = applyPatch(content, { ...parsedPatch, hunks });
   if (patched === false) {
+    // jsdiff answers false for the whole diff; a binary search over hunk
+    // prefixes names the first that fails. A prefix that fails means every
+    // longer one fails too: each hunk lands on its own clamped region, so
+    // adding hunks cannot rescue an earlier failure. The search runs
+    // log-many applies, each the cost of one apply, so the diagnosis is
+    // bounded by the search length: the line product times that length, and
+    // the target bytes one apply copies times the same. An empty target still
+    // costs one line of scan per apply, so it counts as one, not zero.
+    const first =
+      hunks.length > 0 && diagnoseFits(content, fileLines, diffLines, hunks.length)
+        ? firstFailingHunk(content, parsedPatch, hunks)
+        : -1;
+    // The search cannot miss: the full clamped set is the last prefix and already failed.
+    // The submitted header start, not the clamp's search floor: it is the line
+    // the caller can find in the diff they sent.
+    const where =
+      first >= 0
+        ? `hunk ${String(first + 1)} (starting at line ${String(parsedPatch.hunks[first]?.oldStart)}) does not match file content`
+        : 'hunk context does not match file content';
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      'patch did not apply cleanly: hunk context does not match file content (hunks must be in file order)',
+      `patch did not apply cleanly: ${where} (hunks must be in file order)`,
       args.path,
     );
   }

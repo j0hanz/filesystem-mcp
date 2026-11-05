@@ -22,7 +22,11 @@ const UndoInputSchema = z.strictObject({
     .max(20)
     .optional()
     .describe('Revert the last N calls (not over HTTP)'),
-  dryRun: defaultFalseBoolean('Preview which calls would restore, changing nothing'),
+  dryRun: defaultFalseBoolean(
+    'Preview which calls would restore, changing nothing. ' +
+      'A preview of the whole history assumes each call is reverted after the newer ones, ' +
+      'so a file changed since can still show as restored; previewing one id shows that call alone.',
+  ),
 });
 
 interface UndoOutput {
@@ -75,7 +79,13 @@ function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
 /** Why each path was not reverted, with a count for any past the roster's cap. */
 function reasonLines(results: readonly UndoFileResult[]): string[] {
   const lines = results.flatMap((r) =>
-    'error' in r ? [`// ${r.path}: ${r.error.code} ${r.error.message}`] : [],
+    'error' in r
+      ? [
+          // A cancelled restore is the skip the roster line already named, so
+          // the reason says the same word; any other code stays verbatim.
+          `// ${r.path}: ${r.error.code === ErrorCode.CANCELLED ? 'SKIPPED' : r.error.code} ${r.error.message}`,
+        ]
+      : [],
   );
   if (lines.length <= MAX_REASON_LINES) return lines;
   return [

@@ -46,7 +46,9 @@ const GrepInputSchema = z.strictObject({
   isRegex: defaultFalseBoolean('Treat searchPattern as a regex (default: literal text match)'),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
-  caseSensitive: defaultFalseBoolean('Enable case-sensitive matching (default: case-insensitive)'),
+  caseSensitive: defaultFalseBoolean(
+    'Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.',
+  ),
   maxResults: z
     .uint32()
     .min(1)
@@ -291,8 +293,17 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           ]
             .filter(Boolean)
             .join('\n');
+    // A page that holds every match is the one case the pager's trailer does
+    // not total, so the count line appears there and only there.
+    const countLine =
+      paged.metadata.matchingLines > 0 &&
+      paged.offset === 0 &&
+      structured.matches.length === paged.metadata.matchingLines
+        ? `\n\n// ${buildSearchMatchDetail(paged.metadata.matchingLines, paged.metadata.filesMatched)}`
+        : '';
     const text =
       body +
+      countLine +
       pageTrailer({
         offset: paged.offset,
         shown: structured.matches.length,

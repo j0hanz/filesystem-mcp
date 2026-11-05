@@ -44,7 +44,7 @@ const CreateFileItemSchema = z.strictObject({
     .boolean()
     .optional()
     .describe(
-      'Replace an existing file without asking the user; without it an existing file prompts for confirmation',
+      'Replace an existing file without asking the user; without it an existing file prompts for confirmation. A client that cannot show a prompt fails with INVALID_INPUT and a workaround instead.',
     ),
 });
 
