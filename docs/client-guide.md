@@ -339,9 +339,10 @@ Notes on individual tools:
   text block is the file; with `paths` the files are joined under
   `// <path>` headers. For a file's exact text in code, read one `path` per
   call, or call `resources/read` on its `resourceUri`.
-- A partial read ends with a `// truncated: ...` line, and its
+- A partial read ends with a `// more lines ...` line, or `// truncated: ...` when the size limit cut it short, and its
   `_meta.results[].value.continuation` holds the arguments for the next
-  chunk. `includeHash: true` adds `contentHash` (SHA-256). Images and audio
+  chunk. `includeHash: true` adds `contentHash` (SHA-256). `lineNumbers: true`
+  prefixes each line with its number and a tab. Images and audio
   come back as `image` and `audio` content blocks; other binary files fail
   with `BINARY_FILE` (`Binary file detected.`) unless the call passes `binary: true`. Then a
   full read returns the file as a `resource` block (`resource.blob` is base64,

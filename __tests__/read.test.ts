@@ -136,7 +136,7 @@ describe('read body', () => {
     const whole = await read({ path: file }, { guard });
     assert.strictEqual(whole.isError, true);
     assert.strictEqual(errorOf(whole.structured.results[0])?.code, 'BINARY_FILE');
-    assert.match(whole.text ?? '', /^Binary file detected\. Pass binary: true/);
+    assert.match(whole.text ?? '', /^BINARY_FILE: Binary file detected\. Pass binary: true/);
 
     const ranged = await read({ path: file, head: 1 }, { guard });
     assert.strictEqual(ranged.isError, true);
@@ -451,23 +451,178 @@ describe('read body', () => {
 
     const head = await read({ path: file, head: 10, includeHash: true }, { guard });
     const headText = head.text ?? '';
-    assert.match(headText, /^\/\/ truncated: .*"startLine":11,"endLine":20\}$/m);
+    assert.match(
+      headText,
+      /^\/\/ more lines from 11\. Continue: read .*"startLine":11,"endLine":20\}$/m,
+    );
     assert.match(headText, /^\/\/ sha256: [0-9a-f]{64}$/m);
     // The file's own lines survive ahead of the trailer, unaltered.
     assert.ok(headText.startsWith('line1\nline2\n'), headText.slice(0, 40));
-    assert.ok(headText.indexOf('line10') < headText.indexOf('// truncated'));
+    assert.ok(headText.indexOf('line10') < headText.indexOf('// more lines'));
 
     // A whole-file read is not truncated and was not asked for a hash.
     const full = await read({ path: file }, { guard });
     const fullText = full.text ?? '';
-    assert.ok(!fullText.includes('// truncated'), 'a full read is not truncated');
+    assert.ok(!fullText.includes('// more lines'), 'a full read has no more lines');
     assert.ok(!fullText.includes('// sha256'), 'no hash unless includeHash');
 
     // tail has no args that read backwards, so it reports what it showed.
     const tail = await read({ path: file, tail: 10 }, { guard });
     const tailText = tail.text ?? '';
-    assert.match(tailText, /^\/\/ truncated: showing last 10 lines$/m);
+    assert.match(tailText, /^\/\/ more lines above: showing last 10 lines$/m);
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
+  });
+
+  it('names the code and the next step for a refused path', async () => {
+    const outside = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/hostname';
+    const other = process.platform === 'win32' ? 'C:\\Windows\\system.ini' : '/etc/hosts';
+    const advice =
+      'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.';
+
+    const single = await read({ path: outside }, { guard });
+    assert.strictEqual(single.isError, true);
+    assert.match(single.text ?? '', /^ACCESS_DENIED: Outside allowed directories\./);
+    assert.ok(single.text?.includes(advice));
+
+    const batch = await read({ paths: [outside, other] }, { guard });
+    assert.match(batch.text ?? '', /^\/\/ Error: ACCESS_DENIED: Outside allowed directories\./m);
+    assert.ok(batch.text?.includes(`// ${advice}`));
+  });
+
+  it('gives a sensitive file inside a root no advice about leaving the roots', async () => {
+    const secret = await writeTestFile(root, 'advice/.env', 'SECRET=1\n');
+    const refused = await read({ path: secret }, { guard });
+    assert.strictEqual(refused.isError, true);
+    assert.match(refused.text ?? '', /^ACCESS_DENIED: Sensitive file blocked/);
+    assert.ok(!(refused.text ?? '').includes('allowed root'), refused.text);
+  });
+
+  describe('lineNumbers', () => {
+    it('numbers whole files, heads and ranges from their real first line', async () => {
+      const file = await writeTestFile(root, 'numbered.txt', 'a\nb\nc\nd\n');
+      assert.strictEqual(
+        (await read({ path: file, lineNumbers: true }, { guard })).text,
+        '1\ta\n2\tb\n3\tc\n4\td\n',
+      );
+      assert.ok(
+        (await read({ path: file, head: 2, lineNumbers: true }, { guard })).text?.startsWith(
+          '1\ta\n2\tb\n',
+        ),
+      );
+      assert.ok(
+        (
+          await read({ path: file, startLine: 3, endLine: 3, lineNumbers: true }, { guard })
+        ).text?.startsWith('3\tc'),
+      );
+    });
+
+    it('adds no blank numbered line and leaves the hash on the file bytes', async () => {
+      const crlf = await writeTestFile(root, 'numbered-crlf.txt', 'a\r\nb\r\n');
+      assert.strictEqual(
+        (await read({ path: crlf, lineNumbers: true }, { guard })).text,
+        '1\ta\r\n2\tb\r\n',
+      );
+      const bare = await writeTestFile(root, 'numbered-bare.txt', 'a\nb');
+      assert.strictEqual(
+        (await read({ path: bare, lineNumbers: true }, { guard })).text,
+        '1\ta\n2\tb',
+      );
+      const empty = await writeTestFile(root, 'numbered-empty.txt', '');
+      assert.strictEqual((await read({ path: empty, lineNumbers: true }, { guard })).text, '');
+      const plain = await read({ path: bare, includeHash: true }, { guard });
+      const numbered = await read({ path: bare, includeHash: true, lineNumbers: true }, { guard });
+      assert.strictEqual(
+        valueOf(numbered.structured.results[0])?.contentHash,
+        valueOf(plain.structured.results[0])?.contentHash,
+      );
+    });
+
+    it('refuses numbering past the size limit, and still reads the file without it', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+        const file = await writeTestFile(root, 'numbered-huge.txt', '\n'.repeat(600_000));
+        const refused = await read({ path: file, lineNumbers: true }, { guard });
+        assert.strictEqual(refused.isError, true);
+        assert.strictEqual(errorOf(refused.structured.results[0])?.code, 'TOO_LARGE');
+        assert.match(
+          refused.text ?? '',
+          /^TOO_LARGE: File exceeds size limit \(\d+ > 1048576 bytes, with line numbers\)/,
+        );
+        assert.ok(
+          refused.text?.includes(
+            'Read a slice with head or startLine/endLine, or leave out lineNumbers.',
+          ),
+          refused.text,
+        );
+
+        const plain = await read({ path: file }, { guard });
+        assert.strictEqual(plain.isError, false);
+        const slice = await read({ path: file, head: 2, lineNumbers: true }, { guard });
+        assert.ok(slice.text?.startsWith('1\t\n2\t\n'), slice.text);
+      });
+    });
+
+    it('over stdio holds numbering to the message limit as well', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(64 * 1024 * 1024) }, async () => {
+        const file = await writeTestFile(root, 'numbered-stdio.txt', '\n'.repeat(2 * 1024 * 1024));
+        const stdio = await read({ path: file, lineNumbers: true }, { guard, transport: 'stdio' });
+        assert.strictEqual(errorOf(stdio.structured.results[0])?.code, 'TOO_LARGE');
+        const http = await read({ path: file, lineNumbers: true }, { guard, transport: 'http' });
+        assert.strictEqual(http.isError, false);
+        assert.ok(http.text?.endsWith('2097152\t\n'));
+      });
+    });
+
+    it('numbers a blank line that ends a slice', async () => {
+      const file = await writeTestFile(root, 'numbered-blank.txt', 'a\n\nb\n\n\nc\n');
+      const text = async (args: Partial<ReadArgs>) =>
+        (await read({ path: file, lineNumbers: true, ...args }, { guard })).text ?? '';
+      assert.ok((await text({ head: 2 })).startsWith('1\ta\n2\t\n\n// more lines from 3.'));
+      assert.ok(
+        (await text({ startLine: 2, endLine: 2 })).startsWith('2\t\n\n// more lines from 3.'),
+      );
+      assert.ok(
+        (await text({ startLine: 4, endLine: 5 })).startsWith('4\t\n5\t\n\n// more lines from 6.'),
+      );
+      const crlf = await writeTestFile(root, 'numbered-blank-crlf.txt', 'a\r\n\r\nb\r\n');
+      const slice = await read(
+        { path: crlf, startLine: 1, endLine: 2, lineNumbers: true },
+        { guard },
+      );
+      assert.match(slice.text ?? '', /^1\ta\r?\n2\t\r?\n/);
+    });
+
+    it('stays on through the continuation', async () => {
+      const file = await writeTestFile(root, 'numbered-paged.txt', 'a\nb\nc\nd\n');
+      const first = await read({ path: file, head: 2, lineNumbers: true }, { guard });
+      const continuation = valueOf(first.structured.results[0])?.continuation;
+      assert.ok(continuation);
+      assert.strictEqual(continuation.args.lineNumbers, true);
+      assert.match(first.text ?? '', /"lineNumbers":true\}$/m);
+      const next = await read(continuation.args, { guard });
+      assert.strictEqual(next.text, '3\tc\n4\td');
+
+      const plain = await read({ path: file, head: 2 }, { guard });
+      assert.ok(
+        !('lineNumbers' in (valueOf(plain.structured.results[0])?.continuation?.args ?? {})),
+      );
+    });
+
+    it('is refused with tail', async () => {
+      const file = await writeTestFile(root, 'numbered-tail.txt', 'a\n');
+      await assert.rejects(
+        () => read({ path: file, tail: 1, lineNumbers: true }, { guard }),
+        (err) =>
+          issuesOf(err).some((issue) => issue.message?.includes("'lineNumbers' with 'tail'")),
+      );
+    });
+  });
+
+  it('a slice ending on the last line carries no trailer', async () => {
+    const file = await writeTestFile(root, 'exact-end.txt', 'a\nb\nc\n');
+    for (const args of [{ head: 3 }, { startLine: 2, endLine: 3 }, { startLine: 2, endLine: 99 }]) {
+      const result = await read({ path: file, ...args }, { guard });
+      assert.ok(!(result.text ?? '').includes('\n// '), JSON.stringify(args));
+    }
   });
 
   it('continuations remain usable beyond line 100,000', async () => {
@@ -489,6 +644,7 @@ describe('read body', () => {
       const file = await writeTestFile(root, 'max-end.txt', `${'z'.repeat(99)}\n`.repeat(20000));
       const first = await read({ path: file, startLine: 1, endLine: 2147483647 }, { guard });
       assert.strictEqual(first.isError, false);
+      assert.match(first.text ?? '', /^\/\/ truncated: More lines remain from /m);
       const continuation = valueOf(first.structured.results[0])?.continuation;
       assert.ok(continuation);
       assert.strictEqual(continuation.args.endLine, 2147483647);

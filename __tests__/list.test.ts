@@ -82,6 +82,32 @@ describe('list body', () => {
     );
   });
 
+  it('the full-tree resource says what the page says it left out', async () => {
+    await writeTestFile(root, '.gitignore', 'docs/\n');
+    await writeTestFile(root, 'docs/x.md', 'x');
+    await writeTestFile(root, 'a/b/c.txt', 'x');
+    await writeTestFile(root, 'a/top.txt', 'x');
+
+    const first = await list({ path: root, maxDepth: 2, maxEntries: 1 });
+    const uri = first.structured.resourceUri;
+    assert.ok(uri);
+    const full = JSON.parse(resourceStore.getEntry(uri).text) as {
+      markdown: string;
+      unexpandedDirectories?: number;
+      ignoredDirs?: { total: number; first: string[] };
+    };
+    assert.strictEqual(full.unexpandedDirectories, 1);
+    assert.deepStrictEqual(full.ignoredDirs, { total: 1, first: ['docs'] });
+    assert.match(
+      full.markdown,
+      /^\/\/ depth limit 2: contents of 1 directory not listed or counted; raise maxDepth or list one directly\.$/m,
+    );
+    assert.match(
+      full.markdown,
+      /^\/\/ hid 1 ignored folder \(docs\); pass includeIgnored: true to list it\.$/m,
+    );
+  });
+
   it('reports and externalizes a partial tree when a scan times out', async () => {
     const dir = join(root, 'partial');
     for (let i = 0; i < 20; i++) await writeTestFile(dir, `f${String(i)}.txt`, 'x');
@@ -140,7 +166,11 @@ describe('list body', () => {
 
     const pruned = await list({ path: sub, maxDepth: 4 });
     assert.match(pruned.text ?? '', /kept\.txt/);
-    assert.doesNotMatch(pruned.text ?? '', /skipme|buried\.txt/);
+    assert.doesNotMatch(pruned.text ?? '', /── skipme|buried\.txt/);
+    assert.match(
+      pruned.text ?? '',
+      /^\/\/ hid 1 ignored folder \(gitignore_walk_dir\/a\/skipme\); pass includeIgnored: true to list it\.$/m,
+    );
 
     const all = await list({ path: sub, maxDepth: 4, includeIgnored: true });
     assert.match(all.text ?? '', /kept\.txt/);
@@ -163,6 +193,53 @@ describe('list body', () => {
       all.structured.entries.map((entry) => entry.name),
       ['drop.log', 'keep.txt'],
     );
+  });
+
+  it('says how many directories the depth limit left unexpanded', async () => {
+    await writeTestFile(root, 'a/b/c.txt', 'x');
+    await writeTestFile(root, 'a/top.txt', 'x');
+    const { text, structured } = await list({ path: root, maxDepth: 2, includeSizes: true });
+    assert.match(
+      text ?? '',
+      /^\/\/ depth limit 2: contents of 1 directory not listed or counted; raise maxDepth or list one directly\.$/m,
+    );
+    assert.strictEqual(structured.unexpandedDirectories, 1);
+    const flat = await list({ path: root });
+    assert.ok(!(flat.text ?? '').includes('depth limit'), 'the default one-level list stays plain');
+    const deep = await list({ path: root, maxDepth: 3 });
+    assert.ok(!(deep.text ?? '').includes('depth limit'), 'a tree that fits has nothing to report');
+  });
+
+  it('says which ignored folders it hid, and never a sensitive one', async () => {
+    await writeTestFile(root, '.gitignore', 'docs/\nvault.key/\n');
+    for (const file of [
+      'docs/a.md',
+      'node_modules/x.js',
+      '.git/HEAD',
+      'vault.key/inner.txt',
+      'src/a.ts',
+      'src/node_modules/y.js',
+    ]) {
+      await writeTestFile(root, file, 'x');
+    }
+    const noteOf = (text: string | undefined) =>
+      (text ?? '').split('\n').find((line) => line.startsWith('// hid ')) ?? '';
+
+    const hidden = await list({ path: root, includeHidden: true });
+    const note = noteOf(hidden.text);
+    assert.match(
+      note,
+      /^\/\/ hid 3 ignored folders \(.*\); pass includeIgnored: true to list them\.$/,
+    );
+    for (const name of ['.git', 'docs', 'node_modules']) assert.ok(note.includes(name), name);
+    assert.ok(!(hidden.text ?? '').includes('vault.key'), 'a sensitive folder leaves no trace');
+    assert.ok(!note.includes('src/'), 'a folder below the depth limit is not counted');
+
+    const plain = noteOf((await list({ path: root })).text);
+    assert.match(plain, /^\/\/ hid 2 ignored folders /);
+    assert.ok(!plain.includes('.git'), 'hidden folders are not reported without includeHidden');
+
+    assert.strictEqual(noteOf((await list({ path: root, includeIgnored: true })).text), '');
   });
 
   it('shows sizes and a totals line', async () => {

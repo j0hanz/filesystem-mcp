@@ -78,6 +78,22 @@ describe('search_text body', () => {
     assert.ok(!(result.text ?? '').includes('by default name'));
   });
 
+  it('prints a named file once, on every page and with context', async () => {
+    const file = await writeTestFile(root, 'named/one.txt', 'NEEDLE a\nmid\nNEEDLE b\n');
+    const first = await search({ path: file, searchPattern: 'NEEDLE', maxResults: 1, context: 1 });
+    assert.ok(first.text?.startsWith('// named/one.txt\n1: NEEDLE a\n2- mid'), first.text);
+    const cursor = first.structured.nextCursor;
+    assert.ok(cursor);
+    const second = await search({
+      path: file,
+      searchPattern: 'NEEDLE',
+      maxResults: 1,
+      context: 1,
+      cursor,
+    });
+    assert.ok(second.text?.startsWith('// named/one.txt\n2- mid\n3: NEEDLE b'), second.text);
+  });
+
   it('finds literal matches and renders root-relative paths and line numbers', async () => {
     const dir = join(root, 'grep_dir');
     await writeTestFile(dir, 'target.txt', 'line one\nNEEDLE_MARK here\nline three\n');
@@ -185,7 +201,7 @@ describe('search_text body', () => {
       includeHidden: false,
       includeIgnored: false,
     });
-    assert.strictEqual(text, 'explicit_scope/.hidden.log:1: NEEDLE_SCOPE');
+    assert.strictEqual(text, '// explicit_scope/.hidden.log\n1: NEEDLE_SCOPE');
     assert.deepStrictEqual(
       structured.matches.map(({ file, line }) => ({ file, line })),
       [{ file: 'explicit_scope/.hidden.log', line: 1 }],

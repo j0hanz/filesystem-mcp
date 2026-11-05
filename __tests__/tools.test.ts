@@ -249,6 +249,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(!/more than the maximum of \d+ elements/.test(text), text.slice(0, 300));
   });
 
+  it('read alone declares the client result-size hint in tools/list', async () => {
+    const harness = await createTestClientPair([tmpDir]);
+    try {
+      const { tools } = await harness.client.listTools();
+      const key = 'anthropic/maxResultSizeChars';
+      assert.strictEqual(tools.find((tool) => tool.name === 'read')?._meta?.[key], 200_000);
+      for (const tool of tools.filter((candidate) => candidate.name !== 'read')) {
+        assert.strictEqual(tool._meta?.[key], undefined, tool.name);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('tools/list publishes slimmed schemas and preserves Zod runtime semantics', async () => {
     const pinHarness = await createTestClientPair([tmpDir]);
     try {
@@ -1010,9 +1024,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // the deprecated maxResults alias; measured 20698.
   // Raised 2026-11-03 to 20800 full (read-only unchanged): edit caps oldText
   // (maxLength in two places) and patch caps diff (maxLength); measured 20758.
+  // Raised 2026-11-04 to 20950 full and 10050 read-only: read declares its result
+  // size in _meta and points at stat's tokenEstimate; measured 20913 / 10010.
+  // Raised 2026-11-04 to 21100 full and 10200 read-only: read gains lineNumbers;
+  // measured 21085 / 10182.
+  // Raised 2026-11-04 to 21150 full and 10250 read-only: list names .git among its
+  // skips, and search_text says a named file prints once; measured 21139 / 10236.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 20_800;
-    const BUDGET_CHARS_READ_ONLY = 9_900;
+    const BUDGET_CHARS = 21_150;
+    const BUDGET_CHARS_READ_ONLY = 10_250;
 
     const full = await createTestClientPair([tmpDir]);
     try {

@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, FsError } from '../core/errors.ts';
+import { ErrorCode, formatDetailedError, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import {
   detectMimeFromContent,
@@ -13,9 +13,15 @@ import {
   type FileKind,
   isKnownBinaryExtension,
 } from '../core/mime.ts';
-import { base64EncodedBytes, canLinkFile, type Transport } from '../core/outbound.ts';
+import {
+  base64EncodedBytes,
+  canLinkFile,
+  MAX_OUTBOUND_RESULT_BYTES,
+  type Transport,
+} from '../core/outbound.ts';
 import {
   BINARY_FILE_MESSAGE,
+  createTooLargeError,
   isBinaryRefusal,
   type ReadFileResult,
   type ReadSpec,
@@ -68,9 +74,20 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
   binary: defaultFalseBoolean(
     'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
   ),
+  lineNumbers: defaultFalseBoolean(
+    'Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.',
+  ),
   ...readRangeFields,
 }).superRefine((value, ctx) => {
   validateReadRange(value, ctx);
+  if (value.lineNumbers && value.tail !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['lineNumbers'],
+      message: "Cannot use 'lineNumbers' with 'tail': a tail read does not count lines.",
+      input: value,
+    });
+  }
   if (value.binary && hasLineRange(value)) {
     ctx.addIssue({
       code: 'custom',
@@ -84,7 +101,7 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
 
 interface ReadContinuation {
   tool: 'read';
-  args: { path: string; startLine: number; endLine: number };
+  args: { path: string; startLine: number; endLine: number; lineNumbers?: true };
   hint: string;
 }
 
@@ -134,6 +151,7 @@ function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
 function buildReadContinuation(
   result: ReadFileResult,
   requestedPath: string,
+  lineNumbers: boolean,
 ): ReadContinuation | undefined {
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
@@ -151,7 +169,12 @@ function buildReadContinuation(
   const nextEnd = Math.min(nextStart + chunkSize - 1, MAX_LINE_NUMBER);
   return {
     tool: 'read',
-    args: { path: requestedPath, startLine: nextStart, endLine: nextEnd },
+    args: {
+      path: requestedPath,
+      startLine: nextStart,
+      endLine: nextEnd,
+      ...(lineNumbers ? { lineNumbers: true as const } : {}),
+    },
     hint: `More lines remain from ${String(nextStart)}. Read next chunk with these args.`,
   };
 }
@@ -240,12 +263,17 @@ async function collectFileBudget(
 
 function buildPerPathReadValue(
   result: ReadFileResult,
-  options: { includeHash?: boolean; requestedPath: string; transport: Transport },
+  options: {
+    includeHash?: boolean;
+    lineNumbers: boolean;
+    requestedPath: string;
+    transport: Transport;
+  },
 ): PerPathReadValue {
   const mimeInfo = detectMimeFromContent(result.path, result.content);
   const continuation =
     result.hasMoreLines && result.readMode !== 'tail'
-      ? buildReadContinuation(result, options.requestedPath)
+      ? buildReadContinuation(result, options.requestedPath, options.lineNumbers)
       : undefined;
   const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
@@ -280,22 +308,82 @@ function buildPerPathReadValue(
 }
 
 /**
- * The two facts the model cannot act on without: that lines were dropped, and
- * the exact args to get the next chunk. Both used to live only in the structured
- * half, which no longer reaches the model. Each line is `//` prefixed and set
- * off by a blank line so it cannot be read as file bytes — do not drop either
- * guard.
+ * `cat -n` for `read`. `count` decides what is a line: a final newline ends one
+ * in a whole file but separates a blank last line in a slice, and the text alone
+ * cannot tell them apart.
+ */
+function numberLines(content: string, firstLine: number, count: number): string {
+  return content
+    .split('\n')
+    .map((line, i) => (i < count ? `${String(firstLine + i)}\t${line}` : line))
+    .join('\n');
+}
+
+/** What numbering adds: a tab per line plus each line number's digits, counted without building them. */
+function numberingBytes(firstLine: number, count: number): number {
+  const last = firstLine + count - 1;
+  let bytes = count;
+  for (let digits = 1, floor = 1; floor <= last; digits++, floor *= 10) {
+    const lines = Math.min(last, floor * 10 - 1) - Math.max(firstLine, floor) + 1;
+    if (lines > 0) bytes += lines * digits;
+  }
+  return bytes;
+}
+
+/**
+ * Numbering a newline-heavy file multiplies it many times over, so refuse before
+ * building the text: the executor's size refusal only runs after it exists.
+ */
+function assertNumberingFits(result: ReadFileResult, filePath: string, transport: Transport): void {
+  const max = getMaxTextFileSize();
+  const limit = transport === 'stdio' ? Math.min(max, MAX_OUTBOUND_RESULT_BYTES) : max;
+  const bytes =
+    Buffer.byteLength(result.content, 'utf8') +
+    numberingBytes(result.startLine ?? 1, result.linesRead ?? 0);
+  if (bytes > limit) {
+    throw createTooLargeError(bytes, limit, filePath, {
+      label: 'with line numbers',
+      suggestion: 'Read a slice with head or startLine/endLine, or leave out lineNumbers.',
+    });
+  }
+}
+
+/** A partial read the size limit cut short, as opposed to a slice returned whole. */
+function wasCut(v: PerPathReadValue): boolean {
+  const asked =
+    v.head ??
+    v.tail ??
+    (v.startLine !== undefined && v.endLine !== undefined
+      ? v.endLine - v.startLine + 1
+      : undefined);
+  return asked === undefined || (v.linesRead ?? 0) < asked;
+}
+
+/**
+ * The two facts the model cannot act on without: that lines remain, and the
+ * exact args to get the next chunk. Both used to live only in the structured
+ * half, which no longer reaches the model. `truncated` means the size limit cut
+ * the read; a slice returned as asked only says more lines remain. Each line is
+ * `//` prefixed and set off by a blank line so it cannot be read as file bytes —
+ * do not drop either guard.
  */
 function readTrailer(v: PerPathReadValue): string[] {
   const lines: string[] = [];
   if (v.continuation) {
+    const args = JSON.stringify(v.continuation.args);
     lines.push(
-      `// truncated: ${v.continuation.hint} Continue: read ${JSON.stringify(v.continuation.args)}`,
+      wasCut(v)
+        ? `// truncated: ${v.continuation.hint} Continue: read ${args}`
+        : `// more lines from ${String(v.continuation.args.startLine)}. Continue: read ${args}`,
     );
   } else if (v.hasMoreLines && v.linesRead !== undefined) {
     // A tail read gets no continuation — there are no args that read *backwards*
-    // — so say what was shown rather than leaving the truncation silent.
-    lines.push(`// truncated: showing last ${String(v.linesRead)} lines`);
+    // — so say what was shown rather than leaving the rest silent.
+    lines.push(
+      wasCut(v)
+        ? `// truncated: showing last ${String(v.linesRead)} lines`
+        : `// more lines above: showing last ${String(v.linesRead)} lines`,
+    );
   }
   if (v.contentHash !== undefined) lines.push(`// sha256: ${v.contentHash}`);
   return lines;
@@ -389,8 +477,11 @@ async function readOnePath(
     );
   }
 
+  if (args.lineNumbers) assertNumberingFits(result, filePath, ctx.transport);
+
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
+    lineNumbers: args.lineNumbers,
     // The continuation is args the caller pastes back, so it echoes the path
     // they wrote, or the root-resolved one a relative path was rewritten to.
     // `result.path` is the real path — on Windows that is a backslash-doubling
@@ -405,8 +496,12 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.',
+    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. ' +
+    'A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.',
   input: ReadFileInputSchema,
+  // Claude Code spills a text result over 50,000 characters to a file, which
+  // may sit outside the roots where this server's own tools cannot read it.
+  listMeta: { 'anthropic/maxResultSizeChars': 200_000 },
   readOnlyHint: true,
   deadline: true,
   defaultErrorCode: ErrorCode.NOT_FILE,
@@ -502,7 +597,12 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
 
     const [firstOrdered] = ordered;
     const body = (v: PerPathReadValue): string => {
-      const content = v.content ?? 'read failed';
+      const bytes = v.content ?? 'read failed';
+      // A media or binary placeholder is a note about the file, not its lines.
+      const content =
+        args.lineNumbers && v.mediaData === undefined && v.blobData === undefined
+          ? numberLines(bytes, v.startLine ?? 1, v.linesRead ?? 0)
+          : bytes;
       const trailer = readTrailer(v);
       if (trailer.length === 0) return content;
       // Exactly one blank line between the bytes and the trailer, whether or not
@@ -512,13 +612,15 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     const text =
       ordered.length === 1 && firstOrdered !== undefined
         ? 'error' in firstOrdered
-          ? firstOrdered.error.message
+          ? formatDetailedError(firstOrdered.error)
           : body(firstOrdered.value)
         : ordered
             .map((r) => {
               const header = `// ${r.path}`;
               if ('value' in r) return `${header}\n${body(r.value)}`;
-              return `${header}\n// Error: ${r.error.message}`;
+              const { code, message, suggestion } = r.error;
+              const next = suggestion ? `\n// ${suggestion}` : '';
+              return `${header}\n// Error: ${code}: ${message}${next}`;
             })
             .join('\n\n');
 

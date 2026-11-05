@@ -8,7 +8,7 @@ import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 
-import { ErrorCode } from '../src/core/errors.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { globEntries } from '../src/core/glob.ts';
 import { Logger } from '../src/core/observability.ts';
@@ -195,6 +195,17 @@ describe(
           guard.validateExistingPath(path),
           fsErrorMatcher(ErrorCode.ACCESS_DENIED, /never granted.*configure the share as a root/iu),
         );
+      }
+    });
+
+    it('does not contradict that with advice to accept a grant', async (t) => {
+      stubFilesystem(t);
+      for (const path of OUT_OF_ROOT) {
+        await assert.rejects(guard.validateExistingPath(path), (error: unknown) => {
+          assert.ok(isFsError(error));
+          assert.strictEqual(error.problem.suggestion, undefined);
+          return true;
+        });
       }
     });
 
@@ -406,6 +417,21 @@ describe(
       const fs = stubLinks(t, { [link]: UNC_TARGET });
       await assert.rejects(guard.validatePathForDelete(join(link, 'a.txt')), denied);
       assert.deepEqual(fs.touched(link), []);
+    });
+
+    it('gives no advice about roots, which would not get past the link', async (t) => {
+      stubLinks(t, { [link]: UNC_TARGET });
+      for (const refused of [
+        () => guard.validateExistingPath(link),
+        () => guard.validatePathForWrite(join(link, 'new.txt')),
+        () => guard.validatePathForDelete(join(link, 'a.txt')),
+      ]) {
+        await assert.rejects(refused, (error: unknown) => {
+          assert.ok(isFsError(error));
+          assert.strictEqual(error.problem.suggestion, undefined);
+          return true;
+        });
+      }
     });
 
     it('entryVerdict calls it inaccessible, without following', async (t) => {

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges. A numbered read that would pass the size limit is refused, with advice to read a slice.
+
+### Changed
+
+- **A refused cursor says why it may have gone stale.**
+- **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
+- **`list` says what it left out.** A raised `maxDepth` reports how many directories it did not expand, and a walk that skips ignored folders names them.
+- **`read` errors carry their code and next step.** They now match what `stat` and `create` report. `ACCESS_DENIED` says what to do when the path must stay outside the roots.
+- **`read` tells the client how large its results can be.** Claude Code keeps results up to 200,000 characters inline instead of saving them to a file outside the roots.
+
+### Fixed
+
+- **`read` no longer calls a complete slice truncated.** `// truncated:` now means the size limit cut the read short.
+- **`includeHidden` reaches dotfiles under `**/name/**`.** `find_files`, `search_text` and `replace_text` skipped them silently when a wildcard came before a trailing globstar. `replace_text` with such a pattern and `includeHidden: true` now also changes those files.
+
 ## [2.16.0] - 2026-11-04
 
 A hardening release. Network paths and more credential files are refused, one

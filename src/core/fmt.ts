@@ -173,6 +173,8 @@ export function pageTrailer(
     nextArgs?: Record<string, unknown> | undefined;
     stoppedReason?: StoppedReason | undefined;
     excludedDirs?: ExcludedDirs | undefined;
+    /** Finished `//` lines a tool adds after the shared ones. */
+    notes?: readonly string[] | undefined;
   },
 ): string {
   const lines: string[] = [];
@@ -191,6 +193,7 @@ export function pageTrailer(
   const skipped = skippedLine(p);
   if (skipped) lines.push(skipped);
   if (p.excludedDirs) lines.push(excludedLine(p.excludedDirs));
+  if (p.notes) lines.push(...p.notes);
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
 }
 
