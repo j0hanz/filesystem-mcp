@@ -117,22 +117,23 @@ Once it is connected, you can ask things like:
 
 How this server differs from the official
 [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem),
-checked against its README on 2026-11-02:
+checked against its README on 2026-11-05:
 
-| Capability                | Filesystem MCP                                     | Reference server                        |
-| :------------------------ | :------------------------------------------------- | :-------------------------------------- |
-| Search inside files       | `search_text`: literal text or RE2 regex           | None; `search_files` matches names only |
-| Secret files              | `.env`, keys, and credentials blocked by default   | Not blocked                             |
-| Overwriting a file        | `create` asks you first (unless `overwrite: true`) | `write_file` overwrites without asking  |
-| Delete files              | `delete`; asks before deleting a non-empty folder  | None                                    |
-| `.gitignore`              | Respected by listing and search tools              | Not supported                           |
-| Read-only mode            | `--read-only` removes every tool that writes       | Docker `ro` mounts only                 |
-| Per-folder read-only      | `--read-only-root` guards chosen folders           | Docker `ro` mounts only                 |
-| Apply a unified diff      | `patch`                                            | None                                    |
-| Compare two files         | `diff`                                             | None                                    |
-| Replace across many files | `replace_text` over a folder or glob               | None                                    |
-| Watch files               | Subscribe to a file and get change notifications   | None                                    |
-| Transport                 | stdio, or Streamable HTTP with `--port`            | stdio                                   |
+| Capability                | Filesystem MCP                                          | Reference server                        |
+| :------------------------ | :------------------------------------------------------ | :-------------------------------------- |
+| Search inside files       | `search_text`: literal text or RE2 regex                | None; `search_files` matches names only |
+| Secret files              | `.env`, keys, and credentials blocked by default        | Not blocked                             |
+| Overwriting a file        | `create` asks you first (unless `overwrite: true`)      | `write_file` overwrites without asking  |
+| Delete files              | `delete`; asks before deleting a non-empty folder       | None                                    |
+| Undo a change             | `undo` reverts recent changes; skips files edited since | None                                    |
+| `.gitignore`              | Respected by listing and search tools                   | Not supported                           |
+| Read-only mode            | `--read-only` removes every tool that writes            | Docker `ro` mounts only                 |
+| Per-folder read-only      | `--read-only-root` guards chosen folders                | Docker `ro` mounts only                 |
+| Apply a unified diff      | `patch`                                                 | None                                    |
+| Compare two files         | `diff`                                                  | None                                    |
+| Replace across many files | `replace_text` over a folder or glob                    | None                                    |
+| Watch files               | Subscribe to a file and get change notifications        | None                                    |
+| Transport                 | stdio, or Streamable HTTP with `--port`                 | stdio                                   |
 
 ## Quick start
 
