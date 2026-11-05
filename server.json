@@ -94,7 +94,7 @@
           "type": "named",
           "name": "-v",
           "value": "{host_dir}:/workspace:ro",
-          "description": "Mount the directory to expose to the server.",
+          "description": "Mount the directory to expose to the server, read-only.",
           "isRequired": true,
           "isRepeated": true,
           "variables": {
@@ -107,6 +107,13 @@
         }
       ],
       "packageArguments": [
+        {
+          "type": "named",
+          "name": "--read-only",
+          "description": "Remove every tool that writes, to match the read-only mount.",
+          "format": "boolean",
+          "isRequired": true
+        },
         {
           "type": "positional",
           "valueHint": "/workspace",
