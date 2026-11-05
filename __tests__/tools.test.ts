@@ -1039,7 +1039,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // replace_text/undo say what happens without a prompt and how previews
     // assume reverts; stat's Windows created note still to land (~170 chars).
     const BUDGET_CHARS = 21_900;
-    const BUDGET_CHARS_READ_ONLY = 10_250;
+    // Raised from 10,250 alongside the full budget: search_text's case-default
+    // sentence, with stat's Windows created note still to land.
+    const BUDGET_CHARS_READ_ONLY = 10_550;
 
     const full = await createTestClientPair([tmpDir]);
     try {
