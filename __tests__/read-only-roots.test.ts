@@ -205,7 +205,7 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
   const assertReadOnlyDenied = (error: unknown, dir: string): void => {
     assert.ok(isFsError(error), String(error));
     assert.equal(error.code, ErrorCode.ACCESS_DENIED);
-    assert.match(error.message, /Read-only root/u);
+    assert.match(error.message, /^Read-only root.*Read-only folders setting/u);
     assert.ok(error.message.includes(normalizePath(dir)), error.message);
   };
 

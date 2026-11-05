@@ -1072,7 +1072,7 @@ export class PathGuard {
     const ro = this.readOnlySpellings.find((dir) => isPathInsideDirectory(dir, normalized));
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
-      `Read-only root: ${path} is inside ${ro ?? 'a read-only root'} (--read-only-root / FS_READ_ONLY_DIRS). Writes, moves, and deletes are refused there.`,
+      `Read-only root: ${path} is inside ${ro ?? 'a read-only root'} (--read-only-root / FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension). Writes, moves, and deletes are refused there.`,
       path,
     );
   }
@@ -1083,7 +1083,7 @@ export class PathGuard {
     if (this.isSensitive(checkPath)) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        'Sensitive file blocked by the server denylist. To unblock one built-in secret-file pattern, restart the server with --allow <pattern> (or FS_ALLOWLIST), or in the Claude Desktop extension add it to the Unblocked secret files setting; --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns the whole built-in list off. Paths blocked with --deny or FS_DENYLIST stay blocked.',
+        'Sensitive file blocked by the server denylist. To unblock one built-in secret-file pattern, restart the server with --allow <pattern> (or FS_ALLOWLIST), or in the Claude Desktop extension add it to the Unblocked secret files setting. Outside the extension, --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns the whole built-in list off. Paths blocked with --deny, FS_DENYLIST, or the Extra blocked files setting stay blocked.',
         requestedPath,
       );
     }
@@ -1524,7 +1524,7 @@ export class PathGuard {
         if (inside !== undefined) {
           throw new FsError(
             ErrorCode.ACCESS_DENIED,
-            `Read-only root inside: ${realTarget} contains ${inside} (--read-only-root / FS_READ_ONLY_DIRS). Deletes and moves of a parent directory are refused there.`,
+            `Read-only root inside: ${realTarget} contains ${inside} (--read-only-root / FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension). Deletes and moves of a parent directory are refused there.`,
             requestedPath,
           );
         }

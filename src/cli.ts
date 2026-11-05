@@ -7,7 +7,7 @@ import { parseArgs as utilParseArgs } from 'node:util';
 import packageJson from '../package.json' with { type: 'json' };
 import { printHelpAndExit, printVersionAndExit } from './cli-help.ts';
 import { cli, MODERN_PROTOCOL_REVISION } from './core/config.ts';
-import { formatUnknownErrorMessage } from './core/errors.ts';
+import { formatUnknownErrorMessage, isNodeError } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
   IS_WINDOWS,
@@ -256,10 +256,22 @@ export async function parseArgs(): Promise<{
         );
       }
     }
+    // A missing folder only warns: a chosen one deleted later must not stop the
+    // server. One replaced by a file does stop it.
+    const listedReadOnly = await normalizeAndValidateDirs(readOnlyRoots, true);
+    for (const dir of listedReadOnly) {
+      await stat(dir).catch((error: unknown) => {
+        const missing = isNodeError(error) && ['ENOENT', 'ENOTDIR'].includes(error.code ?? '');
+        console.error(
+          missing
+            ? `[warning] Read-only folder not found: ${dir}. Check the spelling. It is protected if it appears.`
+            : `[warning] Read-only folder cannot be checked: ${dir}: ${formatUnknownErrorMessage(error)}`,
+        );
+      });
+    }
     const readOnlyDirs = [
       ...(await normalizeAndValidateDirs(v['read-only-root'] ?? [], allowMissingRoots)),
-      // As FS_READ_ONLY_DIRS does: a folder deleted later must not stop the server.
-      ...(await normalizeAndValidateDirs(readOnlyRoots, true)),
+      ...listedReadOnly,
     ];
 
     const allowedDirs =

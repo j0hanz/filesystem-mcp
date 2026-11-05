@@ -179,20 +179,26 @@ async function runTransfers(
   }
   const safe: TransferPlan[] = [];
   for (const plan of ready) {
-    if (!overlapping.has(plan)) {
-      safe.push(plan);
+    if (overlapping.has(plan)) {
+      failures.push(
+        pairFailure(
+          plan.request,
+          new FsError(
+            ErrorCode.INVALID_INPUT,
+            `${VERB[op]} cancelled: "${plan.request.source}" or "${plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+            plan.request.source,
+          ),
+        ),
+      );
       continue;
     }
-    failures.push(
-      pairFailure(
-        plan.request,
-        new FsError(
-          ErrorCode.INVALID_INPUT,
-          `${VERB[op]} cancelled: "${plan.request.source}" or "${plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
-          plan.request.source,
-        ),
-      ),
-    );
+    try {
+      await ctx.fs.refuseDirectoryMerge(plan);
+      safe.push(plan);
+    } catch (error) {
+      rethrowIfAborted(error);
+      failures.push(pairFailure(plan.request, error));
+    }
   }
 
   // Round 1 returns input_required while an overwrite needs approval (R14).

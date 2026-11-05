@@ -121,6 +121,12 @@ Three switches change the list:
 `--allow` only lifts built-in patterns. It never lifts your own `--deny`
 rules, so `--deny` always wins.
 
+In the Claude Desktop extension, use its settings instead of flags. "Extra
+blocked files" blocks more paths, as `--deny` does. "Unblocked secret files"
+unblocks a built-in pattern, as `--allow` does, and cannot lift anything in
+"Extra blocked files". The extension has no setting that turns off the whole
+built-in list.
+
 In a pattern, `*` matches within one folder name, `**` matches any number of
 folders, `?` matches one character, `[abc]` matches a set, and `{a,b}`
 matches alternatives. Hidden names match like any other name:
@@ -161,6 +167,10 @@ available — only calls that touch a read-only folder fail — and `list_roots`
 reports the read-only folders in `readOnlyDirs`. Directories a user grants
 during the session are writable unless they sit under a read-only folder.
 
+In the Claude Desktop extension, choose these folders with the "Read-only
+folders" picker, with nothing to type. Folders saved in the older typed
+setting keep working, and both settings apply.
+
 ## Command-line flags
 
 When a flag and its environment variable are both set, the flag wins, with two
@@ -173,28 +183,28 @@ exceptions:
   `--walk-cwd`, and `--allow-missing-roots` cannot switch off their environment
   variable, so unset the variable instead.
 
-| Flag                         | Default     | What it does                                                                                                                     |
-| :--------------------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| `[folders...]`               |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
-| `--read-only`                | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
-| `--read-only-root <dir>`     |             | Refuse writes, moves, and deletes under this folder. Repeatable. Env: `FS_READ_ONLY_DIRS`.                                       |
-| `--read-only-roots <dir...>` |             | Like `--read-only-root` for every argument after it, so it must come last. The Claude Desktop extension uses this.               |
-| `--deny <pattern>`           |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
-| `--allow <pattern>`          |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
-| `--allow-sensitive`          | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
-| `--allow-cwd`                | off         | Add the current working folder.                                                                                                  |
-| `--walk-cwd`                 | off         | Walk up from the current folder to the project root, then add it. Implies `--allow-cwd`.                                         |
-| `--allow-missing-roots`      | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
-| `--root-boundary <path>`     |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
-| `--max-file-size <bytes>`    | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
-| `--tool-timeout <ms>`        | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.             |
-| `--port <n>`                 |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
-| `--http-host <host>`         | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
-| `--api-key <key>`            |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
-| `--log-level <level>`        | `info`      | `debug`, `info`, `notice`, `warn`, `error`, `critical`, `alert`, or `emergency`. Env: `FS_LOG_LEVEL`.                            |
-| `--print-config`             |             | Print the settings the server would use, as JSON, and exit.                                                                      |
-| `-h`, `--help`               |             | Show help.                                                                                                                       |
-| `-v`, `--version`            |             | Show the version.                                                                                                                |
+| Flag                         | Default     | What it does                                                                                                                                        |
+| :--------------------------- | :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[folders...]`               |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                                         |
+| `--read-only`                | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                                            |
+| `--read-only-root <dir>`     |             | Refuse writes, moves, and deletes under this folder. Repeatable. Env: `FS_READ_ONLY_DIRS`.                                                          |
+| `--read-only-roots <dir...>` |             | Like `--read-only-root` for every argument after it, so it must come last. A missing folder logs a warning. The Claude Desktop extension uses this. |
+| `--deny <pattern>`           |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                                   |
+| `--allow <pattern>`          |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                                            |
+| `--allow-sensitive`          | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                                                  |
+| `--allow-cwd`                | off         | Add the current working folder.                                                                                                                     |
+| `--walk-cwd`                 | off         | Walk up from the current folder to the project root, then add it. Implies `--allow-cwd`.                                                            |
+| `--allow-missing-roots`      | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                                                  |
+| `--root-boundary <path>`     |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                                       |
+| `--max-file-size <bytes>`    | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.                               |
+| `--tool-timeout <ms>`        | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                                |
+| `--port <n>`                 |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                                      |
+| `--http-host <host>`         | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                                                |
+| `--api-key <key>`            |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments.                    |
+| `--log-level <level>`        | `info`      | `debug`, `info`, `notice`, `warn`, `error`, `critical`, `alert`, or `emergency`. Env: `FS_LOG_LEVEL`.                                               |
+| `--print-config`             |             | Print the settings the server would use, as JSON, and exit.                                                                                         |
+| `-h`, `--help`               |             | Show help.                                                                                                                                          |
+| `-v`, `--version`            |             | Show the version.                                                                                                                                   |
 
 ## Environment variables
 
@@ -390,7 +400,8 @@ the allowed folders instead of asking about it.
 or one of your `--deny` rules. Unblock that built-in pattern with
 `--allow`, for example `--allow '.env.example'`. `--deny` rules cannot be
 lifted this way; remove the rule instead. In the Claude Desktop extension, add
-the file to the Unblocked secret files setting.
+the file to the Unblocked secret files setting, or remove it from Extra blocked
+files if it is listed there.
 
 **Nothing happens, or a syntax error at startup.** Check `node --version`.
 The server needs Node.js 24 or later.
