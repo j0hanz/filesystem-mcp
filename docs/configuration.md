@@ -173,27 +173,28 @@ exceptions:
   `--walk-cwd`, and `--allow-missing-roots` cannot switch off their environment
   variable, so unset the variable instead.
 
-| Flag                      | Default     | What it does                                                                                                                     |
-| :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| `[folders...]`            |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
-| `--read-only`             | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
-| `--read-only-root <dir>`  |             | Refuse writes, moves, and deletes under this folder. Repeatable. Env: `FS_READ_ONLY_DIRS`.                                       |
-| `--deny <pattern>`        |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
-| `--allow <pattern>`       |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
-| `--allow-sensitive`       | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
-| `--allow-cwd`             | off         | Add the current working folder.                                                                                                  |
-| `--walk-cwd`              | off         | Walk up from the current folder to the project root, then add it. Implies `--allow-cwd`.                                         |
-| `--allow-missing-roots`   | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
-| `--root-boundary <path>`  |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
-| `--max-file-size <bytes>` | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
-| `--tool-timeout <ms>`     | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.             |
-| `--port <n>`              |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
-| `--http-host <host>`      | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
-| `--api-key <key>`         |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
-| `--log-level <level>`     | `info`      | `debug`, `info`, `notice`, `warn`, `error`, `critical`, `alert`, or `emergency`. Env: `FS_LOG_LEVEL`.                            |
-| `--print-config`          |             | Print the settings the server would use, as JSON, and exit.                                                                      |
-| `-h`, `--help`            |             | Show help.                                                                                                                       |
-| `-v`, `--version`         |             | Show the version.                                                                                                                |
+| Flag                         | Default     | What it does                                                                                                                     |
+| :--------------------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| `[folders...]`               |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
+| `--read-only`                | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
+| `--read-only-root <dir>`     |             | Refuse writes, moves, and deletes under this folder. Repeatable. Env: `FS_READ_ONLY_DIRS`.                                       |
+| `--read-only-roots <dir...>` |             | Like `--read-only-root` for every argument after it, so it must come last. The Claude Desktop extension uses this.               |
+| `--deny <pattern>`           |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
+| `--allow <pattern>`          |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
+| `--allow-sensitive`          | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
+| `--allow-cwd`                | off         | Add the current working folder.                                                                                                  |
+| `--walk-cwd`                 | off         | Walk up from the current folder to the project root, then add it. Implies `--allow-cwd`.                                         |
+| `--allow-missing-roots`      | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
+| `--root-boundary <path>`     |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
+| `--max-file-size <bytes>`    | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
+| `--tool-timeout <ms>`        | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.             |
+| `--port <n>`                 |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
+| `--http-host <host>`         | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
+| `--api-key <key>`            |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
+| `--log-level <level>`        | `info`      | `debug`, `info`, `notice`, `warn`, `error`, `critical`, `alert`, or `emergency`. Env: `FS_LOG_LEVEL`.                            |
+| `--print-config`             |             | Print the settings the server would use, as JSON, and exit.                                                                      |
+| `-h`, `--help`               |             | Show help.                                                                                                                       |
+| `-v`, `--version`            |             | Show the version.                                                                                                                |
 
 ## Environment variables
 

@@ -30,6 +30,10 @@ const OPTIONS_HELP: HelpRow[] = [
     flags: '--read-only-root <dir>',
     desc: 'Refuse writes, moves, and deletes under this directory; repeatable, any directory including a subtree of a writable root (env: FS_READ_ONLY_DIRS)',
   },
+  {
+    flags: '--read-only-roots <dir...>',
+    desc: 'Like --read-only-root for every argument after it; must come last. For hosts that pass a folder list as arguments',
+  },
   { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
     flags: '--log-level <level>',

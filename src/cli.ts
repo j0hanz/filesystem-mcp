@@ -2,6 +2,7 @@ import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcont
 
 import type { Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { delimiter } from 'node:path';
 import { parseArgs as utilParseArgs } from 'node:util';
 
 import packageJson from '../package.json' with { type: 'json' };
@@ -14,6 +15,7 @@ import {
   isWindowsDrivePath,
   isWindowsDriveRelativePath,
   normalizePath,
+  splitDirList,
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
@@ -122,6 +124,37 @@ function expandEnvPlaceholder(arg: string): string[] {
   return value ? [value] : [];
 }
 
+const READ_ONLY_ROOTS_FLAG = '--read-only-roots';
+const UNFILLED_USER_CONFIG = /^\$\{user_config\.[^}]+\}$/;
+
+/**
+ * An MCPB host spreads a multi-select setting into separate arguments, so a
+ * repeatable flag would cover only the first and the rest would become writable
+ * roots. Everything after the flag leaves the argument list before parsing. A
+ * host passes an empty setting through as its literal placeholder.
+ */
+export function splitReadOnlyRoots(argv: readonly string[]): {
+  args: string[];
+  readOnlyRoots: string[];
+} {
+  const at = argv.indexOf(READ_ONLY_ROOTS_FLAG);
+  if (at === -1) return { args: [...argv], readOnlyRoots: [] };
+  return {
+    args: argv.slice(0, at),
+    readOnlyRoots: argv.slice(at + 1).filter((entry) => !UNFILLED_USER_CONFIG.test(entry)),
+  };
+}
+
+/** A value saved by the extension's old text field is a delimited list; a folder's own name may hold the delimiter. */
+async function expandSavedList(entry: string): Promise<string[]> {
+  if (!entry.includes(delimiter)) return [entry];
+  const isFolder = await stat(entry).then(
+    (stats) => stats.isDirectory(),
+    () => false,
+  );
+  return isFolder ? [entry] : splitDirList(entry);
+}
+
 const CLI_PARSER_CONFIG = {
   options: {
     'allow-cwd': { type: 'boolean', default: false },
@@ -158,7 +191,8 @@ export async function parseArgs(): Promise<{
   apiKey: string | undefined;
 }> {
   try {
-    const parsed = utilParseArgs(CLI_PARSER_CONFIG);
+    const { args, readOnlyRoots } = splitReadOnlyRoots(process.argv.slice(2));
+    const parsed = utilParseArgs({ ...CLI_PARSER_CONFIG, args });
 
     if (parsed.values.help) {
       printHelpAndExit();
@@ -213,7 +247,8 @@ export async function parseArgs(): Promise<{
     // entry denies nothing new. The same shape rules as positional roots
     // apply: a drive-relative or reserved-name value would silently name a
     // different directory than the operator meant.
-    for (const raw of v['read-only-root'] ?? []) {
+    const listedReadOnly = (await Promise.all(readOnlyRoots.map(expandSavedList))).flat();
+    for (const raw of [...(v['read-only-root'] ?? []), ...listedReadOnly]) {
       validateCliPath(raw);
       if (raw.trim() !== raw) {
         throw new CliExitError(
@@ -221,10 +256,11 @@ export async function parseArgs(): Promise<{
         );
       }
     }
-    const readOnlyDirs = await normalizeAndValidateDirs(
-      v['read-only-root'] ?? [],
-      allowMissingRoots,
-    );
+    const readOnlyDirs = [
+      ...(await normalizeAndValidateDirs(v['read-only-root'] ?? [], allowMissingRoots)),
+      // As FS_READ_ONLY_DIRS does: a folder deleted later must not stop the server.
+      ...(await normalizeAndValidateDirs(listedReadOnly, true)),
+    ];
 
     const allowedDirs =
       positionals.length > 0 ? await normalizeAndValidateDirs(positionals, allowMissingRoots) : [];

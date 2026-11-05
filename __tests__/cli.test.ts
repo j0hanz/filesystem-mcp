@@ -7,7 +7,7 @@ import {
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -271,6 +271,53 @@ describe('CLI (real subprocess)', () => {
     assert.strictEqual(code, 0, stderr);
     const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
     assert.deepStrictEqual(config.readOnlyDirs, []);
+  });
+
+  describe('--read-only-roots', () => {
+    const printConfig = async (
+      ...args: string[]
+    ): Promise<{ readOnlyDirs: string[]; allowedRoots: string[] }> => {
+      const { code, stdout, stderr } = await runCli(['--print-config', root, ...args]);
+      assert.strictEqual(code, 0, stderr);
+      return JSON.parse(stdout) as { readOnlyDirs: string[]; allowedRoots: string[] };
+    };
+
+    const folders = async (...names: string[]): Promise<string[]> => {
+      const paths = names.map((name) => join(root, name));
+      await Promise.all(paths.map((path) => mkdir(path, { recursive: true })));
+      return paths;
+    };
+
+    it('CLI-ROS-001: every folder after --read-only-roots is read-only', async () => {
+      const [a = '', b = ''] = await folders('ros1a', 'ros1b');
+      const config = await printConfig('--read-only-roots', a, b);
+      assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(a), normalizePath(b)]);
+      assert.ok(!config.allowedRoots.includes(normalizePath(a)));
+      assert.ok(!config.allowedRoots.includes(normalizePath(b)));
+    });
+
+    it('CLI-ROS-002: an unfilled placeholder adds nothing', async () => {
+      const config = await printConfig('--read-only-roots', '${user_config.read_only_dirs}');
+      assert.deepStrictEqual(config.readOnlyDirs, []);
+    });
+
+    it('CLI-ROS-003: a list saved by the old text field is split', async () => {
+      const [a = '', b = ''] = await folders('ros3a', 'ros3b');
+      const config = await printConfig('--read-only-roots', [a, b].join(delimiter));
+      assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(a), normalizePath(b)]);
+    });
+
+    it('CLI-ROS-004: a folder name holding the separator stays whole', async () => {
+      const [folder = ''] = await folders(`ros4x${delimiter}y`);
+      const config = await printConfig('--read-only-roots', folder);
+      assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(folder)]);
+    });
+
+    it('CLI-ROS-005: a missing folder still starts and stays listed', async () => {
+      const gone = join(root, 'ros5gone');
+      const config = await printConfig('--read-only-roots', gone);
+      assert.ok(config.readOnlyDirs.includes(normalizePath(gone)));
+    });
   });
 
   it('CLI-RO-003: --read-only and --read-only-root combine', async () => {
