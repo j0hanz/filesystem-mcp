@@ -1,9 +1,8 @@
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
-import { createTwoFilesPatch } from 'diff';
 
-import { DIFF_TIMEOUT_MS, diffStatsFromPatch } from '../core/diff.ts';
+import { DIFF_TIMEOUT_MS, diffStatsFromPatch, twoFilesPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { readNamedText } from '../core/scan.ts';
 import { PositiveInt, RequiredPath } from '../core/schema.ts';
@@ -45,14 +44,17 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
       ]);
 
     // Synchronous Myers diff; `timeout` is the only thing that can stop it.
-    const diffText = createTwoFilesPatch(
+    const diffText = twoFilesPatch(
       basename(validA),
       basename(validB),
       contentA,
       contentB,
       'a',
       'b',
-      { context: args.context, timeout: DIFF_TIMEOUT_MS },
+      {
+        context: args.context,
+        timeout: DIFF_TIMEOUT_MS,
+      },
     );
     if (diffText === undefined) {
       throw new FsError(
