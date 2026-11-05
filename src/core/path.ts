@@ -1083,7 +1083,7 @@ export class PathGuard {
     if (this.isSensitive(checkPath)) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        'Sensitive file blocked by the server denylist. To unblock one built-in secret-file pattern, restart the server with --allow <pattern> (or FS_ALLOWLIST); --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns the whole built-in list off. Paths blocked with --deny or FS_DENYLIST stay blocked.',
+        'Sensitive file blocked by the server denylist. To unblock one built-in secret-file pattern, restart the server with --allow <pattern> (or FS_ALLOWLIST), or in the Claude Desktop extension add it to the Unblocked secret files setting; --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns the whole built-in list off. Paths blocked with --deny or FS_DENYLIST stay blocked.',
         requestedPath,
       );
     }

@@ -388,7 +388,8 @@ the allowed folders instead of asking about it.
 **`Sensitive file blocked`.** The file matches the [secret-file list](#secret-files)
 or one of your `--deny` rules. Unblock that built-in pattern with
 `--allow`, for example `--allow '.env.example'`. `--deny` rules cannot be
-lifted this way; remove the rule instead.
+lifted this way; remove the rule instead. In the Claude Desktop extension, add
+the file to the Unblocked secret files setting.
 
 **Nothing happens, or a syntax error at startup.** Check `node --version`.
 The server needs Node.js 24 or later.
