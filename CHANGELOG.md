@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.2] - 2026-11-05
+
+Tool replies that name what failed and what changed, and schema docs that state
+the cases callers hit. Before upgrading, read Changed if you parse `search_text`
+or `replace_text` text, or match `patch` errors or `undo` reason lines.
+
+### Changed
+
+- **`search_text` prints the match count.** A page that holds every match now ends in a line like `// 3 matches · 2 files`, before any skip notice. Paged results keep the pager's total.
+- **`replace_text` names the changed files.** A write with `returnDiff` off, or with a returned diff cut short, now adds `// changed: a.txt, b.txt`. It lists up to five paths, then `and N more`. In this line and in the early-stop warning, a name with a comma, a double quote or a control character goes by its JSON spelling, so it cannot read as two paths.
+- **`undo` reason lines say `SKIPPED`.** A restore skipped because the file or its folder changed used to print `CANCELLED` in the reason line, while the step line said skipped. Other error codes stay as they were.
+
+### Fixed
+
+- **`patch` names the hunk that failed.** The error now reads `hunk 2 (starting at line 40) does not match file content`, using the start line from the submitted diff. A patch too large to diagnose within the apply budget keeps the old wording, `hunk context does not match file content`.
+
+### Documentation
+
+- **`create` and `delete` state the no-prompt outcome.** The schemas say a client that cannot show a prompt fails with `INVALID_INPUT`. A recursive `delete` of a non-empty folder then deletes nothing in the call.
+- **`search_text` and `replace_text` cross-reference their case defaults.** `search_text` ignores case by default and `replace_text` matches it, so a reported match can go unreplaced.
+- **`stat` explains `created` on Windows.** A rewrite swaps in a new file, so `created` becomes that write's time. A file shared through hard links is rewritten in place and keeps it.
+- **`undo` qualifies `dryRun`.** A preview of the whole history assumes each call is reverted after the newer ones, so a file changed since can still show as restored. Previewing one id shows that call alone.
+
 ## [2.18.1] - 2026-11-05
 
 Clearer `delete` and `undo` errors, and diff headers that show file names as
