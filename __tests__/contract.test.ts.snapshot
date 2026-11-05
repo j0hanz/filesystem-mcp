@@ -690,7 +690,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "caseSensitive": {
             "default": false,
-            "description": "Enable case-sensitive matching (default: case-insensitive). replace_text matches case by default, so matches found here can go unreplaced there.",
+            "description": "Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.",
             "type": "boolean"
           },
           "maxResults": {
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows every rewrite of a file swaps in a new one atomically, so created becomes that write's time, while modified keeps tracking edits.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1193,7 +1193,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           },
           "caseSensitive": {
             "default": false,
-            "description": "Enable case-sensitive matching (default: case-insensitive). replace_text matches case by default, so matches found here can go unreplaced there.",
+            "description": "Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.",
             "type": "boolean"
           },
           "maxResults": {
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows every rewrite of a file swaps in a new one atomically, so created becomes that write's time, while modified keeps tracking edits.",
       "inputSchema": {
         "type": "object",
         "properties": {

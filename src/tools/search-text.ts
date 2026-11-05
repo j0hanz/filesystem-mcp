@@ -47,7 +47,7 @@ const GrepInputSchema = z.strictObject({
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
   caseSensitive: defaultFalseBoolean(
-    'Enable case-sensitive matching (default: case-insensitive). replace_text matches case by default, so matches found here can go unreplaced there.',
+    'Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.',
   ),
   maxResults: z
     .uint32()
