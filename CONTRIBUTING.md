@@ -177,9 +177,7 @@ Don't change the version in `package.json`, `server.json`,
 `mcpb/manifest.json`, `.codex-plugin/plugin.json`, or
 `.cursor-plugin/plugin.json`. The Release workflow bumps them together.
 
-## Issues and the project board
+## Issues
 
 Issues are the work items, and pull requests link to them. The labels are
-bug, enhancement, maintenance, documentation, and blocked. Maintainers track
-work on a GitHub Project, and [docs/project-board.md](docs/project-board.md)
-describes its setup and triage workflow.
+bug, enhancement, maintenance, documentation, and blocked.
