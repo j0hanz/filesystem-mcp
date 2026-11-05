@@ -19,7 +19,12 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"],
+      "args": [
+        "${__dirname}/dist/index.js",
+        "${user_config.allowed_directories}",
+        "--read-only-roots",
+        "${user_config.read_only_folders}"
+      ],
       "env": {
         "FS_READ_ONLY": "${user_config.read_only}",
         "FS_READ_ONLY_DIRS": "${user_config.read_only_dirs}",
@@ -56,36 +61,44 @@
   "user_config": {
     "allowed_directories": {
       "type": "directory",
-      "title": "Allowed directories",
-      "description": "Directories the server may read and write. Other paths need your approval first.",
+      "title": "Allowed folders",
+      "description": "The folders the AI can use. The AI must ask you before it opens anything else.",
       "multiple": true,
       "required": true
     },
     "read_only": {
       "type": "boolean",
       "title": "Read-only mode",
-      "description": "Remove every tool that changes files. The AI can still list, search, and read.",
+      "description": "Turn this on so the AI can read files but never change, move, or delete them.",
       "default": false,
+      "required": false
+    },
+    "read_only_folders": {
+      "type": "directory",
+      "title": "Read-only folders",
+      "description": "Optional. Folders the AI can read but not change. Each one must be in Allowed folders or inside one of them. Has no effect while Read-only mode is on, because then nothing can be changed.",
+      "multiple": true,
+      "default": [],
       "required": false
     },
     "read_only_dirs": {
       "type": "string",
-      "title": "Read-only directories",
-      "description": "Directories the AI may read but never change, `:`-separated on macOS and Linux, `;`-separated on Windows. Writes, moves, and deletes under them are refused. The directories must also be allowed; this setting grants no access.",
+      "title": "Read-only folders, typed (older setting)",
+      "description": "Optional. Folders saved here keep working, together with Read-only folders above. Use the setting above for new folders. To type more than one, put a semicolon between the full paths on Windows or a colon on macOS and Linux, with no space after it. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
       "default": "",
       "required": false
     },
     "deny_patterns": {
       "type": "string",
       "title": "Extra blocked files",
-      "description": "Comma-separated patterns to block, for example private/**,*.sqlite. Secret files such as .env and private keys are already blocked.",
+      "description": "Optional. Files the AI can never open, with a comma between each. To block a folder, add /** after its name. The example private/**, *.sqlite, salaries.xlsx blocks everything in any folder named private, every .sqlite file, and every file named salaries.xlsx in any folder. Files such as .env, private keys, and cloud and SSH credentials are already blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     },
     "allow_patterns": {
       "type": "string",
       "title": "Unblocked secret files",
-      "description": "Comma-separated built-in secret-file patterns to unblock, for example .env.example. The AI can then read matching files, so list only what it should see. Extra blocked files always win.",
+      "description": "Optional. Leave this empty unless the AI needs a file that is blocked by default. List the files with a comma between each. The example .env.example, debug.keystore unblocks those two names. The AI can then read and change any file with a listed name, in every allowed folder, so list only what you are happy for it to touch. Anything in Extra blocked files stays blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     }

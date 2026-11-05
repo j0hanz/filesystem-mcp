@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--read-only-roots` takes any number of read-only folders, one per argument.** Every argument after it is read-only, so it must come last. A folder that does not exist yet is accepted and protected once it appears.
 - **The Claude Desktop extension can unblock a secret file.** Its new "Unblocked secret files" setting passes `FS_ALLOWLIST`, the fix the `ACCESS_DENIED` message names.
 - **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges. A numbered read that would pass the size limit is refused, with advice to read a slice.
 
 ### Changed
 
+- **The Claude Desktop extension's settings explain themselves.** They name what is blocked by default, link the full list, and show examples with several items. Saved settings carry over.
+- **The Claude Desktop extension picks read-only folders with a folder picker.** There are no paths or separators to type. Folders saved in the typed field keep working, and both settings apply.
+- **Refusing a secret file names the extension setting.** The message offered only a restart with a flag, which a Claude Desktop user cannot do.
 - **A refused cursor says why it may have gone stale.**
 - **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
 - **`list` says what it left out.** A raised `maxDepth` reports how many directories it did not expand, and a walk that skips ignored folders names them.

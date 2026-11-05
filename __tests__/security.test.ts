@@ -134,7 +134,7 @@ describe('Security (P0)', () => {
         guard.validateExistingPath(envPath),
         fsErrorMatcher(
           ErrorCode.ACCESS_DENIED,
-          /--allow <pattern>[\s\S]*FS_ALLOWLIST[\s\S]*--allow-sensitive[\s\S]*FS_ALLOW_SENSITIVE=1/,
+          /--allow <pattern>[\s\S]*FS_ALLOWLIST[\s\S]*Unblocked secret files[\s\S]*--allow-sensitive[\s\S]*FS_ALLOW_SENSITIVE=1/,
         ),
         'Should reject access to .env',
       );
@@ -352,6 +352,31 @@ describe('Security (P0)', () => {
           assert.strictEqual(matcher.isSensitive('/w/.env.example'), true);
         });
       }
+    });
+
+    it('the examples in the extension settings do what their text says', async () => {
+      await withEnv(
+        {
+          FS_DENYLIST: 'private/**, *.sqlite, salaries.xlsx',
+          FS_ALLOWLIST: '.env.example, debug.keystore',
+        },
+        () => {
+          const matcher = new SensitiveMatcher();
+          for (const blocked of [
+            '/w/private/a.txt',
+            '/w/sub/private/c.txt',
+            '/w/sub/data.sqlite',
+            '/w/sub/salaries.xlsx',
+            '/w/.env',
+            '/w/release.keystore',
+          ]) {
+            assert.strictEqual(matcher.isSensitive(blocked), true, blocked);
+          }
+          for (const open of ['/w/.env.example', '/w/debug.keystore', '/w/ok.txt']) {
+            assert.strictEqual(matcher.isSensitive(open), false, open);
+          }
+        },
+      );
     });
 
     it('TC-SEC-013: Custom FS_DENYLIST rules', () => {
