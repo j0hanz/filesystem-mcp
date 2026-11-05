@@ -547,6 +547,9 @@ export class GuardedFileSystem {
         pair.source,
       );
     }
+    if (op === 'move' && !respelling) {
+      await this.#refuseDirectoryMerge(entry, destination, pair.destination);
+    }
     // On the final destination spelling: a re-spelled directory moves its
     // entries in or out of a spelling-specific allow or deny rule.
     await this.#relocationWalk(op, entry, pair.source, destination, signal);
@@ -605,6 +608,8 @@ export class GuardedFileSystem {
           request.destination,
         );
       }
+      // A destination filled while a Confirmation was open keeps its identity.
+      if (op === 'move') await this.#refuseDirectoryMerge(entry, destination, request.destination);
     }
     if (createParents) await this.mkdir(dirname(destination), { recursive: true });
     if (op === 'copy') await this.#copy(entry, destination);
@@ -623,6 +628,30 @@ export class GuardedFileSystem {
   ): Promise<void> {
     const plan = await this.planTransfer('move', { source: oldPath, destination: newPath });
     await this.executeTransfer(plan, { crossDevice });
+  }
+
+  /**
+   * A rename never merges directories, so refuse before a prompt or a
+   * cross-device copy is spent on one. `entry` is read as itself, since moving
+   * a link renames the link; `destination` is already resolved through links.
+   */
+  async #refuseDirectoryMerge(
+    entry: string,
+    destination: string,
+    requested: string,
+  ): Promise<void> {
+    const [source, dest] = await Promise.all([
+      unlessMissing(fsLstat(entry)),
+      unlessMissing(fsLstat(destination)),
+    ]);
+    if (!source?.isDirectory() || !dest?.isDirectory()) return;
+    // An unreadable destination falls through: the rename reports what it always did.
+    if (!(await this.hasChildrenUnchecked(destination).catch(() => false))) return;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      `A move cannot merge directories: destination "${requested}" is a non-empty directory. Choose a new destination name, or use copy: true to merge and keep the source.`,
+      requested,
+    );
   }
 
   /**
