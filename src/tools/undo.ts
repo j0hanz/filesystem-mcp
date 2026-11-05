@@ -47,7 +47,8 @@ const MAX_REASON_LINES = 20;
 
 /** Each step's results within the caps, in restore order; skipped and failed paths are kept before restored ones. */
 function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
-  let budget = MAX_LISTED_BYTES;
+  // The array brackets, then a separator per result, so the listed JSON stays in budget.
+  let budget = MAX_LISTED_BYTES - 2;
   return steps.map((step) => {
     const keep = new Set<UndoFileResult>();
     const ranked = [
@@ -56,7 +57,7 @@ function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
     ];
     for (const result of ranked) {
       if (keep.size === MAX_STEP_RESULTS) break;
-      const bytes = Buffer.byteLength(JSON.stringify(result));
+      const bytes = Buffer.byteLength(JSON.stringify(result)) + 1;
       if (bytes > budget) break;
       budget -= bytes;
       keep.add(result);

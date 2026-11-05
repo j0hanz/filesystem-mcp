@@ -98,7 +98,8 @@ Once it is connected, you can ask things like:
   need a client that can show them. If yours cannot, the server refuses each
   of those actions instead of asking. Only `create` and copies can skip the
   question, because `overwrite: true` replaces a file without asking, on any
-  client, and `undo` can usually restore it. Edits made with `edit`, `patch`, and
+  client. `undo` can usually restore a file `create` replaced, but a copy cannot
+  be undone. Edits made with `edit`, `patch`, and
   `replace_text` apply without asking, but the AI can show you the diff first
   with `dryRun`. If the AI should never change
   anything, `--read-only` removes every tool that writes.

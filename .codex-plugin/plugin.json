@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Filesystem MCP",
     "shortDescription": "Read, search, edit and patch files in the folders you choose.",
-    "longDescription": "Gives your AI client file tools limited to the folders you allow. Secret files like .env and private keys stay hidden by default, deleting a folder or overwriting a file needs your confirmation unless the AI passes overwrite: true, a client that cannot ask gets a refusal, and read-only mode removes every tool that changes files. Runs locally and sends no data anywhere.",
+    "longDescription": "Gives your AI client file tools limited to the folders you allow. Secret files like .env and private keys stay hidden by default, deleting a folder or overwriting a file needs your confirmation (only create and copies can skip it, with overwrite: true), a client that cannot ask gets a refusal, and read-only mode removes every tool that changes files. Runs locally and sends no data anywhere.",
     "developerName": "j0hanz",
     "category": "Coding",
     "capabilities": ["Read", "Write"],

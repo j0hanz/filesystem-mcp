@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
-import { unifiedPatch } from '../core/diff.ts';
+import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
@@ -88,7 +88,12 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       return { content: result.patched, result, write: true };
     },
   );
-  const { linesAdded, linesRemoved } = done.result;
+  // A dry run shows where the hunks landed, like edit's, and counts what it
+  // shows: a hunk that re-adds unchanged lines counts more than it changes.
+  const computed = args.dryRun
+    ? unifiedPatch(basename(done.validPath), done.before, done.after)
+    : undefined;
+  const { linesAdded, linesRemoved } = computed ? diffStatsFromPatch(computed) : done.result;
   // The patched file used to come back whole in the text block, so a one-line
   // hunk against a 5000-line file returned 5000 lines. Every other write tool
   // answers with a summary; the result is reachable via `resourceUri` or a
@@ -99,11 +104,12 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     ctx.log('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
   }
 
-  // A dry run shows where the hunks landed, like edit's. The caller's own diff
-  // stands in when the Myers pass hits DIFF_TIMEOUT_MS.
-  const preview = args.dryRun
-    ? (unifiedPatch(basename(done.validPath), done.before, done.after) ?? args.diff)
-    : undefined;
+  // The caller's own diff stands in when the Myers pass hits DIFF_TIMEOUT_MS.
+  const preview = args.dryRun ? (computed ?? args.diff) : undefined;
+  const approximate =
+    computed === undefined && args.dryRun
+      ? '\n// Too many lines to diff: this is the diff as passed, and its line numbers may be off.'
+      : '';
 
   const { resourceLink, validPath, modified, ...fileMeta } = done.report();
   return {
@@ -119,7 +125,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     text:
       preview === undefined
         ? summaryText
-        : `${summaryText} [dry run]${preview.includes('\n@@') || preview.startsWith('@@') ? `\n\n${preview}` : ''}`,
+        : `${summaryText} [dry run]${approximate}${preview.includes('\n@@') || preview.startsWith('@@') ? `\n\n${preview}` : ''}`,
     ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
   };
 }

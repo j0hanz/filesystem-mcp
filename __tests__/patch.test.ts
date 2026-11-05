@@ -76,6 +76,18 @@ describe('patch body', () => {
     }
   });
 
+  it('dryRun counts the lines its diff shows, not the ones the input re-adds', async () => {
+    const f = join(root, 'patch_dry_counts.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const diff = '--- f\n+++ f\n@@ -1,3 +1,3 @@\n-a\n-b\n-c\n+a\n+X\n+c\n';
+    const dry = await patch({ path: f, diff, dryRun: true });
+    assert.match(dry.text ?? '', /\+1 -1 \[dry run\]/);
+    assert.strictEqual(dry.structured.linesAdded, 1);
+    assert.strictEqual(dry.structured.linesRemoved, 1);
+    const real = await patch({ path: f, diff });
+    assert.strictEqual(real.structured.linesAdded, 3, 'a real reply does not change');
+  });
+
   it('dryRun on a large file returns the hunk, not the file', async () => {
     const f = join(root, 'patch_dry_large.txt');
     const rest = Array.from({ length: 5000 }, (_, i) => `line ${String(i)}`).join('\n');
