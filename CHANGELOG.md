@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The Claude Desktop extension's settings explain themselves.** They name what is blocked by default, link the full list, and show examples with several items. Saved settings carry over.
-- **The Claude Desktop extension picks read-only folders with a folder picker.** There are no paths or separators to type. A list saved by the old text field keeps working.
+- **The Claude Desktop extension picks read-only folders with a folder picker.** There are no paths or separators to type. After upgrading, open the setting and check your folders: Claude Desktop may not carry over a list saved in the old text field, and a folder that is not listed is writable.
 - **Refusing a secret file names the extension setting.** The message offered only a restart with a flag, which a Claude Desktop user cannot do.
 - **A refused cursor says why it may have gone stale.**
 - **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
