@@ -554,7 +554,12 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       );
     } else if (stop === 'maxMatches' || stop === 'maxFiles') {
       lines.push(`// Raise ${stop} to reach them.`);
-    } else if (stop === undefined && !args.dryRun && !args.returnDiff && structured.summary.succeeded > 0) {
+    } else if (
+      stop === undefined &&
+      !args.dryRun &&
+      !args.returnDiff &&
+      structured.summary.succeeded > 0
+    ) {
       // The one case nothing else names the files: the early-stop warning
       // above lists them, `dryRun` and `returnDiff` ship the diff, and the
       // per-file results sit under `_meta`, which the model does not see.

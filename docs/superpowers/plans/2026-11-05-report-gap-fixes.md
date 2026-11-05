@@ -49,11 +49,13 @@ Input classes no task's happy path covers, each pinned by the named test:
 ### Task 1: No-prompt fallback wording in `create` and `delete`
 
 **Files:**
+
 - Modify: `src/tools/create.ts:43-48`
 - Modify: `src/tools/delete.ts:35-37`
 - Modify: `__tests__/contract.test.ts.snapshot` (via update command)
 
 **Interfaces:**
+
 - Consumes: none.
 - Produces: none.
 
@@ -98,11 +100,13 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 2: Cross-warn the case defaults
 
 **Files:**
+
 - Modify: `src/tools/search-text.ts:49`
 - Modify: `src/tools/replace-text.ts:79-82`
 - Modify: `__tests__/contract.test.ts.snapshot` (via update command)
 
 **Interfaces:**
+
 - Consumes: none.
 - Produces: none.
 
@@ -137,12 +141,14 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 3: `undo` preview wording and one skip word
 
 **Files:**
+
 - Modify: `src/tools/undo.ts:25` (schema)
 - Modify: `src/tools/undo.ts:76-85` (`reasonLines`)
 - Test: `__tests__/undo.test.ts`
 - Modify: `__tests__/contract.test.ts.snapshot` (via update command)
 
 **Interfaces:**
+
 - Consumes: `ErrorCode` (already imported in `src/tools/undo.ts`).
 - Produces: none.
 
@@ -200,10 +206,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 4: `search_text` prints the match count
 
 **Files:**
+
 - Modify: `src/tools/search-text.ts:270-309`
 - Test: `__tests__/search-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `buildSearchMatchDetail` (`src/tools/search-text.ts:136`), `paged.offset`, `paged.metadata.matchingLines`, `paged.metadata.filesMatched`.
 - Produces: none.
 
@@ -249,10 +257,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 5: `replace_text` names the changed files
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts:538-555`
 - Test: `__tests__/replace-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `structured.results` (root-relative paths), `structured.summary.succeeded`.
 - Produces: none.
 
@@ -299,10 +309,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 6: `patch` names the failing hunk
 
 **Files:**
+
 - Modify: `src/tools/patch.ts:184-193`
 - Test: `__tests__/patch.test.ts`
 
 **Interfaces:**
+
 - Consumes: `applyPatch`, `parsedPatch`, the clamped `hunks`, `fileLines`, `diffLines` (all in `patchContent`), `MAX_PATCH_LINE_PRODUCT`.
 - Produces: none.
 
@@ -324,9 +336,14 @@ On `patched === false`, diagnose only within one apply's budget (each prefix re-
 if (patched === false) {
   const first =
     hunks.length > 0 && fileLines * diffLines * hunks.length <= MAX_PATCH_LINE_PRODUCT
-      ? hunks.findIndex((_, i) => applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false)
+      ? hunks.findIndex(
+          (_, i) => applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false,
+        )
       : -1;
-  const where = first >= 0 ? `hunk ${String(first + 1)} (starting at line ${String(hunks[first]?.oldStart)}) does not match file content` : 'hunk context does not match file content';
+  const where =
+    first >= 0
+      ? `hunk ${String(first + 1)} (starting at line ${String(hunks[first]?.oldStart)}) does not match file content`
+      : 'hunk context does not match file content';
   throw new FsError(
     ErrorCode.INVALID_INPUT,
     `patch did not apply cleanly: ${where} (hunks must be in file order)`,
@@ -354,10 +371,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 7: `stat` notes the Windows creation-time reset
 
 **Files:**
+
 - Modify: `src/tools/stat.ts:172-175`
 - Modify: `__tests__/contract.test.ts.snapshot` (via update command)
 
 **Interfaces:**
+
 - Consumes: none.
 - Produces: none.
 
@@ -386,9 +405,11 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 8: Full check and graph refresh
 
 **Files:**
+
 - Modify: `graphify-out/` (via `graphify update .`)
 
 **Interfaces:**
+
 - Consumes: all prior tasks.
 - Produces: a green full check.
 

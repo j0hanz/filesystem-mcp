@@ -191,7 +191,8 @@ function patchContent(
     const first =
       hunks.length > 0 && fileLines * diffLines * hunks.length <= MAX_PATCH_LINE_PRODUCT
         ? hunks.findIndex(
-            (_, i) => applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false,
+            (_, i) =>
+              applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false,
           )
         : -1;
     // findIndex cannot miss: the full clamped set is the last prefix and already failed.

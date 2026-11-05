@@ -299,7 +299,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
       paged.metadata.matchingLines > 0 &&
       paged.offset === 0 &&
       structured.matches.length === paged.metadata.matchingLines
-        ? `\n\n// ${buildSearchMatchDetail(paged.metadata.matchingLines, paged.metadata.filesMatched ?? 0)}`
+        ? `\n\n// ${buildSearchMatchDetail(paged.metadata.matchingLines, paged.metadata.filesMatched)}`
         : '';
     const text =
       body +
