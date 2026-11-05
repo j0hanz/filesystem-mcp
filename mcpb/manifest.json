@@ -19,10 +19,14 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"],
+      "args": [
+        "${__dirname}/dist/index.js",
+        "${user_config.allowed_directories}",
+        "--read-only-roots",
+        "${user_config.read_only_dirs}"
+      ],
       "env": {
         "FS_READ_ONLY": "${user_config.read_only}",
-        "FS_READ_ONLY_DIRS": "${user_config.read_only_dirs}",
         "FS_DENYLIST": "${user_config.deny_patterns}",
         "FS_ALLOWLIST": "${user_config.allow_patterns}"
       }
@@ -69,10 +73,11 @@
       "required": false
     },
     "read_only_dirs": {
-      "type": "string",
+      "type": "directory",
       "title": "Read-only folders",
-      "description": "Optional. Folders the AI can read but not change. Each one must be in the list above or inside a folder in it. Type the full path. For more than one, put a semicolon between the paths on Windows or a colon on macOS and Linux, with no spaces. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
-      "default": "",
+      "description": "Optional. Folders the AI can read but not change. Each one must be in Allowed folders or inside one of them. Has no effect while Read-only mode is on, because then nothing can be changed.",
+      "multiple": true,
+      "default": [],
       "required": false
     },
     "deny_patterns": {

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
+import { replaceVariables } from '@anthropic-ai/mcpb';
+
+import { splitReadOnlyRoots } from '../src/cli.ts';
 import { ALL_TOOLS } from '../src/tools/index.ts';
 
 describe('MCPB manifest', () => {
@@ -10,8 +13,11 @@ describe('MCPB manifest', () => {
   ) as {
     version: string;
     tools: { name: string }[];
-    server: { mcp_config: { env: Record<string, string> } };
-    user_config: Record<string, { title: string; description: string }>;
+    server: { mcp_config: { args: string[]; env: Record<string, string> } };
+    user_config: Record<
+      string,
+      { title: string; description: string; type?: string; multiple?: boolean; default?: unknown }
+    >;
   };
   const SECRET_LIST =
     'https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files';
@@ -64,12 +70,40 @@ describe('MCPB manifest', () => {
     assert.match(docs, /^## Secret files$/m);
   });
 
-  it('MCPB-007: the read-only folders example is a real value', () => {
-    const text = manifest.user_config['read_only_dirs']?.description ?? '';
-    assert.ok(text.includes('C:\\Work\\docs;C:\\Work\\archive'));
-    assert.ok(text.includes('/Users/me/docs:/Users/me/archive'));
-    // A space after the separator stops the server starting.
-    assert.match(text, /with no spaces/);
+  it('MCPB-007: read-only folders use the folder picker', () => {
+    const setting = manifest.user_config['read_only_dirs'];
+    assert.strictEqual(setting?.type, 'directory');
+    assert.strictEqual(setting.multiple, true);
+    assert.deepStrictEqual(setting.default, []);
+    assert.doesNotMatch(setting.description, /semicolon|colon/);
+    assert.match(setting.description, /no effect while Read-only mode is on/);
+    assert.strictEqual(manifest.server.mcp_config.env['FS_READ_ONLY_DIRS'], undefined);
+  });
+
+  describe('MCPB-011: arguments the host builds', () => {
+    const build = (readOnly: string | string[]): ReturnType<typeof splitReadOnlyRoots> => {
+      const argv = replaceVariables(manifest.server.mcp_config.args, {
+        __dirname: '/x',
+        'user_config.allowed_directories': ['/w', '/v'],
+        'user_config.read_only_dirs': readOnly,
+      }) as string[];
+      return splitReadOnlyRoots(argv.slice(1));
+    };
+
+    it('keeps chosen folders out of the roots', () => {
+      assert.deepStrictEqual(build(['/w/a', '/w/b']), {
+        args: ['/w', '/v'],
+        readOnlyRoots: ['/w/a', '/w/b'],
+      });
+    });
+
+    it('adds nothing when no folder is chosen', () => {
+      assert.deepStrictEqual(build([]), { args: ['/w', '/v'], readOnlyRoots: [] });
+    });
+
+    it('adds nothing for a setting saved empty by the old text field', () => {
+      assert.deepStrictEqual(build(''), { args: ['/w', '/v'], readOnlyRoots: [] });
+    });
   });
 
   it('MCPB-008: no example value ends in a period someone could copy', () => {
