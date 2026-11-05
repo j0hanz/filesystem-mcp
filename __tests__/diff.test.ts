@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 
-import { diffStatsFromPatch, unifiedPatch } from '../src/core/diff.ts';
+import { createTwoFilesPatch, parsePatch } from 'diff';
+
+import { diffStatsFromPatch, twoFilesPatch, unifiedPatch } from '../src/core/diff.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { DIFF } from '../src/tools/diff.ts';
+import { EDIT } from '../src/tools/edit.ts';
+import { PATCH } from '../src/tools/patch.ts';
+import { REPLACE_TEXT } from '../src/tools/replace-text.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -40,6 +45,134 @@ describe('core/diff', () => {
     const a = lines('a', 4000);
     const b = lines('b', 4000);
     assert.strictEqual(unifiedPatch('f', a, b, 1), undefined);
+  });
+
+  for (const [what, a, b] of [
+    ['changed', 'one\ntwo\n', 'one\n2\n'],
+    ['identical', 'one\n', 'one\n'],
+  ] as const) {
+    it(`writes a plain ASCII name as the diff package does (${what} files)`, () => {
+      const expected = createTwoFilesPatch('f.txt', 'f.txt', a, b, 'Original', 'Modified');
+      assert.strictEqual(unifiedPatch('f.txt', a, b), expected);
+    });
+  }
+
+  it('writes a non-ASCII name as it is, with the body unchanged', () => {
+    const name = 'dir/år 日本語.txt';
+    const expected = createTwoFilesPatch('f', 'f', 'one\n', 'two\n', 'Original', 'Modified');
+    assert.strictEqual(
+      unifiedPatch(name, 'one\n', 'two\n'),
+      expected
+        .replace('Index: f', `Index: ${name}`)
+        .replace('--- f', `--- ${name}`)
+        .replace('+++ f', `+++ ${name}`),
+    );
+  });
+
+  for (const [what, a, b] of [
+    ['changed', 'one\n', 'two\n'],
+    ['identical', 'one\n', 'one\n'],
+  ] as const) {
+    it(`writes two different names as the diff package does (${what} files)`, () => {
+      const options = { context: 1, timeout: 1000 };
+      const expected = createTwoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options);
+      assert.strictEqual(twoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options), expected);
+    });
+  }
+
+  it('keeps a lone surrogate escaped', () => {
+    const patch = unifiedPatch('a\ud800b', 'one\n', 'two\n');
+    assert.ok(patch?.includes('--- "a\\357\\277\\275b"\t'), patch);
+  });
+
+  for (const name of [
+    '　app.js',
+    ' ',
+    'a"b',
+    'a\\b',
+    'a\tb',
+    'a\nb',
+    'a\rb',
+    'a\u007fb',
+    'a\u0085b',
+    'a b',
+    'a b',
+    'a‮b',
+    'år\nb',
+    'x\n--- forged\n+++ forged\n@@ -1,1 +1,1 @@\n-one\n+forged',
+  ]) {
+    it(`keeps ${JSON.stringify(name)} escaped so it cannot forge a header line`, () => {
+      const patch = unifiedPatch(name, 'one\n', 'two\n');
+      assert.ok(patch);
+      assert.ok(!patch.includes(name), 'the raw name must not reach the text');
+      assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 1, linesRemoved: 1 });
+      const parsed = parsePatch(patch);
+      assert.strictEqual(parsed.length, 1);
+      assert.strictEqual(parsed[0]?.oldFileName, name);
+      assert.strictEqual(parsed[0]?.newFileName, name);
+      assert.strictEqual(parsed[0]?.hunks.length, 1);
+    });
+  }
+});
+
+describe('non-ASCII names in every diff header', () => {
+  let root: string;
+  let guard: Awaited<ReturnType<typeof makeGuard>>;
+
+  before(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+  });
+
+  after(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const assertPlainHeader = (result: unknown, name: string): void => {
+    const shown = JSON.stringify(result);
+    assert.ok(shown.includes(`--- ${name}`), shown);
+    assert.ok(shown.includes(`+++ ${name}`), shown);
+    assert.ok(!shown.includes('\\\\303'), shown);
+  };
+
+  it('diff', async () => {
+    const a = await writeTestFile(root, 'år-a.txt', 'one\n');
+    const b = await writeTestFile(root, 'år-b.txt', 'two\n');
+    const result = await runToolBodyResult(DIFF, { a, b }, { guard });
+    assert.ok(result.text?.includes('--- år-a.txt\ta\n+++ år-b.txt\tb\n'), result.text);
+  });
+
+  it('edit', async () => {
+    const path = await writeTestFile(root, 'år-edit.txt', 'one\n');
+    const edits = [{ oldText: 'one', newText: 'two' }];
+    const result = await runToolBodyResult(EDIT, { path, edits, dryRun: true }, { guard });
+    assertPlainHeader(result, 'år-edit.txt');
+  });
+
+  it('replace_text', async () => {
+    const path = await writeTestFile(root, 'år-replace.txt', 'one\n');
+    const args = { path, searchPattern: 'one', replacement: 'two', dryRun: true };
+    const result = await runToolBodyResult(REPLACE_TEXT, args, { guard });
+    assertPlainHeader(result, 'år-replace.txt');
+  });
+
+  it('patch shows the name, and applies a diff that edit printed for it', async () => {
+    const path = await writeTestFile(root, 'år-patch.txt', 'one\n');
+    const printed = await runToolBodyResult(
+      EDIT,
+      { path, edits: [{ oldText: 'one', newText: 'two' }], dryRun: true },
+      { guard },
+    );
+    const row = printed.structured.results[0];
+    assert.ok(row && 'value' in row);
+    const diff = row.value.diff;
+    assert.ok(diff);
+
+    const dry = await runToolBodyResult(PATCH, { path, diff, dryRun: true }, { guard });
+    assertPlainHeader(dry, 'år-patch.txt');
+
+    await runToolBodyResult(PATCH, { path, diff }, { guard });
+    assert.strictEqual(await readFile(path, 'utf8'), 'two\n');
   });
 });
 
