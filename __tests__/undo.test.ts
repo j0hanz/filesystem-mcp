@@ -3113,6 +3113,22 @@ describe('undo tool over the wire', () => {
     }
   });
 
+  it('an unknown id reaches the client with its code and hint', async () => {
+    const tmp = await createTestRoot();
+    const pair = await createTestClientPair([tmp]);
+    try {
+      const result = await call(pair.client, 'undo', { id: 'zzzz' });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        firstTextBlock(result),
+        'NOT_FOUND: Unknown or expired undo id "zzzz".\nRun undo with dryRun: true and no id to list the ids.',
+      );
+    } finally {
+      await pair.close();
+      await cleanupTestRoot(tmp);
+    }
+  });
+
   it('a delete with one oversized path reports it and still undoes the other', async () => {
     const tmp = await createTestRoot();
     const pair = await withEnv({ FS_MAX_UNDO_BYTES: '2000' }, () => createTestClientPair([tmp]));
