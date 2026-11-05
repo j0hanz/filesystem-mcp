@@ -97,6 +97,39 @@ describe('patch body', () => {
     });
   });
 
+  it('keeps the generic refusal for a huge hunk count against an empty file', async () => {
+    const f = join(root, 'patch_empty_many.txt');
+    await writeFile(f, '');
+    const hunks = Array.from(
+      { length: 4_000 },
+      (_, i) => `@@ -${String(i + 1)},0 +${String(i + 1)},1 @@\n+l${String(i)}\n`,
+    );
+    // A stale context line the empty file cannot match, so the apply fails.
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -500,1 +500,2 @@\n nope\n+X\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.doesNotMatch(error.message ?? '', /hunk \d+/u);
+      return true;
+    });
+  });
+
+  it('names the failing hunk by its submitted start line', async () => {
+    const f = join(root, 'patch_order_line.txt');
+    await writeFile(f, 'a\nb\nc\nd\ne\nf\ng\nh\n');
+    // Hunk 1 consumes lines 1-2, so the clamp moves hunk 2's search start to
+    // 2; its header still says 1, and the refusal names the header, the line
+    // the caller can find in the diff they submitted.
+    const diff =
+      '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n@@ -1,3 +1,3 @@\n-z\n+Y\n c\n d\n';
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /did not apply cleanly: hunk 2 \(starting at line 1\) does not match/u,
+      ),
+    );
+  });
+
   it('refuses a zero-context hunk past the end of the file and writes nothing', async () => {
     const f = join(root, 'patch_past_end.txt');
     await writeFile(f, 'a\nb\n');

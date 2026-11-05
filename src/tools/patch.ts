@@ -187,18 +187,23 @@ function patchContent(
   if (patched === false) {
     // jsdiff answers false for the whole diff; re-applying each prefix names
     // the first hunk that fails. Each prefix re-runs the matcher, so diagnose
-    // only while hunk count times the guarded line product stays within one apply.
+    // only while hunk count times the guarded line product stays within one
+    // apply. An empty target still scans one line per apply, so it counts as
+    // one, not zero: a zero-line product would let thousands of hunks through.
     const first =
-      hunks.length > 0 && fileLines * diffLines * hunks.length <= MAX_PATCH_LINE_PRODUCT
+      hunks.length > 0 &&
+      Math.max(fileLines, 1) * diffLines * hunks.length <= MAX_PATCH_LINE_PRODUCT
         ? hunks.findIndex(
             (_, i) =>
               applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false,
           )
         : -1;
     // findIndex cannot miss: the full clamped set is the last prefix and already failed.
+    // The submitted header start, not the clamp's search floor: it is the line
+    // the caller can find in the diff they sent.
     const where =
       first >= 0
-        ? `hunk ${String(first + 1)} (starting at line ${String(hunks[first]?.oldStart)}) does not match file content`
+        ? `hunk ${String(first + 1)} (starting at line ${String(parsedPatch.hunks[first]?.oldStart)}) does not match file content`
         : 'hunk context does not match file content';
     throw new FsError(
       ErrorCode.INVALID_INPUT,
