@@ -125,6 +125,24 @@ export const DELETE_ERRNOS: ErrnoRows = {
   EEXIST: DIRECTORY_NOT_EMPTY,
 };
 
+/** The way forward when a folder's delete needs a confirmation the client cannot show. */
+export const ASK_PERSON_TO_DELETE =
+  'Ask the person to delete the folder, or to agree to you emptying it first. ' +
+  'Only the person can remove protected files in it, which listings hide.';
+
+const DIRECTORY_NOT_EMPTY_NO_CONFIRM: ErrnoRow = {
+  code: ErrorCode.INVALID_INPUT,
+  message: `Directory not empty. ${ASK_PERSON_TO_DELETE}`,
+};
+
+/** `DELETE_ERRNOS` on a client that cannot confirm, where naming `recursive` leads only to the next refusal. */
+export const DELETE_ERRNOS_NO_CONFIRM: ErrnoRows = {
+  ...DELETE_ERRNOS,
+  ENOTEMPTY: DIRECTORY_NOT_EMPTY_NO_CONFIRM,
+  EISDIR: DIRECTORY_NOT_EMPTY_NO_CONFIRM,
+  EEXIST: DIRECTORY_NOT_EMPTY_NO_CONFIRM,
+};
+
 const ERRNO_RE = /^E[A-Z]+$/;
 
 // NOT_FOUND is in here (not just ENOENT) because a dangling symlink whose

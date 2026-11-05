@@ -121,7 +121,13 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       if (id !== undefined) {
         const entry = journal.get(id);
         if (entry === undefined) {
-          throw new FsError(ErrorCode.NOT_FOUND, `Unknown or expired undo id "${id}".`);
+          throw new FsError(
+            ErrorCode.NOT_FOUND,
+            `Unknown or expired undo id "${id}".`,
+            undefined,
+            undefined,
+            'Run undo with dryRun: true and no id to list the ids.',
+          );
         }
         entries = [entry];
       } else if (steps !== undefined) {
@@ -165,31 +171,26 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
       }
 
       const allResults = stepResults.flatMap((s) => s.results);
-      const summary = stepResults
-        .map((step) => {
-          const restored = step.results
-            .filter((r) => !('error' in r))
-            .map((r) => pathLabel(r.path));
-          const notRestored = step.results.flatMap((r) =>
-            'error' in r
-              ? [
-                  `${pathLabel(r.path)}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`,
-                ]
-              : [],
-          );
-          const parts = [
-            ...(restored.length > 0
-              ? [`${dryRun ? 'would revert' : 'reverted'} ${joinRoster(restored, ', ')}`]
-              : []),
-            ...(notRestored.length > 0 ? [joinRoster(notRestored, ', ')] : []),
-          ];
-          return `undo: ${step.id} (${step.tool}) ${parts.join('; ')}`;
-        })
-        .join(' · ');
-      const head = `${summary}${dryRun ? ' [dry run]' : ''}`;
+      const stepLines = stepResults.map((step) => {
+        const restored = step.results.filter((r) => !('error' in r)).map((r) => pathLabel(r.path));
+        const notRestored = step.results.flatMap((r) =>
+          'error' in r
+            ? [
+                `${pathLabel(r.path)}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`,
+              ]
+            : [],
+        );
+        const parts = [
+          ...(restored.length > 0
+            ? [`${dryRun ? 'would revert' : 'reverted'} ${joinRoster(restored, ', ')}`]
+            : []),
+          ...(notRestored.length > 0 ? [joinRoster(notRestored, ', ')] : []),
+        ];
+        return `undo: ${step.id} (${step.tool}) ${parts.join('; ')}${dryRun ? ' [dry run]' : ''}`;
+      });
       return {
         structured: { steps: listSteps(stepResults) },
-        text: [head, ...reasonLines(allResults)].join('\n'),
+        text: [...stepLines, ...reasonLines(allResults)].join('\n'),
         isError: isTotalFailure(summarize(allResults)),
       };
     });

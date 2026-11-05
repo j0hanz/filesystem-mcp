@@ -27,6 +27,7 @@ import {
   type ReplaceLimits,
   type ReplacementMatcher,
 } from '../core/matcher.ts';
+import { IS_WINDOWS } from '../core/path-utils.ts';
 import type { ResultPaths } from '../core/path.ts';
 import type { Rewritten } from '../core/rewrite.ts';
 import { rewriteEntry } from '../core/rewrite.ts';
@@ -352,6 +353,9 @@ function buildSearchAndReplaceStructuredResult(
   };
 }
 
+/** A backslash makes the diff package C-quote the name; Windows accepts `/`, and on POSIX it is part of a name. */
+const diffHeader = (path: string): string => (IS_WINDOWS ? path.replaceAll('\\', '/') : path);
+
 async function handleSearchAndReplace(
   args: SearchAndReplaceArgs,
   ctx: ToolCtx,
@@ -442,7 +446,7 @@ async function handleSearchAndReplace(
             primary = { index: entry.index, report: done.report };
           }
           return includeDiff
-            ? patchWithinBudget(budget, entry.index, paths.show(entry.path), done)
+            ? patchWithinBudget(budget, entry.index, diffHeader(paths.show(entry.path)), done)
             : {};
         });
         if (o === undefined || o instanceof ScanSkip) return o;

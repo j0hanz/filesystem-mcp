@@ -30,7 +30,8 @@ import { randomBytes } from 'node:crypto';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode, FsError } from './errors.ts';
+import { ASK_PERSON_TO_DELETE, ErrorCode, FsError } from './errors.ts';
+import { joinRoster } from './fmt.ts';
 import type { EntryIdentity } from './fs.ts';
 import { Logger } from './observability.ts';
 
@@ -261,7 +262,7 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
   delete:
     'A recursive delete of a non-empty directory needs a confirmation this client cannot show. ' +
     'Nothing in this call was deleted, including its other paths. ' +
-    'Connect a client that declares the elicitation capability to delete this directory.',
+    ASK_PERSON_TO_DELETE,
   move:
     'Overwriting an existing destination needs a confirmation this client cannot show. ' +
     'Delete the destination first, or move to a path that does not exist yet.',
@@ -277,27 +278,36 @@ const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
 };
 
 /**
+ * Whether the client can answer an embedded form. `undefined` capabilities mean
+ * the connection cannot report them, NOT that the client has none: proceed and
+ * let the SDK decide, exactly as before this check existed.
+ */
+export function canElicit(capabilities: ClientCapabilities | undefined): boolean {
+  if (capabilities === undefined) return true;
+  const elicitation = capabilities.elicitation;
+  return (
+    elicitation !== undefined && (elicitation.form !== undefined || elicitation.url === undefined)
+  );
+}
+
+/**
  * Fail early, and legibly, when the client cannot answer an embedded form.
  * The SDK checks each `inputRequests` entry against the declared client
  * capabilities and rejects the whole call with `-32021` before anything reaches
  * the wire — a protocol error the model never sees. Throwing `FsError` here
  * instead lands in the tool executor's catch and reaches the model as an
  * `isError` result carrying the workaround.
- *
- * `undefined` capabilities mean the connection cannot report them, NOT that the
- * client has none: proceed and let the SDK decide, exactly as before this check
- * existed.
  */
-export function assertCanElicit(op: PendingOp, capabilities: ClientCapabilities | undefined): void {
-  if (capabilities === undefined) return;
-  const elicitation = capabilities.elicitation;
-  if (
-    elicitation !== undefined &&
-    (elicitation.form !== undefined || elicitation.url === undefined)
-  ) {
-    return;
-  }
-  throw new FsError(ErrorCode.INVALID_INPUT, `${op}: ${NO_ELICITATION_HINT[op]}`);
+export function assertCanElicit(
+  op: PendingOp,
+  capabilities: ClientCapabilities | undefined,
+  pending: readonly string[] = [],
+): void {
+  if (canElicit(capabilities)) return;
+  // Delete's way forward is the person acting on a folder, so a batch must say which.
+  const named =
+    op === 'delete' && pending.length > 0 ? ` Applies to: ${joinRoster(pending, ', ')}.` : '';
+  throw new FsError(ErrorCode.INVALID_INPUT, `${op}: ${NO_ELICITATION_HINT[op]}${named}`);
 }
 
 export async function pendingRoundTrip(

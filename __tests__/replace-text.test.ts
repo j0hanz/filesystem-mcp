@@ -51,6 +51,28 @@ describe('replace_text body', () => {
     return { ...result, rows: result.structured.results as readonly Row[] };
   };
 
+  it('keeps absolute diff headers plain and same-named files apart', async () => {
+    // Several roots with the working directory outside them print absolute paths.
+    const other = await createTestRoot();
+    try {
+      await writeTestFile(root, 'a/index.html', 'needle\n');
+      await writeTestFile(root, 'b/index.html', 'needle\n');
+      const result = await replace(
+        { path: root, searchPattern: 'needle', replacement: 'pin', dryRun: true },
+        { fs: new GuardedFileSystem(await makeGuard([root, other])) },
+      );
+
+      const targets = diffTargets(result.structured.diff).sort();
+      assert.strictEqual(targets.length, 2);
+      assert.strictEqual(new Set(targets).size, 2);
+      for (const target of targets) {
+        assert.match(target ?? '', /^[^"\\]+\/[ab]\/index\.html$/u);
+      }
+    } finally {
+      await cleanupTestRoot(other);
+    }
+  });
+
   it('says which default-named folder it skipped', async () => {
     await writeTestFile(root, 'build/gen.ts', 'needle\n');
     await writeTestFile(root, 'src/a.ts', 'other\n');

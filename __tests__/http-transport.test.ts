@@ -165,7 +165,7 @@ describe('HTTP 2025-era (legacy) clients', () => {
       .map((block) => block.text ?? '')
       .join('\n');
     assert.match(text, /confirmation this client cannot show/i);
-    assert.match(text, /elicitation capability/i);
+    assert.match(text, /Ask the person to delete the folder/);
     // Nothing was touched on the way out — the per-request instance never
     // reached the SDK's own elicitation round-trip.
     await access(join(dir, 'f.txt'));

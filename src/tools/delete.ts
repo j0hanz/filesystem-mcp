@@ -9,6 +9,7 @@ import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   DELETE_ERRNOS,
+  DELETE_ERRNOS_NO_CONFIRM,
   ErrorCode,
   isMissing,
   isNotFoundErrno,
@@ -17,6 +18,7 @@ import {
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { type FileType, type GuardedFileSystem, identityOf, sameIdentity } from '../core/fs.ts';
+import { canElicit } from '../core/input-required.ts';
 import { normalizeCaseForComparison, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -146,7 +148,7 @@ async function planPath(
 async function finalizeDeletion(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal'>,
+  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
 ): Promise<{ deleted: string } | { failure: DeleteFailure }> {
   let currentStats: LstatResult;
   try {
@@ -189,7 +191,13 @@ async function finalizeDeletion(
         ctx.signal,
       );
   } catch (error) {
-    return { failure: toDeleteFailure(plan.inputPath, error) };
+    const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
+    return {
+      failure: {
+        path: plan.inputPath,
+        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.inputPath, rows),
+      },
+    };
   }
 
   ctx.log('info', `rm: ${plan.inputPath}`, 'delete');
@@ -206,7 +214,7 @@ async function finalizeDeletion(
 async function executePlan(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal'>,
+  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
   confirmed: Confirmed,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   const verdict = confirmed.verdict(plan.validPath);
