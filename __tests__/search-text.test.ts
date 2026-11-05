@@ -101,7 +101,29 @@ describe('search_text body', () => {
     assert.strictEqual(structured.totalMatches, 1);
     assert.strictEqual(structured.matches[0]?.line, 2);
     assert.ok(structured.matches[0]?.content.includes('NEEDLE_MARK'));
-    assert.strictEqual(text, 'grep_dir/target.txt:2: NEEDLE_MARK here');
+    assert.strictEqual(text, 'grep_dir/target.txt:2: NEEDLE_MARK here\n\n// 1 match · 1 file');
+  });
+
+  it('prints the match count when one page holds every match', async () => {
+    await writeTestFile(root, 'count/a.txt', 'NEEDLE here\nNEEDLE again\n');
+    await writeTestFile(root, 'count/b.txt', 'one NEEDLE\n');
+    const { text } = await search({ path: root, searchPattern: 'NEEDLE' });
+    assert.match(text ?? '', /\/\/ 3 matches · 2 files/u);
+  });
+
+  it('leaves the count to the pager when matches span pages', async () => {
+    await writeTestFile(root, 'pages/a.txt', 'NEEDLE one\n');
+    await writeTestFile(root, 'pages/b.txt', 'NEEDLE two\n');
+    const { text } = await search({ path: root, searchPattern: 'NEEDLE', maxResults: 1 });
+    assert.doesNotMatch(text ?? '', /\/\/ \d+ matches/u);
+    assert.match(text ?? '', /showing 1-/u);
+  });
+
+  it('no count line on zero matches', async () => {
+    await writeTestFile(root, 'none/a.txt', 'nothing here\n');
+    const { text } = await search({ path: root, searchPattern: 'NEEDLE' });
+    assert.match(text ?? '', /No matches/u);
+    assert.doesNotMatch(text ?? '', /matches ·/u);
   });
 
   it("honors the allowed root's .gitignore below it", async () => {
@@ -201,7 +223,10 @@ describe('search_text body', () => {
       includeHidden: false,
       includeIgnored: false,
     });
-    assert.strictEqual(text, '// explicit_scope/.hidden.log\n1: NEEDLE_SCOPE');
+    assert.strictEqual(
+      text,
+      '// explicit_scope/.hidden.log\n1: NEEDLE_SCOPE\n\n// 1 match · 1 file',
+    );
     assert.deepStrictEqual(
       structured.matches.map(({ file, line }) => ({ file, line })),
       [{ file: 'explicit_scope/.hidden.log', line: 1 }],
@@ -308,6 +333,8 @@ describe('search_text body', () => {
         'grep_context/b.txt-1- foo',
         'grep_context/b.txt:2: NEEDLE',
         'grep_context/b.txt-3- bar',
+        '',
+        '// 3 matches · 2 files',
       ].join('\n'),
     );
     const plain = await search({ path: dir, searchPattern: 'NEEDLE' });
@@ -333,6 +360,8 @@ describe('search_text body', () => {
         'grep_context_adjacent/c.txt-1- x',
         'grep_context_adjacent/c.txt:2: NEEDLE a',
         'grep_context_adjacent/c.txt:3: NEEDLE b',
+        '',
+        '// 2 matches · 1 file',
       ].join('\n'),
     );
   });
@@ -541,7 +570,10 @@ describe('search_text body', () => {
 
       await writeTestFile(dir, 'small.txt', 'BIGNEEDLE\n');
       const beside = await search({ path: dir, searchPattern: 'BIGNEEDLE' });
-      assert.strictEqual(beside.text, `skipped_big/small.txt:1: BIGNEEDLE\n\n${skipLine}`);
+      assert.strictEqual(
+        beside.text,
+        `skipped_big/small.txt:1: BIGNEEDLE\n\n// 1 match · 1 file\n\n${skipLine}`,
+      );
     });
   });
 
@@ -752,7 +784,7 @@ describe('search_text body', () => {
     const { structured, text } = await search({ path: dir, searchPattern: 'BINNEEDLE' });
     assert.strictEqual(
       text,
-      'search_bin/text.txt:1: BINNEEDLE\n\n// skipped 1 binary file; results may be incomplete.',
+      'search_bin/text.txt:1: BINNEEDLE\n\n// 1 match · 1 file\n\n// skipped 1 binary file; results may be incomplete.',
     );
     assert.strictEqual(structured.filesScanned, 2);
     assert.strictEqual(structured.skippedBinary, 1);

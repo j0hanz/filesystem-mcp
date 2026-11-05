@@ -293,8 +293,17 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           ]
             .filter(Boolean)
             .join('\n');
+    // A page that holds every match is the one case the pager's trailer does
+    // not total, so the count line appears there and only there.
+    const countLine =
+      paged.metadata.matchingLines > 0 &&
+      paged.offset === 0 &&
+      structured.matches.length === paged.metadata.matchingLines
+        ? `\n\n// ${buildSearchMatchDetail(paged.metadata.matchingLines, paged.metadata.filesMatched ?? 0)}`
+        : '';
     const text =
       body +
+      countLine +
       pageTrailer({
         offset: paged.offset,
         shown: structured.matches.length,
