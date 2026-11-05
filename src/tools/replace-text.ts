@@ -142,6 +142,16 @@ function keepFailure(rows: FailureRow[], row: FailureRow): void {
   if (rows.length > MAX_FAILURES) rows.pop();
 }
 
+/** Up to five changed paths, then a count of the rest, for the summary lines. */
+function changedPathList(results: SearchAndReplaceOutput['results'], total: number): string {
+  const shown = results
+    .filter((x) => !('error' in x))
+    .slice(0, 5)
+    .map((x) => x.path)
+    .join(', ');
+  return total > 5 ? `${shown}, and ${String(total - 5)} more` : shown;
+}
+
 function recordChangedFile(
   summary: ReplaceSummary,
   index: number,
@@ -542,14 +552,8 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       // rewritten. The paths ship under `_meta`, which the model does not see; name
       // them here, or a re-run of a self-matching replacement applies it twice.
       const total = structured.summary.succeeded;
-      const shown = structured.results
-        .filter((x) => !('error' in x))
-        .slice(0, 5)
-        .map((x) => x.path)
-        .join(', ');
-      const more = total > 5 ? `, and ${String(total - 5)} more` : '';
       lines.push(
-        `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
+        `// ${String(total)} file(s) were already rewritten and stay changed: ${changedPathList(structured.results, total)}. ` +
           'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
       );
     } else if (stop === 'maxMatches' || stop === 'maxFiles') {
@@ -557,20 +561,16 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     } else if (
       stop === undefined &&
       !args.dryRun &&
-      !args.returnDiff &&
+      (!args.returnDiff || structured.diffTruncated === true) &&
       structured.summary.succeeded > 0
     ) {
-      // The one case nothing else names the files: the early-stop warning
-      // above lists them, `dryRun` and `returnDiff` ship the diff, and the
-      // per-file results sit under `_meta`, which the model does not see.
-      const shown = structured.results
-        .filter((x) => !('error' in x))
-        .slice(0, 5)
-        .map((x) => x.path)
-        .join(', ');
-      const total = structured.summary.succeeded;
-      const more = total > 5 ? `, and ${String(total - 5)} more` : '';
-      lines.push(`// changed: ${shown}${more}`);
+      // The cases nothing else names the files: the early-stop warning above
+      // lists them, a dry run or a complete returned diff ships the diff, and
+      // the per-file results sit under `_meta`, which the model does not see.
+      // A diff the size budget or deadline cut short does not name them all.
+      lines.push(
+        `// changed: ${changedPathList(structured.results, structured.summary.succeeded)}`,
+      );
     }
     const hint =
       structured.totalMatches === 0

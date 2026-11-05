@@ -55,7 +55,20 @@ describe('replace_text body', () => {
     await writeTestFile(root, 'a.txt', 'NEEDLE one\n');
     await writeTestFile(root, 'b.txt', 'NEEDLE two\n');
     const { text } = await replace({ path: root, searchPattern: 'NEEDLE', replacement: 'DONE' });
-    assert.match(text ?? '', /\/\/ changed: a\.txt, b\.txt/u);
+    // Walk order, not alphabetical: either roster order is valid.
+    assert.match(text ?? '', /\/\/ changed: (?:a\.txt, b\.txt|b\.txt, a\.txt)/u);
+  });
+
+  it('names the changed files when the returned diff is truncated', async () => {
+    const big = 'x'.repeat(30_000);
+    await writeTestFile(root, 'big.txt', `${big}\n`);
+    const { text } = await replace({
+      path: join(root, 'big.txt'),
+      searchPattern: 'x',
+      replacement: 'y',
+      returnDiff: true,
+    });
+    assert.match(text ?? '', /\/\/ changed: big\.txt/u);
   });
 
   it('keeps absolute diff headers plain and same-named files apart', async () => {
