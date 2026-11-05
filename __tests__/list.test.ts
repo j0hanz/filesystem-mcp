@@ -82,6 +82,32 @@ describe('list body', () => {
     );
   });
 
+  it('the full-tree resource says what the page says it left out', async () => {
+    await writeTestFile(root, '.gitignore', 'docs/\n');
+    await writeTestFile(root, 'docs/x.md', 'x');
+    await writeTestFile(root, 'a/b/c.txt', 'x');
+    await writeTestFile(root, 'a/top.txt', 'x');
+
+    const first = await list({ path: root, maxDepth: 2, maxEntries: 1 });
+    const uri = first.structured.resourceUri;
+    assert.ok(uri);
+    const full = JSON.parse(resourceStore.getEntry(uri).text) as {
+      markdown: string;
+      unexpandedDirectories?: number;
+      ignoredDirs?: { total: number; first: string[] };
+    };
+    assert.strictEqual(full.unexpandedDirectories, 1);
+    assert.deepStrictEqual(full.ignoredDirs, { total: 1, first: ['docs'] });
+    assert.match(
+      full.markdown,
+      /^\/\/ depth limit 2: contents of 1 directory not listed or counted; raise maxDepth or list one directly\.$/m,
+    );
+    assert.match(
+      full.markdown,
+      /^\/\/ hid 1 ignored folder \(docs\); pass includeIgnored: true to list it\.$/m,
+    );
+  });
+
   it('reports and externalizes a partial tree when a scan times out', async () => {
     const dir = join(root, 'partial');
     for (let i = 0; i < 20; i++) await writeTestFile(dir, `f${String(i)}.txt`, 'x');

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges.
+- **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges. A numbered read that would pass the size limit is refused, with advice to read a slice.
 
 ### Changed
 

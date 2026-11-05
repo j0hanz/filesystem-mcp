@@ -14,7 +14,6 @@ import {
   FsError,
   isMissing,
   isNodeError,
-  OUTSIDE_ROOTS_SUGGESTION,
   type PerPathResult,
   Problem,
   unlessMissing,
@@ -934,13 +933,7 @@ export class UndoPreview {
   #assertAllowed(path: string): void {
     const guard = this.#fs.pathGuard;
     if (guard.allowedRootContaining(path) === undefined || guard.isSensitive(path)) {
-      throw new FsError(
-        ErrorCode.ACCESS_DENIED,
-        'Outside allowed directories.',
-        path,
-        undefined,
-        OUTSIDE_ROOTS_SUGGESTION,
-      );
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Outside allowed directories.', path);
     }
   }
 

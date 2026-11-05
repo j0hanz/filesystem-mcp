@@ -1815,6 +1815,41 @@ describe('restoreEntry', () => {
     );
   });
 
+  it('dry run gives a sensitive path under a restored folder no advice about roots', async () => {
+    const plain = await makeGuard([tmpDir]);
+    const policyCtx = await withEnv({ FS_DENYLIST: '**/Restored/blocked.txt' }, () =>
+      createTestServer([tmpDir]),
+    );
+    try {
+      const capture = async (run: (fs: GuardedFileSystem) => Promise<unknown>) => {
+        const cap = new UndoJournal(32 * 1024 * 1024).beginCapture();
+        await run(new GuardedFileSystem(plain, cap));
+        assert.strictEqual(cap.unavailableReason(), undefined);
+        return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
+      };
+      const folder = join(tmpDir, 'Restored');
+      const blocked = join(folder, 'blocked.txt');
+      await mkdir(folder, { recursive: true });
+      await writeFile(blocked, 'saved');
+      const deletedFile = await capture((fs) => fs.rm(blocked, { force: true }));
+      const deletedFolder = await capture((fs) => fs.rm(folder, { recursive: true, force: true }));
+
+      const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
+      const preview = new UndoPreview(policyFs);
+      const results = [];
+      for (const entry of [deletedFolder, deletedFile]) {
+        results.push(...(await restoreEntry(entry, policyFs, { dryRun: true, preview })).results);
+      }
+      const refused = results.find((result) => 'error' in result);
+      assert.ok(refused && 'error' in refused);
+      assert.strictEqual(refused.error.code, ErrorCode.ACCESS_DENIED);
+      assert.strictEqual(refused.error.suggestion, undefined);
+    } finally {
+      policyCtx.disposeRuntimeState();
+      await policyCtx.mcp.close();
+    }
+  });
+
   it('dry run does not use a replacement tree as backing for a recreated directory', async () => {
     const policyCtx = await withEnv({ FS_DENYLIST: '**/X/blocked.txt' }, () =>
       createTestServer([tmpDir]),

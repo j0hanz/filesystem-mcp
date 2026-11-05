@@ -357,6 +357,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   run: async (args, ctx) => {
     const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
     const renderOpts: RenderOptions = { includeSizes: args.includeSizes, sortBy: args.sortBy };
+    const listNotes = (metadata: ListPageMetadata): string[] => [
+      ...depthNote(args.maxDepth, metadata.unexpandedDirectories),
+      ...ignoredNote(metadata.ignoredDirs),
+    ];
     const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
       store: ctx.pageStore,
       queryKey: pageQueryKey('list', { ...args, path: resolvedPath }, ['cursor', 'maxEntries']),
@@ -383,14 +387,13 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       },
       externalize: (entries, metadata) => {
         const name = basename(metadata.path);
+        const notes = listNotes(metadata);
         // The stored tree is the whole collected set, bounded by the hard cap.
         const fullOutput = {
           entries,
-          markdown: renderMarkdown(
-            treeHeader(ctx.fs.pathGuard, metadata.path),
-            entries,
-            renderOpts,
-          ),
+          markdown:
+            renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), entries, renderOpts) +
+            (notes.length > 0 ? `\n\n${notes.join('\n')}` : ''),
           totalEntries: metadata.totalEntries,
           totalFiles: metadata.totalFiles,
           totalDirectories: metadata.totalDirectories,
@@ -399,6 +402,8 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
             ? { skippedInaccessible: metadata.skippedInaccessible }
             : {}),
           ...(metadata.stoppedReason ? { stoppedReason: metadata.stoppedReason } : {}),
+          unexpandedDirectories: metadata.unexpandedDirectories,
+          ...(metadata.ignoredDirs ? { ignoredDirs: metadata.ignoredDirs } : {}),
           ...(metadata.totalEntries > entries.length || metadata.stoppedReason !== undefined
             ? { truncated: true }
             : {}),
@@ -431,10 +436,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       nextArgs: args,
       stoppedReason: structured.stoppedReason,
       skippedInaccessible: structured.skippedInaccessible,
-      notes: [
-        ...depthNote(args.maxDepth, paged.metadata.unexpandedDirectories),
-        ...ignoredNote(paged.metadata.ignoredDirs),
-      ],
+      notes: listNotes(paged.metadata),
     });
     const text =
       renderMarkdown(

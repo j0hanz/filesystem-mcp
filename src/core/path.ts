@@ -744,12 +744,13 @@ export class PathGuard {
       // already been accepted and added to the allowed set. A path still out of
       // root here was either declined, ungrantable (outside FS_ROOT_BOUNDARY), or
       // never pre-checked — fail closed.
-      this.throwAccessDenied(
-        requestedPath,
-        isUncOrDevicePath(normalizedRequested)
-          ? `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`
-          : accessDeniedHint,
-      );
+      if (isUncOrDevicePath(normalizedRequested)) {
+        this.throwRemoteDenied(
+          requestedPath,
+          `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`,
+        );
+      }
+      this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
     if (!allowSensitive) {
       this.assertNotSensitiveFile(requestedPath, requestedPath);
@@ -810,7 +811,7 @@ export class PathGuard {
       this.validateAccess(requestedPath);
 
     if (await this.reachesRemoteLink(normalizedRequested)) {
-      this.throwAccessDenied(
+      this.throwRemoteDenied(
         requestedPath,
         `${accessDeniedHint} A link on this path points at a network or device path.`,
       );
@@ -1097,6 +1098,15 @@ export class PathGuard {
       OUTSIDE_ROOTS_SUGGESTION,
     );
   }
+
+  /** A network or device path: a grant cannot admit it, so `hint` carries the remedy. */
+  private throwRemoteDenied(requestedPath: string, hint: string): never {
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      `Outside allowed directories. ${hint}`,
+      requestedPath,
+    );
+  }
   private async resolveNearestExistingAncestor(
     requestedPath: string,
     currentPath: string,
@@ -1228,7 +1238,7 @@ export class PathGuard {
       spelled.push(onDisk);
       if (!resolveLast && index === missing.length - 1) break;
       if (await this.reachesRemoteLink(join(ancestor, ...spelled))) {
-        this.throwAccessDenied(
+        this.throwRemoteDenied(
           requestedPath,
           `${accessDeniedHint} A link on this path points at a network or device path.`,
         );
@@ -1299,7 +1309,7 @@ export class PathGuard {
     );
 
     if (await this.reachesRemoteLink(normalizedRequested)) {
-      this.throwAccessDenied(
+      this.throwRemoteDenied(
         requestedPath,
         `${accessDeniedHint} A link on this path points at a network or device path.`,
       );
@@ -1403,7 +1413,7 @@ export class PathGuard {
     // The parent only, so the link itself stays deletable. Before the lstat below,
     // which follows a link in the parent; respellMissing checks what it re-spells.
     if (await this.reachesRemoteLink(dirname(normalizedRequested))) {
-      this.throwAccessDenied(
+      this.throwRemoteDenied(
         requestedPath,
         `${accessDeniedHint} A link on this path points at a network or device path.`,
       );

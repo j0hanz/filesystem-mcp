@@ -537,6 +537,41 @@ describe('read body', () => {
       );
     });
 
+    it('refuses numbering past the size limit, and still reads the file without it', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+        const file = await writeTestFile(root, 'numbered-huge.txt', '\n'.repeat(600_000));
+        const refused = await read({ path: file, lineNumbers: true }, { guard });
+        assert.strictEqual(refused.isError, true);
+        assert.strictEqual(errorOf(refused.structured.results[0])?.code, 'TOO_LARGE');
+        assert.match(
+          refused.text ?? '',
+          /^TOO_LARGE: File exceeds size limit \(\d+ > 1048576 bytes, with line numbers\)/,
+        );
+        assert.ok(
+          refused.text?.includes(
+            'Read a slice with head or startLine/endLine, or leave out lineNumbers.',
+          ),
+          refused.text,
+        );
+
+        const plain = await read({ path: file }, { guard });
+        assert.strictEqual(plain.isError, false);
+        const slice = await read({ path: file, head: 2, lineNumbers: true }, { guard });
+        assert.ok(slice.text?.startsWith('1\t\n2\t\n'), slice.text);
+      });
+    });
+
+    it('over stdio holds numbering to the message limit as well', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(64 * 1024 * 1024) }, async () => {
+        const file = await writeTestFile(root, 'numbered-stdio.txt', '\n'.repeat(2 * 1024 * 1024));
+        const stdio = await read({ path: file, lineNumbers: true }, { guard, transport: 'stdio' });
+        assert.strictEqual(errorOf(stdio.structured.results[0])?.code, 'TOO_LARGE');
+        const http = await read({ path: file, lineNumbers: true }, { guard, transport: 'http' });
+        assert.strictEqual(http.isError, false);
+        assert.ok(http.text?.endsWith('2097152\t\n'));
+      });
+    });
+
     it('numbers a blank line that ends a slice', async () => {
       const file = await writeTestFile(root, 'numbered-blank.txt', 'a\n\nb\n\n\nc\n');
       const text = async (args: Partial<ReadArgs>) =>

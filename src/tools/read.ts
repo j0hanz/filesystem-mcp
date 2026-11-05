@@ -13,9 +13,15 @@ import {
   type FileKind,
   isKnownBinaryExtension,
 } from '../core/mime.ts';
-import { base64EncodedBytes, canLinkFile, type Transport } from '../core/outbound.ts';
+import {
+  base64EncodedBytes,
+  canLinkFile,
+  MAX_OUTBOUND_RESULT_BYTES,
+  type Transport,
+} from '../core/outbound.ts';
 import {
   BINARY_FILE_MESSAGE,
+  createTooLargeError,
   isBinaryRefusal,
   type ReadFileResult,
   type ReadSpec,
@@ -313,6 +319,35 @@ function numberLines(content: string, firstLine: number, count: number): string 
     .join('\n');
 }
 
+/** What numbering adds: a tab per line plus each line number's digits, counted without building them. */
+function numberingBytes(firstLine: number, count: number): number {
+  const last = firstLine + count - 1;
+  let bytes = count;
+  for (let digits = 1, floor = 1; floor <= last; digits++, floor *= 10) {
+    const lines = Math.min(last, floor * 10 - 1) - Math.max(firstLine, floor) + 1;
+    if (lines > 0) bytes += lines * digits;
+  }
+  return bytes;
+}
+
+/**
+ * Numbering a newline-heavy file multiplies it many times over, so refuse before
+ * building the text: the executor's size refusal only runs after it exists.
+ */
+function assertNumberingFits(result: ReadFileResult, filePath: string, transport: Transport): void {
+  const max = getMaxTextFileSize();
+  const limit = transport === 'stdio' ? Math.min(max, MAX_OUTBOUND_RESULT_BYTES) : max;
+  const bytes =
+    Buffer.byteLength(result.content, 'utf8') +
+    numberingBytes(result.startLine ?? 1, result.linesRead ?? 0);
+  if (bytes > limit) {
+    throw createTooLargeError(bytes, limit, filePath, {
+      label: 'with line numbers',
+      suggestion: 'Read a slice with head or startLine/endLine, or leave out lineNumbers.',
+    });
+  }
+}
+
 /** A partial read the size limit cut short, as opposed to a slice returned whole. */
 function wasCut(v: PerPathReadValue): boolean {
   const asked =
@@ -441,6 +476,8 @@ async function readOnePath(
       error,
     );
   }
+
+  if (args.lineNumbers) assertNumberingFits(result, filePath, ctx.transport);
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
