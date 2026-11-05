@@ -142,12 +142,21 @@ function keepFailure(rows: FailureRow[], row: FailureRow): void {
   if (rows.length > MAX_FAILURES) rows.pop();
 }
 
+/**
+ * A path as the roster shows it. A comma would read as two paths, and a quote
+ * or a control character renders badly, so those names go by their JSON
+ * spelling; every other name stays as written.
+ */
+const rosterName = (path: string): string =>
+  // eslint-disable-next-line no-control-regex -- a control character is exactly what gets quoted
+  path === '' || /["\r\n,\u0000-\u001f]/u.test(path) ? JSON.stringify(path) : path;
+
 /** Up to five changed paths, then a count of the rest, for the summary lines. */
 function changedPathList(results: SearchAndReplaceOutput['results'], total: number): string {
   const shown = results
     .filter((x) => !('error' in x))
     .slice(0, 5)
-    .map((x) => x.path)
+    .map((x) => rosterName(x.path))
     .join(', ');
   return total > 5 ? `${shown}, and ${String(total - 5)} more` : shown;
 }

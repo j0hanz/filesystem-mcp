@@ -71,6 +71,14 @@ describe('replace_text body', () => {
     assert.match(text ?? '', /\/\/ changed: big\.txt/u);
   });
 
+  it('quotes a changed file name that contains the roster separator', async () => {
+    await writeTestFile(root, 'a, b.txt', 'NEEDLE\n');
+    await writeTestFile(root, 'c.txt', 'NEEDLE\n');
+    const { text } = await replace({ path: root, searchPattern: 'NEEDLE', replacement: 'DONE' });
+    assert.match(text ?? '', /"a, b\.txt"/u);
+    assert.match(text ?? '', /(?<!")c\.txt/u);
+  });
+
   it('keeps absolute diff headers plain and same-named files apart', async () => {
     // Several roots with the working directory outside them print absolute paths.
     const other = await createTestRoot();
