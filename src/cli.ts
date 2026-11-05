@@ -2,7 +2,6 @@ import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcont
 
 import type { Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { delimiter, isAbsolute } from 'node:path';
 import { parseArgs as utilParseArgs } from 'node:util';
 
 import packageJson from '../package.json' with { type: 'json' };
@@ -15,7 +14,6 @@ import {
   isWindowsDrivePath,
   isWindowsDriveRelativePath,
   normalizePath,
-  splitDirList,
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
@@ -145,18 +143,10 @@ export function splitReadOnlyRoots(argv: readonly string[]): {
   };
 }
 
-/** A value saved by the extension's old text field is a delimited list; a folder's own name may hold the delimiter. */
-async function expandSavedList(entry: string): Promise<string[]> {
-  if (!entry.includes(delimiter)) return [entry];
-  const isFolder = await stat(entry).then(
-    (stats) => stats.isDirectory(),
-    () => false,
-  );
-  if (isFolder) return [entry];
-  // The old field asked for full paths, so a part that is not one means a missing
-  // folder whose name holds the delimiter: protect both readings.
-  const parts = splitDirList(entry);
-  return parts.every((part) => isAbsolute(part)) ? parts : [entry, ...parts];
+/** As `parseArgs` does by default: under `node -e` or `-p`, arguments start one place earlier. */
+function mainArgs(): string[] {
+  const isEval = process.execArgv.some((arg) => ['-e', '--eval', '-p', '--print'].includes(arg));
+  return process.argv.slice(isEval ? 1 : 2);
 }
 
 const CLI_PARSER_CONFIG = {
@@ -195,7 +185,7 @@ export async function parseArgs(): Promise<{
   apiKey: string | undefined;
 }> {
   try {
-    const { args, readOnlyRoots } = splitReadOnlyRoots(process.argv.slice(2));
+    const { args, readOnlyRoots } = splitReadOnlyRoots(mainArgs());
     // An option here would silently become a folder and lose its own effect.
     const misplaced = readOnlyRoots.find((entry) => entry.startsWith('-'));
     if (misplaced !== undefined) {
@@ -258,8 +248,7 @@ export async function parseArgs(): Promise<{
     // entry denies nothing new. The same shape rules as positional roots
     // apply: a drive-relative or reserved-name value would silently name a
     // different directory than the operator meant.
-    const listedReadOnly = (await Promise.all(readOnlyRoots.map(expandSavedList))).flat();
-    for (const raw of [...(v['read-only-root'] ?? []), ...listedReadOnly]) {
+    for (const raw of [...(v['read-only-root'] ?? []), ...readOnlyRoots]) {
       validateCliPath(raw);
       if (raw.trim() !== raw) {
         throw new CliExitError(
@@ -270,7 +259,7 @@ export async function parseArgs(): Promise<{
     const readOnlyDirs = [
       ...(await normalizeAndValidateDirs(v['read-only-root'] ?? [], allowMissingRoots)),
       // As FS_READ_ONLY_DIRS does: a folder deleted later must not stop the server.
-      ...(await normalizeAndValidateDirs(listedReadOnly, true)),
+      ...(await normalizeAndValidateDirs(readOnlyRoots, true)),
     ];
 
     const allowedDirs =

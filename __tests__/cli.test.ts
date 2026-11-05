@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -22,6 +22,13 @@ function runCli(
   args: readonly string[],
   env: Record<string, string | undefined> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return runNode([join(repoRoot, 'src', 'index.ts'), ...args], env);
+}
+
+function runNode(
+  nodeArgs: readonly string[],
+  env: Record<string, string | undefined> = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     // Reviewer note: a parent shell's own FS_* vars would otherwise leak into
     // the spawned CLI and change the policy it reports; omit them when
@@ -32,7 +39,7 @@ function runCli(
       if (!k.startsWith('FS_')) childEnv[k] = v;
     }
     Object.assign(childEnv, env);
-    const child = spawn(process.execPath, [join(repoRoot, 'src', 'index.ts'), ...args], {
+    const child = spawn(process.execPath, nodeArgs, {
       cwd: repoRoot,
       env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -301,9 +308,14 @@ describe('CLI (real subprocess)', () => {
       assert.deepStrictEqual(config.readOnlyDirs, []);
     });
 
-    it('CLI-ROS-003: a list saved by the old text field is split', async () => {
+    it('CLI-ROS-003: folders from the flag and from FS_READ_ONLY_DIRS both apply', async () => {
       const [a = '', b = ''] = await folders('ros3a', 'ros3b');
-      const config = await printConfig('--read-only-roots', [a, b].join(delimiter));
+      const { code, stdout, stderr } = await runCli(
+        ['--print-config', root, '--read-only-roots', a],
+        { FS_READ_ONLY_DIRS: b },
+      );
+      assert.strictEqual(code, 0, stderr);
+      const config = JSON.parse(stdout) as { readOnlyDirs: string[] };
       assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(a), normalizePath(b)]);
     });
 
@@ -336,7 +348,29 @@ describe('CLI (real subprocess)', () => {
     it('CLI-ROS-007: a missing folder holding the separator keeps its whole name', async () => {
       const gone = join(root, `ros7gone${delimiter}back`);
       const config = await printConfig('--read-only-roots', gone);
-      assert.ok(config.readOnlyDirs.includes(normalizePath(gone)));
+      assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(gone)]);
+    });
+
+    it('CLI-ROS-008: a list is not split, even when no such folder exists', async () => {
+      const [a = '', b = ''] = await folders('ros8a', 'ros8b');
+      const joined = [a, b].join(delimiter);
+      const config = await printConfig('--read-only-roots', joined);
+      assert.deepStrictEqual(config.readOnlyDirs, [normalizePath(joined)]);
+    });
+
+    it('CLI-ROS-009: a leading flag survives a node -e launch', async () => {
+      const entry = pathToFileURL(join(repoRoot, 'src', 'index.ts')).href;
+      const { code, stdout, stderr } = await runNode([
+        '-e',
+        `import(${JSON.stringify(entry)})`,
+        '--',
+        '--read-only',
+        '--print-config',
+        root,
+      ]);
+      assert.strictEqual(code, 0, stderr);
+      const config = JSON.parse(stdout) as { readOnly: boolean };
+      assert.strictEqual(config.readOnly, true);
     });
   });
 

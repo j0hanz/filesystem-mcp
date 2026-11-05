@@ -50,6 +50,7 @@ describe('MCPB manifest', () => {
     assert.deepStrictEqual(Object.keys(manifest.user_config), [
       'allowed_directories',
       'read_only',
+      'read_only_folders',
       'read_only_dirs',
       'deny_patterns',
       'allow_patterns',
@@ -71,13 +72,27 @@ describe('MCPB manifest', () => {
   });
 
   it('MCPB-007: read-only folders use the folder picker', () => {
-    const setting = manifest.user_config['read_only_dirs'];
+    const setting = manifest.user_config['read_only_folders'];
     assert.strictEqual(setting?.type, 'directory');
     assert.strictEqual(setting.multiple, true);
     assert.deepStrictEqual(setting.default, []);
     assert.doesNotMatch(setting.description, /semicolon|colon/);
     assert.match(setting.description, /no effect while Read-only mode is on/);
-    assert.strictEqual(manifest.server.mcp_config.env['FS_READ_ONLY_DIRS'], undefined);
+  });
+
+  it('MCPB-012: the typed setting stays as it was, so an upgrade keeps saved folders', () => {
+    const setting = manifest.user_config['read_only_dirs'];
+    assert.strictEqual(setting?.type, 'string');
+    assert.strictEqual(setting.multiple, undefined);
+    assert.strictEqual(setting.default, '');
+    assert.strictEqual(
+      manifest.server.mcp_config.env['FS_READ_ONLY_DIRS'],
+      '${user_config.read_only_dirs}',
+    );
+    assert.ok(setting.description.includes('C:\\Work\\docs;C:\\Work\\archive'));
+    assert.ok(setting.description.includes('/Users/me/docs:/Users/me/archive'));
+    // A space after the separator stops the server starting.
+    assert.match(setting.description, /with no spaces/);
   });
 
   describe('MCPB-011: arguments the host builds', () => {
@@ -85,7 +100,7 @@ describe('MCPB manifest', () => {
       const argv = replaceVariables(manifest.server.mcp_config.args, {
         __dirname: '/x',
         'user_config.allowed_directories': ['/w', '/v'],
-        'user_config.read_only_dirs': readOnly,
+        'user_config.read_only_folders': readOnly,
       }) as string[];
       return splitReadOnlyRoots(argv.slice(1));
     };
@@ -101,7 +116,7 @@ describe('MCPB manifest', () => {
       assert.deepStrictEqual(build([]), { args: ['/w', '/v'], readOnlyRoots: [] });
     });
 
-    it('adds nothing for a setting saved empty by the old text field', () => {
+    it('adds nothing for a setting a host leaves empty', () => {
       assert.deepStrictEqual(build(''), { args: ['/w', '/v'], readOnlyRoots: [] });
     });
   });

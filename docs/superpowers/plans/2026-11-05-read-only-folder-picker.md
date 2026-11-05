@@ -6,6 +6,8 @@
 
 **Architecture:** MCPB can pass a multi-select value only as command-line arguments, and it spreads the values in place. A new last-position flag, `--read-only-roots`, makes every argument after it a read-only folder. `splitReadOnlyRoots` removes them from the argument list before parsing, so none can become a writable root.
 
+**Changed after PR review:** the picker uses a new key, `read_only_folders`, and `read_only_dirs` stays a typed setting wired to `FS_READ_ONLY_DIRS`, because Claude Desktop appeared to drop a saved value when the key's type changed. `--read-only-roots` takes each argument as one folder and never splits a list. Where this plan says otherwise, this note wins.
+
 **Tech Stack:** TypeScript on Node 24+, `node:util` `parseArgs`, `node:test`, MCPB manifest 0.3, `replaceVariables` from `@anthropic-ai/mcpb` (already a dev dependency).
 
 **Spec:** No design doc. The maintainer's request on 2026-11-05: the read-only setting should be clickable like allowed folders, and OS differences should need no thought from the user.

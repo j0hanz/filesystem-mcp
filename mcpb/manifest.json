@@ -23,10 +23,11 @@
         "${__dirname}/dist/index.js",
         "${user_config.allowed_directories}",
         "--read-only-roots",
-        "${user_config.read_only_dirs}"
+        "${user_config.read_only_folders}"
       ],
       "env": {
         "FS_READ_ONLY": "${user_config.read_only}",
+        "FS_READ_ONLY_DIRS": "${user_config.read_only_dirs}",
         "FS_DENYLIST": "${user_config.deny_patterns}",
         "FS_ALLOWLIST": "${user_config.allow_patterns}"
       }
@@ -72,12 +73,19 @@
       "default": false,
       "required": false
     },
-    "read_only_dirs": {
+    "read_only_folders": {
       "type": "directory",
       "title": "Read-only folders",
       "description": "Optional. Folders the AI can read but not change. Each one must be in Allowed folders or inside one of them. Has no effect while Read-only mode is on, because then nothing can be changed.",
       "multiple": true,
       "default": [],
+      "required": false
+    },
+    "read_only_dirs": {
+      "type": "string",
+      "title": "Read-only folders, typed (older setting)",
+      "description": "Optional. Folders saved here keep working, together with Read-only folders above. Use the setting above for new folders. To type more than one, put a semicolon between the full paths on Windows or a colon on macOS and Linux, with no spaces. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
+      "default": "",
       "required": false
     },
     "deny_patterns": {
