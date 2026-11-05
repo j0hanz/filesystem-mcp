@@ -233,7 +233,7 @@ The expansion code is the published MCPB library, and Claude Desktop's own behav
 4. Any old saved value still applies, or the form asks them to choose again.
 5. The settings text is easy to follow, and whether the URL is clickable.
 
-If the picker does not start the server, or the second folder is writable, stop and report it. Revert Task 2 and keep the typed field.
+Stop and report it if the picker does not start the server, if the second folder is writable, or if an upgrade silently drops or resets an old saved value without asking. In that last case a person's protected folders become writable with no notice. Revert Task 2 and keep the typed field.
 
 - [ ] **Step 4: Open the PR**
 
