@@ -318,6 +318,26 @@ describe('CLI (real subprocess)', () => {
       const config = await printConfig('--read-only-roots', gone);
       assert.ok(config.readOnlyDirs.includes(normalizePath(gone)));
     });
+
+    it('CLI-ROS-006: an option after the list is refused, not taken as a folder', async () => {
+      const [folder = ''] = await folders('ros6');
+      const { code, stderr } = await runCli([
+        '--print-config',
+        root,
+        '--read-only-roots',
+        folder,
+        '--deny',
+        'secret/**',
+      ]);
+      assert.notStrictEqual(code, 0);
+      assert.match(stderr, /--read-only-roots must come last/);
+    });
+
+    it('CLI-ROS-007: a missing folder holding the separator keeps its whole name', async () => {
+      const gone = join(root, `ros7gone${delimiter}back`);
+      const config = await printConfig('--read-only-roots', gone);
+      assert.ok(config.readOnlyDirs.includes(normalizePath(gone)));
+    });
   });
 
   it('CLI-RO-003: --read-only and --read-only-root combine', async () => {

@@ -2,7 +2,7 @@ import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcont
 
 import type { Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { delimiter } from 'node:path';
+import { delimiter, isAbsolute } from 'node:path';
 import { parseArgs as utilParseArgs } from 'node:util';
 
 import packageJson from '../package.json' with { type: 'json' };
@@ -152,7 +152,11 @@ async function expandSavedList(entry: string): Promise<string[]> {
     (stats) => stats.isDirectory(),
     () => false,
   );
-  return isFolder ? [entry] : splitDirList(entry);
+  if (isFolder) return [entry];
+  // The old field asked for full paths, so a part that is not one means a missing
+  // folder whose name holds the delimiter: protect both readings.
+  const parts = splitDirList(entry);
+  return parts.every((part) => isAbsolute(part)) ? parts : [entry, ...parts];
 }
 
 const CLI_PARSER_CONFIG = {
@@ -192,6 +196,13 @@ export async function parseArgs(): Promise<{
 }> {
   try {
     const { args, readOnlyRoots } = splitReadOnlyRoots(process.argv.slice(2));
+    // An option here would silently become a folder and lose its own effect.
+    const misplaced = readOnlyRoots.find((entry) => entry.startsWith('-'));
+    if (misplaced !== undefined) {
+      throw new CliExitError(
+        `--read-only-roots must come last: "${misplaced}" looks like an option. Write a folder starting with - as ./${misplaced}`,
+      );
+    }
     const parsed = utilParseArgs({ ...CLI_PARSER_CONFIG, args });
 
     if (parsed.values.help) {
