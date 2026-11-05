@@ -68,5 +68,28 @@ describe('MCPB manifest', () => {
     const text = manifest.user_config['read_only_dirs']?.description ?? '';
     assert.ok(text.includes('C:\\Work\\docs;C:\\Work\\archive'));
     assert.ok(text.includes('/Users/me/docs:/Users/me/archive'));
+    // A space after the separator stops the server starting.
+    assert.match(text, /with no spaces/);
+  });
+
+  it('MCPB-008: no example value ends in a period someone could copy', () => {
+    const text = Object.values(manifest.user_config)
+      .map((setting) => setting.description)
+      .join(' ');
+    assert.doesNotMatch(text, /(\\archive|\/archive|salaries\.xlsx|debug\.keystore)\./);
+  });
+
+  it('MCPB-009: the block setting says how to block a folder, and claims only what is blocked', () => {
+    const text = manifest.user_config['deny_patterns']?.description ?? '';
+    assert.match(text, /To block a folder, add \/\*\* after its name/);
+    // prod.env is open: only .env, .env.* and .envrc are on the list.
+    assert.doesNotMatch(text, /Environment files/);
+    assert.match(text, /Files such as \.env/);
+  });
+
+  it('MCPB-010: the unblock setting says it allows changes in every folder', () => {
+    const text = manifest.user_config['allow_patterns']?.description ?? '';
+    assert.match(text, /read and change/);
+    assert.match(text, /in every allowed folder/);
   });
 });

@@ -71,21 +71,21 @@
     "read_only_dirs": {
       "type": "string",
       "title": "Read-only folders",
-      "description": "Optional. Folders the AI can read but not change. Each one must be in the list above or inside a folder in it. For more than one, type the full paths with a semicolon between them on Windows: C:\\Work\\docs;C:\\Work\\archive. On macOS and Linux, use a colon: /Users/me/docs:/Users/me/archive",
+      "description": "Optional. Folders the AI can read but not change. Each one must be in the list above or inside a folder in it. Type the full path. For more than one, put a semicolon between the paths on Windows or a colon on macOS and Linux, with no spaces. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
       "default": "",
       "required": false
     },
     "deny_patterns": {
       "type": "string",
       "title": "Extra blocked files",
-      "description": "Optional. Files the AI can never open, with a comma between each: private/**, *.sqlite, salaries.xlsx. That example blocks everything in any folder named private, every .sqlite file, and any file named salaries.xlsx. Environment files, private keys, and cloud and SSH credentials are already blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
+      "description": "Optional. Files the AI can never open, with a comma between each. To block a folder, add /** after its name. The example private/**, *.sqlite, salaries.xlsx blocks everything in any folder named private, every .sqlite file, and every file named salaries.xlsx in any folder. Files such as .env, private keys, and cloud and SSH credentials are already blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     },
     "allow_patterns": {
       "type": "string",
       "title": "Unblocked secret files",
-      "description": "Optional. Leave this empty unless the AI needs a file that is blocked by default. List the files with a comma between each: .env.example, debug.keystore. The AI can then read them, so list only what you are happy for it to see. Anything in Extra blocked files stays blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
+      "description": "Optional. Leave this empty unless the AI needs a file that is blocked by default. List the files with a comma between each. The example .env.example, debug.keystore unblocks those two names. The AI can then read and change any file with a listed name, in every allowed folder, so list only what you are happy for it to touch. Anything in Extra blocked files stays blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     }
