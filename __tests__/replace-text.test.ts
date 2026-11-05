@@ -51,6 +51,13 @@ describe('replace_text body', () => {
     return { ...result, rows: result.structured.results as readonly Row[] };
   };
 
+  it('names the changed files on a live run without returnDiff', async () => {
+    await writeTestFile(root, 'a.txt', 'NEEDLE one\n');
+    await writeTestFile(root, 'b.txt', 'NEEDLE two\n');
+    const { text } = await replace({ path: root, searchPattern: 'NEEDLE', replacement: 'DONE' });
+    assert.match(text ?? '', /\/\/ changed: a\.txt, b\.txt/u);
+  });
+
   it('keeps absolute diff headers plain and same-named files apart', async () => {
     // Several roots with the working directory outside them print absolute paths.
     const other = await createTestRoot();
