@@ -94,10 +94,13 @@ Once it is connected, you can ask things like:
 - It is safe by default. The AI can use only the folders you allow, and
   `.env` files, private keys, and cloud credentials are blocked. The server
   asks you before the AI deletes a non-empty folder, opens a folder you did
-  not allow, or writes over a file with `create` or `move`. Only `create` and
-  copies can skip that question, by passing `overwrite: true`. Edits made with
-  `edit`, `patch`, and `replace_text` apply without asking, but the AI can
-  show you the diff first with `dryRun`. If the AI should never change
+  not allow, or writes over a file with `create` or `move`. These questions
+  need a client that can show them. If yours cannot, the server refuses each
+  of those actions instead of asking. Only `create` and copies can skip the
+  question, because `overwrite: true` replaces a file without asking, on any
+  client, and `undo` can usually restore it. Edits made with `edit`, `patch`, and
+  `replace_text` apply without asking, but the AI can show you the diff first
+  with `dryRun`. If the AI should never change
   anything, `--read-only` removes every tool that writes.
 - Search and editing are made for code. The AI can search inside files like
   `grep`, with a regex engine (RE2) that cannot hang, and by default the
@@ -123,7 +126,7 @@ checked against its README on 2026-11-05:
 | :------------------------ | :------------------------------------------------------ | :------------------------------------------- |
 | Search inside files       | `search_text`: literal text or RE2 regex                | None; `search_files` matches names only      |
 | Secret files              | `.env`, keys, and credentials blocked by default        | Not blocked                                  |
-| Overwriting a file        | `create` asks you first (unless `overwrite: true`)      | `write_file` overwrites without asking       |
+| Overwriting a file        | `create` asks first; `overwrite: true` does not ask     | `write_file` overwrites without asking       |
 | Delete files              | `delete`; asks before deleting a non-empty folder       | None                                         |
 | Undo a change             | `undo` reverts recent changes; skips files edited since | None                                         |
 | `.gitignore`              | Respected by listing and search tools                   | Not supported                                |
@@ -318,22 +321,22 @@ npm install -g @j0hanz/filesystem-mcp
 
 ## Tools
 
-| Tool             | What it does                                                                                                            |
-| :--------------- | :---------------------------------------------------------------------------------------------------------------------- |
-| `list_roots`     | Shows the folders the server may use.                                                                                   |
-| `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                          |
-| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                                    |
-| `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                                    |
-| `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                                     |
-| `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`.           |
-| `diff`           | Compares two files and returns a unified diff.                                                                          |
-| `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file, unless `overwrite: true`.              |
-| `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.                     |
-| `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do.                                                          |
-| `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                                 |
-| `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting, unless a copy passes `overwrite: true`.           |
-| `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                                     |
-| `undo` ✎         | Reverts recent changes by undo id or the last N calls, for 30 minutes while the server runs. Skips files changed since. |
+| Tool             | What it does                                                                                                                   |
+| :--------------- | :----------------------------------------------------------------------------------------------------------------------------- |
+| `list_roots`     | Shows the folders the server may use.                                                                                          |
+| `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                                 |
+| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                                           |
+| `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                                           |
+| `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                                            |
+| `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`.                  |
+| `diff`           | Compares two files and returns a unified diff.                                                                                 |
+| `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file; `overwrite: true` replaces it without asking. |
+| `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.                            |
+| `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do. `dryRun` shows the diff first.                                  |
+| `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                                        |
+| `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting; a copy with `overwrite: true` replaces without asking.   |
+| `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                                            |
+| `undo` ✎         | Reverts recent changes by undo id or the last N calls, for 30 minutes while the server runs. Skips files changed since.        |
 
 ✎ changes files. `--read-only` removes these tools. To refuse changes under
 one folder while the rest stay writable, pass `--read-only-root <dir>`
@@ -369,16 +372,16 @@ with API keys, Docker, and troubleshooting.
 
 ## Security
 
-| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                          |
-| :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                         |
-| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                 |
-| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot ask gets an error instead. |
-| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                       |
-| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                |
-| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                  |
-| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                               |
-| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                             |
+| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question: `overwrite: true` replaces a file without asking, on any client. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot show the question gets a refusal instead: a folder outside the list stays closed, a recursive delete of a non-empty folder does not run, and a file is not overwritten unless `overwrite: true` was passed. |
+| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 If you find a vulnerability, please report it privately.
 [SECURITY.md](SECURITY.md) explains how.
@@ -424,14 +427,16 @@ The basics:
 - **Paths.** A relative path resolves against the server's working directory
   when that is inside a root, and against the root otherwise. With several
   roots, it must exist under exactly one of them. Absolute paths are never
-  ambiguous. Search results are printed relative to the root, so a result
-  can be passed straight back. A name that differs from the one on disk only
+  ambiguous. Search results are printed relative to the root, or absolute
+  when a relative path would not read back, so a result can be passed straight
+  back. A name that differs from the one on disk only
   in Unicode form (NFC or NFD) or in its space characters (U+00A0, U+202F)
   finds that entry.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
   roots are questions for the user. Declare the `elicitation` capability and
   answer them in a handler, or, on the 2026-07-28 protocol, take them as data
-  (`input_required`) and answer later.
+  (`input_required`) and answer later. A client that can do neither gets a
+  refusal. `overwrite: true` on `create` and copies never asks.
 - **Protocol versions.** The server speaks the 2025 protocol and 2026-07-28,
   over stdio and Streamable HTTP. Over HTTP, 2025-era clients get no
   confirmations or change notifications.

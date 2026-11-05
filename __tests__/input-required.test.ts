@@ -66,7 +66,7 @@ describe('input_required multi-round-trip infrastructure', () => {
     { name: 'URL only', capabilities: { elicitation: { url: {} } }, canElicit: false },
   ];
   const hints = {
-    delete: 'Delete the entries inside it individually',
+    delete: 'Nothing in this call was deleted, including its other paths',
     move: 'Delete the destination first',
     copy: 'Pass overwrite=true',
     create: 'Pass overwrite: true',

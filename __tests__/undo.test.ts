@@ -2765,6 +2765,36 @@ describe('undo body', () => {
     assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
   });
 
+  it('tells a preview from a restore, and names what was skipped and why', async () => {
+    const x = join(root, 'said-x.txt');
+    const y = join(root, 'said-y.txt');
+    await writeFile(x, 'X0');
+    await writeFile(y, 'Y0');
+    const id = await journaled(CREATE, {
+      files: [
+        { path: x, content: 'X1', overwrite: true },
+        { path: y, content: 'Y1', overwrite: true },
+      ],
+    });
+    await writeFile(y, 'Y-external');
+
+    const preview = (await undo({ id, dryRun: true })).text ?? '';
+    assert.match(preview, /would revert said-x\.txt; said-y\.txt SKIPPED \[dry run\]/u);
+    assert.ok(
+      // Case-folded: a Windows drive letter comes back in the root's spelling.
+      preview
+        .toLowerCase()
+        .includes(
+          `// ${y}: cancelled not restored: it or its folder was modified since`.toLowerCase(),
+        ),
+      `the reason names the path: ${preview}`,
+    );
+
+    const real = (await undo({ id })).text ?? '';
+    assert.match(real, /\) reverted said-x\.txt; said-y\.txt SKIPPED/u);
+    assert.doesNotMatch(real, /dry run|would revert/u);
+  });
+
   it('a second concurrent undo of a fully restored id reports it gone', async () => {
     const x = join(root, 'full.txt');
     await writeFile(x, 'X0');

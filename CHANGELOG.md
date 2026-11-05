@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A `patch` dry run returns a labelled diff.** It used to return the whole resulting file with no label. The text now starts `patch: name +1 -1 [dry run]`, followed by the diff of where the hunks landed. `diff` in the structured result holds that diff, not the one passed in.
+- **`undo` replies say what happened.** A real undo says `reverted`; a preview says `would revert` and ends in `[dry run]`. A skipped or failed path gets a line with its reason.
+- **`move` shows the change of folder.** When the base name stays the same, the reply reads `README.md → docs/README.md`. A rename in one folder is as short as before.
+- **A refused recursive delete says what it left alone.** On a client that cannot confirm, the refusal says no path in the call was deleted, and no longer suggests deleting the entries one by one.
+
+### Fixed
+
+- **The docs say what happens when a client cannot ask.** The "Allowed folders" setting and the README promised a prompt; a client that cannot show one gets a refusal. The README also says `overwrite: true` replaces a file without asking.
+- **The `find_files` and `search_text` descriptions mention absolute paths.** A path comes back absolute when a relative one would not read back, and either can be passed to `read`.
+
 ## [2.17.0] - 2026-11-05
 
 Easier settings for the Claude Desktop extension, with a folder picker for

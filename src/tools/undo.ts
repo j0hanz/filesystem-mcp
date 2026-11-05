@@ -43,6 +43,7 @@ interface UndoOutput {
  */
 const MAX_STEP_RESULTS = 100;
 const MAX_LISTED_BYTES = 2 * MIB;
+const MAX_REASON_LINES = 20;
 
 /** Each step's results within the caps, in restore order; skipped and failed paths are kept before restored ones. */
 function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
@@ -68,6 +69,18 @@ function listSteps(steps: UndoOutput['steps']): UndoOutput['steps'] {
       totalResults: step.results.length,
     };
   });
+}
+
+/** Why each path was not reverted, with a count for any past the roster's cap. */
+function reasonLines(results: readonly UndoFileResult[]): string[] {
+  const lines = results.flatMap((r) =>
+    'error' in r ? [`// ${r.path}: ${r.error.code} ${r.error.message}`] : [],
+  );
+  if (lines.length <= MAX_REASON_LINES) return lines;
+  return [
+    ...lines.slice(0, MAX_REASON_LINES),
+    `// +${String(lines.length - MAX_REASON_LINES)} more not reverted`,
+  ];
 }
 
 export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
@@ -150,20 +163,33 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
         stepResults.push({ id: entry.id, tool: entry.tool, results: outcome.results });
       }
 
-      const text = stepResults
+      const allResults = stepResults.flatMap((s) => s.results);
+      const summary = stepResults
         .map((step) => {
-          const roster = step.results.map((r) => {
-            const label = pathLabel(r.path);
-            if (!('error' in r)) return label;
-            return `${label}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`;
-          });
-          return `undo: ${step.id} (${step.tool}) ${joinRoster(roster)}`;
+          const restored = step.results
+            .filter((r) => !('error' in r))
+            .map((r) => pathLabel(r.path));
+          const notRestored = step.results.flatMap((r) =>
+            'error' in r
+              ? [
+                  `${pathLabel(r.path)}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`,
+                ]
+              : [],
+          );
+          const parts = [
+            ...(restored.length > 0
+              ? [`${dryRun ? 'would revert' : 'reverted'} ${joinRoster(restored, ', ')}`]
+              : []),
+            ...(notRestored.length > 0 ? [joinRoster(notRestored, ', ')] : []),
+          ];
+          return `undo: ${step.id} (${step.tool}) ${parts.join('; ')}`;
         })
         .join(' · ');
+      const head = `${summary}${dryRun ? ' [dry run]' : ''}`;
       return {
         structured: { steps: listSteps(stepResults) },
-        text,
-        isError: isTotalFailure(summarize(stepResults.flatMap((s) => s.results))),
+        text: [head, ...reasonLines(allResults)].join('\n'),
+        isError: isTotalFailure(summarize(allResults)),
       };
     });
   },

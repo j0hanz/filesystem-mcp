@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
+import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
@@ -27,7 +28,7 @@ const PatchInputSchema = z.strictObject({
     .min(1)
     .max(MAX_DIFF_CHARS, { message: 'diff too long (max 1,048,576 chars)' })
     .describe('Single-file unified diff to apply (as produced by the diff tool or edit dry-run)'),
-  dryRun: defaultFalseBoolean('Preview the result without writing (default: false)'),
+  dryRun: defaultFalseBoolean('Preview the diff without writing (default: false)'),
 });
 
 type PatchOutput = Omit<WrittenFileMeta, 'resourceLink'> & {
@@ -87,7 +88,6 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       return { content: result.patched, result, write: true };
     },
   );
-  const patched = done.after;
   const { linesAdded, linesRemoved } = done.result;
   // The patched file used to come back whole in the text block, so a one-line
   // hunk against a 5000-line file returned 5000 lines. Every other write tool
@@ -99,6 +99,12 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     ctx.log('info', `patch: ${args.path} (+${linesAdded}/-${linesRemoved})`, 'patch');
   }
 
+  // A dry run shows where the hunks landed, like edit's. The caller's own diff
+  // stands in when the Myers pass hits DIFF_TIMEOUT_MS.
+  const preview = args.dryRun
+    ? (unifiedPatch(basename(done.validPath), done.before, done.after) ?? args.diff)
+    : undefined;
+
   const { resourceLink, validPath, modified, ...fileMeta } = done.report();
   return {
     structured: {
@@ -107,11 +113,13 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       modified,
       linesAdded,
       linesRemoved,
-      ...(args.dryRun ? { diff: args.diff } : {}),
+      ...(preview !== undefined ? { diff: preview } : {}),
     },
-    // A dry run exists to be previewed, so it keeps returning the patched
-    // text; only the write path summarizes, where the bytes are on disk.
-    text: args.dryRun ? patched : summaryText,
+    // A no-op patch yields a header-only diff; it previews nothing.
+    text:
+      preview === undefined
+        ? summaryText
+        : `${summaryText} [dry run]${preview.includes('\n@@') || preview.startsWith('@@') ? `\n\n${preview}` : ''}`,
     ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
   };
 }

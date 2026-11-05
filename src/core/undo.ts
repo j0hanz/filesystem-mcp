@@ -1138,7 +1138,7 @@ export async function restoreEntry(
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
   const remaining: { record: UndoRecord; order: number }[] = [];
-  const SKIP_MSG = 'Not restored: modified since this undo step was recorded';
+  const SKIP_MSG = 'Not restored: it or its folder was modified since this undo step was recorded';
   const skip = (record: UndoRecord, order: number, path: string): void => {
     remaining.push({ record, order });
     results.push({ path, error: Problem.cancelled(SKIP_MSG, { path }) });

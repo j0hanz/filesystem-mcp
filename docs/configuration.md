@@ -397,8 +397,9 @@ The server needs Node.js 24 or later.
 
 **Overwrite or delete fails with "needs a confirmation this client cannot
 show".** Your client does not support MCP confirmations (elicitation). The
-error says what to do instead, such as passing `overwrite: true`, deleting a
-folder's files one by one, or using a path that does not exist yet.
+error says what to do instead, such as passing `overwrite: true` or using a
+path that does not exist yet. A recursive delete of a non-empty folder needs a
+client that supports confirmations.
 
 **A search misses files.** By default, searches skip hidden files,
 `.gitignore`d files, and folders like `node_modules`, `dist`, and `.git`. Ask

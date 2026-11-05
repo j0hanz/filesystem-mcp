@@ -259,8 +259,9 @@ interface PendingRoundTripOpts {
  */
 const NO_ELICITATION_HINT: Readonly<Record<PendingOp, string>> = {
   delete:
-    'Deleting a non-empty directory needs a confirmation this client cannot show. ' +
-    'Delete the entries inside it individually, or connect a client that declares the elicitation capability.',
+    'A recursive delete of a non-empty directory needs a confirmation this client cannot show. ' +
+    'Nothing in this call was deleted, including its other paths. ' +
+    'Connect a client that declares the elicitation capability to delete this directory.',
   move:
     'Overwriting an existing destination needs a confirmation this client cannot show. ' +
     'Delete the destination first, or move to a path that does not exist yet.',

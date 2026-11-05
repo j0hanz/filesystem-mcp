@@ -92,7 +92,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files by name or glob pattern; returns file paths relative to the root, ready to pass to read. ' +
+    'Find files by name or glob pattern; returns root-relative or absolute paths; read takes either as is. ' +
     'A pattern without / matches file names at any depth. search_text searches contents.',
   input: SearchFilesInputSchema,
   readOnlyHint: true,

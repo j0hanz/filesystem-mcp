@@ -673,10 +673,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const dir = join(tmpDir, 'del_no_elicit_dir');
       await mkdir(join(dir, 'sub'), { recursive: true });
       await writeFile(join(dir, 'sub', 'f.txt'), 'x');
+      const other = join(tmpDir, 'del_no_elicit_other.txt');
+      await writeFile(other, 'x');
 
       const result = await eh.client.callTool({
         name: 'delete',
-        arguments: { paths: [dir], recursive: true },
+        arguments: { paths: [dir, other], recursive: true },
       });
 
       assert.strictEqual(result.isError, true, 'must surface as a tool error');
@@ -684,9 +686,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         .map((block) => block.text ?? '')
         .join('\n');
       assert.match(text, /confirmation this client cannot show/i);
-      assert.match(text, /individually|elicitation capability/i);
+      assert.match(text, /other paths/i);
+      assert.doesNotMatch(text, /individually/i);
       // R7/R14: the refusal must not have deleted anything on the way out.
       await access(join(dir, 'sub', 'f.txt'));
+      await access(other);
     } finally {
       await eh.close();
     }
