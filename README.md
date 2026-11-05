@@ -117,22 +117,23 @@ Once it is connected, you can ask things like:
 
 How this server differs from the official
 [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem),
-checked against its README on 2026-11-02:
+checked against its README on 2026-11-05:
 
-| Capability                | Filesystem MCP                                     | Reference server                        |
-| :------------------------ | :------------------------------------------------- | :-------------------------------------- |
-| Search inside files       | `search_text`: literal text or RE2 regex           | None; `search_files` matches names only |
-| Secret files              | `.env`, keys, and credentials blocked by default   | Not blocked                             |
-| Overwriting a file        | `create` asks you first (unless `overwrite: true`) | `write_file` overwrites without asking  |
-| Delete files              | `delete`; asks before deleting a non-empty folder  | None                                    |
-| `.gitignore`              | Respected by listing and search tools              | Not supported                           |
-| Read-only mode            | `--read-only` removes every tool that writes       | Docker `ro` mounts only                 |
-| Per-folder read-only      | `--read-only-root` guards chosen folders           | Docker `ro` mounts only                 |
-| Apply a unified diff      | `patch`                                            | None                                    |
-| Compare two files         | `diff`                                             | None                                    |
-| Replace across many files | `replace_text` over a folder or glob               | None                                    |
-| Watch files               | Subscribe to a file and get change notifications   | None                                    |
-| Transport                 | stdio, or Streamable HTTP with `--port`            | stdio                                   |
+| Capability                | Filesystem MCP                                          | Reference server                             |
+| :------------------------ | :------------------------------------------------------ | :------------------------------------------- |
+| Search inside files       | `search_text`: literal text or RE2 regex                | None; `search_files` matches names only      |
+| Secret files              | `.env`, keys, and credentials blocked by default        | Not blocked                                  |
+| Overwriting a file        | `create` asks you first (unless `overwrite: true`)      | `write_file` overwrites without asking       |
+| Delete files              | `delete`; asks before deleting a non-empty folder       | None                                         |
+| Undo a change             | `undo` reverts recent changes; skips files edited since | None                                         |
+| `.gitignore`              | Respected by listing and search tools                   | Not supported                                |
+| Read-only mode            | `--read-only` removes every tool that writes            | `--read-only` removes every tool that writes |
+| Per-folder read-only      | `--read-only-root` guards chosen folders                | Run a second server with `--read-only`       |
+| Apply a unified diff      | `patch`                                                 | None                                         |
+| Compare two files         | `diff`                                                  | None                                         |
+| Replace across many files | `replace_text` over a folder or glob                    | None                                         |
+| Watch files               | Subscribe to a file and get change notifications        | None                                         |
+| Transport                 | stdio, or Streamable HTTP with `--port`                 | stdio                                        |
 
 ## Quick start
 
@@ -200,7 +201,7 @@ For a one-click install, download
 [`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb),
 open it with Claude Desktop, and pick the folders to allow. Claude Desktop's
 built-in Node.js runs it. The extension's settings also let you turn on
-read-only mode and block more files.
+read-only mode, block more files, and unblock a built-in secret file.
 
 To set it up by hand, add this to `claude_desktop_config.json`
 (Settings → Developer → Edit Config):

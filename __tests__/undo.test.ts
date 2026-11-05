@@ -877,6 +877,34 @@ describe('UndoCapture via GuardedFileSystem', () => {
     assert.strictEqual(await readFile(d, 'utf8'), 'c');
   });
 
+  it('undo of a directory move fails cleanly when the origin was refilled', async () => {
+    const from = join(tmpDir, 'refill-d');
+    const to = join(tmpDir, 'refill-e');
+    await mkdir(from);
+    await writeFile(join(from, 'a.txt'), 'a');
+    const journal = new UndoJournal();
+    const cap = journal.beginCapture();
+    await runToolBodyResult(
+      MOVE,
+      { moves: [{ source: from, destination: to }] },
+      { fs: new GuardedFileSystem(ctx.pathGuard, cap), undoJournal: journal },
+    );
+    const id = journal.add('move', cap.journalRecords());
+    cap.release();
+
+    await mkdir(from);
+    await writeFile(join(from, 'new.txt'), 'new');
+    const undone = (await runToolBodyResult(
+      UNDO,
+      { id },
+      { fs: new GuardedFileSystem(ctx.pathGuard), undoJournal: journal },
+    )) as UndoRun;
+    const results = undone.structured.steps[0]?.results ?? [];
+    assert.ok(results[0]?.error, 'undo reports the path it could not restore');
+    assert.strictEqual(await readFile(join(to, 'a.txt'), 'utf8'), 'a');
+    assert.strictEqual(await readFile(join(from, 'new.txt'), 'utf8'), 'new');
+  });
+
   it('a folder chain that cannot be inspected costs only that folder, and names it', async () => {
     const cap = capture();
     await cap.forMutation(join(tmpDir, 'sub'), async (own) => {

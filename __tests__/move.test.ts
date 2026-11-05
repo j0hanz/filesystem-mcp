@@ -823,6 +823,167 @@ describe('move body', () => {
     });
   });
 
+  describe('a directory move onto a non-empty directory', () => {
+    const MERGE = /cannot merge directories/;
+
+    /** `src/x.txt` and `dst/y.txt` in a folder of their own. */
+    const pair = async (name: string): Promise<{ dir: string; src: string; dst: string }> => {
+      const dir = join(root, name);
+      const [src, dst] = [join(dir, 'src'), join(dir, 'dst')];
+      await mkdir(src, { recursive: true });
+      await mkdir(dst);
+      await writeFile(join(src, 'x.txt'), 'x');
+      await writeFile(join(dst, 'y.txt'), 'y');
+      return { dir, src, dst };
+    };
+
+    const assertUntouched = async (src: string, dst: string): Promise<void> => {
+      assert.strictEqual(await readFile(join(src, 'x.txt'), 'utf-8'), 'x');
+      assert.strictEqual(await readFile(join(dst, 'y.txt'), 'utf-8'), 'y');
+    };
+
+    it('refuses without asking', async () => {
+      const { src, dst } = await pair('merge_refused');
+      const asked: string[] = [];
+      const result = await move(
+        { moves: [{ source: src, destination: dst }] },
+        {
+          confirm: (prompt) => {
+            asked.push(prompt.message);
+            return { action: 'accept', content: { choice: 'overwrite' } };
+          },
+        },
+      );
+      assert.strictEqual(result.isError, true);
+      assert.deepStrictEqual(asked, []);
+      const failure = result.structured.failures?.[0];
+      assert.strictEqual(failure?.error.code, 'INVALID_INPUT');
+      assert.match(failure.error.message, MERGE);
+      assert.match(result.text ?? '', MERGE);
+      await assertUntouched(src, dst);
+    });
+
+    it('a refused pair leaves its sibling to run', async () => {
+      const { dir, src, dst } = await pair('merge_sibling');
+      const file = join(dir, 'file.txt');
+      await writeFile(file, 'f');
+      const moved = join(dir, 'moved.txt');
+      const result = await move({
+        moves: [
+          { source: src, destination: dst },
+          { source: file, destination: moved },
+        ],
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(result.structured.moves.length, 1);
+      assert.strictEqual(result.structured.failures?.length, 1);
+      assert.match(result.text ?? '', MERGE);
+      assert.strictEqual(await readFile(moved, 'utf-8'), 'f');
+      await assertUntouched(src, dst);
+    });
+
+    it('refuses a destination filled while the prompt was open', async () => {
+      const dir = join(root, 'merge_late');
+      const [src, dst] = [join(dir, 'src'), join(dir, 'dst')];
+      await mkdir(src, { recursive: true });
+      await mkdir(dst);
+      await writeFile(join(src, 'x.txt'), 'x');
+      let prompts = 0;
+      const result = await move(
+        { moves: [{ source: src, destination: dst }] },
+        {
+          confirm: async () => {
+            prompts += 1;
+            await writeFile(join(dst, 'late.txt'), 'late');
+            return { action: 'accept', content: { choice: 'overwrite' } };
+          },
+        },
+      );
+      assert.strictEqual(prompts, 1);
+      assert.match(result.structured.failures?.[0]?.error.message ?? '', MERGE);
+      assert.strictEqual(await readFile(join(src, 'x.txt'), 'utf-8'), 'x');
+      assert.strictEqual(await readFile(join(dst, 'late.txt'), 'utf-8'), 'late');
+    });
+
+    it('a link to a directory is not refused as a merge', async (t) => {
+      const { dir, src, dst } = await pair('merge_link_source');
+      const link = join(dir, 'lnk');
+      if (!(await trySymlink(src, link, () => t.skip('symlink creation not permitted')))) return;
+      const result = await move(
+        { moves: [{ source: link, destination: dst }] },
+        { confirm: choose('overwrite') },
+      );
+      assert.doesNotMatch(result.structured.failures?.[0]?.error.message ?? '', MERGE);
+      await assertUntouched(src, dst);
+    });
+
+    it('a destination link to a full directory is refused', async (t) => {
+      const { dir, src, dst } = await pair('merge_link_dest');
+      const link = join(dir, 'dstLink');
+      if (!(await trySymlink(dst, link, () => t.skip('symlink creation not permitted')))) return;
+      const asked: string[] = [];
+      const result = await move(
+        { moves: [{ source: src, destination: link }] },
+        {
+          confirm: (prompt) => {
+            asked.push(prompt.message);
+            return { action: 'accept', content: { choice: 'overwrite' } };
+          },
+        },
+      );
+      assert.deepStrictEqual(asked, []);
+      assert.match(result.structured.failures?.[0]?.error.message ?? '', MERGE);
+      assert.ok((await lstat(link)).isSymbolicLink());
+      await assertUntouched(src, dst);
+    });
+
+    it('a case-only rename of a full directory still works', async () => {
+      const dir = join(root, 'merge_case');
+      const from = join(dir, 'CaseDir');
+      await mkdir(from, { recursive: true });
+      await writeFile(join(from, 'child.txt'), 'c');
+      const result = await move({
+        moves: [{ source: from, destination: join(dir, 'casedir') }],
+      });
+      assert.strictEqual(result.structured.failures, undefined);
+      assert.ok((await readdir(dir)).includes('casedir'));
+      assert.strictEqual(await readFile(join(dir, 'casedir', 'child.txt'), 'utf-8'), 'c');
+    });
+
+    // On Windows, rename(2)'s counterpart refuses any directory destination (EPERM), empty too.
+    it(
+      'an empty destination still takes the move',
+      { skip: process.platform === 'win32' },
+      async () => {
+        const dir = join(root, 'merge_empty');
+        const [src, dst] = [join(dir, 'src'), join(dir, 'dst')];
+        await mkdir(src, { recursive: true });
+        await mkdir(dst);
+        await writeFile(join(src, 'x.txt'), 'x');
+        const result = await move(
+          { moves: [{ source: src, destination: dst }] },
+          { confirm: choose('overwrite') },
+        );
+        assert.strictEqual(result.structured.moves.length, 1);
+        assert.strictEqual(await readFile(join(dst, 'x.txt'), 'utf-8'), 'x');
+        await assert.rejects(lstat(src));
+      },
+    );
+
+    it('a file source onto a directory is unchanged', async () => {
+      const { dir, dst } = await pair('merge_file_source');
+      const file = join(dir, 'a.txt');
+      await writeFile(file, 'a');
+      const result = await move(
+        { moves: [{ source: file, destination: dst }] },
+        { confirm: choose('overwrite') },
+      );
+      assert.doesNotMatch(result.structured.failures?.[0]?.error.message ?? '', MERGE);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'a');
+      assert.strictEqual(await readFile(join(dst, 'y.txt'), 'utf-8'), 'y');
+    });
+  });
+
   // H3 (2026-10 bug hunt): an overlapping move batch is refused with no data loss.
   describe('overlapping batches', () => {
     it('refuses a swap [A->B, B->A] and both files survive', async () => {

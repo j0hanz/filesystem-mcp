@@ -85,7 +85,20 @@ describe('rename across devices (EXDEV)', () => {
     await mkdir(dst);
     await writeFile(join(src, 'x.txt'), 'x');
     await writeFile(join(dst, 'y.txt'), 'y');
-    await assert.rejects(fs.rename(src, dst));
+    let renames = 0;
+    const spied = new GuardedFileSystem(guard, undefined, {
+      rename: () => {
+        renames += 1;
+        return Promise.reject(errno('EXDEV'));
+      },
+    });
+    await assert.rejects(spied.rename(src, dst), (err: unknown) => {
+      assert.ok(isFsError(err));
+      assert.strictEqual(err.code, ErrorCode.INVALID_INPUT);
+      assert.match(err.message, /cannot merge directories/);
+      return true;
+    });
+    assert.strictEqual(renames, 0, 'nothing reached the cross-device copy');
     assert.deepStrictEqual(await readdir(dst), ['y.txt']);
     assert.deepStrictEqual(await readdir(src), ['x.txt']);
     assert.deepStrictEqual(await leftovers(), []);

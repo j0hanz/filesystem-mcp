@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Claude Desktop extension can unblock a secret file.** Its new "Unblocked secret files" setting passes `FS_ALLOWLIST`, the fix the `ACCESS_DENIED` message names.
 - **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges. A numbered read that would pass the size limit is refused, with advice to read a slice.
 
 ### Changed
@@ -21,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The registry's Docker entry no longer advertises tools that cannot work.** It mounted the folder read-only but kept every write tool, so each write failed with `EROFS`. It now passes `--read-only`.
+- **A directory move onto a non-empty directory is refused up front.** It asked to overwrite, then failed with a raw `EPERM` or `ENOTEMPTY`, and a cross-device move first copied the whole tree. It now answers `INVALID_INPUT` before any prompt or copy. `copy: true` still merges.
 - **`read` no longer calls a complete slice truncated.** `// truncated:` now means the size limit cut the read short.
 - **`includeHidden` reaches dotfiles under `**/name/**`.** `find_files`, `search_text` and `replace_text` skipped them silently when a wildcard came before a trailing globstar. `replace_text` with such a pattern and `includeHidden: true` now also changes those files.
 
