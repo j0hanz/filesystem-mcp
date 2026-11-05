@@ -91,8 +91,8 @@ describe('MCPB manifest', () => {
     );
     assert.ok(setting.description.includes('C:\\Work\\docs;C:\\Work\\archive'));
     assert.ok(setting.description.includes('/Users/me/docs:/Users/me/archive'));
-    // A space after the separator stops the server starting.
-    assert.match(setting.description, /with no spaces/);
+    // A space after the separator makes every request fail; one inside a path is fine.
+    assert.match(setting.description, /with no space after it/);
   });
 
   describe('MCPB-011: arguments the host builds', () => {

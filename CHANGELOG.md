@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`--read-only-roots` takes a list of read-only folders.** Every argument after it is read-only, so it must come last. A folder that does not exist yet is accepted and protected once it appears.
+- **`--read-only-roots` takes any number of read-only folders, one per argument.** Every argument after it is read-only, so it must come last. A folder that does not exist yet is accepted and protected once it appears.
 - **The Claude Desktop extension can unblock a secret file.** Its new "Unblocked secret files" setting passes `FS_ALLOWLIST`, the fix the `ACCESS_DENIED` message names.
 - **`read` can number its lines.** `lineNumbers: true` works on whole files, `head` and ranges. A numbered read that would pass the size limit is refused, with advice to read a slice.
 

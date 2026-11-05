@@ -84,7 +84,7 @@
     "read_only_dirs": {
       "type": "string",
       "title": "Read-only folders, typed (older setting)",
-      "description": "Optional. Folders saved here keep working, together with Read-only folders above. Use the setting above for new folders. To type more than one, put a semicolon between the full paths on Windows or a colon on macOS and Linux, with no spaces. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
+      "description": "Optional. Folders saved here keep working, together with Read-only folders above. Use the setting above for new folders. To type more than one, put a semicolon between the full paths on Windows or a colon on macOS and Linux, with no space after it. Examples: C:\\Work\\docs;C:\\Work\\archive or /Users/me/docs:/Users/me/archive",
       "default": "",
       "required": false
     },

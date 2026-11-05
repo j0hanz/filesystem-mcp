@@ -304,7 +304,7 @@ describe('CLI (real subprocess)', () => {
     });
 
     it('CLI-ROS-002: an unfilled placeholder adds nothing', async () => {
-      const config = await printConfig('--read-only-roots', '${user_config.read_only_dirs}');
+      const config = await printConfig('--read-only-roots', '${user_config.read_only_folders}');
       assert.deepStrictEqual(config.readOnlyDirs, []);
     });
 

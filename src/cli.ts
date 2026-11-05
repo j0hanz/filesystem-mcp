@@ -143,7 +143,7 @@ export function splitReadOnlyRoots(argv: readonly string[]): {
   };
 }
 
-/** As `parseArgs` does by default: under `node -e` or `-p`, arguments start one place earlier. */
+/** Under `node -e` or `-p` and their long forms, arguments start one place earlier. */
 function mainArgs(): string[] {
   const isEval = process.execArgv.some((arg) => ['-e', '--eval', '-p', '--print'].includes(arg));
   return process.argv.slice(isEval ? 1 : 2);
