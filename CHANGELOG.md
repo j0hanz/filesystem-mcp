@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Claude Desktop extension's settings explain themselves.** They name what is blocked by default, link the full list, and show examples with several items. Saved settings carry over.
 - **A refused cursor says why it may have gone stale.**
 - **`search_text` prints a named file's path once.** Rows from a single-file search no longer repeat it. Directory searches and `_meta` are unchanged.
 - **`list` says what it left out.** A raised `maxDepth` reports how many directories it did not expand, and a walk that skips ignored folders names them.

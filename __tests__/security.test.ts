@@ -354,6 +354,31 @@ describe('Security (P0)', () => {
       }
     });
 
+    it('the examples in the extension settings do what their text says', async () => {
+      await withEnv(
+        {
+          FS_DENYLIST: 'private/**, *.sqlite, salaries.xlsx',
+          FS_ALLOWLIST: '.env.example, debug.keystore',
+        },
+        () => {
+          const matcher = new SensitiveMatcher();
+          for (const blocked of [
+            '/w/private/a.txt',
+            '/w/sub/private/c.txt',
+            '/w/sub/data.sqlite',
+            '/w/sub/salaries.xlsx',
+            '/w/.env',
+            '/w/release.keystore',
+          ]) {
+            assert.strictEqual(matcher.isSensitive(blocked), true, blocked);
+          }
+          for (const open of ['/w/.env.example', '/w/debug.keystore', '/w/ok.txt']) {
+            assert.strictEqual(matcher.isSensitive(open), false, open);
+          }
+        },
+      );
+    });
+
     it('TC-SEC-013: Custom FS_DENYLIST rules', () => {
       const matcher = new SensitiveMatcher(['*.secret']);
       assert.strictEqual(matcher.isSensitive('data.secret'), true, 'Should match custom pattern');

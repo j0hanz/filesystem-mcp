@@ -56,36 +56,36 @@
   "user_config": {
     "allowed_directories": {
       "type": "directory",
-      "title": "Allowed directories",
-      "description": "Directories the server may read and write. Other paths need your approval first.",
+      "title": "Allowed folders",
+      "description": "The folders the AI can use. The AI must ask you before it opens anything else.",
       "multiple": true,
       "required": true
     },
     "read_only": {
       "type": "boolean",
       "title": "Read-only mode",
-      "description": "Remove every tool that changes files. The AI can still list, search, and read.",
+      "description": "Turn this on so the AI can read files but never change, move, or delete them.",
       "default": false,
       "required": false
     },
     "read_only_dirs": {
       "type": "string",
-      "title": "Read-only directories",
-      "description": "Directories the AI may read but never change, `:`-separated on macOS and Linux, `;`-separated on Windows. Writes, moves, and deletes under them are refused. The directories must also be allowed; this setting grants no access.",
+      "title": "Read-only folders",
+      "description": "Optional. Folders the AI can read but not change. Each one must be in the list above or inside a folder in it. For more than one, type the full paths with a semicolon between them on Windows: C:\\Work\\docs;C:\\Work\\archive. On macOS and Linux, use a colon: /Users/me/docs:/Users/me/archive",
       "default": "",
       "required": false
     },
     "deny_patterns": {
       "type": "string",
       "title": "Extra blocked files",
-      "description": "Comma-separated patterns to block, for example private/**,*.sqlite. Secret files such as .env and private keys are already blocked.",
+      "description": "Optional. Files the AI can never open, with a comma between each: private/**, *.sqlite, salaries.xlsx. That example blocks everything in any folder named private, every .sqlite file, and any file named salaries.xlsx. Environment files, private keys, and cloud and SSH credentials are already blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     },
     "allow_patterns": {
       "type": "string",
       "title": "Unblocked secret files",
-      "description": "Comma-separated built-in secret-file patterns to unblock, for example .env.example. The AI can then read matching files, so list only what it should see. Extra blocked files always win.",
+      "description": "Optional. Leave this empty unless the AI needs a file that is blocked by default. List the files with a comma between each: .env.example, debug.keystore. The AI can then read them, so list only what you are happy for it to see. Anything in Extra blocked files stays blocked. Full list: https://github.com/j0hanz/filesystem-mcp/blob/main/docs/configuration.md#secret-files",
       "default": "",
       "required": false
     }
