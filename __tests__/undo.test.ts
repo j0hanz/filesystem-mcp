@@ -2785,7 +2785,7 @@ describe('undo body', () => {
       preview
         .toLowerCase()
         .includes(
-          `// ${y}: cancelled not restored: it or its folder was modified since`.toLowerCase(),
+          `// ${y}: skipped not restored: it or its folder was modified since`.toLowerCase(),
         ),
       `the reason names the path: ${preview}`,
     );
@@ -3059,6 +3059,34 @@ describe('undo body', () => {
     const real = await undo({ id });
     assert.notStrictEqual(real.isError, true);
     assert.strictEqual(await readFile(file, 'utf8'), 'a\n');
+  });
+
+  it('reason line prints SKIPPED for a cancelled restore', async () => {
+    const a = join(root, 'reason-skip.txt');
+    const id = await journaled(CREATE, { files: [{ path: a, content: 'first' }] });
+    await writeFile(a, 'changed since this undo step was recorded');
+
+    const undone = await undo({ id });
+
+    assert.match(undone.text ?? '', /: SKIPPED Not restored/u);
+  });
+
+  it('reason line keeps the code for a failed restore', async () => {
+    const a = join(root, 'reason-fail-a.txt');
+    const b = join(root, 'reason-fail-b.txt');
+    await writeFile(a, 'bytes');
+    const id = await journaled(MOVE, { moves: [{ source: a, destination: b }] });
+
+    const undone = await undo(
+      { id },
+      {
+        fs: new GuardedFileSystem(guard, undefined, {
+          rename: () => Promise.reject(new Error('fake disk full')),
+        }),
+      },
+    );
+
+    assert.match(undone.text ?? '', /: UNKNOWN fake disk full/u);
   });
 
   it('over HTTP, only an undo id or a dry run is accepted', async () => {
