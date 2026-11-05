@@ -97,7 +97,7 @@ describe('patch body', () => {
     });
   });
 
-  it('keeps the generic refusal for a huge hunk count against an empty file', async () => {
+  it('names the failing hunk across thousands of empty-target hunks', async () => {
     const f = join(root, 'patch_empty_many.txt');
     await writeFile(f, '');
     const hunks = Array.from(
@@ -106,11 +106,38 @@ describe('patch body', () => {
     );
     // A stale context line the empty file cannot match, so the apply fails.
     const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -500,1 +500,2 @@\n nope\n+X\n`;
-    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
-      assert.ok(isFsError(error), 'expected FsError');
-      assert.doesNotMatch(error.message ?? '', /hunk \d+/u);
-      return true;
-    });
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 4001/u),
+    );
+  });
+
+  it('bounds the diagnosis on a huge single-line target', async () => {
+    const f = join(root, 'patch_big_single.txt');
+    await writeFile(f, `${'x'.repeat(8 * 1024 * 1024)}\n`);
+    const hunks = Array.from({ length: 1_500 }, () => '@@ -1,0 +1,1 @@\n+l\n');
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -1,1 +1,2 @@\n nope\n+X\n`;
+    const started = Date.now();
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 1501/u),
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2_000, `diagnosis took ${String(elapsed)}ms`);
+  });
+
+  it('names the failing hunk among zero-line hunks', async () => {
+    const f = join(root, 'patch_zero_line.txt');
+    await writeFile(f, 'seed\n');
+    const hunks = Array.from(
+      { length: 20_000 },
+      (_, i) => `@@ -${String(i + 1)},0 +${String(i + 1)},0 @@\n`,
+    );
+    const diff = `--- f.txt\n+++ f.txt\n${hunks.join('')}@@ -1,1 +1,2 @@\n nope\n+X\n`;
+    await assert.rejects(
+      patch({ path: f, diff }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /did not apply cleanly: hunk 20001/u),
+    );
   });
 
   it('names the failing hunk by its submitted start line', async () => {
