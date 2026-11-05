@@ -5,12 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.18.0] - 2026-11-05
+
+Tool replies that say what happened, and refusals and docs that match what the
+server does. Before upgrading, read Changed if you parse `patch` dry-run or
+`undo` text: a `patch` dry run no longer returns the resulting file. Read Fixed
+if you send `move` batches: a chain with a full destination now moves nothing.
 
 ### Changed
 
 - **A `patch` dry run returns a labelled diff.** It used to return the whole resulting file with no label. The text now starts `patch: name +1 -1 [dry run]`, followed by the diff of where the hunks landed. `diff` in the structured result holds that diff, not the one passed in.
-- **`undo` replies say what happened.** A real undo says `reverted`; a preview says `would revert` and ends in `[dry run]`. A skipped or failed path gets a line with its reason.
+- **`undo` replies say what happened.** A real undo says `reverted`; a preview says `would revert` and ends in `[dry run]`. A skipped or failed path gets a line with its reason, up to 20 lines and then a count of the rest.
 - **`move` shows the change of folder.** When the base name stays the same, the reply reads `README.md → docs/README.md`. A rename in one folder is as short as before.
 - **A refused recursive delete says what it left alone.** On a client that cannot confirm, the refusal says no path in the call was deleted, and no longer suggests deleting the entries one by one.
 
@@ -22,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Refusals name the Claude Desktop extension's settings.** The read-only refusals name "Read-only folders". The secret-file refusal says `--allow-sensitive` applies outside the extension, and that "Extra blocked files" stays blocked.
 - **`--read-only-roots` warns about a folder that does not exist.** The server still starts and protects that path, but a typo no longer goes unnoticed.
 - **The configuration guide and README describe the extension's settings.** They cover "Read-only folders", "Extra blocked files" and "Unblocked secret files".
+- **`patch` dry-run counts match the diff shown.** `linesAdded` and `linesRemoved` used to count lines a hunk re-added unchanged.
+- **A skipped `move` undo no longer blames only the old path.** The reason now says the moved entry, its old path or a folder either needs was modified.
+- **Listed `undo` results stay inside their 2 MiB budget.** Array brackets and separators were not counted.
+- **The docs no longer imply a copy can be undone.**
+- **`move` batches check directory merges in parallel.** Checking one pair at a time added each pair's latency on slow storage, and cancelling a batch did not stop the remaining checks.
 
 ## [2.17.0] - 2026-11-05
 
