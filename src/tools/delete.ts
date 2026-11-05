@@ -33,7 +33,7 @@ const DeleteInputSchema = z.strictObject({
     .max(1000)
     .describe('Paths to delete (max 1000); accepts files, directories, or symlinks'),
   recursive: defaultFalseBoolean(
-    'Delete directory contents recursively (required for non-empty directories). Deleting a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT and nothing in the call is deleted.',
+    'Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT and nothing in the call is deleted.',
   ),
   ignoreIfNotExists: defaultFalseBoolean(
     'Silently succeed if a path does not exist instead of returning an error',
