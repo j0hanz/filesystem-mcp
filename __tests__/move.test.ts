@@ -66,6 +66,19 @@ describe('move body', () => {
   const move = async (args: MoveArgs, options: Partial<ToolBodyOptions> = {}): Promise<MoveRun> =>
     runToolBodyResult(MOVE, args, { fs, ...options });
 
+  it('shows the change of folder when the base name stays, and only the names otherwise', async () => {
+    const source = join(root, 'same-name.md');
+    await writeFile(source, 'x');
+    const into = join(root, 'docs', 'same-name.md');
+    const moved = await move({ moves: [{ source, destination: into }] });
+    assert.strictEqual(moved.text, `move: same-name.md → ${join('docs', 'same-name.md')}`);
+
+    const renamed = await move({
+      moves: [{ source: into, destination: join(root, 'docs', 'other.md') }],
+    });
+    assert.strictEqual(renamed.text, 'move: same-name.md → other.md');
+  });
+
   it('names the failing pair, code and reason in its text', async () => {
     const source = join(root, 'move_reason_missing.txt');
     const destination = join(root, 'move_reason_dest.txt');

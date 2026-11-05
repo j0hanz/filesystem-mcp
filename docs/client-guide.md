@@ -353,9 +353,9 @@ Notes on individual tools:
 - `stat` on a folder has no `size`; its `entryCount` is the number of entries
   directly inside it, hidden ones included and secret files left out. `0` means
   the folder is empty.
-- A dry run of `edit` or `replace_text` returns a unified diff as its text.
-  A dry run of `patch` returns the patched file as its text; the diff it
-  applied is in `_meta.diff`.
+- A dry run of `edit`, `patch` or `replace_text` returns a unified diff as its
+  text. A `patch` dry run's text starts with a `[dry run]` summary line, and
+  `_meta.diff` holds the same diff.
 
 ## Errors
 
@@ -480,8 +480,8 @@ client.setRequestHandler('elicitation/create', async ({ params }) => {
 
 The client must declare `capabilities: { elicitation: { form: {} } }`. Without
 it the server cannot ask, and the call fails with a message that names the
-alternative (`overwrite: true`, deleting files one by one, a path inside the
-roots).
+alternative (`overwrite: true`, a path inside the roots). A recursive delete
+of a non-empty directory has none, and the message says so.
 
 **Two ways to answer on 2026-07-28.** By default the SDK fulfils the server's
 `input_required` result through the same `elicitation/create` handler and

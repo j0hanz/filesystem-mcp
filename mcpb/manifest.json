@@ -62,7 +62,7 @@
     "allowed_directories": {
       "type": "directory",
       "title": "Allowed folders",
-      "description": "The folders the AI can use. The AI must ask you before it opens anything else.",
+      "description": "The folders the AI can use. Anything else is refused, unless your client can ask you and you approve it. Some folders, such as ~/.ssh, are always refused.",
       "multiple": true,
       "required": true
     },

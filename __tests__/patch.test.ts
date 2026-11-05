@@ -76,12 +76,35 @@ describe('patch body', () => {
     }
   });
 
-  it('dryRun returns the patched text and advertises no resourceUri or resource_link', async () => {
+  it('dryRun counts the lines its diff shows, not the ones the input re-adds', async () => {
+    const f = join(root, 'patch_dry_counts.txt');
+    await writeFile(f, 'a\nb\nc\n');
+    const diff = '--- f\n+++ f\n@@ -1,3 +1,3 @@\n-a\n-b\n-c\n+a\n+X\n+c\n';
+    const dry = await patch({ path: f, diff, dryRun: true });
+    assert.match(dry.text ?? '', /\+1 -1 \[dry run\]/);
+    assert.strictEqual(dry.structured.linesAdded, 1);
+    assert.strictEqual(dry.structured.linesRemoved, 1);
+    const real = await patch({ path: f, diff });
+    assert.strictEqual(real.structured.linesAdded, 3, 'a real reply does not change');
+  });
+
+  it('dryRun on a large file returns the hunk, not the file', async () => {
+    const f = join(root, 'patch_dry_large.txt');
+    const rest = Array.from({ length: 5000 }, (_, i) => `line ${String(i)}`).join('\n');
+    await writeFile(f, `a\nb\nc\n${rest}\n`);
+    const dry = await patch({ path: f, diff: DIFF, dryRun: true });
+    assert.doesNotMatch(dry.text ?? '', /line 4000/);
+    assert.ok((await readFile(f, 'utf-8')).startsWith('a\n'), 'a dry run writes nothing');
+  });
+
+  it('dryRun returns a labelled diff and advertises no resourceUri or resource_link', async () => {
     const f = join(root, 'patch_dry.txt');
     await writeFile(f, 'a\nb\nc\n');
     const dry = await patch({ path: f, diff: DIFF, dryRun: true });
-    assert.strictEqual(dry.text, 'X\nb\nc\n');
-    assert.strictEqual(dry.structured.diff, DIFF);
+    assert.match(dry.text ?? '', /^patch: patch_dry\.txt \+1 -1 \[dry run\]\n\n/);
+    assert.match(dry.text ?? '', /^-a$/m);
+    assert.match(dry.text ?? '', /^\+X$/m);
+    assert.ok((dry.text ?? '').endsWith(dry.structured.diff ?? 'missing'));
     assert.strictEqual(dry.structured.resourceUri, undefined);
     assert.strictEqual(dry.resources, undefined, 'a dry run links nothing');
     assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\n');
@@ -152,7 +175,7 @@ describe('patch body', () => {
     let live: Promise<unknown> | undefined;
     try {
       const dry = await patch({ path: f, diff: DIFF, dryRun: true });
-      assert.strictEqual(dry.text, 'X\nb\nc\n');
+      assert.match(dry.text ?? '', /\[dry run\]/);
 
       let settled = false;
       live = patch({ path: f, diff: DIFF }).finally(() => {

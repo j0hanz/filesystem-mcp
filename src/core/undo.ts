@@ -1138,10 +1138,10 @@ export async function restoreEntry(
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
   const remaining: { record: UndoRecord; order: number }[] = [];
-  const SKIP_MSG = 'Not restored: modified since this undo step was recorded';
-  const skip = (record: UndoRecord, order: number, path: string): void => {
+  const SKIP_MSG = 'Not restored: it or its folder was modified since this undo step was recorded';
+  const skip = (record: UndoRecord, order: number, path: string, message = SKIP_MSG): void => {
     remaining.push({ record, order });
-    results.push({ path, error: Problem.cancelled(SKIP_MSG, { path }) });
+    results.push({ path, error: Problem.cancelled(message, { path }) });
   };
   const done = (path: string): void => {
     results.push({ path, value: { restored: true } });
@@ -1280,7 +1280,13 @@ export async function restoreEntry(
               if (!sameIdentity(landed, tracked)) world.rewrite(tracked, landed);
               done(record.from);
             } else {
-              skip(record, order, record.from);
+              // Either end can be what changed, and this names only the old path.
+              skip(
+                record,
+                order,
+                record.from,
+                'Not restored: the moved entry, its old path or a folder either needs was modified since this undo step was recorded',
+              );
             }
           });
           break;

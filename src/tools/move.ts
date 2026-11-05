@@ -1,7 +1,7 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { basename, resolve } from 'node:path';
+import { normalize, resolve, sep } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -266,6 +266,20 @@ async function runTransfers(
   return { results, skipped, failures };
 }
 
+/**
+ * A pair as `from → to`, base names only unless they match: `README.md →
+ * README.md` hides the change of folder, so that shows the paths past their
+ * shared folders.
+ */
+function pairLabel(from: string, to: string): string {
+  const [fromName, toName] = [pathLabel(from), pathLabel(to)];
+  if (fromName !== toName) return `${fromName} → ${toName}`;
+  const [a, b] = [normalize(from).split(sep), normalize(to).split(sep)];
+  let shared = 0;
+  while (shared < a.length - 1 && shared < b.length - 1 && a[shared] === b[shared]) shared += 1;
+  return `${a.slice(shared).join(sep)} → ${b.slice(shared).join(sep)}`;
+}
+
 function buildSummary(
   verb: 'move' | 'copy',
   results: readonly MoveItemResult[],
@@ -278,7 +292,7 @@ function buildSummary(
   // Skipped destinations are an outcome the user chose, not a failure — name
   // them, or an all-skipped call reads as "copy: nothing".
   const tokens = [
-    ...results.map((r) => `${pathLabel(r.from)} → ${pathLabel(r.to)}`),
+    ...results.map((r) => pairLabel(r.from, r.to)),
     ...skipped.map((dest) => `${pathLabel(dest)} SKIPPED`),
   ];
   const parts = [`${verb}: ${joinRoster(tokens) || 'nothing'}`];
@@ -304,7 +318,7 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
       const move = args.moves[0];
       return {
         label,
-        subject: `${basename(move?.source ?? '')} → ${basename(move?.destination ?? '')}`,
+        subject: pairLabel(move?.source ?? '', move?.destination ?? ''),
       };
     }
     return { label, subject: `${String(args.moves.length)} files` };
