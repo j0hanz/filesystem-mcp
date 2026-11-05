@@ -79,7 +79,9 @@ const SearchAndReplaceInputSchema = z.strictObject({
   caseSensitive: z
     .boolean()
     .default(true)
-    .describe('Match case exactly (default: true). Pass false to ignore case.'),
+    .describe(
+      'Match case exactly (default: true). Pass false to ignore case. search_text ignores case by default, so matches it reports can include case variants this call does not replace.',
+    ),
   wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
   dryRun: defaultFalseBoolean(
     'Preview replacements without writing to disk (default: false = apply changes)',
