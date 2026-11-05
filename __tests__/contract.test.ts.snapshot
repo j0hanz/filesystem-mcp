@@ -41,7 +41,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "description": "Text content to write, verbatim."
                 },
                 "append": {
-                  "description": "Append the content to the end of the file instead of overwriting; creates the file if it does not exist",
+                  "description": "Append the content verbatim, adding no newline; creates the file if it does not exist",
                   "type": "boolean"
                 },
                 "overwrite": {

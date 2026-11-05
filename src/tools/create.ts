@@ -38,7 +38,7 @@ const CreateFileItemSchema = z.strictObject({
     .boolean()
     .optional()
     .describe(
-      'Append the content to the end of the file instead of overwriting; creates the file if it does not exist',
+      'Append the content verbatim, adding no newline; creates the file if it does not exist',
     ),
   overwrite: z
     .boolean()
