@@ -185,9 +185,23 @@ function patchContent(
   // so `=== false` distinguishes a no-op patch ('') from a failed one.
   const patched = applyPatch(content, { ...parsedPatch, hunks });
   if (patched === false) {
+    // jsdiff answers false for the whole diff; re-applying each prefix names
+    // the first hunk that fails. Each prefix re-runs the matcher, so diagnose
+    // only while hunk count times the guarded line product stays within one apply.
+    const first =
+      hunks.length > 0 && fileLines * diffLines * hunks.length <= MAX_PATCH_LINE_PRODUCT
+        ? hunks.findIndex(
+            (_, i) => applyPatch(content, { ...parsedPatch, hunks: hunks.slice(0, i + 1) }) === false,
+          )
+        : -1;
+    // findIndex cannot miss: the full clamped set is the last prefix and already failed.
+    const where =
+      first >= 0
+        ? `hunk ${String(first + 1)} (starting at line ${String(hunks[first]?.oldStart)}) does not match file content`
+        : 'hunk context does not match file content';
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      'patch did not apply cleanly: hunk context does not match file content (hunks must be in file order)',
+      `patch did not apply cleanly: ${where} (hunks must be in file order)`,
       args.path,
     );
   }
