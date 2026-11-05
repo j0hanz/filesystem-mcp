@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows every rewrite of a file swaps in a new one atomically, so created becomes that write's time, while modified keeps tracking edits.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows a rewrite swaps in a new file atomically, so created becomes that write's time, but a file shared through hard links is rewritten in place and keeps its created time. modified keeps tracking edits.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -858,7 +858,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "dryRun": {
             "default": false,
-            "description": "Preview which calls would restore, changing nothing. The preview assumes every newer call is reverted first, so a file changed since can still show as restored.",
+            "description": "Preview which calls would restore, changing nothing. A preview of the whole history assumes each call is reverted after the newer ones, so a file changed since can still show as restored; previewing one id shows that call alone.",
             "type": "boolean"
           }
         },
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows every rewrite of a file swaps in a new one atomically, so created becomes that write's time, while modified keeps tracking edits.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows a rewrite swaps in a new file atomically, so created becomes that write's time, but a file shared through hard links is rewritten in place and keeps its created time. modified keeps tracking edits.",
       "inputSchema": {
         "type": "object",
         "properties": {

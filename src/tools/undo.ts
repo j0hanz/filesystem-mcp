@@ -23,7 +23,9 @@ const UndoInputSchema = z.strictObject({
     .optional()
     .describe('Revert the last N calls (not over HTTP)'),
   dryRun: defaultFalseBoolean(
-    'Preview which calls would restore, changing nothing. The preview assumes every newer call is reverted first, so a file changed since can still show as restored.',
+    'Preview which calls would restore, changing nothing. ' +
+      'A preview of the whole history assumes each call is reverted after the newer ones, ' +
+      'so a file changed since can still show as restored; previewing one id shows that call alone.',
   ),
 });
 
