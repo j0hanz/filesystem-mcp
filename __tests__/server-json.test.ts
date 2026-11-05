@@ -9,9 +9,7 @@ interface RegistryArgument {
 }
 
 describe('registry manifest', () => {
-  const manifest = JSON.parse(
-    readFileSync(new URL('../server.json', import.meta.url), 'utf8'),
-  ) as {
+  const manifest = JSON.parse(readFileSync(new URL('../server.json', import.meta.url), 'utf8')) as {
     packages: { runtimeArguments?: RegistryArgument[]; packageArguments?: RegistryArgument[] }[];
   };
 
