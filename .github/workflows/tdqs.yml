@@ -1,14 +1,18 @@
 # Scores the advertised tool definitions on tdqs.dev (the rubric Glama uses).
-# Kept apart from ci.yml, which must stay secret-free: this one reads
-# TDQS_API_KEY. A hosted score spends one of the account's 30 daily calls,
-# so it runs only when a definition can have changed, or by hand.
+# Kept apart from ci.yml, which must stay secret-free. The secret never meets
+# PR code: `definitions` builds and runs the PR with no secret and hands the
+# tools/list JSON on as data; `score` holds the key and runs only the pinned
+# tdqs CLI on that JSON. A hosted score spends one of the account's 30 daily
+# calls, so `score` runs only when tools/list differs from the base branch.
 name: TDQS
 
 on:
   pull_request:
     paths:
-      - 'src/tools/**'
-      - 'src/core/schema.ts'
+      # Schema limits and copy live across src/, so any of it can change tools/list.
+      - 'src/**'
+      - 'package-lock.json'
+      - 'scripts/tools-list.mjs'
       - '.github/workflows/tdqs.yml'
   workflow_dispatch:
 
@@ -21,13 +25,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tdqs:
-    name: TDQS
+  definitions:
+    name: TDQS definitions
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      # Empty on fork PRs, which receive no secrets; the score step skips then.
-      TDQS_API_KEY: ${{ secrets.TDQS_API_KEY }}
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      tools: ${{ steps.compare.outputs.tools }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,15 +44,63 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+      - name: Root for the server
+        run: mkdir -p "$RUNNER_TEMP/root"
       - name: Lint definitions
         # Offline and free. Gated on errors only: the move/delete
         # shadow-candidate warning is permanent and coherence review clears it.
-        run: npx -y mcp-tdqs@0.2.0 lint --command "node dist/index.js ." --fail-on error
+        run: npx -y mcp-tdqs@0.2.0 lint --command "node dist/index.js $RUNNER_TEMP/root" --fail-on error
+      - name: Dump tools/list
+        run: node scripts/tools-list.mjs dist/index.js "$RUNNER_TEMP/root" "$RUNNER_TEMP/tools.json"
+      - name: Check out base
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - name: Build base
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: base
+        run: npm ci && npm run build
+      - name: Dump base tools/list
+        if: ${{ github.event_name == 'pull_request' }}
+        run: node scripts/tools-list.mjs base/dist/index.js "$RUNNER_TEMP/root" "$RUNNER_TEMP/base-tools.json"
+      - name: Compare
+        id: compare
+        run: |
+          changed=true
+          if [ -f "$RUNNER_TEMP/base-tools.json" ] && cmp -s "$RUNNER_TEMP/tools.json" "$RUNNER_TEMP/base-tools.json"; then
+            changed=false
+            echo "tools/list matches the base branch; skipping the hosted score."
+          fi
+          delim="EOF_$(openssl rand -hex 8)"
+          {
+            echo "changed=$changed"
+            echo "tools<<$delim"
+            cat "$RUNNER_TEMP/tools.json"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+  score:
+    name: TDQS score
+    needs: definitions
+    if: ${{ needs.definitions.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      # Empty on fork PRs, which receive no secrets; the score step skips then.
+      TDQS_API_KEY: ${{ secrets.TDQS_API_KEY }}
+      # Passed through env, never interpolated into the script: it is PR-built data.
+      TOOLS_JSON: ${{ needs.definitions.outputs.tools }}
+    steps:
       - name: Score definitions
         if: ${{ env.TDQS_API_KEY != '' }}
         # Gate at tier A (3.5+). Scores swing about 0.3 between identical runs,
         # so a tighter gate would fail at random; the summary shows the detail.
-        run: >-
-          npx -y mcp-tdqs@0.2.0 score --command "node dist/index.js ."
-          --hosted https://tdqs.dev --server-name filesystem-mcp
-          --fail-under A --format markdown >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          printf '%s' "$TOOLS_JSON" > "$RUNNER_TEMP/tools.json"
+          npx -y mcp-tdqs@0.2.0 score --file "$RUNNER_TEMP/tools.json" \
+            --hosted https://tdqs.dev --server-name filesystem-mcp \
+            --fail-under A --format markdown >> "$GITHUB_STEP_SUMMARY"
