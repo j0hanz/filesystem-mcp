@@ -749,6 +749,23 @@ describe('move body', () => {
   });
 
   describe('overwrite Confirmation', () => {
+    it('move: overwrite: true still asks before replacing', async () => {
+      const src = await writeTestFile(root, 'move_ow_flag_src.txt', 'new source');
+      const dst = await writeTestFile(root, 'move_ow_flag_dst.txt', 'existing dst');
+      const asked: string[] = [];
+      await move(
+        { moves: [{ source: src, destination: dst }], overwrite: true },
+        {
+          confirm: (prompt) => {
+            asked.push(prompt.message);
+            return { action: 'accept', content: { choice: 'skip' } };
+          },
+        },
+      );
+      assert.strictEqual(asked.length, 1);
+      assert.strictEqual(await readFile(dst, 'utf-8'), 'existing dst');
+    });
+
     for (const copy of [false, true]) {
       const op = copy ? 'copy' : 'move';
 

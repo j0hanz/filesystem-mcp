@@ -128,6 +128,17 @@ describe('read body', () => {
     }
   });
 
+  it('refuses path together with paths', async () => {
+    const file = await writeTestFile(root, 'read-both.txt', 'x');
+    await assert.rejects(
+      () => read({ path: file, paths: [file] }, { guard }),
+      (err) =>
+        issuesOf(err).some((issue) =>
+          (issue.message ?? '').includes("Cannot use both 'path' and 'paths'"),
+        ),
+    );
+  });
+
   it('without binary refuses a binary file and names the flag', async () => {
     const dir = join(root, 'binary-flag');
     await mkdir(dir, { recursive: true });
