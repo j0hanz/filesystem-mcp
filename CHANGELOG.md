@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2026-11-06
+
+Copies that can be undone, a structured error on failed calls, and failure
+messages that say what went wrong. Before upgrading, read Changed if you call
+`undo` with `steps` after a copy, parse `read` hash lines, or match `undo` or
+`patch` error text.
+
+### Added
+
+- **`move` copies can be undone.** A copy now returns an undo id. `undo` removes what the copy created and restores what it replaced, with the saved file mode. A copy over a hard-linked file, a copied folder without owner write, or a copy too large for the undo budget still gives no undo.
+- **Failed calls carry `_meta.error`.** When a whole call fails, the result's `_meta.error` holds `{ code, message, path, suggestion }`, the same shape as per-path errors. The text is unchanged.
+
+### Changed
+
+- **`undo {steps: N}` counts copies.** A copy is now an undo step, so `steps: 1` right after a copy reverts that copy, not the call before it.
+- **`read` marks a slice hash.** With `head`, `tail` or a line range, the hash line reads `// sha256 (slice): …`, and the hash covers that slice only. A whole-file read keeps `// sha256: …`.
+- **`undo` says why each path was skipped.** The single `Not restored: it or its folder was modified since this undo step was recorded` is replaced by specific reasons, such as `Not restored: it was deleted since this undo step was recorded` or `Not restored: the folder is no longer empty`.
+
+### Fixed
+
+- **`patch` names the line that differs.** A failed hunk now ends in `at line 4: expected "d", found "Z"`, counting blank context lines. Long lines show where they differ, surrogate pairs stay whole, and a missing line reads `found end of file`. `(hunks must be in file order)` appears only when reordering would let the patch apply.
+- **No grant advice where no grant is offered.** An out-of-root error for a system folder, a drive root, or a path outside `FS_ROOT_BOUNDARY` now says only a startup root can admit it, instead of suggesting a grant.
+
+### Documentation
+
+- **The client guide says what a hash covers** and where per-path errors live.
+
 ## [2.18.4] - 2026-11-06
 
 Tool descriptions that route `delete`, `list`, `move`, `read` and `stat` to the
