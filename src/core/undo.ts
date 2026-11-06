@@ -658,7 +658,7 @@ export interface RestoreOutcome {
 }
 
 /** sha256 of a file's current bytes, streamed so a huge file still hashes. */
-export async function hashFile(
+async function hashFile(
   fs: GuardedFileSystem,
   path: string,
   signal?: AbortSignal,

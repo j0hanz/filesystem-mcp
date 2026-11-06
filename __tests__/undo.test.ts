@@ -470,8 +470,10 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await writeFile(join(dest, 'a.txt'), 'edited');
     const { results } = await restoreCopy(cap);
     const byName = new Map(results.map((r) => [pathLabel(r.path), r]));
-    assert.ok(byName.get('a.txt')?.error, 'the edited file is refused');
-    assert.strictEqual(byName.get('b.txt')?.error, undefined);
+    const a = byName.get('a.txt');
+    const b = byName.get('b.txt');
+    assert.ok(a && 'error' in a, 'the edited file is refused');
+    assert.ok(b && !('error' in b), 'the untouched file is restored');
     await assert.rejects(lstat(join(dest, 'b.txt')));
     assert.strictEqual(await readFile(join(dest, 'a.txt'), 'utf8'), 'edited');
     cap.release();
@@ -2854,21 +2856,25 @@ describe('undo id on results', () => {
     }
   });
 
-  it('a copy ends with not undoable: copies are not undoable yet', async () => {
+  it('a copy gives an undo id that removes the copy', async () => {
     const tmp = await createTestRoot();
     const pair = await createTestClientPair([tmp]);
     try {
       const src = join(tmp, 'suffix-copy.txt');
+      const dest = join(tmp, 'suffix-copy-dest.txt');
       await writeFile(src, 'cp');
       const result = await pair.client.callTool({
         name: 'move',
-        arguments: {
-          moves: [{ source: src, destination: join(tmp, 'suffix-copy-dest.txt') }],
-          copy: true,
-        },
+        arguments: { moves: [{ source: src, destination: dest }], copy: true },
       });
       assert.notStrictEqual(result.isError, true);
-      assert.match(firstTextBlock(result) ?? '', / · not undoable: copies are not undoable yet$/u);
+      assert.doesNotMatch(firstTextBlock(result) ?? '', /not undoable/u);
+      const id = (result._meta as { undo?: string } | undefined)?.undo;
+      assert.strictEqual(typeof id, 'string');
+      const undone = await pair.client.callTool({ name: 'undo', arguments: { id } });
+      assert.notStrictEqual(undone.isError, true);
+      await assert.rejects(lstat(dest));
+      assert.strictEqual(await readFile(src, 'utf8'), 'cp');
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);
@@ -3635,7 +3641,7 @@ describe('undo tool over the wire', () => {
     }
   });
 
-  it('a copy with new parents keeps the call-wide reason and no undo id', async () => {
+  it('undo of a copy with new parents removes the parents too', async () => {
     const tmp = await createTestRoot();
     const pair = await createTestClientPair([tmp]);
     try {
@@ -3650,13 +3656,12 @@ describe('undo tool over the wire', () => {
         copy: true,
       });
       assert.notStrictEqual(copied.isError, true);
-      assert.match(
-        (firstTextBlock(copied) ?? '').split('\n')[0] ?? '',
-        / · not undoable: copies are not undoable yet$/u,
-      );
       const meta = copied._meta as { undo?: string; undoUnavailable?: string };
-      assert.strictEqual(meta.undo, undefined);
-      assert.strictEqual(meta.undoUnavailable, 'copies are not undoable yet');
+      assert.strictEqual(typeof meta.undo, 'string');
+      assert.strictEqual(meta.undoUnavailable, undefined);
+      const undone = await call(pair.client, 'undo', { id: meta.undo });
+      assert.notStrictEqual(undone.isError, true);
+      await assert.rejects(lstat(join(tmp, 'new')));
     } finally {
       await pair.close();
       await cleanupTestRoot(tmp);

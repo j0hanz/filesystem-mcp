@@ -63,10 +63,10 @@ import {
   identityOf as fileIdentityOf,
   NOT_RECORDING,
   type PathCapture,
-  plannedMkdirChain,
-  saveOld,
   planCopyUndo,
+  plannedMkdirChain,
   recordCopyUndo,
+  saveOld,
   snapshotTree,
 } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
@@ -1099,9 +1099,7 @@ export class GuardedFileSystem {
     // Its own capture: a copy that cannot be undone must not cost its siblings their undo.
     await this.#forMutation(validDest, async (own) => {
       // Before the copy: which destination entries are new and which it replaces.
-      const targets = own.recording
-        ? await planCopyUndo(own, this, validSource, validDest)
-        : [];
+      const targets = own.recording ? await planCopyUndo(own, this, validSource, validDest) : [];
       try {
         await this.#copyValid(validSource, validDest);
       } catch (error) {
