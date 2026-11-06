@@ -421,6 +421,45 @@ describe('UndoCapture via GuardedFileSystem', () => {
     cap.release();
   });
 
+  it('a copy past the record budget stops hashing once undo gave up', async () => {
+    const src = join(tmpDir, 'cph-src');
+    const dest = join(tmpDir, 'cph-dest');
+    await mkdir(src, { recursive: true });
+    for (let i = 0; i < 6; i++) await writeFile(join(src, `f${i}.txt`), String(i));
+    // rmdir + 2 removes = 1536 bytes; a third remove would make 2048.
+    const cap = new UndoJournal(1600).beginCapture();
+    const fs = makeFs(cap);
+    let hashed = 0;
+    const open = fs.open.bind(fs);
+    fs.open = async (...args: Parameters<typeof fs.open>) => {
+      if (args[0].includes('cph-dest')) hashed++;
+      return open(...args);
+    };
+    await copyVia(fs, src, dest);
+    assert.match(cap.unavailableReason() ?? '', /: too many changes to keep for undo$/u);
+    assert.ok(hashed <= 3 && hashed > 0, `hashed ${String(hashed)} files after undo gave up`);
+    cap.release();
+  });
+
+  it('POSIX only: undo of a copy over a 0600 file puts the mode back', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX mode bits');
+      return;
+    }
+    const src = join(tmpDir, 'cpmode-src.txt');
+    const dest = join(tmpDir, 'cpmode-dest.txt');
+    await writeFile(src, 'new');
+    await fsModule.chmod(src, 0o644);
+    await writeFile(dest, 'old');
+    await fsModule.chmod(dest, 0o600);
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    await restoreCopy(cap);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'old');
+    assert.strictEqual((await lstat(dest)).mode & 0o777, 0o600);
+    cap.release();
+  });
+
   it('copy of a tree holding a link is not undoable for that path', async (t) => {
     const src = join(tmpDir, 'cpl-src');
     await mkdir(src, { recursive: true });

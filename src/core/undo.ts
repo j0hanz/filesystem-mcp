@@ -606,6 +606,8 @@ export async function recordCopyUndo(
 ): Promise<void> {
   try {
     for (const target of targets) {
+      // Once undo gave up, hashing the rest would only re-read files for nothing.
+      if (capture.unavailableReason() !== undefined) return;
       if (target.kind === 'new-dir') {
         capture.push({ op: 'rmdir', path: target.path });
       } else {

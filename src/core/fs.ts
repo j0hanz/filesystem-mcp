@@ -811,7 +811,8 @@ export class GuardedFileSystem {
       }
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
-    const mode = existingMode ?? options.mode;
+    // An explicit mode (undo restoring a saved file) wins over the one a copy left.
+    const mode = options.mode ?? existingMode;
     // Called once the bytes have landed, before a descriptor closes: a failed close must not hide them.
     const recordWrite = (): void => {
       if (!own.recording) return;
