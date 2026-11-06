@@ -576,34 +576,36 @@ export class PathGuard {
         continue;
       }
       const normalized = normalizePath(requested);
-      if (this.isSensitive(requested) || this.isSensitive(normalized)) {
-        continue;
-      }
       if (isPathWithinDirectories(normalized, allowedDirs)) {
         continue;
       }
-      // The requested path itself, not only its grant directory: a file link's
-      // grant directory is its local parent, which says nothing about its target.
-      if (await this.isUnsafeGrantTarget(normalized)) {
-        continue;
-      }
-      const targetDir = normalizePath(await this.resolveGrantTargetDir(normalized));
-      // Never offer a grant into a bare filesystem root or an unsafe path (home,
-      // /etc, C:\Windows, ...). Without FS_ROOT_BOUNDARY, isWithinBoundary returns
-      // true for everything, so this is the one guard that still rejects roots a
-      // misleading grant could reach. Mirrors the check gating --allow-cwd.
-      if (await this.isUnsafeGrantTarget(targetDir)) {
-        continue;
-      }
-      if (grantDirs.some((dir) => isSamePath(dir, targetDir))) {
-        continue;
-      }
-      if (!(await this.isWithinBoundary(targetDir))) {
+      const targetDir = await this.grantTargetFor(requested, normalized);
+      if (targetDir === undefined || grantDirs.some((dir) => isSamePath(dir, targetDir))) {
         continue;
       }
       grantDirs.push(targetDir);
     }
     return grantDirs.sort();
+  }
+
+  /**
+   * The directory a grant for this out-of-root path would add, or undefined
+   * when no grant is ever offered for it. precheckAccess offers exactly these;
+   * a denial uses the same answer to say whether a grant can help.
+   */
+  private async grantTargetFor(requested: string, normalized: string): Promise<string | undefined> {
+    if (this.isSensitive(requested) || this.isSensitive(normalized)) return undefined;
+    // The requested path itself, not only its grant directory: a file link's
+    // grant directory is its local parent, which says nothing about its target.
+    if (await this.isUnsafeGrantTarget(normalized)) return undefined;
+    const targetDir = normalizePath(await this.resolveGrantTargetDir(normalized));
+    // Never offer a grant into a bare filesystem root or an unsafe path (home,
+    // /etc, C:\Windows, ...). Without FS_ROOT_BOUNDARY, isWithinBoundary returns
+    // true for everything, so this is the one guard that still rejects roots a
+    // misleading grant could reach. Mirrors the check gating --allow-cwd.
+    if (await this.isUnsafeGrantTarget(targetDir)) return undefined;
+    if (!(await this.isWithinBoundary(targetDir))) return undefined;
+    return targetDir;
   }
 
   /**
@@ -680,14 +682,14 @@ export class PathGuard {
     return kept.length > 0;
   }
 
-  private validateAccess(
+  private async validateAccess(
     requestedPath: string,
     allowSensitive = false,
-  ): {
+  ): Promise<{
     normalizedRequested: string;
     allowedDirs: string[];
     accessDeniedHint: string;
-  } {
+  }> {
     if (!this.allowedDirectoriesState) {
       throw new FsError(
         ErrorCode.UNKNOWN,
@@ -751,11 +753,16 @@ export class PathGuard {
           `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`,
         );
       }
-      // shortcut: lexical check only, so a link aliasing C:\Windows still gets grant advice; use isUnsafeGrantTarget if validateAccess turns async.
+      // Grant advice only where precheckAccess would offer one; if the check
+      // itself fails, keep the general advice rather than mask the denial.
+      const grantable = await this.grantTargetFor(requestedPath, normalizedRequested).then(
+        (dir) => dir !== undefined,
+        () => true,
+      );
       this.throwAccessDenied(
         requestedPath,
         accessDeniedHint,
-        isUnsafeCwdPath(normalizedRequested) ? NO_GRANT_SUGGESTION : OUTSIDE_ROOTS_SUGGESTION,
+        grantable ? OUTSIDE_ROOTS_SUGGESTION : NO_GRANT_SUGGESTION,
       );
     }
     if (!allowSensitive) {
@@ -814,7 +821,7 @@ export class PathGuard {
 
   async validateExistingPathDetailed(requestedPath: string): Promise<ValidatedPathDetails> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccess(requestedPath);
+      await this.validateAccess(requestedPath);
 
     if (await this.reachesRemoteLink(normalizedRequested)) {
       this.throwRemoteDenied(
@@ -1313,7 +1320,7 @@ export class PathGuard {
   }
 
   async #validatePathForWrite(requestedPath: string, allowSensitive: boolean): Promise<string> {
-    const { normalizedRequested, allowedDirs, accessDeniedHint } = this.validateAccess(
+    const { normalizedRequested, allowedDirs, accessDeniedHint } = await this.validateAccess(
       requestedPath,
       allowSensitive,
     );
@@ -1404,7 +1411,7 @@ export class PathGuard {
     opts?: { allowReadOnly?: boolean },
   ): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccess(requestedPath);
+      await this.validateAccess(requestedPath);
 
     // A workspace root is refused here, before the parent-containment check
     // below reaches for a parent that is out-of-root by construction and

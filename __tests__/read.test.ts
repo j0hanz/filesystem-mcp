@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
-import { OUTSIDE_ROOTS_SUGGESTION } from '../src/core/errors.ts';
+import { NO_GRANT_SUGGESTION, OUTSIDE_ROOTS_SUGGESTION } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
@@ -498,11 +498,31 @@ describe('read body', () => {
     }
   });
 
+  it('gives no grant advice through a link into a system folder', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'fs-mcp-outside-'));
+    const system = process.platform === 'win32' ? 'C:\\Windows' : '/etc';
+    const link = join(outside, 'sys');
+    try {
+      await symlink(system, link, 'junction');
+      const name = process.platform === 'win32' ? 'win.ini' : 'hostname';
+      const result = await read({ path: join(link, name) }, { guard });
+      assert.ok(result.text?.includes(NO_GRANT_SUGGESTION), result.text);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('gives no grant advice for a file at a filesystem root', async () => {
+    const atRoot = join(parse(tmpdir()).root, 'fs-mcp-no-such-file.txt');
+    const result = await read({ path: atRoot }, { guard });
+    assert.ok(result.text?.includes(NO_GRANT_SUGGESTION), result.text);
+  });
+
   it('names the code and the next step for a refused path', async () => {
     const outside = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/hostname';
     const other = process.platform === 'win32' ? 'C:\\Windows\\system.ini' : '/etc/hosts';
     const advice =
-      'Use a path under an allowed root; list_roots names them. This system location is never granted; it needs a startup root.';
+      'Use a path under an allowed root; list_roots names them. No grant is offered for this location; only a startup root can admit it.';
 
     const single = await read({ path: outside }, { guard });
     assert.strictEqual(single.isError, true);
