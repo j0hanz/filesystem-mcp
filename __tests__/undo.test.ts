@@ -2799,9 +2799,7 @@ describe('undo body', () => {
       // Case-folded: a Windows drive letter comes back in the root's spelling.
       preview
         .toLowerCase()
-        .includes(
-          `// ${y}: skipped not restored: its content was modified since`.toLowerCase(),
-        ),
+        .includes(`// ${y}: skipped not restored: its content was modified since`.toLowerCase()),
       `the reason names the path: ${preview}`,
     );
 

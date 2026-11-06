@@ -46,10 +46,12 @@ Checked against source on 2026-11-06. The report items judged by design (#1 conf
 ### Task 1: Patch mismatch names the line, not the order
 
 **Files:**
+
 - Modify: `src/tools/patch.ts:241-252`
 - Test: `__tests__/patch.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MAX_MATCH_LINE_CHARS` (1000) from `src/core/search.ts:31`.
 - Produces: none used by other tasks.
 
@@ -62,7 +64,10 @@ it('names the mismatched line for a single stale hunk', async () => {
   const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
   await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
     assert.ok(isFsError(error));
-    assert.match(error.message, /hunk 1 \(starting at line 1\) does not match file content: expected "a", found "q"/u);
+    assert.match(
+      error.message,
+      /hunk 1 \(starting at line 1\) does not match file content: expected "a", found "q"/u,
+    );
     assert.doesNotMatch(error.message, /file order/u);
     return true;
   });
@@ -109,12 +114,14 @@ git commit -m "fix(patch): name the mismatched line; blame order only when it ca
 ### Task 2: Label a slice hash as a slice hash
 
 **Files:**
+
 - Modify: `src/tools/read.ts:73` (schema description), `src/tools/read.ts:388` (trailer)
 - Modify: `__tests__/contract.test.ts.snapshot` (regenerated)
 - Modify: `docs/client-guide.md` (the `includeHash` line, if it describes the hash)
 - Test: `__tests__/read.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PerPathReadValue` fields `head`, `tail`, `startLine` (`src/tools/read.ts:300-303`).
 - Produces: none.
 
@@ -151,10 +158,12 @@ git commit -m "fix(read): mark a head/tail/range hash as a slice hash"
 ### Task 3: Undo says why each path was skipped
 
 **Files:**
+
 - Modify: `src/core/undo.ts:1141-1250`
 - Test: `__tests__/undo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `restoreEntry`, `captureOne`, `newFs` test helpers (`__tests__/undo.test.ts:1138-1145`).
 - Produces: none. The existing rename message at `src/core/undo.ts:1288` stays.
 
@@ -181,16 +190,16 @@ Expected: FAIL on the three changed assertions.
 
 - [ ] **Step 3: Implement.** Replace `SKIP_MSG` with one message per cause and make `skip()`'s `message` parameter required. Exact copy:
 
-| Call site | Message |
-| :-- | :-- |
-| `:1164` blocked parent | `Not restored: its parent folder could not be restored` |
+| Call site                               | Message                                                                              |
+| :-------------------------------------- | :----------------------------------------------------------------------------------- |
+| `:1164` blocked parent                  | `Not restored: its parent folder could not be restored`                              |
 | `:1188` write, `record.expect === null` | `Not restored: something was created at this path since this undo step was recorded` |
-| `:1188` write, hash differs | `Not restored: its content was modified since this undo step was recorded` |
-| `:1201` remove, hash differs | `Not restored: its content was modified since this undo step was recorded` |
-| `:1209` rmdir, link in place | `Not restored: a link now sits where the folder was` |
-| `:1217` rmdir, `ENOTEMPTY` | `Not restored: the folder is no longer empty` |
-| `:1240` mkdir, non-folder in place | `Not restored: a file or link now occupies the folder's path` |
-| `:1250` symlink, path taken | `Not restored: something now occupies the link's path` |
+| `:1188` write, hash differs             | `Not restored: its content was modified since this undo step was recorded`           |
+| `:1201` remove, hash differs            | `Not restored: its content was modified since this undo step was recorded`           |
+| `:1209` rmdir, link in place            | `Not restored: a link now sits where the folder was`                                 |
+| `:1217` rmdir, `ENOTEMPTY`              | `Not restored: the folder is no longer empty`                                        |
+| `:1240` mkdir, non-folder in place      | `Not restored: a file or link now occupies the folder's path`                        |
+| `:1250` symlink, path taken             | `Not restored: something now occupies the link's path`                               |
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -207,10 +216,12 @@ git commit -m "fix(undo): say why each skipped path was not restored"
 ### Task 4: No grant advice for paths that can never be granted
 
 **Files:**
+
 - Modify: `src/core/errors.ts:68-70`, `src/core/path.ts:753` and `:1092-1099`
 - Test: `__tests__/read.test.ts:487-500`
 
 **Interfaces:**
+
 - Consumes: `isUnsafeCwdPath(normalized: string): boolean` (`src/core/path-discovery.ts:93`, already imported in `path.ts`).
 - Produces: `export const NO_GRANT_SUGGESTION: string` in `src/core/errors.ts`. `throwAccessDenied(requestedPath: string, hint?: string, suggestion = OUTSIDE_ROOTS_SUGGESTION): never`.
 
@@ -260,18 +271,21 @@ git commit -m "fix(path): drop grant advice for system paths that are never gran
 ### Task 5: Thrown tool errors carry the problem in `_meta`
 
 **Files:**
+
 - Modify: `src/tools/define.ts:319-331`
 - Modify: `docs/client-guide.md` (the error-handling section: one line saying `_meta.error` holds `{code, message, path?, suggestion?}`)
 - Test: `__tests__/tools.test.ts:528-535`
 
 **Interfaces:**
+
 - Consumes: `Problem.fromUnknown(error: unknown, defaultCode: ErrorCode): Problem` (`src/core/errors.ts`).
 - Produces: thrown-error results shaped `{ isError: true, content: [text], _meta: { error: Problem } }`. No `structuredContent`.
 
 - [ ] **Step 1: Write the failing test.** Extend `TC-FUNC-062: patch that does not apply returns isError`:
 
 ```ts
-const meta = result._meta as { error?: { code?: string; message?: string; path?: string } } | undefined;
+const meta = result._meta as
+  { error?: { code?: string; message?: string; path?: string } } | undefined;
 assert.strictEqual(meta?.error?.code, 'INVALID_INPUT');
 assert.match(meta?.error?.message ?? '', /did not apply cleanly/);
 assert.strictEqual(result.structuredContent, undefined);

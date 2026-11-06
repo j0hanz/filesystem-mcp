@@ -9,8 +9,8 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
-import { MAX_MATCH_LINE_CHARS } from '../core/search.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
+import { MAX_MATCH_LINE_CHARS } from '../core/search.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
