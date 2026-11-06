@@ -144,7 +144,10 @@ describe('patch body', () => {
     const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-${shared}X\n+Z\n b\n`;
     await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
       assert.ok(isFsError(error), 'expected FsError');
-      assert.match(error.message ?? '', /expected "…\[\d+ chars\] p+X", found "…\[\d+ chars\] p+Y"/u);
+      assert.match(
+        error.message ?? '',
+        /expected "…\[\d+ chars\] p+X", found "…\[\d+ chars\] p+Y"/u,
+      );
       return true;
     });
   });
