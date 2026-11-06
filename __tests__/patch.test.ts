@@ -126,6 +126,40 @@ describe('patch body', () => {
     });
   });
 
+  it('names end of file for a line the file does not have', async () => {
+    const f = join(root, 'patch_eof.txt');
+    await writeFile(f, 'a\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,3 +1,3 @@\n a\n \n-b\n+B\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "", found end of file/u);
+      return true;
+    });
+  });
+
+  it('shows where long lines differ, not only their shared start', async () => {
+    const f = join(root, 'patch_long_tail.txt');
+    const shared = 'p'.repeat(1500);
+    await writeFile(f, `${shared}Y\nb\n`);
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-${shared}X\n+Z\n b\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /expected "…\[\d+ chars\] p+X", found "…\[\d+ chars\] p+Y"/u);
+      return true;
+    });
+  });
+
+  it('never splits a surrogate pair when clipping', async () => {
+    const f = join(root, 'patch_emoji.txt');
+    await writeFile(f, 'q\nb\n');
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-x${'😀'.repeat(600)}\n+Z\n b\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.ok((error.message ?? '').isWellFormed(), 'lone surrogate in message');
+      return true;
+    });
+  });
+
   it('truncates long lines in the mismatch detail', async () => {
     const f = join(root, 'patch_long_stale.txt');
     await writeFile(f, `${'q'.repeat(5000)}\nb\n`);
@@ -133,7 +167,7 @@ describe('patch body', () => {
     await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
       assert.ok(isFsError(error), 'expected FsError');
       const message = error.message ?? '';
-      assert.match(message, /expected "a+…", found "q+…"/u);
+      assert.match(message, /expected "a+ \[…\d+ chars\]", found "q+ \[…\d+ chars\]"/u);
       assert.ok(message.length < 2 * MAX_MATCH_LINE_CHARS + 300, String(message.length));
       return true;
     });

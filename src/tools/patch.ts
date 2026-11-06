@@ -10,7 +10,7 @@ import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
-import { MAX_MATCH_LINE_CHARS } from '../core/search.ts';
+import { clipLine } from '../core/search.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -172,8 +172,12 @@ function firstFailingHunk(
   return hi;
 }
 
-const clip = (line: string): string =>
-  line.length > MAX_MATCH_LINE_CHARS ? `${line.slice(0, MAX_MATCH_LINE_CHARS)}…` : line;
+/** Index of the first char where `a` and `b` differ (the shorter length if one prefixes the other). */
+const firstDiff = (a: string, b: string): number => {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+};
 
 const stripCr = (line: string): string => line.replace(/\r$/u, '');
 
@@ -191,11 +195,17 @@ function mismatchDetail(
   const old = hunk.lines
     .filter((line) => line === '' || line.startsWith(' ') || line.startsWith('-'))
     .map((line) => stripCr(line.slice(1)));
+  // A line at or past this count is past the end, not blank: split pads with ''.
+  const present = countLines(content) - (hunk.oldStart - 1);
   const file = content.split('\n', hunk.oldStart - 1 + old.length).slice(hunk.oldStart - 1);
-  const at = old.findIndex((line, i) => line !== stripCr(file[i] ?? ''));
+  const at = old.findIndex((line, i) => i >= present || line !== stripCr(file[i] ?? ''));
   if (at < 0) return '';
+  const expected = old[at] ?? '';
+  const where = ` at line ${String(hunk.oldStart + at)}: expected`;
+  if (at >= present) return `${where} "${clipLine(expected, 0)}", found end of file`;
   const found = stripCr(file[at] ?? '');
-  return ` at line ${String(hunk.oldStart + at)}: expected "${clip(old[at] ?? '')}", found "${clip(found)}"`;
+  const col = firstDiff(expected, found);
+  return `${where} "${clipLine(expected, col)}", found "${clipLine(found, col)}"`;
 }
 
 /** The transform: parse, clamp, apply, and the line-count backstop. */
