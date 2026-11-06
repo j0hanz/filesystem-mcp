@@ -1045,8 +1045,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // 22595 / 10670.
     // Raised 2026-11-06 to 23150 full and 10950 read-only: the tdqs.dev round-2
     // report scored delete, list, move, read and stat at Usage 4 for naming no
-    // sibling, and move says a non-empty directory target is refused; diff's
-    // routing line moved nothing and was dropped; measured 23073 / 10887.
+    // sibling, and move says a different non-empty directory target is refused;
+    // diff's routing line moved nothing and was dropped; measured 23096 / 10887.
     const BUDGET_CHARS = 23_150;
     const BUDGET_CHARS_READ_ONLY = 10_950;
 
