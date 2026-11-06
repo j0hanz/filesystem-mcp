@@ -835,6 +835,8 @@ export class GuardedFileSystem {
         // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
         signal?.throwIfAborted();
         try {
+          // Before the bytes: a restored secret must not sit readable at the copy's mode.
+          if (options.mode !== undefined) await handle.chmod(options.mode);
           // No signal on the write: once truncated, an abort would leave the file empty.
           await handle.truncate(0);
           await handle.writeFile(content);

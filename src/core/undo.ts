@@ -369,7 +369,7 @@ export class UndoCapture implements PathCapture {
   /**
    * Charge n more saved bytes (plus the record that will hold them) before
    * reading them, so concurrent reads cannot all pass the same gate. The
-   * write record's `push` draws the reservation down instead of charging twice.
+   * record's `push` draws the reservation down instead of charging twice.
    */
   reserve(n: number): boolean {
     if (this.#unavailable !== undefined) return false;
@@ -399,7 +399,7 @@ export class UndoCapture implements PathCapture {
     if (this.#unavailable !== undefined) return;
     for (const record of records) {
       const cost = recordWeight(record);
-      const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
+      const drawn = Math.min(this.#reserved, cost);
       if (this.#pool.bytes + (cost - drawn) > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
@@ -569,7 +569,13 @@ export async function planCopyUndo(
       capture.abandon('copied links are not undoable');
     } else if (src.isFile()) {
       if (existing === undefined) {
+        // Charged now, so a huge new tree stops here instead of after the copy.
+        if (!capture.reserve(0)) return;
         targets.push({ kind: 'new-file', path: dest });
+      } else if (existing.isFile() && existing.nlink > 1n) {
+        // The copy renames over one name; its twins keep the old inode, which
+        // the restore would hand to the moves that tracked it.
+        capture.abandon('cannot capture a copy over a hard-linked file');
       } else if (existing.isFile()) {
         const saved = await saveOld(capture, fs, dest, existing);
         if (saved) targets.push({ kind: 'replaced-file', path: dest, saved });
@@ -581,7 +587,15 @@ export async function planCopyUndo(
         capture.abandon('a copy would replace a different kind of entry');
         return;
       }
-      if (existing === undefined) targets.push({ kind: 'new-dir', path: dest });
+      if (existing === undefined) {
+        // The copy keeps the source's mode; without owner write, undo could not empty it.
+        if ((Number(src.mode) & 0o200) === 0) {
+          capture.abandon('cannot capture a copy of a read-only folder');
+          return;
+        }
+        if (!capture.reserve(0)) return;
+        targets.push({ kind: 'new-dir', path: dest });
+      }
       for (const name of await fsReaddir(source)) {
         await walk(join(source, name), join(dest, name), existing === undefined);
         if (capture.unavailableReason() !== undefined) return;

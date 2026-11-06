@@ -421,7 +421,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     cap.release();
   });
 
-  it('a copy past the record budget stops hashing once undo gave up', async () => {
+  it('a copy past the record budget gives up while planning, before any hash', async () => {
     const src = join(tmpDir, 'cph-src');
     const dest = join(tmpDir, 'cph-dest');
     await mkdir(src, { recursive: true });
@@ -436,8 +436,72 @@ describe('UndoCapture via GuardedFileSystem', () => {
       return open(...args);
     };
     await copyVia(fs, src, dest);
-    assert.match(cap.unavailableReason() ?? '', /: too many changes to keep for undo$/u);
-    assert.ok(hashed <= 3 && hashed > 0, `hashed ${String(hashed)} files after undo gave up`);
+    assert.match(cap.unavailableReason() ?? '', /: too large to keep for undo$/u);
+    assert.strictEqual(hashed, 0, `hashed ${String(hashed)} files after undo gave up`);
+    assert.strictEqual(await readFile(join(dest, 'f5.txt'), 'utf8'), '5');
+    cap.release();
+  });
+
+  it('a copy over a hard-linked file keeps no undo for it', async () => {
+    const src = join(tmpDir, 'cphl-src.txt');
+    const dest = join(tmpDir, 'cphl-dest.txt');
+    await writeFile(src, 'new');
+    await writeFile(dest, 'old');
+    await link(dest, join(tmpDir, 'cphl-twin.txt'));
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    assert.match(
+      cap.unavailableReason() ?? '',
+      /: cannot capture a copy over a hard-linked file$/u,
+    );
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'new');
+    cap.release();
+  });
+
+  it('POSIX only: a copy of a folder without owner write keeps no undo for it', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX mode bits');
+      return;
+    }
+    const src = join(tmpDir, 'cpro-src');
+    const dest = join(tmpDir, 'cpro-dest');
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, 'f.txt'), 'f');
+    await fsModule.chmod(src, 0o555);
+    const cap = capture();
+    try {
+      await copyVia(makeFs(cap), src, dest);
+      assert.match(
+        cap.unavailableReason() ?? '',
+        /: cannot capture a copy of a read-only folder$/u,
+      );
+      assert.deepStrictEqual(cap.journalRecords(), []);
+    } finally {
+      await fsModule.chmod(src, 0o755);
+      await fsModule.chmod(dest, 0o755).catch(() => undefined);
+      cap.release();
+    }
+  });
+
+  it('POSIX only: undo of a copy puts the mode back through a new hard link', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX mode bits');
+      return;
+    }
+    const src = join(tmpDir, 'cpml-src.txt');
+    const dest = join(tmpDir, 'cpml-dest.txt');
+    await writeFile(src, 'new');
+    await fsModule.chmod(src, 0o644);
+    await writeFile(dest, 'old');
+    await fsModule.chmod(dest, 0o600);
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    // A link made after the copy sends the restore down the in-place write.
+    await link(dest, join(tmpDir, 'cpml-twin.txt'));
+    await restoreCopy(cap);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'old');
+    assert.strictEqual((await lstat(dest)).mode & 0o777, 0o600);
     cap.release();
   });
 
