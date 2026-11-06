@@ -466,7 +466,7 @@ describe('read body', () => {
       headText,
       /^\/\/ more lines from 11\. Continue: read .*"startLine":11,"endLine":20\}$/m,
     );
-    assert.match(headText, /^\/\/ sha256: [0-9a-f]{64}$/m);
+    assert.match(headText, /^\/\/ sha256 \(slice\): [0-9a-f]{64}$/m);
     // The file's own lines survive ahead of the trailer, unaltered.
     assert.ok(headText.startsWith('line1\nline2\n'), headText.slice(0, 40));
     assert.ok(headText.indexOf('line10') < headText.indexOf('// more lines'));
@@ -476,6 +476,8 @@ describe('read body', () => {
     const fullText = full.text ?? '';
     assert.ok(!fullText.includes('// more lines'), 'a full read has no more lines');
     assert.ok(!fullText.includes('// sha256'), 'no hash unless includeHash');
+    const fullHashed = (await read({ path: file, includeHash: true }, { guard })).text ?? '';
+    assert.match(fullHashed, /^\/\/ sha256: [0-9a-f]{64}$/m);
 
     // tail has no args that read backwards, so it reports what it showed.
     const tail = await read({ path: file, tail: 10 }, { guard });

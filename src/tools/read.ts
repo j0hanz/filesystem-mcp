@@ -70,7 +70,9 @@ const hasLineRange = (args: ReadRange): boolean =>
   [args.head, args.tail, args.startLine, args.endLine].some((line) => line !== undefined);
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
-  includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
+  includeHash: defaultFalseBoolean(
+    'Include SHA-256 hash of the returned content. For head, tail or a line range it covers that slice, not the whole file.',
+  ),
   binary: defaultFalseBoolean(
     'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
   ),
@@ -385,7 +387,10 @@ function readTrailer(v: PerPathReadValue): string[] {
         : `// more lines above: showing last ${String(v.linesRead)} lines`,
     );
   }
-  if (v.contentHash !== undefined) lines.push(`// sha256: ${v.contentHash}`);
+  if (v.contentHash !== undefined) {
+    const slice = v.head !== undefined || v.tail !== undefined || v.startLine !== undefined;
+    lines.push(`// sha256${slice ? ' (slice)' : ''}: ${v.contentHash}`);
+  }
   return lines;
 }
 
