@@ -123,7 +123,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused. Use read to view one file.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -954,7 +954,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused. Use read to view one file.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
