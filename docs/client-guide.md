@@ -364,8 +364,11 @@ There are three kinds of failure:
 
 1. **A tool failure** is a normal result with `isError: true`. The text says
    what went wrong; in a batch, each failed item also has a
-   `{ code, message, path, suggestion }` error. When the whole call fails,
-   `_meta.error` holds that same shape. Input that does not match the
+   `{ code, message, path, suggestion }` error. A call that fails as a whole,
+   before any per-path result (a patch that does not apply, a refused
+   pre-check), also carries that shape as `_meta.error`. Per-path tools
+   report under `_meta.results[].error`, even for a single `path`; schema
+   errors carry text only. Input that does not match the
    schema comes back this way too (`Input validation error: ...`), so a model
    can correct itself.
 2. **A partial failure** is not `isError`. A call with several paths sets

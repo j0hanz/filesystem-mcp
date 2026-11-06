@@ -175,19 +175,27 @@ function firstFailingHunk(
 const clip = (line: string): string =>
   line.length > MAX_MATCH_LINE_CHARS ? `${line.slice(0, MAX_MATCH_LINE_CHARS)}…` : line;
 
+const stripCr = (line: string): string => line.replace(/\r$/u, '');
+
 /**
- * `: expected "<hunk's first old line>", found "<file line at its start>"`, or
- * '' for a hunk with no context or removed line. The file line is read at the
- * submitted start only; jsdiff's offset search may have looked nearby too.
+ * ` at line N: expected "…", found "…"` for the hunk's first old line (context,
+ * removed, or a blank context line stripped of its space) that differs from the
+ * file at the submitted start; '' when all match there (clamp or order is the
+ * cause). jsdiff's offset search may have looked nearby too.
  */
 function mismatchDetail(
   content: string,
   hunk: ReturnType<typeof parsePatch>[number]['hunks'][number],
 ): string {
-  const old = hunk.lines.find((line) => line.startsWith(' ') || line.startsWith('-'));
-  if (old === undefined || hunk.oldStart < 1) return '';
-  const found = content.split('\n', hunk.oldStart)[hunk.oldStart - 1] ?? '';
-  return `: expected "${clip(old.slice(1))}", found "${clip(found.replace(/\r$/u, ''))}"`;
+  if (hunk.oldStart < 1) return '';
+  const old = hunk.lines
+    .filter((line) => line === '' || line.startsWith(' ') || line.startsWith('-'))
+    .map((line) => stripCr(line.slice(1)));
+  const file = content.split('\n', hunk.oldStart - 1 + old.length).slice(hunk.oldStart - 1);
+  const at = old.findIndex((line, i) => line !== stripCr(file[i] ?? ''));
+  if (at < 0) return '';
+  const found = stripCr(file[at] ?? '');
+  return ` at line ${String(hunk.oldStart + at)}: expected "${clip(old[at] ?? '')}", found "${clip(found)}"`;
 }
 
 /** The transform: parse, clamp, apply, and the line-count backstop. */

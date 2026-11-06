@@ -71,7 +71,7 @@ describe('patch body', () => {
       assert.ok(isFsError(error), 'expected FsError');
       const message = error.message ?? '';
       assert.match(message, /did not apply cleanly: hunk 2 \(starting at line 4\) does not match/u);
-      assert.match(message, /expected "d", found "Z" \(hunks must be in file order\)/u);
+      assert.match(message, /at line 4: expected "d", found "Z" \(hunks must be in file order\)/u);
       return true;
     });
     assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\nZ\ne\nf\n');
@@ -86,9 +86,42 @@ describe('patch body', () => {
       const message = error.message ?? '';
       assert.match(
         message,
-        /hunk 1 \(starting at line 1\) does not match file content: expected "a", found "q"/u,
+        /hunk 1 \(starting at line 1\) does not match file content at line 1: expected "a", found "q"/u,
       );
       assert.doesNotMatch(message, /file order/u);
+      return true;
+    });
+  });
+
+  it('names the first differing line when the first context line matches', async () => {
+    const f = join(root, 'patch_second_stale.txt');
+    await writeFile(f, 'a\nX\nc\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "b", found "X"/u);
+      return true;
+    });
+  });
+
+  it('counts a blank context line with no leading space', async () => {
+    const f = join(root, 'patch_blank_ctx.txt');
+    await writeFile(f, '\nfoo\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n\n-bar\n+baz\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "bar", found "foo"/u);
+      return true;
+    });
+  });
+
+  it('strips CR from both sides of a CRLF mismatch', async () => {
+    const f = join(root, 'patch_crlf.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    const diff = '--- f.txt\r\n+++ f.txt\r\n@@ -1,2 +1,2 @@\r\n-q\r\n+X\r\n b\r\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 1: expected "q", found "a"/u);
       return true;
     });
   });
