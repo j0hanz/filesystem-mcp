@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { OUTSIDE_ROOTS_SUGGESTION } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
@@ -486,16 +488,27 @@ describe('read body', () => {
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
   });
 
+  it('keeps grant advice for a grantable outside path', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'fs-mcp-outside-'));
+    try {
+      const result = await read({ path: join(outside, 'x.txt') }, { guard });
+      assert.ok(result.text?.includes(OUTSIDE_ROOTS_SUGGESTION), result.text);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('names the code and the next step for a refused path', async () => {
     const outside = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/hostname';
     const other = process.platform === 'win32' ? 'C:\\Windows\\system.ini' : '/etc/hosts';
     const advice =
-      'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.';
+      'Use a path under an allowed root; list_roots names them. This system location is never granted; it needs a startup root.';
 
     const single = await read({ path: outside }, { guard });
     assert.strictEqual(single.isError, true);
     assert.match(single.text ?? '', /^ACCESS_DENIED: Outside allowed directories\./);
-    assert.ok(single.text?.includes(advice));
+    assert.ok(single.text?.includes(advice), single.text);
+    assert.ok(!single.text?.includes('accepted grant'), single.text);
 
     const batch = await read({ paths: [outside, other] }, { guard });
     assert.match(batch.text ?? '', /^\/\/ Error: ACCESS_DENIED: Outside allowed directories\./m);

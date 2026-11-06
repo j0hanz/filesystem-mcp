@@ -21,6 +21,7 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
+  NO_GRANT_SUGGESTION,
   OUTSIDE_ROOTS_SUGGESTION,
   rethrowIfAborted,
 } from './errors.ts';
@@ -750,7 +751,12 @@ export class PathGuard {
           `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`,
         );
       }
-      this.throwAccessDenied(requestedPath, accessDeniedHint);
+      // shortcut: lexical check only, so a link aliasing C:\Windows still gets grant advice; use isUnsafeGrantTarget if validateAccess turns async.
+      this.throwAccessDenied(
+        requestedPath,
+        accessDeniedHint,
+        isUnsafeCwdPath(normalizedRequested) ? NO_GRANT_SUGGESTION : OUTSIDE_ROOTS_SUGGESTION,
+      );
     }
     if (!allowSensitive) {
       this.assertNotSensitiveFile(requestedPath, requestedPath);
@@ -1089,13 +1095,17 @@ export class PathGuard {
     }
   }
 
-  private throwAccessDenied(requestedPath: string, hint?: string): never {
+  private throwAccessDenied(
+    requestedPath: string,
+    hint?: string,
+    suggestion = OUTSIDE_ROOTS_SUGGESTION,
+  ): never {
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
       hint ? `Outside allowed directories. ${hint}` : 'Outside allowed directories.',
       requestedPath,
       undefined,
-      OUTSIDE_ROOTS_SUGGESTION,
+      suggestion,
     );
   }
 
