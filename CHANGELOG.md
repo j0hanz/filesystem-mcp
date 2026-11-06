@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.4] - 2026-11-06
+
+Tool descriptions that route `delete`, `list`, `move`, `read` and `stat` to the
+sibling tool that fits, and state two input rules. Inputs, results and behavior
+are unchanged, so nothing needs adapting before upgrading.
+
+### Documentation
+
+- **`delete`, `list`, `move`, `read` and `stat` name a sibling tool.** `delete` points to `move` to relocate a path. `list` points to `read` for contents. `move` points to `delete` to remove a path. `read` points to `search_text` to find text and `list` for directories. `stat` points to `list` for a directory.
+- **`move` scopes `overwrite` to copies.** It skips the prompt for copies only. A move onto a different existing file asks, and one onto a different non-empty directory is refused.
+- **`read` and `stat` state the `path`/`paths` rule.** Pass one or the other, not both. `read` also says `binary: true` returns the whole file with no slice.
+
 ## [2.18.3] - 2026-11-06
 
 Tool descriptions that tell an agent how results page, how to preview or revert
