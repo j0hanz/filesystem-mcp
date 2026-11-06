@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.3] - 2026-11-06
+
+Tool descriptions that tell an agent how results page, how to preview or revert
+a write, and which sibling tool fits. Inputs, results and behavior are
+unchanged, so nothing needs adapting before upgrading.
+
+### Documentation
+
+- **`find_files` and `search_text` say how to page.** Both point at the trailer's cursor for the next page. `find_files` also says hidden and ignored files are skipped by default, and sends directory browsing to `list`.
+- **`edit`, `replace_text` and `patch` name their preview and revert paths.** Each mentions `dryRun`, and `edit` and `replace_text` mention `undo`. `edit` says batch files succeed or fail separately. `replace_text` says a directory run stops near 100 matches unless `maxMatches` sets a strict cap, and that it writes files one at a time.
+- **`create` says an overwrite needs approval.** Replacing an existing file takes `overwrite: true` or the user's confirmation.
+- **`undo` states its HTTP rule and its result.** Pass an undo id or `steps`, not both. Over HTTP a revert needs an id. A large undo cuts its file list short.
+- **`list_roots` says when to call it.** Call it first when you do not know where paths may point.
+- **`stat` shortens its Windows `created` note** and points to `read` for contents.
+- **New logo.** The README and social preview use the plugged-folder logo.
+
 ## [2.18.2] - 2026-11-05
 
 Tool replies that name what failed and what changed, and schema docs that state
