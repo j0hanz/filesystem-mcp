@@ -521,7 +521,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
   description:
     'Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files ' +
     'under a directory, optionally filtered by glob. The pattern runs over the whole file, so it can span lines, ' +
-    'and ^ and $ anchor to file start and end. It stops after maxMatches total matches (default 100). ' +
+    'and ^ and $ anchor to file start and end. A directory run stops near 100 matches; maxMatches sets a strict cap. ' +
     'Each file is written separately; preview wide scopes with dryRun, revert with undo. ' +
     'Use edit for one unique exact match.',
   input: SearchAndReplaceInputSchema,

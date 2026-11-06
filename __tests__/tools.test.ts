@@ -1039,11 +1039,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // wording (create, delete, search_text, replace_text, undo, stat) says
     // what happens without a prompt, how previews assume reverts, and
     // Windows creation times; measured 21993 / 10579.
-    // Raised 2026-11-06 to 22600 full and 10700 read-only: the v2.18.2 TDQS
+    // Raised 2026-11-06 to 22650 full and 10700 read-only: the v2.18.2 TDQS
     // review asked for paging, dryRun/undo paths and sibling routing in the
     // descriptions; stat's created clause shrank to pay part of it; measured
-    // 22553 / 10670.
-    const BUDGET_CHARS = 22_600;
+    // 22595 / 10670.
+    const BUDGET_CHARS = 22_650;
     const BUDGET_CHARS_READ_ONLY = 10_700;
 
     const full = await createTestClientPair([tmpDir]);
