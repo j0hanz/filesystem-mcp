@@ -92,8 +92,9 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files by name or glob pattern; returns root-relative or absolute paths; read takes either as is. ' +
-    'A pattern without / matches file names at any depth. search_text searches contents.',
+    'Find files by name or glob pattern, like find. Returns root-relative or absolute paths, and read accepts either form. ' +
+    'A pattern without / matches file names at any depth. Hidden and ignored files are skipped by default. ' +
+    "Pass the trailer's cursor for the next page. list browses directories; search_text searches contents.",
   input: SearchFilesInputSchema,
   readOnlyHint: true,
   deadline: true,

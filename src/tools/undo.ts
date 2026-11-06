@@ -98,7 +98,8 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
   name: 'undo',
   title: 'Undo',
   description:
-    'Revert earlier calls that changed files, by undo id or the last N calls. A file is restored only if unchanged since. dryRun lists the history.',
+    'Revert earlier calls that changed files, by undo id or the last N calls (steps), not both. Over HTTP only id works. ' +
+    "A file is restored only if unchanged since; the result gives each file's outcome. dryRun lists the history.",
   input: UndoInputSchema,
   readOnlyHint: false,
   noUndo: true,

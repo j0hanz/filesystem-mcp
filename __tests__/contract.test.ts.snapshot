@@ -18,7 +18,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. edit or patch changes part of an existing file.",
+      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. Replacing an existing file needs overwrite: true or the user's confirmation. Use edit or patch to change part of a file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -162,7 +162,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "edit",
       "title": "Edit Files",
-      "description": "Edit text files in place by replacing exact oldText with newText, like str_replace. Pass path with edits, or files for a batch; never both. Each oldText must match exactly once, and a file is written only if all its edits match. replace_text replaces every occurrence across files.",
+      "description": "Edit text files in place by replacing exact oldText with newText, like str_replace. Pass path with edits, or files for a batch; never both. Each oldText must match exactly once. A file is written only if all its edits match; batch files succeed or fail separately. dryRun previews the diff; undo reverts the call. Use replace_text for every occurrence, create for new files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -410,7 +410,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "patch",
       "title": "Patch",
-      "description": "Apply a single-file unified diff to one existing text file, like git apply. Nothing is written unless every hunk applies in file order with exactly matching context; hunks are found by their context, so start line numbers may be off.",
+      "description": "Apply a single-file unified diff to one existing text file, like git apply. Nothing is written unless every hunk applies in file order with exactly matching context; hunks are found by their context, so start line numbers may be off. dryRun checks without writing. edit suits a few exact replacements.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -524,7 +524,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files under a directory, optionally filtered by glob. The pattern runs over the whole file: it can span lines, and ^ and $ anchor to file start and end. edit replaces one unique exact match.",
+      "description": "Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files under a directory, optionally filtered by glob. The pattern runs over the whole file, so it can span lines, and ^ and $ anchor to file start and end. It stops after maxMatches total matches (default 100). Each file is written separately; preview wide scopes with dryRun, revert with undo. Use edit for one unique exact match.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -631,7 +631,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Call it first when you do not know where paths may point. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -646,7 +646,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and root-relative or absolute paths; read takes either as is. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names. A named file prints its path once, as a header.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep. Returns matching lines with line numbers and root-relative or absolute paths, and read accepts either form. searchPattern is the text to find, matched within one line; pattern filters files by glob. A named file prints its path once, as a header. Pass the trailer's cursor for the next page. find_files matches file names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -733,7 +733,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern; returns root-relative or absolute paths; read takes either as is. A pattern without / matches file names at any depth. search_text searches contents.",
+      "description": "Find files by name or glob pattern, like find. Returns root-relative or absolute paths, and read accepts either form. A pattern without / matches file names at any depth. Hidden and ignored files are skipped by default. Pass the trailer's cursor for the next page. list browses directories; search_text searches contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows a rewrite swaps in a new file atomically, so created becomes that write's time, but a file shared through hard links is rewritten in place and keeps its created time. modified keeps tracking edits.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. On Windows a rewrite resets created unless the file has other hard links. read returns contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -840,7 +840,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "undo",
       "title": "Undo",
-      "description": "Revert earlier calls that changed files, by undo id or the last N calls. A file is restored only if unchanged since. dryRun lists the history.",
+      "description": "Revert earlier calls that changed files, by undo id or the last N calls (steps), not both. Over HTTP only id works. A file is restored only if unchanged since; the result gives each file's outcome. dryRun lists the history.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1134,7 +1134,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Call it first when you do not know where paths may point. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -1149,7 +1149,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and root-relative or absolute paths; read takes either as is. searchPattern is the text to find, matched within one line; pattern filters files by glob. find_files matches file names. A named file prints its path once, as a header.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep. Returns matching lines with line numbers and root-relative or absolute paths, and read accepts either form. searchPattern is the text to find, matched within one line; pattern filters files by glob. A named file prints its path once, as a header. Pass the trailer's cursor for the next page. find_files matches file names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1236,7 +1236,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern; returns root-relative or absolute paths; read takes either as is. A pattern without / matches file names at any depth. search_text searches contents.",
+      "description": "Find files by name or glob pattern, like find. Returns root-relative or absolute paths, and read accepts either form. A pattern without / matches file names at any depth. Hidden and ignored files are skipped by default. Pass the trailer's cursor for the next page. list browses directories; search_text searches contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. created is the filesystem creation time; on Windows a rewrite swaps in a new file atomically, so created becomes that write's time, but a file shared through hard links is rewritten in place and keeps its created time. modified keeps tracking edits.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. On Windows a rewrite resets created unless the file has other hard links. read returns contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
