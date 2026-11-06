@@ -454,7 +454,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         "properties": {
           "includeHash": {
             "default": false,
-            "description": "Include SHA-256 hash of the returned content. For head, tail or a line range it covers that slice, not the whole file.",
+            "description": "Include SHA-256 of the returned content (the slice for head, tail or a line range)",
             "type": "boolean"
           },
           "binary": {
@@ -1064,7 +1064,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
         "properties": {
           "includeHash": {
             "default": false,
-            "description": "Include SHA-256 hash of the returned content. For head, tail or a line range it covers that slice, not the whole file.",
+            "description": "Include SHA-256 of the returned content (the slice for head, tail or a line range)",
             "type": "boolean"
           },
           "binary": {

@@ -71,7 +71,7 @@ const hasLineRange = (args: ReadRange): boolean =>
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean(
-    'Include SHA-256 hash of the returned content. For head, tail or a line range it covers that slice, not the whole file.',
+    'Include SHA-256 of the returned content (the slice for head, tail or a line range)',
   ),
   binary: defaultFalseBoolean(
     'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
