@@ -1043,10 +1043,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // review asked for paging, dryRun/undo paths and sibling routing in the
     // descriptions; stat's created clause shrank to pay part of it; measured
     // 22595 / 10670.
-    // Raised 2026-11-06 to 23100 full and 10950 read-only: the tdqs.dev round-2
+    // Raised 2026-11-06 to 23150 full and 10950 read-only: the tdqs.dev round-2
     // report scored delete, diff, list, move, read and stat at Usage 4 for naming
-    // no sibling; measured 23064 / 10914.
-    const BUDGET_CHARS = 23_100;
+    // no sibling, and move says a non-empty directory target is refused;
+    // measured 23100 / 10914.
+    const BUDGET_CHARS = 23_150;
     const BUDGET_CHARS_READ_ONLY = 10_950;
 
     const full = await createTestClientPair([tmpDir]);
