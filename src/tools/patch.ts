@@ -9,6 +9,7 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
+import { MAX_MATCH_LINE_CHARS } from '../core/search.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
@@ -171,6 +172,24 @@ function firstFailingHunk(
   return hi;
 }
 
+const clip = (line: string): string =>
+  line.length > MAX_MATCH_LINE_CHARS ? `${line.slice(0, MAX_MATCH_LINE_CHARS)}…` : line;
+
+/**
+ * `: expected "<hunk's first old line>", found "<file line at its start>"`, or
+ * '' for a hunk with no context or removed line. The file line is read at the
+ * submitted start only; jsdiff's offset search may have looked nearby too.
+ */
+function mismatchDetail(
+  content: string,
+  hunk: ReturnType<typeof parsePatch>[number]['hunks'][number],
+): string {
+  const old = hunk.lines.find((line) => line.startsWith(' ') || line.startsWith('-'));
+  if (old === undefined || hunk.oldStart < 1) return '';
+  const found = content.split('\n', hunk.oldStart)[hunk.oldStart - 1] ?? '';
+  return `: expected "${clip(old.slice(1))}", found "${clip(found.replace(/\r$/u, ''))}"`;
+}
+
 /** The transform: parse, clamp, apply, and the line-count backstop. */
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
@@ -241,13 +260,15 @@ function patchContent(
     // The search cannot miss: the full clamped set is the last prefix and already failed.
     // The submitted header start, not the clamp's search floor: it is the line
     // the caller can find in the diff they sent.
-    const where =
-      first >= 0
-        ? `hunk ${String(first + 1)} (starting at line ${String(parsedPatch.hunks[first]?.oldStart)}) does not match file content`
-        : 'hunk context does not match file content';
+    const failing = first >= 0 ? parsedPatch.hunks[first] : undefined;
+    const where = failing
+      ? `hunk ${String(first + 1)} (starting at line ${String(failing.oldStart)}) does not match file content${mismatchDetail(content, failing)}`
+      : 'hunk context does not match file content';
+    // Hunk 1 is never clamped, so its failure is its own context, not the order.
+    const order = hunks.length > 1 && first !== 0 ? ' (hunks must be in file order)' : '';
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      `patch did not apply cleanly: ${where} (hunks must be in file order)`,
+      `patch did not apply cleanly: ${where}${order}`,
       args.path,
     );
   }
