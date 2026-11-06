@@ -20,7 +20,13 @@ import {
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
+import {
+  ErrorCode,
+  formatDetailedError,
+  formatUnknownErrorMessage,
+  FsError,
+  Problem,
+} from '../core/errors.ts';
 import type { ProgressCtx } from '../core/fmt.ts';
 import { plainMessage } from '../core/fmt.ts';
 import { GuardedFileSystem } from '../core/fs.ts';
@@ -319,14 +325,15 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   private failProgress(
     error: unknown,
     undoSuffix = '',
-  ): { isError: true; content: ContentBlock[] } {
+  ): { isError: true; content: ContentBlock[]; _meta: { error: Problem } } {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
-    const errorText =
-      Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN) + undoSuffix;
+    const problem = Problem.fromUnknown(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
     return {
-      content: [{ type: 'text' as const, text: errorText }],
+      content: [{ type: 'text' as const, text: formatDetailedError(problem) + undoSuffix }],
       isError: true,
+      // _meta, not structuredContent: a client would show that JSON in place of the text.
+      _meta: { error: problem },
     };
   }
 

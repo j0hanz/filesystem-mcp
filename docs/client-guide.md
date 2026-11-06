@@ -341,7 +341,10 @@ Notes on individual tools:
   call, or call `resources/read` on its `resourceUri`.
 - A partial read ends with a `// more lines ...` line, or `// truncated: ...` when the size limit cut it short, and its
   `_meta.results[].value.continuation` holds the arguments for the next
-  chunk. `includeHash: true` adds `contentHash` (SHA-256). `lineNumbers: true`
+  chunk. `includeHash: true` adds `contentHash`: SHA-256 of the file text read,
+  without `lineNumbers` prefixes or `//` trailer lines, or of the raw bytes for
+  an image, audio or `binary: true` read. For head, tail or a line range it
+  covers that slice, and the trailer says `// sha256 (slice):`. `lineNumbers: true`
   prefixes each line with its number and a tab. Images and audio
   come back as `image` and `audio` content blocks; other binary files fail
   with `BINARY_FILE` (`Binary file detected.`) unless the call passes `binary: true`. Then a
@@ -363,9 +366,14 @@ There are three kinds of failure:
 
 1. **A tool failure** is a normal result with `isError: true`. The text says
    what went wrong; in a batch, each failed item also has a
-   `{ code, message, path, suggestion }` error. Input that does not match the
-   schema comes back this way too (`Input validation error: ...`), so a model
-   can correct itself.
+   `{ code, message, path, suggestion }` error. A call that fails as a whole,
+   before any per-path result (a patch that does not apply, a refused
+   pre-check), also carries that shape as `_meta.error`. A per-path failure,
+   even for a single `path`, sits in that tool's own collection in the
+   payload (`result.structuredContent ?? result._meta`): `results[].error`
+   or `failures`, as item 2 lists. Input that does not match the schema
+   comes back as text only (`Input validation error: ...`), so a model can
+   correct itself.
 2. **A partial failure** is not `isError`. A call with several paths sets
    `isError` only when every item failed. Check `summary.failed` (`stat`,
    `read`, `edit`, `delete`, `replace_text`) or `failures` (`create`, `move`).

@@ -8,6 +8,7 @@ import type * as z from 'zod/v4';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
+import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { PATCH } from '../src/tools/patch.ts';
 import {
   cleanupTestRoot,
@@ -66,14 +67,113 @@ describe('patch body', () => {
     await writeFile(f, 'a\nb\nc\nZ\ne\nf\n');
     const diff =
       '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n@@ -4,3 +4,3 @@\n-d\n+Y\n e\n f\n';
-    await assert.rejects(
-      patch({ path: f, diff }),
-      fsErrorMatcher(
-        ErrorCode.INVALID_INPUT,
-        /did not apply cleanly: hunk 2 \(starting at line 4\) does not match/u,
-      ),
-    );
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      const message = error.message ?? '';
+      assert.match(message, /did not apply cleanly: hunk 2 \(starting at line 4\) does not match/u);
+      assert.match(message, /at line 4: expected "d", found "Z" \(hunks must be in file order\)/u);
+      return true;
+    });
     assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\nc\nZ\ne\nf\n');
+  });
+
+  it('names the mismatched line for a single stale hunk', async () => {
+    const f = join(root, 'patch_one_stale.txt');
+    await writeFile(f, 'q\nb\nc\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      const message = error.message ?? '';
+      assert.match(
+        message,
+        /hunk 1 \(starting at line 1\) does not match file content at line 1: expected "a", found "q"/u,
+      );
+      assert.doesNotMatch(message, /file order/u);
+      return true;
+    });
+  });
+
+  it('names the first differing line when the first context line matches', async () => {
+    const f = join(root, 'patch_second_stale.txt');
+    await writeFile(f, 'a\nX\nc\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "b", found "X"/u);
+      return true;
+    });
+  });
+
+  it('counts a blank context line with no leading space', async () => {
+    const f = join(root, 'patch_blank_ctx.txt');
+    await writeFile(f, '\nfoo\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n\n-bar\n+baz\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "bar", found "foo"/u);
+      return true;
+    });
+  });
+
+  it('strips CR from both sides of a CRLF mismatch', async () => {
+    const f = join(root, 'patch_crlf.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    const diff = '--- f.txt\r\n+++ f.txt\r\n@@ -1,2 +1,2 @@\r\n-q\r\n+X\r\n b\r\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 1: expected "q", found "a"/u);
+      return true;
+    });
+  });
+
+  it('names end of file for a line the file does not have', async () => {
+    const f = join(root, 'patch_eof.txt');
+    await writeFile(f, 'a\n');
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,3 +1,3 @@\n a\n \n-b\n+B\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(error.message ?? '', /at line 2: expected "", found end of file/u);
+      return true;
+    });
+  });
+
+  it('shows where long lines differ, not only their shared start', async () => {
+    const f = join(root, 'patch_long_tail.txt');
+    const shared = 'p'.repeat(1500);
+    await writeFile(f, `${shared}Y\nb\n`);
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-${shared}X\n+Z\n b\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.match(
+        error.message ?? '',
+        /expected "…\[\d+ chars\] p+X", found "…\[\d+ chars\] p+Y"/u,
+      );
+      return true;
+    });
+  });
+
+  it('never splits a surrogate pair when clipping', async () => {
+    const f = join(root, 'patch_emoji.txt');
+    await writeFile(f, 'q\nb\n');
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-x${'😀'.repeat(600)}\n+Z\n b\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.ok((error.message ?? '').isWellFormed(), 'lone surrogate in message');
+      return true;
+    });
+  });
+
+  it('truncates long lines in the mismatch detail', async () => {
+    const f = join(root, 'patch_long_stale.txt');
+    await writeFile(f, `${'q'.repeat(5000)}\nb\n`);
+    const diff = `--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-${'a'.repeat(5000)}\n+X\n b\n`;
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      const message = error.message ?? '';
+      assert.match(message, /expected "a+ \[…\d+ chars\]", found "q+ \[…\d+ chars\]"/u);
+      assert.ok(message.length < 2 * MAX_MATCH_LINE_CHARS + 300, String(message.length));
+      return true;
+    });
   });
 
   it('keeps the generic refusal when the diagnosis is over budget', async () => {
@@ -93,6 +193,7 @@ describe('patch body', () => {
       const message = error.message ?? '';
       assert.match(message, /did not apply cleanly: hunk context does not match/u);
       assert.doesNotMatch(message, /hunk 2/u);
+      assert.match(message, /\(hunks must be in file order\)/u);
       return true;
     });
   });

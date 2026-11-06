@@ -69,6 +69,10 @@ export type PerPathResult<T> = { path: string; value: T } | { path: string; erro
 export const OUTSIDE_ROOTS_SUGGESTION =
   'Use a path under an allowed root; list_roots names them. A path outside them needs a new startup root or an accepted grant.';
 
+/** For an out-of-root path no grant is offered for: a system folder, a drive root, outside FS_ROOT_BOUNDARY. */
+export const NO_GRANT_SUGGESTION =
+  'Use a path under an allowed root; list_roots names them. No grant is offered for this location; only a startup root can admit it.';
+
 const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.NOT_FOUND]: 'Run list or find_files to verify the path.',
   [ErrorCode.NOT_FILE]: 'Target is a directory, not a file.',

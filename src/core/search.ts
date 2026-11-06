@@ -35,7 +35,7 @@ const MATCH_LEAD_CHARS = 200;
  * `line` cut to a window that starts `MATCH_LEAD_CHARS` before `column`, with
  * each cut marked by the number of chars removed. A cut never splits a pair.
  */
-function clipLine(line: string, column: number): string {
+export function clipLine(line: string, column: number): string {
   if (line.length <= MAX_MATCH_LINE_CHARS) return line;
   let start = Math.max(0, column - MATCH_LEAD_CHARS);
   let end = Math.min(line.length, start + MAX_MATCH_LINE_CHARS);

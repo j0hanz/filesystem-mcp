@@ -1259,7 +1259,65 @@ describe('restoreEntry', () => {
       (r): r is { path: string; error: Problem } => 'error' in r,
     );
     assert.ok(skipped);
-    assert.match(skipped.error.message, /modified since/);
+    assert.match(
+      skipped.error.message,
+      /^Not restored: its content was modified since this undo step was recorded$/u,
+    );
+  });
+
+  const skipMessage = async (entry: UndoEntry): Promise<string> => {
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const skipped = outcome.results.find(
+      (r): r is { path: string; error: Problem } => 'error' in r,
+    );
+    assert.ok(skipped);
+    return skipped.error.message;
+  };
+
+  it('an overwritten file deleted since is skipped as deleted', async () => {
+    const file = join(tmpDir, 'restore-gone.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: it was deleted since this undo step was recorded',
+    );
+  });
+
+  it('an overwritten file replaced by a folder is skipped as replaced', async () => {
+    const file = join(tmpDir, 'restore-swapped.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    await mkdir(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: a folder or link replaced it since this undo step was recorded',
+    );
+  });
+
+  it('a created file replaced by a folder is skipped as replaced', async () => {
+    const file = join(tmpDir, 'restore-new-swapped.txt');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    await mkdir(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: a folder or link replaced it since this undo step was recorded',
+    );
+  });
+
+  it('a folder that gained a file is skipped as no longer empty', async () => {
+    const dir = join(tmpDir, 'restore-filled');
+    const entry = await captureOne((fs) => fs.mkdir(dir, { recursive: true }));
+    await writeFile(join(dir, 'new.txt'), 'x');
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const skipped = outcome.results.find(
+      (r): r is { path: string; error: Problem } => 'error' in r,
+    );
+    assert.ok(skipped);
+    assert.match(skipped.error.message, /^Not restored: the folder is no longer empty$/u);
   });
 
   it('a deleted tree comes back with bytes, mode, symlink and subdirectory', async (t) => {
@@ -2784,9 +2842,7 @@ describe('undo body', () => {
       // Case-folded: a Windows drive letter comes back in the root's spelling.
       preview
         .toLowerCase()
-        .includes(
-          `// ${y}: skipped not restored: it or its folder was modified since`.toLowerCase(),
-        ),
+        .includes(`// ${y}: skipped not restored: its content was modified since`.toLowerCase()),
       `the reason names the path: ${preview}`,
     );
 

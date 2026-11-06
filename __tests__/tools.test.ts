@@ -532,6 +532,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const result = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
     assert.strictEqual(result.isError, true);
     assert.match(firstTextBlock(result).text ?? '', /INVALID_INPUT.*did not apply cleanly/);
+    const meta = result._meta as
+      { error?: { code?: string; message?: string; path?: string } } | undefined;
+    assert.strictEqual(meta?.error?.code, 'INVALID_INPUT');
+    assert.match(meta?.error?.message ?? '', /did not apply cleanly/);
+    assert.strictEqual(result.structuredContent, undefined);
   });
 
   it('TC-FUNC-063: list sends text, metadata and its resource link over MCP', async () => {

@@ -10,6 +10,7 @@ import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
+import { clipLine } from '../core/search.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -171,6 +172,42 @@ function firstFailingHunk(
   return hi;
 }
 
+/** Index of the first char where `a` and `b` differ (the shorter length if one prefixes the other). */
+const firstDiff = (a: string, b: string): number => {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+};
+
+const stripCr = (line: string): string => line.replace(/\r$/u, '');
+
+/**
+ * ` at line N: expected "…", found "…"` for the hunk's first old line (context,
+ * removed, or a blank context line stripped of its space) that differs from the
+ * file at the submitted start; '' when all match there (clamp or order is the
+ * cause). jsdiff's offset search may have looked nearby too.
+ */
+function mismatchDetail(
+  content: string,
+  hunk: ReturnType<typeof parsePatch>[number]['hunks'][number],
+): string {
+  if (hunk.oldStart < 1) return '';
+  const old = hunk.lines
+    .filter((line) => line === '' || line.startsWith(' ') || line.startsWith('-'))
+    .map((line) => stripCr(line.slice(1)));
+  // A line at or past this count is past the end, not blank: split pads with ''.
+  const present = countLines(content) - (hunk.oldStart - 1);
+  const file = content.split('\n', hunk.oldStart - 1 + old.length).slice(hunk.oldStart - 1);
+  const at = old.findIndex((line, i) => i >= present || line !== stripCr(file[i] ?? ''));
+  if (at < 0) return '';
+  const expected = old[at] ?? '';
+  const where = ` at line ${String(hunk.oldStart + at)}: expected`;
+  if (at >= present) return `${where} "${clipLine(expected, 0)}", found end of file`;
+  const found = stripCr(file[at] ?? '');
+  const col = firstDiff(expected, found);
+  return `${where} "${clipLine(expected, col)}", found "${clipLine(found, col)}"`;
+}
+
 /** The transform: parse, clamp, apply, and the line-count backstop. */
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
@@ -241,13 +278,15 @@ function patchContent(
     // The search cannot miss: the full clamped set is the last prefix and already failed.
     // The submitted header start, not the clamp's search floor: it is the line
     // the caller can find in the diff they sent.
-    const where =
-      first >= 0
-        ? `hunk ${String(first + 1)} (starting at line ${String(parsedPatch.hunks[first]?.oldStart)}) does not match file content`
-        : 'hunk context does not match file content';
+    const failing = first >= 0 ? parsedPatch.hunks[first] : undefined;
+    const where = failing
+      ? `hunk ${String(first + 1)} (starting at line ${String(failing.oldStart)}) does not match file content${mismatchDetail(content, failing)}`
+      : 'hunk context does not match file content';
+    // Hunk 1 is never clamped, so its failure is its own context, not the order.
+    const order = hunks.length > 1 && first !== 0 ? ' (hunks must be in file order)' : '';
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      `patch did not apply cleanly: ${where} (hunks must be in file order)`,
+      `patch did not apply cleanly: ${where}${order}`,
       args.path,
     );
   }
