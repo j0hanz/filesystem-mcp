@@ -1265,6 +1265,49 @@ describe('restoreEntry', () => {
     );
   });
 
+  const skipMessage = async (entry: UndoEntry): Promise<string> => {
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const skipped = outcome.results.find(
+      (r): r is { path: string; error: Problem } => 'error' in r,
+    );
+    assert.ok(skipped);
+    return skipped.error.message;
+  };
+
+  it('an overwritten file deleted since is skipped as deleted', async () => {
+    const file = join(tmpDir, 'restore-gone.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: it was deleted since this undo step was recorded',
+    );
+  });
+
+  it('an overwritten file replaced by a folder is skipped as replaced', async () => {
+    const file = join(tmpDir, 'restore-swapped.txt');
+    await writeFile(file, 'before');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    await mkdir(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: a folder or link replaced it since this undo step was recorded',
+    );
+  });
+
+  it('a created file replaced by a folder is skipped as replaced', async () => {
+    const file = join(tmpDir, 'restore-new-swapped.txt');
+    const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
+    await rm(file);
+    await mkdir(file);
+    assert.strictEqual(
+      await skipMessage(entry),
+      'Not restored: a folder or link replaced it since this undo step was recorded',
+    );
+  });
+
   it('a folder that gained a file is skipped as no longer empty', async () => {
     const dir = join(tmpDir, 'restore-filled');
     const entry = await captureOne((fs) => fs.mkdir(dir, { recursive: true }));

@@ -1142,6 +1142,8 @@ export async function restoreEntry(
     blocked: 'Not restored: its parent folder could not be restored',
     created: 'Not restored: something was created at this path since this undo step was recorded',
     content: 'Not restored: its content was modified since this undo step was recorded',
+    deleted: 'Not restored: it was deleted since this undo step was recorded',
+    replaced: 'Not restored: a folder or link replaced it since this undo step was recorded',
     linkInFolder: 'Not restored: a link now sits where the folder was',
     notEmpty: 'Not restored: the folder is no longer empty',
     folderTaken: "Not restored: a file or link now occupies the folder's path",
@@ -1160,6 +1162,12 @@ export async function restoreEntry(
   };
   const matchesHash = async (path: string, expect: string): Promise<boolean> =>
     (await world.probe(path))?.kind === 'file' && (await world.hash(path)) === expect;
+  /** Why a file whose hash no longer matches was left alone. */
+  const changedReason = async (path: string): Promise<string> => {
+    const at = await world.probe(path);
+    if (at === undefined) return SKIP.deleted;
+    return at.kind === 'file' ? SKIP.content : SKIP.replaced;
+  };
 
   for (const { record, order } of restoreOrder(entry.records)) {
     const anchor = record.op === 'rename' ? record.from : record.path;
@@ -1197,7 +1205,7 @@ export async function restoreEntry(
                 record,
                 order,
                 record.path,
-                record.expect === null ? SKIP.created : SKIP.content,
+                record.expect === null ? SKIP.created : await changedReason(record.path),
               );
             }
           });
@@ -1211,7 +1219,7 @@ export async function restoreEntry(
               await world.rm(record.path);
               done(record.path);
             } else {
-              skip(record, order, record.path, SKIP.content);
+              skip(record, order, record.path, await changedReason(record.path));
             }
           });
           break;
