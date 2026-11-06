@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. undo reverts a delete whose result gives an undo id.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. A non-empty directory needs recursive: true and the user's confirmation. undo reverts a delete whose result gives an undo id. Use move to relocate a path instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -287,7 +287,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern; read returns file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -352,7 +352,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. undo reverts a move whose result gives an undo id; a copy cannot be undone.",
+      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. overwrite skips the prompt for copies only; a move onto a different existing file asks, and one onto a different non-empty directory is refused. undo reverts a move whose result gives an undo id; a copy cannot be undone. Use delete to remove a path.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -448,7 +448,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Pass path, or paths for a batch, not both. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource, with no slice. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file. Use search_text to find text and list for directories.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. On Windows a rewrite resets created unless the file has other hard links. read returns contents.",
+      "description": "Get metadata without reading contents, like ls -ld. Fields are type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Pass path, or paths for a batch, not both. Each missing path gets its own NOT_FOUND entry, so stat also checks existence. On Windows a rewrite resets created unless the file has other hard links. read returns contents; list lists a directory.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -993,7 +993,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern; read returns file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1058,7 +1058,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Pass path, or paths for a batch, not both. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource, with no slice. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file. Use search_text to find text and list for directories.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist: each missing path gets its own NOT_FOUND entry. On Windows a rewrite resets created unless the file has other hard links. read returns contents.",
+      "description": "Get metadata without reading contents, like ls -ld. Fields are type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Pass path, or paths for a batch, not both. Each missing path gets its own NOT_FOUND entry, so stat also checks existence. On Windows a rewrite resets created unless the file has other hard links. read returns contents; list lists a directory.",
       "inputSchema": {
         "type": "object",
         "properties": {

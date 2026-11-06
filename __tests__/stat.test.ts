@@ -26,6 +26,9 @@ type StatRow = Awaited<ReturnType<typeof stat>>['structured']['results'][number]
 
 const valueOf = (row: StatRow | undefined) => (row && 'value' in row ? row.value : undefined);
 const errorOf = (row: StatRow | undefined) => (row && 'error' in row ? row.error : undefined);
+/** Zod issues of a schema refusal the harness's parse step throws. */
+const issuesOf = (err: unknown): { message?: string }[] =>
+  (err as { issues?: { message?: string }[] }).issues ?? [];
 
 async function stat(args: StatArgs, options: ToolBodyOptions) {
   return runToolBodyResult(STAT, args, options);
@@ -70,6 +73,17 @@ describe('stat body', () => {
       assert.strictEqual(value.isHidden, false);
       assert.ok(!('entryCount' in value), 'a file must not report an entryCount');
     }
+  });
+
+  it('refuses path together with paths', async () => {
+    const file = await writeTestFile(root, 'stat-both.txt', 'x');
+    await assert.rejects(
+      () => stat({ path: file, paths: [file] }, { guard }),
+      (err) =>
+        issuesOf(err).some((issue) =>
+          (issue.message ?? '').includes("Cannot use both 'path' and 'paths'"),
+        ),
+    );
   });
 
   it('a directory does not read as empty or world-writable (#56)', async () => {
