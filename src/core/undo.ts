@@ -369,7 +369,7 @@ export class UndoCapture implements PathCapture {
   /**
    * Charge n more saved bytes (plus the record that will hold them) before
    * reading them, so concurrent reads cannot all pass the same gate. The
-   * write record's `push` draws the reservation down instead of charging twice.
+   * record's `push` draws the reservation down instead of charging twice.
    */
   reserve(n: number): boolean {
     if (this.#unavailable !== undefined) return false;
@@ -399,7 +399,7 @@ export class UndoCapture implements PathCapture {
     if (this.#unavailable !== undefined) return;
     for (const record of records) {
       const cost = recordWeight(record);
-      const drawn = record.op === 'write' ? Math.min(this.#reserved, cost) : 0;
+      const drawn = Math.min(this.#reserved, cost);
       if (this.#pool.bytes + (cost - drawn) > this.maxBytes) {
         this.abandon('too many changes to keep for undo');
         return;
@@ -536,6 +536,105 @@ export async function snapshotTree(
     capture.abandon('cannot capture a non-regular entry');
   } catch {
     capture.abandon('could not read the deleted files');
+  }
+}
+
+/** One destination entry a copy creates or replaces, as it stood before the copy. */
+export type CopyTarget =
+  | { kind: 'new-file'; path: string }
+  | { kind: 'new-dir'; path: string }
+  | { kind: 'replaced-file'; path: string; saved: SavedFile };
+
+/**
+ * Pre-order walk of the copy source against the destination, before the copy:
+ * what each destination entry was, with the bytes of every file the copy will
+ * replace. Abandons `capture` (and returns []) on anything it cannot restore.
+ */
+export async function planCopyUndo(
+  capture: PathCapture,
+  fs: GuardedFileSystem,
+  validSource: string,
+  validDest: string,
+): Promise<CopyTarget[]> {
+  const targets: CopyTarget[] = [];
+  const walk = async (source: string, dest: string, destAbsent: boolean): Promise<void> => {
+    if (fs.pathGuard.isSensitive(dest)) {
+      capture.abandon('contains protected files');
+      return;
+    }
+    const src = await fsLstat(source, { bigint: true });
+    const existing = destAbsent ? undefined : await unlessMissing(fsLstat(dest, { bigint: true }));
+    if (src.isSymbolicLink()) {
+      // shortcut: no record removes a link a call created; add one if clients copy trees with links
+      capture.abandon('copied links are not undoable');
+    } else if (src.isFile()) {
+      if (existing === undefined) {
+        // Charged now, so a huge new tree stops here instead of after the copy.
+        if (!capture.reserve(0)) return;
+        targets.push({ kind: 'new-file', path: dest });
+      } else if (existing.isFile() && existing.nlink > 1n) {
+        // The copy renames over one name; its twins keep the old inode, which
+        // the restore would hand to the moves that tracked it.
+        capture.abandon('cannot capture a copy over a hard-linked file');
+      } else if (existing.isFile()) {
+        const saved = await saveOld(capture, fs, dest, existing);
+        if (saved) targets.push({ kind: 'replaced-file', path: dest, saved });
+      } else {
+        capture.abandon('a copy would replace a different kind of entry');
+      }
+    } else if (src.isDirectory()) {
+      if (existing !== undefined && !existing.isDirectory()) {
+        capture.abandon('a copy would replace a different kind of entry');
+        return;
+      }
+      if (existing === undefined) {
+        // The copy keeps the source's mode; without owner write, undo could not empty it.
+        if ((Number(src.mode) & 0o200) === 0) {
+          capture.abandon('cannot capture a copy of a read-only folder');
+          return;
+        }
+        if (!capture.reserve(0)) return;
+        targets.push({ kind: 'new-dir', path: dest });
+      }
+      for (const name of await fsReaddir(source)) {
+        await walk(join(source, name), join(dest, name), existing === undefined);
+        if (capture.unavailableReason() !== undefined) return;
+      }
+    } else {
+      capture.abandon('cannot capture a non-regular entry');
+    }
+  };
+  try {
+    await walk(validSource, validDest, false);
+  } catch {
+    capture.abandon('could not read the copy destination');
+  }
+  return capture.unavailableReason() === undefined ? targets : [];
+}
+
+/** After the copy: push the records that undo `targets`, each file hashed as it landed. */
+export async function recordCopyUndo(
+  capture: PathCapture,
+  fs: GuardedFileSystem,
+  targets: readonly CopyTarget[],
+): Promise<void> {
+  try {
+    for (const target of targets) {
+      // Once undo gave up, hashing the rest would only re-read files for nothing.
+      if (capture.unavailableReason() !== undefined) return;
+      if (target.kind === 'new-dir') {
+        capture.push({ op: 'rmdir', path: target.path });
+      } else {
+        const expect = await hashFile(fs, target.path);
+        capture.push(
+          target.kind === 'new-file'
+            ? { op: 'remove', path: target.path, expect }
+            : { op: 'write', path: target.path, ...target.saved, expect },
+        );
+      }
+    }
+  } catch {
+    capture.abandon('could not read the copied files');
   }
 }
 

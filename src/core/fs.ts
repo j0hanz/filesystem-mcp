@@ -63,7 +63,9 @@ import {
   identityOf as fileIdentityOf,
   NOT_RECORDING,
   type PathCapture,
+  planCopyUndo,
   plannedMkdirChain,
+  recordCopyUndo,
   saveOld,
   snapshotTree,
 } from './undo.ts';
@@ -809,7 +811,8 @@ export class GuardedFileSystem {
       }
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
-    const mode = existingMode ?? options.mode;
+    // An explicit mode (undo restoring a saved file) wins over the one a copy left.
+    const mode = options.mode ?? existingMode;
     // Called once the bytes have landed, before a descriptor closes: a failed close must not hide them.
     const recordWrite = (): void => {
       if (!own.recording) return;
@@ -832,6 +835,8 @@ export class GuardedFileSystem {
         // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
         signal?.throwIfAborted();
         try {
+          // Before the bytes: a restored secret must not sit readable at the copy's mode.
+          if (options.mode !== undefined) await handle.chmod(options.mode);
           // No signal on the write: once truncated, an abort would leave the file empty.
           await handle.truncate(0);
           await handle.writeFile(content);
@@ -1094,11 +1099,23 @@ export class GuardedFileSystem {
   async #copy(source: string, destination: string): Promise<void> {
     const validSource = await this.#guard('probe', source);
     const validDest = await this.#guard('write', destination);
-    // Undoing a forced cp means telling new files apart from overwritten ones
-    // across a merged tree.
-    // ponytail: upgrade path is snapshotting destination entries here before
-    // fsCp, the way snapshotTree does.
-    this.#capture?.abandon('copies are not undoable yet');
+    // Its own capture: a copy that cannot be undone must not cost its siblings their undo.
+    await this.#forMutation(validDest, async (own) => {
+      // Before the copy: which destination entries are new and which it replaces.
+      const targets = own.recording ? await planCopyUndo(own, this, validSource, validDest) : [];
+      try {
+        await this.#copyValid(validSource, validDest);
+      } catch (error) {
+        own.abandon('the copy failed part-way');
+        own.changed();
+        throw error;
+      }
+      if (own.recording) await recordCopyUndo(own, this, targets);
+      own.changed();
+    });
+  }
+
+  async #copyValid(validSource: string, validDest: string): Promise<void> {
     // One file copied over one existing file stages instead: fs.cp with force
     // unlinks the destination before it copies, so a failed copy lost the old
     // bytes. The staged copy renames into place, leaving the destination
