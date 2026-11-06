@@ -72,9 +72,15 @@ describe('Rewrite', () => {
     const controller = new AbortController();
     let finish = (): void => undefined;
     let settled = false;
+    let entered = (): void => undefined;
+    // A fixed sleep raced the lock on slow Windows runners; wait for the transform instead.
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     const running = rewriteFile(
       { fs, path, dryRun: false, signal: controller.signal, tool: 'edit' },
       async (content) => {
+        entered();
         await new Promise<void>((resolve) => {
           finish = resolve;
         });
@@ -84,7 +90,7 @@ describe('Rewrite', () => {
       settled = true;
     });
     const outcome = running.catch(() => undefined);
-    await sleep(20);
+    await inside;
     controller.abort();
     await sleep(50);
     assert.equal(settled, false);
