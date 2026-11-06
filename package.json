@@ -36,7 +36,8 @@
     "check": "npm run check:static && npm run test",
     "test": "node --test --test-timeout=60000",
     "test:coverage": "node --test --test-timeout=60000 --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=92 --test-coverage-branches=85 --test-coverage-functions=91",
-    "test:mutation": "stryker run"
+    "test:mutation": "stryker run",
+    "tdqs": "npm run build && npx -y mcp-tdqs@0.2.0 score --command \"node dist/index.js .\" --hosted https://tdqs.dev --server-name filesystem-mcp --format markdown --output tdqs-report.md"
   },
   "keywords": [
     "mcp",

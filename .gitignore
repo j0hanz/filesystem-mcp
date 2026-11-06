@@ -1,6 +1,9 @@
 # Git worktrees
 .worktrees/
 
+# Local TDQS score report (npm run tdqs)
+tdqs-report.md
+
 # Dependencies
 node_modules/
 yarn.lock

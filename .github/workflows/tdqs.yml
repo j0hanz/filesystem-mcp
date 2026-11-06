@@ -1,0 +1,54 @@
+# Scores the advertised tool definitions on tdqs.dev (the rubric Glama uses).
+# Kept apart from ci.yml, which must stay secret-free: this one reads
+# TDQS_API_KEY. A hosted score spends one of the account's 30 daily calls,
+# so it runs only when a definition can have changed, or by hand.
+name: TDQS
+
+on:
+  pull_request:
+    paths:
+      - 'src/tools/**'
+      - 'src/core/schema.ts'
+      - '.github/workflows/tdqs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes the run in flight; its result would be stale anyway.
+concurrency:
+  group: tdqs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tdqs:
+    name: TDQS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Empty on fork PRs, which receive no secrets; the score step skips then.
+      TDQS_API_KEY: ${{ secrets.TDQS_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Lint definitions
+        # Offline and free. Gated on errors only: the move/delete
+        # shadow-candidate warning is permanent and coherence review clears it.
+        run: npx -y mcp-tdqs@0.2.0 lint --command "node dist/index.js ." --fail-on error
+      - name: Score definitions
+        if: ${{ env.TDQS_API_KEY != '' }}
+        # Gate at tier A (3.5+). Scores swing about 0.3 between identical runs,
+        # so a tighter gate would fail at random; the summary shows the detail.
+        run: >-
+          npx -y mcp-tdqs@0.2.0 score --command "node dist/index.js ."
+          --hosted https://tdqs.dev --server-name filesystem-mcp
+          --fail-under A --format markdown >> "$GITHUB_STEP_SUMMARY"
