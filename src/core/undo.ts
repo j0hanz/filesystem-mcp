@@ -1138,8 +1138,16 @@ export async function restoreEntry(
   // Skipped/failed records, each with its capture order, so the retry runs the
   // same reverse pass instead of re-reversing an already-reversed list.
   const remaining: { record: UndoRecord; order: number }[] = [];
-  const SKIP_MSG = 'Not restored: it or its folder was modified since this undo step was recorded';
-  const skip = (record: UndoRecord, order: number, path: string, message = SKIP_MSG): void => {
+  const SKIP = {
+    blocked: 'Not restored: its parent folder could not be restored',
+    created: 'Not restored: something was created at this path since this undo step was recorded',
+    content: 'Not restored: its content was modified since this undo step was recorded',
+    linkInFolder: 'Not restored: a link now sits where the folder was',
+    notEmpty: 'Not restored: the folder is no longer empty',
+    folderTaken: "Not restored: a file or link now occupies the folder's path",
+    linkTaken: "Not restored: something now occupies the link's path",
+  } as const;
+  const skip = (record: UndoRecord, order: number, path: string, message: string): void => {
     remaining.push({ record, order });
     results.push({ path, error: Problem.cancelled(message, { path }) });
   };
@@ -1161,7 +1169,7 @@ export async function restoreEntry(
     }
     opts.onRecord?.();
     if (isBlocked(anchor)) {
-      skip(record, order, anchor);
+      skip(record, order, anchor, SKIP.blocked);
       continue;
     }
     try {
@@ -1185,7 +1193,12 @@ export async function restoreEntry(
             } else if (await matchesHash(record.path, sha256Hex(record.bytes))) {
               done(record.path); // already holds what undo would write
             } else {
-              skip(record, order, record.path);
+              skip(
+                record,
+                order,
+                record.path,
+                record.expect === null ? SKIP.created : SKIP.content,
+              );
             }
           });
           break;
@@ -1198,7 +1211,7 @@ export async function restoreEntry(
               await world.rm(record.path);
               done(record.path);
             } else {
-              skip(record, order, record.path);
+              skip(record, order, record.path, SKIP.content);
             }
           });
           break;
@@ -1206,7 +1219,7 @@ export async function restoreEntry(
         case 'rmdir': {
           // A link that took the folder's place is not the folder this call made.
           if ((await world.probe(record.path))?.kind === 'link') {
-            skip(record, order, record.path);
+            skip(record, order, record.path, SKIP.linkInFolder);
             break;
           }
           try {
@@ -1214,7 +1227,7 @@ export async function restoreEntry(
           } catch (error) {
             if (!isMissing(error)) {
               if (!isNodeError(error) || error.code !== 'ENOTEMPTY') throw error;
-              skip(record, order, record.path);
+              skip(record, order, record.path, SKIP.notEmpty);
               break;
             }
           }
@@ -1237,7 +1250,7 @@ export async function restoreEntry(
             done(record.path);
           } else {
             blocked.push(record.path);
-            skip(record, order, record.path);
+            skip(record, order, record.path, SKIP.folderTaken);
           }
           break;
         }
@@ -1247,7 +1260,7 @@ export async function restoreEntry(
             if (record.was) world.rewrite(record.was, await world.identity(record.path));
             done(record.path);
           } else {
-            skip(record, order, record.path);
+            skip(record, order, record.path, SKIP.linkTaken);
           }
           break;
         }

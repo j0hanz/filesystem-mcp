@@ -1259,7 +1259,22 @@ describe('restoreEntry', () => {
       (r): r is { path: string; error: Problem } => 'error' in r,
     );
     assert.ok(skipped);
-    assert.match(skipped.error.message, /modified since/);
+    assert.match(
+      skipped.error.message,
+      /^Not restored: its content was modified since this undo step was recorded$/u,
+    );
+  });
+
+  it('a folder that gained a file is skipped as no longer empty', async () => {
+    const dir = join(tmpDir, 'restore-filled');
+    const entry = await captureOne((fs) => fs.mkdir(dir, { recursive: true }));
+    await writeFile(join(dir, 'new.txt'), 'x');
+    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const skipped = outcome.results.find(
+      (r): r is { path: string; error: Problem } => 'error' in r,
+    );
+    assert.ok(skipped);
+    assert.match(skipped.error.message, /^Not restored: the folder is no longer empty$/u);
   });
 
   it('a deleted tree comes back with bytes, mode, symlink and subdirectory', async (t) => {
@@ -2785,7 +2800,7 @@ describe('undo body', () => {
       preview
         .toLowerCase()
         .includes(
-          `// ${y}: skipped not restored: it or its folder was modified since`.toLowerCase(),
+          `// ${y}: skipped not restored: its content was modified since`.toLowerCase(),
         ),
       `the reason names the path: ${preview}`,
     );
