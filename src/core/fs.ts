@@ -65,6 +65,8 @@ import {
   type PathCapture,
   plannedMkdirChain,
   saveOld,
+  planCopyUndo,
+  recordCopyUndo,
   snapshotTree,
 } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
@@ -1094,11 +1096,25 @@ export class GuardedFileSystem {
   async #copy(source: string, destination: string): Promise<void> {
     const validSource = await this.#guard('probe', source);
     const validDest = await this.#guard('write', destination);
-    // Undoing a forced cp means telling new files apart from overwritten ones
-    // across a merged tree.
-    // ponytail: upgrade path is snapshotting destination entries here before
-    // fsCp, the way snapshotTree does.
-    this.#capture?.abandon('copies are not undoable yet');
+    // Its own capture: a copy that cannot be undone must not cost its siblings their undo.
+    await this.#forMutation(validDest, async (own) => {
+      // Before the copy: which destination entries are new and which it replaces.
+      const targets = own.recording
+        ? await planCopyUndo(own, this, validSource, validDest)
+        : [];
+      try {
+        await this.#copyValid(validSource, validDest);
+      } catch (error) {
+        own.abandon('the copy failed part-way');
+        own.changed();
+        throw error;
+      }
+      if (own.recording) await recordCopyUndo(own, this, targets);
+      own.changed();
+    });
+  }
+
+  async #copyValid(validSource: string, validDest: string): Promise<void> {
     // One file copied over one existing file stages instead: fs.cp with force
     // unlinks the destination before it copies, so a failed copy lost the old
     // bytes. The staged copy renames into place, leaving the destination

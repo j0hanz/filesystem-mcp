@@ -342,14 +342,155 @@ describe('UndoCapture via GuardedFileSystem', () => {
     assert.deepStrictEqual(cap.records, []);
   });
 
-  it('cp abandons with copies are not undoable yet', async () => {
+  const restoreCopy = (cap: UndoCapture) =>
+    restoreEntry(
+      { id: 'x', tool: 'move', createdAt: 0, records: cap.journalRecords() },
+      new GuardedFileSystem(ctx.pathGuard),
+      { dryRun: false },
+    );
+
+  it('copy to a new file records remove; undo deletes the copy', async () => {
     const src = join(tmpDir, 'cp-src.txt');
     const dest = join(tmpDir, 'cp-dest.txt');
     await writeFile(src, 'cp');
     const cap = capture();
-    const fs = makeFs(cap);
-    await copyVia(fs, src, dest);
-    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+    await copyVia(makeFs(cap), src, dest);
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op),
+      ['remove'],
+    );
+    await restoreCopy(cap);
+    await assert.rejects(lstat(dest));
+    assert.strictEqual(await readFile(src, 'utf8'), 'cp');
+    cap.release();
+  });
+
+  it('copy over a file records write; undo puts the old bytes back', async () => {
+    const src = join(tmpDir, 'cpw-src.txt');
+    const dest = join(tmpDir, 'cpw-dest.txt');
+    await writeFile(src, 'new');
+    await writeFile(dest, 'old');
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'new');
+    assert.deepStrictEqual(
+      cap.records.map((r) => r.op),
+      ['write'],
+    );
+    await restoreCopy(cap);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'old');
+    cap.release();
+  });
+
+  it('copy of a tree to a new path; undo removes the tree', async () => {
+    const src = join(tmpDir, 'cpt-src');
+    const dest = join(tmpDir, 'cpt-dest');
+    await mkdir(join(src, 'sub'), { recursive: true });
+    await writeFile(join(src, 'a.txt'), 'a');
+    await writeFile(join(src, 'sub', 'b.txt'), 'b');
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    assert.deepStrictEqual(cap.records.map((r) => r.op).sort(), [
+      'remove',
+      'remove',
+      'rmdir',
+      'rmdir',
+    ]);
+    await restoreCopy(cap);
+    await assert.rejects(lstat(dest));
+    cap.release();
+  });
+
+  it('merge copy; undo restores replaced and removes new, keeps the rest', async () => {
+    const src = join(tmpDir, 'cpm-src');
+    const dest = join(tmpDir, 'cpm-dest');
+    await mkdir(src, { recursive: true });
+    await mkdir(dest, { recursive: true });
+    await writeFile(join(src, 'same.txt'), 'new');
+    await writeFile(join(src, 'add.txt'), 'add');
+    await writeFile(join(dest, 'same.txt'), 'old');
+    await writeFile(join(dest, 'keep.txt'), 'k');
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    assert.strictEqual(await readFile(join(dest, 'add.txt'), 'utf8'), 'add');
+    await restoreCopy(cap);
+    assert.strictEqual(await readFile(join(dest, 'same.txt'), 'utf8'), 'old');
+    await assert.rejects(lstat(join(dest, 'add.txt')));
+    assert.strictEqual(await readFile(join(dest, 'keep.txt'), 'utf8'), 'k');
+    assert.ok((await lstat(dest)).isDirectory());
+    cap.release();
+  });
+
+  it('copy of a tree holding a link is not undoable for that path', async (t) => {
+    const src = join(tmpDir, 'cpl-src');
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, 'f.txt'), 'f');
+    if (!(await trySymlink(join(src, 'f.txt'), join(src, 'link'), () => t.skip(), 'file'))) return;
+    const cap = capture();
+    await copyVia(makeFs(cap), src, join(tmpDir, 'cpl-dest'));
+    assert.strictEqual(cap.unavailableReason(), 'cpl-dest: copied links are not undoable');
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
+  });
+
+  it('copy over a protected file is refused and keeps no bytes', async () => {
+    const dir = join(tmpDir, 'cpp');
+    await mkdir(dir, { recursive: true });
+    const src = join(dir, 'env.txt');
+    const dest = join(dir, '.env');
+    await writeFile(src, 'NEW=1');
+    await writeFile(dest, 'OLD=1');
+    const cap = capture();
+    await assert.rejects(copyVia(makeFs(cap), src, dest), /Sensitive file blocked/u);
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'OLD=1');
+    cap.release();
+  });
+
+  it('copy over a file past the budget still copies', async () => {
+    const src = join(tmpDir, 'cpb-src.txt');
+    const dest = join(tmpDir, 'cpb-dest.txt');
+    await writeFile(src, 'small');
+    await writeFile(dest, 'x'.repeat(4096));
+    const cap = new UndoJournal(1024).beginCapture();
+    await copyVia(makeFs(cap), src, dest);
+    assert.match(cap.unavailableReason() ?? '', /: too large to keep for undo$/u);
+    assert.strictEqual(await readFile(dest, 'utf8'), 'small');
+    cap.release();
+  });
+
+  it('undo of a copy refuses a file edited since', async () => {
+    const src = join(tmpDir, 'cpe-src');
+    const dest = join(tmpDir, 'cpe-dest');
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, 'a.txt'), 'a');
+    await writeFile(join(src, 'b.txt'), 'b');
+    const cap = capture();
+    await copyVia(makeFs(cap), src, dest);
+    await writeFile(join(dest, 'a.txt'), 'edited');
+    const { results } = await restoreCopy(cap);
+    const byName = new Map(results.map((r) => [pathLabel(r.path), r]));
+    assert.ok(byName.get('a.txt')?.error, 'the edited file is refused');
+    assert.strictEqual(byName.get('b.txt')?.error, undefined);
+    await assert.rejects(lstat(join(dest, 'b.txt')));
+    assert.strictEqual(await readFile(join(dest, 'a.txt'), 'utf8'), 'edited');
+    cap.release();
+  });
+
+  it('a merge copy onto a different kind keeps no undo for it', async () => {
+    const src = join(tmpDir, 'cpk-src');
+    const dest = join(tmpDir, 'cpk-dest');
+    await mkdir(join(src, 'b'), { recursive: true });
+    await mkdir(dest, { recursive: true });
+    await writeFile(join(dest, 'b'), 'file');
+    const cap = capture();
+    await assert.rejects(copyVia(makeFs(cap), src, dest));
+    assert.match(
+      cap.unavailableReason() ?? '',
+      /: a copy would replace a different kind of entry$/u,
+    );
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
   });
 
   it('after an abandon, mutations run but record nothing, and the first reason wins', async () => {
@@ -359,12 +500,12 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await writeFile(mid, 'mid');
     const cap = capture();
     const fs = makeFs(cap);
-    await copyVia(fs, src, join(tmpDir, 'pin-dest.txt')); // abandons: copies are not undoable yet
+    cap.abandon('first reason');
     await fs.writeFile(mid, 'replaced'); // the mutation runs; nothing is recorded
     await fs.rename(mid, src); // overwrites src; nothing is recorded
     assert.strictEqual((await lstat(src)).size, 8); // the write and rename both ran
     await fs.rm(src); // snapshotTree skips; nothing is recorded
-    assert.strictEqual(cap.unavailableReason(), 'copies are not undoable yet');
+    assert.strictEqual(cap.unavailableReason(), 'first reason');
     assert.deepStrictEqual(cap.records, []);
   });
 

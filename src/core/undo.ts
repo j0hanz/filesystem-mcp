@@ -539,6 +539,89 @@ export async function snapshotTree(
   }
 }
 
+/** One destination entry a copy creates or replaces, as it stood before the copy. */
+export type CopyTarget =
+  | { kind: 'new-file'; path: string }
+  | { kind: 'new-dir'; path: string }
+  | { kind: 'replaced-file'; path: string; saved: SavedFile };
+
+/**
+ * Pre-order walk of the copy source against the destination, before the copy:
+ * what each destination entry was, with the bytes of every file the copy will
+ * replace. Abandons `capture` (and returns []) on anything it cannot restore.
+ */
+export async function planCopyUndo(
+  capture: PathCapture,
+  fs: GuardedFileSystem,
+  validSource: string,
+  validDest: string,
+): Promise<CopyTarget[]> {
+  const targets: CopyTarget[] = [];
+  const walk = async (source: string, dest: string, destAbsent: boolean): Promise<void> => {
+    if (fs.pathGuard.isSensitive(dest)) {
+      capture.abandon('contains protected files');
+      return;
+    }
+    const src = await fsLstat(source, { bigint: true });
+    const existing = destAbsent ? undefined : await unlessMissing(fsLstat(dest, { bigint: true }));
+    if (src.isSymbolicLink()) {
+      // shortcut: no record removes a link a call created; add one if clients copy trees with links
+      capture.abandon('copied links are not undoable');
+    } else if (src.isFile()) {
+      if (existing === undefined) {
+        targets.push({ kind: 'new-file', path: dest });
+      } else if (existing.isFile()) {
+        const saved = await saveOld(capture, fs, dest, existing);
+        if (saved) targets.push({ kind: 'replaced-file', path: dest, saved });
+      } else {
+        capture.abandon('a copy would replace a different kind of entry');
+      }
+    } else if (src.isDirectory()) {
+      if (existing !== undefined && !existing.isDirectory()) {
+        capture.abandon('a copy would replace a different kind of entry');
+        return;
+      }
+      if (existing === undefined) targets.push({ kind: 'new-dir', path: dest });
+      for (const name of await fsReaddir(source)) {
+        await walk(join(source, name), join(dest, name), existing === undefined);
+        if (capture.unavailableReason() !== undefined) return;
+      }
+    } else {
+      capture.abandon('cannot capture a non-regular entry');
+    }
+  };
+  try {
+    await walk(validSource, validDest, false);
+  } catch {
+    capture.abandon('could not read the copy destination');
+  }
+  return capture.unavailableReason() === undefined ? targets : [];
+}
+
+/** After the copy: push the records that undo `targets`, each file hashed as it landed. */
+export async function recordCopyUndo(
+  capture: PathCapture,
+  fs: GuardedFileSystem,
+  targets: readonly CopyTarget[],
+): Promise<void> {
+  try {
+    for (const target of targets) {
+      if (target.kind === 'new-dir') {
+        capture.push({ op: 'rmdir', path: target.path });
+      } else {
+        const expect = await hashFile(fs, target.path);
+        capture.push(
+          target.kind === 'new-file'
+            ? { op: 'remove', path: target.path, expect }
+            : { op: 'write', path: target.path, ...target.saved, expect },
+        );
+      }
+    }
+  } catch {
+    capture.abandon('could not read the copied files');
+  }
+}
+
 /**
  * A directory may go back only if every entry keeps its sensitive-file status,
  * as the move tool requires (`PathGuard.relocationKeepsProtection`): something
@@ -575,7 +658,7 @@ export interface RestoreOutcome {
 }
 
 /** sha256 of a file's current bytes, streamed so a huge file still hashes. */
-async function hashFile(
+export async function hashFile(
   fs: GuardedFileSystem,
   path: string,
   signal?: AbortSignal,
