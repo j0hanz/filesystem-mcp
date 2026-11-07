@@ -254,7 +254,6 @@ line re-read by the advisor):
 - Windows-specific PathGuard tests: the CI matrix runs the whole suite on
   Windows and the platform-conditional tests (027, 030, aliased-root) exist.
 - HTTP 413/415 "untested": both are pinned in `http-server.test.ts:97,275`.
-  Only `FS_TRUST_PROXY` lacks an end-to-end test (backlog below).
 - Structural/AST search tool (direction): ungrounded — no issue, doc or
   TODO asks for it.
 
@@ -442,11 +441,9 @@ From the 2026-09-28 deep audit at `4d751c94` (not selected):
   with per-file `mtime`/`size` validation. Plan 044 makes a load slightly
   dearer, which is the argument for this. Effort M, risk MED (stale rules
   change what a walk exposes).
-- **`FS_TRUST_PROXY` rate-limit keying and `index.ts` shutdown sequencing
-  have no end-to-end tests** (grep: zero hits for `FS_TRUST_PROXY`,
-  `SIGTERM`, `shutdown` in `__tests__/`). A trust-proxy test needs a real
-  request with `X-Forwarded-For` through `bootHttpTest`; a shutdown test
-  needs a child process (Windows has no signals — use stdin EOF). Effort M.
+- **`index.ts` shutdown sequencing has no end-to-end test** (grep: zero
+  hits for `SIGTERM`, `shutdown` in `__tests__/`). A shutdown test needs a
+  child process (Windows has no signals — use stdin EOF). Effort M.
 - **`ResourceStore` byte-budget/TTL eviction has no direct test**
   (`store.ts:94-110`; `TC-FUNC-058..060A` cover put/get only) and the class
   takes no `now` injection unlike `PageSnapshotStore`. Effort S.

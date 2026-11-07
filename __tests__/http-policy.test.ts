@@ -754,7 +754,7 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(resolveTrustProxySetting(''), undefined);
       assert.strictEqual(resolveTrustProxySetting('   '), undefined);
       assert.strictEqual(resolveTrustProxySetting(undefined), undefined);
-      for (const bad of ['0', '1', '2', ' 1 ', 'true', 'TRUE', 'false']) {
+      for (const bad of ['0', '1', '2', ' 1 ', 'Infinity', '-Infinity', 'true', 'TRUE', 'false']) {
         assert.throws(
           () => resolveTrustProxySetting(bad),
           fsErrorMatcher(ErrorCode.INVALID_INPUT, /no longer accepts a hop count/),

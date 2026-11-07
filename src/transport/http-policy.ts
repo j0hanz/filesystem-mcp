@@ -167,7 +167,7 @@ export function resolveAllowedHosts(
 export function resolveTrustProxySetting(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
-  if (Number.isFinite(Number(trimmed)) || /^(true|false)$/i.test(trimmed)) {
+  if (!Number.isNaN(Number(trimmed)) || /^(true|false)$/i.test(trimmed)) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
       `FS_TRUST_PROXY no longer accepts a hop count or true/false ('${trimmed}'): a hop count trusts X-Forwarded-For from any client that connects. Set it to your proxy's address instead, for example FS_TRUST_PROXY=loopback or FS_TRUST_PROXY=10.0.0.5. Unset it if no proxy sits in front.`,
