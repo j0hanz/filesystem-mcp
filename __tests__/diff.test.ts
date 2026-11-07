@@ -160,6 +160,36 @@ describe('core/diff', () => {
     );
     assert.ok(out.every((p) => p !== undefined));
   });
+
+  it('a few very long lines still leave the event loop free', async () => {
+    // Under the line threshold, but megabytes of text: the byte gate must catch it.
+    const long = (tag: string) =>
+      Array.from({ length: 400 }, (_, i) => `${'x'.repeat(20_000)}${tag}${String(i)}`).join('\n');
+    const a = long('a');
+    const b = long('b');
+    let maxGap = 0;
+    let last = performance.now();
+    const tick = setInterval(() => {
+      const now = performance.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 10);
+    const patch = unifiedPatch('f', a, b);
+    maxGap = Math.max(maxGap, performance.now() - last);
+    await patch;
+    clearInterval(tick);
+    assert.ok(maxGap < 100, `event loop blocked ${maxGap.toFixed(0)} ms`);
+  });
+
+  it('a burst past the worker queue cap gives up at once', async () => {
+    // Four worker diffs may be pending; the rest degrade instead of holding their text.
+    const out = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        unifiedPatch('f', lines(`a${String(i)}-`, 600), lines(`b${String(i)}-`, 600)),
+      ),
+    );
+    assert.strictEqual(out.filter((p) => p === undefined).length, 4);
+  });
 });
 
 describe('non-ASCII names in every diff header', () => {

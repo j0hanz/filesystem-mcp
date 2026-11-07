@@ -101,6 +101,25 @@ describe('Built artifact (dist/index.js, the npm bin)', () => {
     }
   });
 
+  it('DIST-005: a diff big enough for the worker loads it from dist/', async (t) => {
+    if (!built) return t.skip('dist/ is not built');
+    // Over the inline threshold: a missing dist/core/diff-worker.js would answer TOO_LARGE.
+    const body = (tag: string) =>
+      Array.from({ length: 600 }, (_, i) => `${tag}${String(i)}`).join('\n') + '\n';
+    const a = await writeTestFile(tmpDir, 'dist-diff-a.txt', body('a'));
+    const b = await writeTestFile(tmpDir, 'dist-diff-b.txt', body('b'));
+    const harness = await createStdioClient(tmpDir, {}, [], 'dist');
+    try {
+      const result = await harness.client.callTool({ name: 'diff', arguments: { a, b } });
+      assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+      const meta = result._meta as { linesAdded?: number; linesRemoved?: number };
+      assert.strictEqual(meta.linesAdded, 600);
+      assert.strictEqual(meta.linesRemoved, 600);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('DIST-004: the public ./transport export resolves and exposes both starters', async (t) => {
     if (!built) return t.skip('dist/ is not built');
     // A self-reference resolves through package.json `exports`, so this fails

@@ -39,7 +39,15 @@ const WORKER_URL = new URL(
   import.meta.url,
 );
 
+/** Characters in both sides at or under which a diff runs inline: long lines cost too. */
+const INLINE_DIFF_MAX_CHARS = 64 * 1024;
+
+// Worker diffs pending at once, running or queued; each holds both texts.
+const MAX_PENDING_WORKER_DIFFS = 4;
+let pendingWorkerDiffs = 0;
+
 function overInlineLimit(before: string, after: string): boolean {
+  if (before.length + after.length > INLINE_DIFF_MAX_CHARS) return true;
   let count = 2;
   for (const text of [before, after]) {
     for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) {
@@ -52,29 +60,46 @@ function overInlineLimit(before: string, after: string): boolean {
 /** Runs one structuredPatch in a worker; `undefined` on its deadline, a crash, or the kill timer. */
 function patchInWorker(request: DiffWorkerRequest): Promise<StructuredPatch | undefined> {
   return new Promise((resolve) => {
-    const worker = new Worker(WORKER_URL);
+    let worker: Worker | undefined;
     let settled = false;
     const finish = (patch: StructuredPatch | undefined): void => {
       if (settled) return;
       settled = true;
       clearTimeout(kill);
       resolve(patch);
-      void worker.terminate();
+      void worker?.terminate();
     };
     const kill = setTimeout(() => {
       finish(undefined);
     }, request.options.timeout + WORKER_KILL_GRACE_MS);
-    worker.once('message', (patch: StructuredPatch | null) => {
-      finish(patch ?? undefined);
-    });
-    worker.once('error', () => {
+    try {
+      worker = new Worker(WORKER_URL);
+      worker.once('message', (patch: StructuredPatch | null) => {
+        finish(patch ?? undefined);
+      });
+      worker.once('error', () => {
+        finish(undefined);
+      });
+      worker.once('exit', () => {
+        finish(undefined);
+      });
+      worker.postMessage(request);
+    } catch {
+      // A worker that cannot start degrades like one past its deadline.
       finish(undefined);
-    });
-    worker.once('exit', () => {
-      finish(undefined);
-    });
-    worker.postMessage(request);
+    }
   });
+}
+
+/** One worker diff through the queue; `undefined` at once when the queue is full. */
+async function queuedWorkerPatch(request: DiffWorkerRequest): Promise<StructuredPatch | undefined> {
+  if (pendingWorkerDiffs >= MAX_PENDING_WORKER_DIFFS) return undefined;
+  pendingWorkerDiffs++;
+  try {
+    return await runExclusive(DIFF_WORKER_KEY, () => patchInWorker(request));
+  } finally {
+    pendingWorkerDiffs--;
+  }
 }
 
 /**
@@ -101,9 +126,7 @@ export async function twoFilesPatch(
   options: { context?: number; timeout: number },
 ): Promise<string | undefined> {
   const patch = overInlineLimit(before, after)
-    ? await runExclusive(DIFF_WORKER_KEY, () =>
-        patchInWorker({ oldName, newName, before, after, oldHeader, newHeader, options }),
-      )
+    ? await queuedWorkerPatch({ oldName, newName, before, after, oldHeader, newHeader, options })
     : structuredPatch(oldName, newName, before, after, oldHeader, newHeader, options);
   if (patch === undefined) return undefined;
   const shownOld = headerName(oldName);

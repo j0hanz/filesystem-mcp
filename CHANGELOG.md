@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Big diffs no longer stall the server** ([GHSA-9p5w-jvxw-wrcg](https://github.com/j0hanz/filesystem-mcp/security/advisories/GHSA-9p5w-jvxw-wrcg)). A diff of two large, mostly different files held the event loop for up to 1 s, and a stream of them kept every other client waiting. Diffs over 1000 lines now run in a worker thread, one at a time, and other requests are served meanwhile. Results are unchanged.
+- **Big diffs no longer stall the server** ([GHSA-9p5w-jvxw-wrcg](https://github.com/j0hanz/filesystem-mcp/security/advisories/GHSA-9p5w-jvxw-wrcg)). A diff of two large, mostly different files held the event loop for up to 1 s, and a stream of them kept every other client waiting. Diffs over 1000 lines or 64 KiB now run in a worker thread, one at a time, and other requests are served meanwhile. When four big diffs are already waiting, a further one is skipped the way a diff past its deadline is: `diff` answers "too large", and `edit`, `patch` and `replace_text` leave out the preview.
 
 ## [2.19.0] - 2026-11-06
 
