@@ -244,6 +244,31 @@ describe('UndoCapture via GuardedFileSystem', () => {
     assert.strictEqual(rec.expect, sha256Hex('abcdef'));
   });
 
+  it('append when a concurrent writer creates the file after lstat abandons capture instead of recording remove', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const file = join(tmpDir, 'concurrent-append.txt');
+    const cap = capture();
+    let checks = 0;
+    // Line 952 calls signal.throwIfAborted() right after fsLstat saw ENOENT and right before fsOpen(O_CREAT|O_EXCL).
+    const signal = {
+      aborted: false,
+      throwIfAborted() {
+        if (++checks === 1) writeFileSync(file, 'concurrent-data');
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+    const fs = makeFs(cap);
+    await fs.appendFile(file, '-appended', { signal });
+    assert.strictEqual(await readFile(file, 'utf8'), 'concurrent-data-appended');
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'concurrent-append.txt: file was created concurrently',
+    );
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
+  });
+
   it('mkdir -p a/b/c pushes 3 rmdir, top-down', async () => {
     await mkdir(join(tmpDir, 'deep'), { recursive: true });
     const cap = capture();
