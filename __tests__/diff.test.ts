@@ -182,12 +182,13 @@ describe('core/diff', () => {
   });
 
   it('a burst past the worker queue cap gives up at once', async () => {
-    // Four worker diffs may be pending; the rest degrade instead of holding their text.
+    // Sixteen worker diffs may be pending (matching PARALLEL_CONCURRENCY); the rest degrade instead of holding their text.
     const out = await Promise.all(
-      Array.from({ length: 8 }, (_, i) =>
+      Array.from({ length: 20 }, (_, i) =>
         unifiedPatch('f', lines(`a${String(i)}-`, 600), lines(`b${String(i)}-`, 600)),
       ),
     );
+    assert.strictEqual(out.filter((p) => p !== undefined).length, 16);
     assert.strictEqual(out.filter((p) => p === undefined).length, 4);
   });
 });

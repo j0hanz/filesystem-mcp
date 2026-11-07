@@ -13,7 +13,7 @@ export interface DiffWorkerRequest {
   options: { context?: number; timeout: number };
 }
 
-parentPort?.once('message', (req: DiffWorkerRequest) => {
+parentPort?.on('message', (req: DiffWorkerRequest) => {
   const patch = structuredPatch(
     req.oldName,
     req.newName,
