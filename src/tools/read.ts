@@ -132,20 +132,24 @@ type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
 const READ_TOOL_LABEL = 'Read';
 
 function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
-  const signalPart = signal ? { signal } : {};
+  const slice = args.paths !== undefined && hasLineRange(args);
+  const base = {
+    ...(signal ? { signal } : {}),
+    ...(slice ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true } : {}),
+  };
   const { head, tail, startLine, endLine } = args;
 
-  if (head !== undefined) return { kind: 'head', lines: head, ...signalPart };
-  if (tail !== undefined) return { kind: 'tail', lines: tail, ...signalPart };
+  if (head !== undefined) return { kind: 'head', lines: head, ...base };
+  if (tail !== undefined) return { kind: 'tail', lines: tail, ...base };
   if (startLine !== undefined || endLine !== undefined) {
     return {
       kind: 'range',
       start: startLine ?? 1,
       ...(endLine !== undefined ? { end: endLine } : {}),
-      ...signalPart,
+      ...base,
     };
   }
-  return { kind: 'full', ...signalPart };
+  return { kind: 'full', ...base };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
@@ -469,6 +473,14 @@ async function readOnePath(
   try {
     result = await ctx.fs.readFile(filePath, spec);
   } catch (error: unknown) {
+    if (
+      args.paths !== undefined &&
+      isRangeRead &&
+      error instanceof FsError &&
+      error.code === ErrorCode.TOO_LARGE
+    ) {
+      throw budgetSkip(filePath, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
+    }
     if (!isBinaryRefusal(error)) throw error;
     // The schema refuses binary with a range, so this is always a full read.
     if (args.binary) return await readBinaryResource(filePath, args, ctx);
@@ -546,24 +558,35 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
                 binary: args.binary,
               },
             );
-    let charged = 0;
     const { results: ordered, summary } = await runOverPaths(
       items,
       ctx,
       ErrorCode.NOT_FILE,
       async ({ path, skip }) => {
         if (skip) throw skip;
-        const value = await readOnePath(path, args, ctx);
-        if (!slice) return value;
-        // A slice's cost is known only once read; charged in completion order, so memory stays bounded.
-        const size = Buffer.byteLength(value.content ?? '', 'utf8');
-        if (charged + size > READ_MANY_MAX_TOTAL_BYTES) {
-          throw budgetSkip(path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
-        }
-        charged += size;
-        return value;
+        return readOnePath(path, args, ctx);
       },
     );
+    if (slice) {
+      // Charge slice bytes deterministically in input path order; each individual
+      // slice read is already hard-capped at READ_MANY_MAX_TOTAL_BYTES above.
+      let charged = 0;
+      for (let i = 0; i < ordered.length; i++) {
+        const entry = ordered[i];
+        if (!entry || 'error' in entry) continue;
+        const size = Buffer.byteLength(entry.value.content ?? '', 'utf8');
+        if (charged + size > READ_MANY_MAX_TOTAL_BYTES) {
+          ordered[i] = {
+            path: entry.path,
+            error: budgetSkip(entry.path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION).problem,
+          };
+          summary.succeeded -= 1;
+          summary.failed += 1;
+        } else {
+          charged += size;
+        }
+      }
+    }
 
     const resources: ContentBlock[] = [];
     for (const result of ordered) {

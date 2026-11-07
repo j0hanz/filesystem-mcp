@@ -37,14 +37,21 @@ export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promi
   return buffer.subarray(0, bytesRead);
 }
 
+interface ReadSpecBase {
+  signal?: AbortSignal;
+  maxSize?: number;
+  hardCap?: boolean;
+}
+
 export type ReadSpec =
-  | { kind: 'full'; signal?: AbortSignal }
-  | { kind: 'head'; lines: number; signal?: AbortSignal }
-  | { kind: 'tail'; lines: number; signal?: AbortSignal }
-  | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
+  | ({ kind: 'full' } & ReadSpecBase)
+  | ({ kind: 'head'; lines: number } & ReadSpecBase)
+  | ({ kind: 'tail'; lines: number } & ReadSpecBase)
+  | ({ kind: 'range'; start: number; end?: number } & ReadSpecBase);
 
 interface ReadOptions {
   maxSize: number;
+  hardCap?: boolean;
   signal?: AbortSignal;
 }
 
@@ -280,6 +287,9 @@ async function readRangeContent(
       // join('\n') puts a separator only between lines, so the first costs none.
       const lineBytes = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? newlineBytes : 0);
       if (lines.length > 0 && estimatedBytes + lineBytes > options.maxSize) {
+        if (options.hardCap) {
+          throw createTooLargeError(estimatedBytes + lineBytes, options.maxSize, filePath);
+        }
         hasMoreLines = true;
         break;
       }
@@ -288,6 +298,9 @@ async function readRangeContent(
 
       estimatedBytes += lineBytes;
       if (estimatedBytes > options.maxSize) {
+        if (options.hardCap) {
+          throw createTooLargeError(estimatedBytes, options.maxSize, filePath);
+        }
         hasMoreLines = await peekHasMore(iterator);
         break;
       }
@@ -407,6 +420,12 @@ async function readTailContent(
   }
 
   const content = lines.join('\n');
+  if (options.hardCap) {
+    const contentBytes = Buffer.byteLength(content, encoding);
+    if (contentBytes > options.maxSize) {
+      throw createTooLargeError(contentBytes, options.maxSize, filePath);
+    }
+  }
   return {
     content,
     linesRead: lines.length,
@@ -533,7 +552,8 @@ export async function readFileWithStats(
   openVerified: () => Promise<FileHandle>,
 ): Promise<ReadFileResult> {
   const options: ReadOptions = {
-    maxSize: getMaxTextFileSize(),
+    maxSize: spec.maxSize ?? getMaxTextFileSize(),
+    ...(spec.hardCap ? { hardCap: true } : {}),
     ...(spec.signal ? { signal: spec.signal } : {}),
   };
   spec.signal?.throwIfAborted();

@@ -8,6 +8,7 @@ import type * as z from 'zod/v4';
 
 import { NO_GRANT_SUGGESTION, OUTSIDE_ROOTS_SUGGESTION } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { READ } from '../src/tools/index.ts';
@@ -288,27 +289,68 @@ describe('read body', () => {
     assert.match(result.text ?? '', /\/\/ .*big\.txt\nx/);
   });
 
-  it('batch slices over budget skip one slice without head/tail advice', async () => {
-    // Each head: 1 returns one 300 KiB line; two of them pass 512 KiB.
+  it('batch slices over budget deterministically skip the later slice in input order', async () => {
     const line = 'y'.repeat(300 * 1024);
     const a = await writeTestFile(root, 'read-budget/a.txt', `${line}\nrest\n`);
     const b = await writeTestFile(root, 'read-budget/b.txt', `${line}\nrest\n`);
     const c = await writeTestFile(root, 'read-budget/c.txt', 'tiny\nrest\n');
-    const result = await read({ paths: [a, b, c], head: 1 }, { guard });
+    const delayedFs = new (class extends GuardedFileSystem {
+      override async readFile(
+        filePath: string,
+        spec: Parameters<GuardedFileSystem['readFile']>[1],
+      ): ReturnType<GuardedFileSystem['readFile']> {
+        if (filePath === a) {
+          await new Promise((resolve) => setTimeout(resolve, 15));
+        }
+        return super.readFile(filePath, spec);
+      }
+    })(guard);
+    const result = await read({ paths: [a, b, c], head: 1 }, { guard, fs: delayedFs });
     assert.strictEqual(result.isError, false);
     const errors = result.structured.results.map((r) => errorOf(r));
     assert.strictEqual(errors.length, 3);
-    // Charged in completion order: either a or b is skipped, never both; c always fits.
-    assert.strictEqual(errors[2], undefined);
-    const skipped = errors.filter((e) => e !== undefined);
-    assert.strictEqual(skipped.length, 1);
-    assert.strictEqual(skipped[0]?.code, 'TOO_LARGE');
-    assert.match(skipped[0]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
+    assert.strictEqual(errors[0], undefined, 'first path in input order must be kept');
+    assert.strictEqual(errors[1]?.code, 'TOO_LARGE', 'second path exceeding budget must be skipped');
+    assert.match(errors[1]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
     assert.strictEqual(
-      skipped[0]?.suggestion,
+      errors[1]?.suggestion,
       'Read it on its own with path, or ask for fewer lines.',
     );
+    assert.strictEqual(
+      errors[2],
+      undefined,
+      'third smaller path that fits remaining budget must be kept',
+    );
     assert.strictEqual(result.structured.summary.failed, 1);
+  });
+
+  it('batch slice on a file with a 2 MiB single line stops reading at maxTotalSize instead of buffering whole line', async () => {
+    const hugeLine = 'z'.repeat(2 * 1024 * 1024);
+    const huge = await writeTestFile(root, 'read-budget/huge-line.txt', `${hugeLine}\n`);
+    const small = await writeTestFile(root, 'read-budget/small-after.txt', 'ok\n');
+    const controller = new AbortController();
+    let abortChecks = 0;
+    controller.signal.throwIfAborted = () => {
+      abortChecks++;
+    };
+    const result = await read(
+      { paths: [huge, small], tail: 1 },
+      { guard, signal: controller.signal },
+    );
+    assert.strictEqual(result.isError, false);
+    const errors = result.structured.results.map((r) => errorOf(r));
+    assert.strictEqual(errors[0]?.code, 'TOO_LARGE');
+    assert.match(errors[0]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
+    assert.strictEqual(
+      errors[0]?.suggestion,
+      'Read it on its own with path, or ask for fewer lines.',
+    );
+    assert.strictEqual(errors[1], undefined);
+    // 2 MiB is 32 chunks of 64 KiB; stopping at 512 KiB reads only 9 chunks (~18 abort checks total).
+    assert.ok(
+      abortChecks < 25,
+      `expected tail slice to stop reading past 512 KiB, but throwIfAborted was called ${String(abortChecks)} times`,
+    );
   });
 
   it('reads a path outside the allowed root as ACCESS_DENIED (#TC-FUNC-007)', async () => {
