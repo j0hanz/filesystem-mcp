@@ -363,7 +363,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   description:
     'Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. ' +
     "A non-empty directory needs recursive: true and the user's confirmation. " +
-    'undo reverts a delete whose result gives an undo id. Use move to relocate a path instead.',
+    'Returns { path, deleted } per path and an undo id for undo. Use move to relocate a path instead.',
   input: DeleteInputSchema,
   readOnlyHint: false,
   progress: (args) => ({
