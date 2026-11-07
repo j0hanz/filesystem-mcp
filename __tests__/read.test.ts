@@ -357,6 +357,18 @@ describe('read body', () => {
     );
   });
 
+  it('batch tail slice accepts an exact-budget newline-terminated file', async () => {
+    const exactLine = 'x'.repeat(512 * 1024);
+    const exactFile = await writeTestFile(root, 'read-budget/exact-tail.txt', `${exactLine}\n`);
+    const result = await read({ paths: [exactFile], tail: 1 }, { guard });
+    assert.strictEqual(result.isError, false);
+    assert.strictEqual(errorOf(result.structured.results[0]), undefined);
+    const val = valueOf(result.structured.results[0]);
+    assert.strictEqual(val?.linesRead, 1);
+    assert.strictEqual(val?.hasMoreLines, undefined);
+    assert.doesNotMatch(result.text ?? '', /more lines above|truncated/);
+  });
+
   it('reads a path outside the allowed root as ACCESS_DENIED (#TC-FUNC-007)', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');

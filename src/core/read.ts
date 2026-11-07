@@ -388,16 +388,8 @@ async function readTailContent(
     chunks.push(kept);
     totalLen += kept.length;
 
-    if (totalLen > options.maxSize) {
-      if (newlines < neededNewlines) {
-        throw createTooLargeError(totalLen, options.maxSize, filePath, {
-          label: `could not collect ${tail} lines`,
-          suggestion: 'Use a narrower tail or head.',
-        });
-      }
-      if (options.hardCap && totalLen - newlines - 2 > options.maxSize) {
-        throw createTooLargeError(totalLen, options.maxSize, filePath);
-      }
+    const effectiveBytes = totalLen - (endsWithLf ? 1 : 0) - (sliceStart > 0 ? 1 : 0);
+    if (position > 0 && effectiveBytes > options.maxSize) {
       stoppedByLimit = true;
       break;
     }
@@ -422,13 +414,6 @@ async function readTailContent(
     lines = lines.slice(1);
   }
 
-  if (stoppedByLimit && lines.length < tail) {
-    throw createTooLargeError(totalLen, options.maxSize, filePath, {
-      label: `could not collect ${tail} lines`,
-      suggestion: 'Use a narrower tail or head.',
-    });
-  }
-
   let hasMoreLines = stoppedByLimit || position > 0;
   if (lines.length > tail) {
     hasMoreLines = true;
@@ -436,11 +421,15 @@ async function readTailContent(
   }
 
   const content = lines.join('\n');
-  if (options.hardCap) {
-    const contentBytes = Buffer.byteLength(content, encoding);
-    if (contentBytes > options.maxSize) {
-      throw createTooLargeError(contentBytes, options.maxSize, filePath);
-    }
+  const contentBytes = Buffer.byteLength(content, encoding);
+  if ((stoppedByLimit || contentBytes > options.maxSize) && lines.length < tail) {
+    throw createTooLargeError(totalLen, options.maxSize, filePath, {
+      label: `could not collect ${tail} lines`,
+      suggestion: 'Use a narrower tail or head.',
+    });
+  }
+  if (options.hardCap && contentBytes > options.maxSize) {
+    throw createTooLargeError(contentBytes, options.maxSize, filePath);
   }
   return {
     content,
