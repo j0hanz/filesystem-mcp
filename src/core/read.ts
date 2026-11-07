@@ -369,23 +369,39 @@ async function readTailContent(
       endsWithLf = buffer[bytesRead - 1] === LF;
     }
 
-    for (const byte of buffer) {
-      if (byte === LF) newlines++;
-    }
-
-    chunks.push(buffer);
-    totalLen += chunkSize;
-
     // A trailing LF produces an empty final segment after split('\n'), so a
     // newline-terminated file needs `tail + 1` LFs while an unterminated file
     // needs `tail` LFs; the oldest partial segment before the first LF is
     // dropped below whenever `position > 0`.
     const neededNewlines = endsWithLf ? tail + 1 : tail;
-    if (newlines >= neededNewlines) break;
+    let sliceStart = 0;
+    for (let i = bytesRead - 1; i >= 0; i--) {
+      if (buffer[i] === LF && ++newlines === neededNewlines) {
+        sliceStart = i;
+        position += i;
+        break;
+      }
+    }
+
+    const kept =
+      sliceStart > 0 ? buffer.subarray(sliceStart, bytesRead) : buffer.subarray(0, bytesRead);
+    chunks.push(kept);
+    totalLen += kept.length;
+
     if (totalLen > options.maxSize) {
+      if (newlines < neededNewlines) {
+        throw createTooLargeError(totalLen, options.maxSize, filePath, {
+          label: `could not collect ${tail} lines`,
+          suggestion: 'Use a narrower tail or head.',
+        });
+      }
+      if (options.hardCap && totalLen - newlines - 2 > options.maxSize) {
+        throw createTooLargeError(totalLen, options.maxSize, filePath);
+      }
       stoppedByLimit = true;
       break;
     }
+    if (newlines >= neededNewlines) break;
   }
 
   chunks.reverse();

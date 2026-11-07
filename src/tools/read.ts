@@ -544,7 +544,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const slice = args.paths !== undefined && hasLineRange(args);
-    const items: BudgetItem[] =
+    const rawItems: BudgetItem[] =
       args.paths === undefined
         ? [{ path: args.path ?? '' }]
         : slice
@@ -558,35 +558,53 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
                 binary: args.binary,
               },
             );
+    const items = rawItems.map((item, index) => ({ ...item, index }));
+    let charged = 0;
+    let nextToCharge = 0;
+    const waiters = new Map<number, () => void>();
+    const waitForTurn = (index: number): Promise<void> =>
+      nextToCharge === index
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            waiters.set(index, resolve);
+          });
+    const advanceTurn = (): void => {
+      nextToCharge += 1;
+      const wake = waiters.get(nextToCharge);
+      if (wake) {
+        waiters.delete(nextToCharge);
+        wake();
+      }
+    };
     const { results: ordered, summary } = await runOverPaths(
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      async ({ path, skip }) => {
-        if (skip) throw skip;
-        return readOnePath(path, args, ctx);
+      async ({ path, skip, index }) => {
+        let value: PerPathReadValue | undefined;
+        try {
+          if (skip) throw skip;
+          value = await readOnePath(path, args, ctx);
+        } finally {
+          if (slice) {
+            await waitForTurn(index);
+            if (value !== undefined) {
+              const size = Buffer.byteLength(value.content ?? '', 'utf8');
+              if (charged + size <= READ_MANY_MAX_TOTAL_BYTES) {
+                charged += size;
+              } else {
+                value = undefined;
+              }
+            }
+            advanceTurn();
+          }
+        }
+        if (value === undefined) {
+          throw budgetSkip(path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
+        }
+        return value;
       },
     );
-    if (slice) {
-      // Charge slice bytes deterministically in input path order; each individual
-      // slice read is already hard-capped at READ_MANY_MAX_TOTAL_BYTES above.
-      let charged = 0;
-      for (let i = 0; i < ordered.length; i++) {
-        const entry = ordered[i];
-        if (!entry || 'error' in entry) continue;
-        const size = Buffer.byteLength(entry.value.content ?? '', 'utf8');
-        if (charged + size > READ_MANY_MAX_TOTAL_BYTES) {
-          ordered[i] = {
-            path: entry.path,
-            error: budgetSkip(entry.path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION).problem,
-          };
-          summary.succeeded -= 1;
-          summary.failed += 1;
-        } else {
-          charged += size;
-        }
-      }
-    }
 
     const resources: ContentBlock[] = [];
     for (const result of ordered) {

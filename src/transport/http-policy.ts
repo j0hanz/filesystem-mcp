@@ -406,10 +406,10 @@ export function createRateLimiter(
       if (bucket) {
         buckets.delete(ip);
       } else if (buckets.size >= maxBuckets) {
+        // Buckets stay in ascending windowStart order; stop at the first active window.
         for (const [trackedIp, trackedBucket] of buckets) {
-          if (now - trackedBucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
-            buckets.delete(trackedIp);
-          }
+          if (now - trackedBucket.windowStart < RATE_LIMIT_WINDOW_MS) break;
+          buckets.delete(trackedIp);
         }
         if (buckets.size >= maxBuckets) {
           const oldest = buckets.keys().next().value;

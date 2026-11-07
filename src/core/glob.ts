@@ -1,4 +1,3 @@
-import { lstatSync, readFileSync } from 'node:fs';
 import {
   glob as fsGlob,
   readdir as fsReaddir,
@@ -10,6 +9,7 @@ import { dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path'
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
+import { processInParallel } from './concurrency.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -241,6 +241,29 @@ export function isSafeGlobSyntax(pattern: string): boolean {
 
 /** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
 const MAX_GITIGNORE_BYTES = MIB;
+const GLOB_BATCH_CONCURRENCY = 64;
+
+async function readGitignoreMatcher(
+  absPath: string,
+  signal?: AbortSignal,
+): Promise<Ignore | undefined> {
+  try {
+    // lstat, not stat: a symlinked .gitignore may point at a device, a
+    // FIFO or a huge file outside the root. Only a plain, small file is a
+    // rule set worth reading.
+    const info = await lstat(absPath);
+    if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) return undefined;
+    const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
+    return ignore().add(contents);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    rethrowIfAborted(error);
+    if (!isNotFoundErrno(error)) {
+      Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
+    }
+    return undefined;
+  }
+}
 
 /**
  * Load `.gitignore` from each ancestor of `root` up to and including `ceiling`,
@@ -277,6 +300,7 @@ async function loadAncestorGitignores(
       if (matcher.test(`${prefix}/`).ignored) continue;
       manager.addAncestorMatcher(prefix, matcher);
     } catch (error) {
+      if (signal?.aborted) throw error;
       rethrowIfAborted(error);
       // ENOENT is the normal case (no .gitignore at this level); anything else is not worth a warning per walk
     }
@@ -284,85 +308,81 @@ async function loadAncestorGitignores(
 }
 
 class GitignoreManager {
-  private readonly root: string;
-  private readonly includeHidden: boolean;
-  private readonly maxDepth: number | undefined;
-  private matchers = new Map<string, Ignore | null>();
+  private matchers = new Map<string, Ignore>();
   /** Rules from directories above the walk root, farthest first; `prefix` re-bases a walk-relative path to that directory. */
   private ancestors: { prefix: string; matcher: Ignore }[] = [];
   private dirCache = new Map<string, boolean>();
 
-  constructor(root: string, includeHidden: boolean, maxDepth?: number) {
-    this.root = resolve(root);
-    this.includeHidden = includeHidden;
-    this.maxDepth = maxDepth;
+  addMatcher(dir: string, matcher: Ignore): void {
+    this.matchers.set(dir, matcher);
   }
 
   addAncestorMatcher(prefix: string, matcher: Ignore): void {
     this.ancestors.push({ prefix, matcher });
   }
 
+  /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
   static async load(
     root: string,
     includeHidden: boolean,
     signal?: AbortSignal,
     maxDepth?: number,
     ignoreCeiling?: string,
-  ): Promise<GitignoreManager> {
-    const manager = new GitignoreManager(root, includeHidden, maxDepth);
+    pathGuard?: Pick<PathGuard, 'isSensitive'>,
+  ): Promise<GitignoreManager | null> {
+    const resolvedRoot = resolve(root);
+    const manager = new GitignoreManager();
     try {
       if (ignoreCeiling !== undefined) {
-        await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
+        await loadAncestorGitignores(resolvedRoot, ignoreCeiling, manager, signal);
+      }
+      let frontier: string[] = [''];
+      for (let depth = 0; frontier.length > 0; depth++) {
+        signal?.throwIfAborted();
+        const nextFrontier: string[] = [];
+        const canDescend = maxDepth === undefined || depth < maxDepth;
+        await processInParallel(
+          frontier,
+          async (dir) => {
+            const absDir = dir === '' ? resolvedRoot : join(resolvedRoot, dir);
+            if (!canDescend) {
+              const matcher = await readGitignoreMatcher(join(absDir, '.gitignore'), signal);
+              if (matcher) manager.addMatcher(dir, matcher);
+              return;
+            }
+            const entries = await fsReaddir(absDir, { withFileTypes: true }).catch(() => undefined);
+            if (!entries) return;
+            const gitignoreEntry = entries.find(
+              (entry) => normalizeCaseForComparison(entry.name) === '.gitignore',
+            );
+            if (gitignoreEntry) {
+              const matcher = await readGitignoreMatcher(join(absDir, gitignoreEntry.name), signal);
+              if (matcher) manager.addMatcher(dir, matcher);
+            }
+            for (const entry of entries) {
+              if (!entry.isDirectory()) continue;
+              const name = entry.name;
+              if (!includeHidden && name.startsWith('.')) continue;
+              if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) continue;
+              if (pathGuard?.isSensitive(join(absDir, name))) continue;
+              const childRel = dir === '' ? name : `${dir}/${name}`;
+              if (manager.isIgnored(childRel, true)) continue;
+              nextFrontier.push(childRel);
+            }
+          },
+          GLOB_BATCH_CONCURRENCY,
+          signal,
+        );
+        frontier = nextFrontier;
       }
     } catch (error) {
+      if (signal?.aborted) throw error;
       rethrowIfAborted(error);
       Logger.warn(
-        `Failed to load ancestor .gitignore files above ${root}: ${formatUnknownErrorMessage(error)}`,
+        `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
       );
     }
-    return manager;
-  }
-
-  private getMatcher(dir: string): Ignore | null {
-    const cached = this.matchers.get(dir);
-    if (cached !== undefined) return cached;
-
-    if (dir !== '') {
-      const segments = dir.split('/');
-      if (this.maxDepth !== undefined && segments.length > this.maxDepth) {
-        this.matchers.set(dir, null);
-        return null;
-      }
-      // Search dot-directories (.venv, .terraform, ...) for rules only when the
-      // walk includes hidden entries; for any other walk, reading rules inside
-      // hidden trees would diverge from non-hidden discovery.
-      if (!this.includeHidden && segments.some((part) => part.startsWith('.'))) {
-        this.matchers.set(dir, null);
-        return null;
-      }
-    }
-
-    const absPath = dir === '' ? join(this.root, '.gitignore') : join(this.root, dir, '.gitignore');
-    try {
-      // lstat, not stat: a symlinked .gitignore may point at a device, a
-      // FIFO or a huge file outside the root. Only a plain, small file is a
-      // rule set worth reading.
-      const info = lstatSync(absPath);
-      if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) {
-        this.matchers.set(dir, null);
-        return null;
-      }
-      const contents = readFileSync(absPath, 'utf-8');
-      const matcher = ignore().add(contents);
-      this.matchers.set(dir, matcher);
-      return matcher;
-    } catch (error) {
-      if (!isNotFoundErrno(error)) {
-        Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
-      }
-      this.matchers.set(dir, null);
-      return null;
-    }
+    return manager.matchers.size === 0 && manager.ancestors.length === 0 ? null : manager;
   }
 
   isIgnored(relativePath: string, isDirectory: boolean): boolean {
@@ -406,7 +426,7 @@ class GitignoreManager {
     for (const { prefix, matcher } of this.ancestors) apply(matcher, `${prefix}/${posixPath}`);
 
     // Check root level
-    const rootMatcher = this.getMatcher('');
+    const rootMatcher = this.matchers.get('');
     if (rootMatcher) apply(rootMatcher, posixPath);
 
     // Check subdirectories
@@ -416,7 +436,7 @@ class GitignoreManager {
       const part = parts[i];
       if (!part) continue;
       currentDir = currentDir ? `${currentDir}/${part}` : part;
-      const matcher = this.getMatcher(currentDir);
+      const matcher = this.matchers.get(currentDir);
       if (matcher) apply(matcher, parts.slice(i + 1).join('/'));
     }
 
@@ -855,6 +875,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
         signal,
         maxDepth,
         options.ignoreCeiling,
+        options.pathGuard,
       )
     : null;
 
