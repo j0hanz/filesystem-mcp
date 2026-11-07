@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Paths are exact; globs are not expanded. A non-empty directory needs recursive: true and the user's confirmation. Returns { path, deleted } per path and an undo id for undo. Use move to relocate a path instead.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). Non-empty directories require recursive: true and confirmation. Set ignoreIfNotExists: true to succeed cleanly if a path is already absent. Returns { path, deleted } per path and an undo id. Use move to relocate a path instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -352,7 +352,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Each destination is the full new path, not a folder to move into; missing parent directories are created. overwrite skips the prompt for copies only; a move onto a different existing file asks, and one onto a different non-empty directory is refused. undo reverts a move or copy whose result gives an undo id. Use delete to remove a path.",
+      "description": "Move, rename, or copy files and directories, like mv or cp -r. Use when renaming paths, moving files between directories, or copying trees (copy: true). Each destination must be the full target path, not an existing directory to move into. Overwrite applies only to copies; moving onto an existing file requires confirmation. Returns moved paths and an undo id. Use delete to remove paths.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -840,7 +840,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "undo",
       "title": "Undo",
-      "description": "Revert earlier calls that changed files, by undo id or the last N calls (steps), not both. Over HTTP a revert needs an id. A file is restored only if unchanged since; the result lists file outcomes, cut short on large undos. dryRun lists the history.",
+      "description": "Revert earlier mutating tool calls by undo id or steps (last N calls), not both. Use when rolling back recent file changes. Restores a file only if unchanged since the target call; modified files are skipped with explanation. Over HTTP, an undo id is required. Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.",
       "inputSchema": {
         "type": "object",
         "properties": {
