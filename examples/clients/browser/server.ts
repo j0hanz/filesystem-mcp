@@ -100,7 +100,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     send(200, await route(JSON.parse(raw || '{}')));
   } catch (error) {
     // Thrown, not isError: unknown tool, bad URI, a file outside the roots.
-    send(500, { error: error instanceof Error ? error.message : String(error) });
+    send(500, { error: error instanceof Error ? error.message : 'Request failed' });
   }
 }
 
