@@ -132,7 +132,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   description:
     'Write whole text files (create, overwrite, or append) or make empty directories. ' +
     'Use when creating new files, replacing full contents, or creating folders. ' +
-    'Missing parent directories are created automatically. Replacing an existing file requires overwrite: true. ' +
+    'Missing parent directories are created automatically. Replacing an existing file requires overwrite: true or user confirmation. ' +
     'Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.',
   input: CreateInputSchema,
   readOnlyHint: false,

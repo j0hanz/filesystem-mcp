@@ -101,7 +101,7 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     'Revert earlier mutating tool calls by undo id or steps (last N calls), not both. ' +
     'Use when rolling back recent file changes. ' +
     'Restores a file only if unchanged since the target call; modified files are skipped with explanation. ' +
-    'Over HTTP, an undo id is required. Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.',
+    'Over HTTP, reverting requires an undo id (call with dryRun to list them). Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.',
   input: UndoInputSchema,
   readOnlyHint: false,
   noUndo: true,

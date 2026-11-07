@@ -1052,10 +1052,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // report scored delete, list, move, read and stat at Usage 4 for naming no
     // sibling, and move says a different non-empty directory target is refused;
     // diff's routing line moved nothing and was dropped; measured 23096 / 10887.
-    // Raised 2026-11-07 to 23850 full and 11150 read-only: TDQS description
+    // Raised 2026-11-07 to 23950 full and 11150 read-only: TDQS description
     // refinement adds direct "use when" routing, parameter semantics, return format descriptions,
-    // and cross-tool disambiguation; measured 23766 / 11056.
-    const BUDGET_CHARS = 23_850;
+    // and cross-tool disambiguation; measured 23870 / 11082.
+    const BUDGET_CHARS = 23_950;
     const BUDGET_CHARS_READ_ONLY = 11_150;
 
     const full = await createTestClientPair([tmpDir]);

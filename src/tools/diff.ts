@@ -30,7 +30,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     'Compare two text files and return a unified diff from a to b, like diff -u. ' +
     'Use when reviewing changes between two files. ' +
     'Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. ' +
-    'Rejects binary files and paths outside allowed roots. Use read to inspect full files or slices first.',
+    'Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.',
   input: DiffInputSchema,
   readOnlyHint: true,
   progress: (args) => ({

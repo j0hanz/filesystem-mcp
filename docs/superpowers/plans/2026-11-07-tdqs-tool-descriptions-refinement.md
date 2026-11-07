@@ -64,7 +64,7 @@ In `src/tools/diff.ts` (lines 29-31), replace description with:
     'Compare two text files and return a unified diff from a to b, like diff -u. ' +
     'Use when reviewing changes between two files. ' +
     'Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. ' +
-    'Rejects binary files and paths outside allowed roots. Use read to inspect full files or slices first.',
+    'Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.',
 ```
 
 In `src/tools/find-files.ts` (lines 94-97), replace description with:
@@ -166,7 +166,7 @@ In `src/tools/stat.ts` (lines 170-174), replace description with:
     'Get metadata without reading file contents, like ls -ld. ' +
     'Use when checking file existence, size, type, or timestamps. ' +
     'Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. ' +
-    'Symlinks return link targets without following. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. ' +
+    'Symlinks report their target after validating the path. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. ' +
     'Use read to view contents, and list to browse directories.',
 ```
 
@@ -216,7 +216,7 @@ In `src/tools/create.ts` (lines 132-135), replace description with:
   description:
     'Write whole text files (create, overwrite, or append) or make empty directories. ' +
     'Use when creating new files, replacing full contents, or creating folders. ' +
-    'Missing parent directories are created automatically. Replacing an existing file requires overwrite: true. ' +
+    'Missing parent directories are created automatically. Replacing an existing file requires overwrite: true or user confirmation. ' +
     'Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.',
 ```
 
@@ -227,7 +227,7 @@ In `src/tools/edit.ts` (lines 699-703), replace description with:
     'Edit text files in place by replacing exact oldText with newText. ' +
     'Use when changing specific unique snippets in one or more files. ' +
     'Each oldText must match exactly once; unmatched or ambiguous text fails and leaves the file untouched. ' +
-    'Returns the diff and line counts per file, plus an undo id. Use dryRun to preview. ' +
+    'Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. ' +
     'Use replace_text for multiple occurrences or regex, patch to apply unified diffs, and create for new files.',
 ```
 
@@ -238,7 +238,7 @@ In `src/tools/patch.ts` (lines 64-68), replace description with:
     'Apply a single-file unified diff to an existing text file, like git apply. ' +
     'Use when applying diffs produced by diff tools or git. ' +
     'Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. ' +
-    'Returns applied hunk counts, lines changed, and an undo id. Use dryRun to test applicability cleanly. ' +
+    'Returns lines added and removed, plus an undo id. Use dryRun to test applicability cleanly. ' +
     'Use edit for unique snippet replacements, and replace_text for regex across files.',
 ```
 
@@ -319,7 +319,7 @@ In `src/tools/undo.ts` (lines 100-102), replace description with:
     'Revert earlier mutating tool calls by undo id or steps (last N calls), not both. ' +
     'Use when rolling back recent file changes. ' +
     'Restores a file only if unchanged since the target call; modified files are skipped with explanation. ' +
-    'Over HTTP, an undo id is required. Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.',
+    'Over HTTP, reverting requires an undo id (call with dryRun to list them). Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.',
 ```
 
 - [ ] **Step 2: Update contract snapshots and verify tests**
