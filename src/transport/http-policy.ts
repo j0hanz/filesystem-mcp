@@ -156,17 +156,24 @@ export function resolveAllowedHosts(
 }
 
 /**
- * Express's `trust proxy` setting from `FS_TRUST_PROXY`. A
- * non-negative integer hop count parses to a number (Express counts hops from
- * the socket); anything else (a subnet name/expression, or a negative/
- * non-integer string) passes through unchanged for Express to interpret.
- * `undefined` means the env var was unset or empty — leave Express's default
- * (disabled) in place.
+ * Express's `trust proxy` setting from `FS_TRUST_PROXY`: the reverse proxy's
+ * address (IP, CIDR, comma list, or an Express name such as `loopback`),
+ * passed through for Express to compile. Hop counts and true/false are
+ * refused: they trust `X-Forwarded-For` from whatever peer connects, so a
+ * client reaching the server directly could forge its IP and get a fresh
+ * rate-limit bucket per request (GHSA-f423-gwmw-6wwh). `undefined` means the
+ * env var was unset or blank — leave Express's default (disabled) in place.
  */
-export function resolveTrustProxySetting(value: string | undefined): number | string | undefined {
-  if (!value) return undefined;
-  const hops = Number(value);
-  return Number.isInteger(hops) && hops >= 0 ? hops : value;
+export function resolveTrustProxySetting(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (Number.isFinite(Number(trimmed)) || /^(true|false)$/i.test(trimmed)) {
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      `FS_TRUST_PROXY no longer accepts a hop count or true/false ('${trimmed}'): a hop count trusts X-Forwarded-For from any client that connects. Set it to your proxy's address instead, for example FS_TRUST_PROXY=loopback or FS_TRUST_PROXY=10.0.0.5. Unset it if no proxy sits in front.`,
+    );
+  }
+  return trimmed;
 }
 
 /**

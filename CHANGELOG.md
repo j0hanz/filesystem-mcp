@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **`FS_TRUST_PROXY` no longer accepts a hop count** ([GHSA-f423-gwmw-6wwh](https://github.com/j0hanz/filesystem-mcp/security/advisories/GHSA-f423-gwmw-6wwh)). A hop count let a client that reached the server directly forge `X-Forwarded-For` and skip the per-IP rate limit. Replace `FS_TRUST_PROXY=1` with your proxy's address, such as `loopback`. The server now refuses to start with a hop count or `true`/`false`.
+
 ## [2.19.0] - 2026-11-06
 
 Copies that can be undone, a structured error on failed calls, and failure

@@ -641,12 +641,20 @@ describe('FS_TRUST_PROXY wiring', () => {
     return statuses;
   };
 
-  it('FS_TRUST_PROXY gives each forwarded client its own limit', async () => {
-    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: '1' });
+  it('FS_TRUST_PROXY naming the peer gives each forwarded client its own limit', async () => {
+    // The test client on 127.0.0.1 plays the proxy.
+    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: 'loopback' });
     const statuses = await forwardedStatuses();
     assert.ok(!statuses.includes(429), `statuses: ${statuses.join(',')}`);
     // Each client spent its own single request, so the limiter ran for both.
     assert.deepStrictEqual(await forwardedStatuses(), [429, 429]);
+  });
+
+  it('FS_TRUST_PROXY ignores a forged header from a peer that is not the proxy', async () => {
+    // GHSA-f423-gwmw-6wwh: a direct client must not pick its own bucket.
+    http = await bootHttpTest([root], { FS_RATE_LIMIT_RPM: '1', FS_TRUST_PROXY: '10.9.9.9' });
+    const statuses = await forwardedStatuses();
+    assert.strictEqual(statuses[1], 429, `statuses: ${statuses.join(',')}`);
   });
 
   it('without FS_TRUST_PROXY the header is ignored', async () => {

@@ -746,14 +746,21 @@ describe('HTTP Policy & Security', () => {
       assert.deepStrictEqual(splitCsvList(' , '), []);
     });
 
-    it('resolveTrustProxySetting parses integer hops or passes through string expressions', () => {
-      assert.strictEqual(resolveTrustProxySetting('1'), 1);
-      assert.strictEqual(resolveTrustProxySetting('2'), 2);
-      assert.strictEqual(resolveTrustProxySetting('0'), 0);
+    it('resolveTrustProxySetting passes proxy addresses and rejects hop counts', () => {
       assert.strictEqual(resolveTrustProxySetting('loopback'), 'loopback');
       assert.strictEqual(resolveTrustProxySetting('10.0.0.0/8'), '10.0.0.0/8');
+      assert.strictEqual(resolveTrustProxySetting('::1'), '::1');
+      assert.strictEqual(resolveTrustProxySetting(' loopback, 10.0.0.5 '), 'loopback, 10.0.0.5');
       assert.strictEqual(resolveTrustProxySetting(''), undefined);
+      assert.strictEqual(resolveTrustProxySetting('   '), undefined);
       assert.strictEqual(resolveTrustProxySetting(undefined), undefined);
+      for (const bad of ['0', '1', '2', ' 1 ', 'true', 'TRUE', 'false']) {
+        assert.throws(
+          () => resolveTrustProxySetting(bad),
+          fsErrorMatcher(ErrorCode.INVALID_INPUT, /no longer accepts a hop count/),
+          bad,
+        );
+      }
     });
   });
 });
