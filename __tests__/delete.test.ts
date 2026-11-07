@@ -665,6 +665,20 @@ describe('delete body', () => {
     assert.match(result.text ?? '', /FAILED — Delete cancelled/);
     await access(join(dir, 'sub', 'f.txt'));
   });
+
+  it('deduplicates two spellings of the same missing path when ignoreIfNotExists is true', async () => {
+    const missingA = join(root, 'missing-dedup.txt');
+    const missingB = `${root}/./missing-dedup.txt`;
+    const result = await del({
+      paths: [missingA, missingB],
+      ignoreIfNotExists: true,
+    });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structured.results.length, 1);
+    assert.strictEqual(result.structured.summary.total, 1);
+    assert.strictEqual(result.structured.results[0]?.value?.deleted, true);
+  });
 });
 
 describe('nestedIndexes', () => {
