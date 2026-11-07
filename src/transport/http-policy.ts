@@ -380,10 +380,15 @@ interface RateBucket {
 // Fixed 60s window; never tuned, so it is a constant rather than config plumbing.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
+export const MAX_RATE_LIMIT_BUCKETS = 10_000;
+
 /**
  * Fixed-window per-client-IP rate limiter.
  */
-export function createRateLimiter(max: number): RequestHandler {
+export function createRateLimiter(
+  max: number,
+  maxBuckets = MAX_RATE_LIMIT_BUCKETS,
+): RequestHandler {
   const buckets = new Map<string, RateBucket>();
   const sweep = setInterval(() => {
     const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS * 2;
@@ -398,6 +403,19 @@ export function createRateLimiter(max: number): RequestHandler {
     const now = Date.now();
     let bucket = buckets.get(ip);
     if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      if (bucket) {
+        buckets.delete(ip);
+      } else if (buckets.size >= maxBuckets) {
+        for (const [trackedIp, trackedBucket] of buckets) {
+          if (now - trackedBucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+            buckets.delete(trackedIp);
+          }
+        }
+        if (buckets.size >= maxBuckets) {
+          const oldest = buckets.keys().next().value;
+          if (oldest !== undefined) buckets.delete(oldest);
+        }
+      }
       bucket = { windowStart: now, count: 0 };
       buckets.set(ip, bucket);
     }
