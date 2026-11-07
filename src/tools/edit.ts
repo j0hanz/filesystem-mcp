@@ -697,10 +697,11 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
   name: 'edit',
   title: 'Edit Files',
   description:
-    'Edit text files in place by replacing exact oldText with newText, like str_replace. ' +
-    'Pass path with edits, or files for a batch; never both. ' +
-    'Each oldText must match exactly once. A file is written only if all its edits match; batch files succeed or fail separately. ' +
-    'dryRun previews the diff; undo reverts the call. Use replace_text for every occurrence, create for new files.',
+    'Edit text files in place by replacing exact oldText with newText. ' +
+    'Use when changing specific unique snippets in one or more files. ' +
+    'Each oldText must match exactly once; unmatched or ambiguous text fails and leaves the file untouched. ' +
+    'Returns the diff and line counts per file, plus an undo id. Use dryRun to preview. ' +
+    'Use replace_text for multiple occurrences or regex, patch to apply unified diffs, and create for new files.',
   input: EditFileInputSchema,
   readOnlyHint: false,
   deadline: true,

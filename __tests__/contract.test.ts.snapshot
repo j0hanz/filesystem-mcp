@@ -18,7 +18,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. Replacing an existing file needs overwrite: true or the user's confirmation. Use edit or patch to change part of a file.",
+      "description": "Write whole text files (create, overwrite, or append) or make empty directories. Use when creating new files, replacing full contents, or creating folders. Missing parent directories are created automatically. Replacing an existing file requires overwrite: true. Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -162,7 +162,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "edit",
       "title": "Edit Files",
-      "description": "Edit text files in place by replacing exact oldText with newText, like str_replace. Pass path with edits, or files for a batch; never both. Each oldText must match exactly once. A file is written only if all its edits match; batch files succeed or fail separately. dryRun previews the diff; undo reverts the call. Use replace_text for every occurrence, create for new files.",
+      "description": "Edit text files in place by replacing exact oldText with newText. Use when changing specific unique snippets in one or more files. Each oldText must match exactly once; unmatched or ambiguous text fails and leaves the file untouched. Returns the diff and line counts per file, plus an undo id. Use dryRun to preview. Use replace_text for multiple occurrences or regex, patch to apply unified diffs, and create for new files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -410,7 +410,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "patch",
       "title": "Patch",
-      "description": "Apply a single-file unified diff to one existing text file, like git apply. Nothing is written unless every hunk applies in file order with exactly matching context; hunks are found by their context, so start line numbers may be off. dryRun checks without writing. edit suits a few exact replacements.",
+      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns applied hunk counts, lines changed, and an undo id. Use dryRun to test applicability cleanly. Use edit for unique snippet replacements, and replace_text for regex across files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -524,7 +524,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files under a directory, optionally filtered by glob. The pattern runs over the whole file, so it can span lines, and ^ and $ anchor to file start and end. A directory run stops near 100 matches; maxMatches sets a strict cap. Each file is written separately; preview wide scopes with dryRun, revert with undo. Use edit for one unique exact match.",
+      "description": "Find and replace text or an RE2 regex across one file or all files under a directory, like sed -i. Use when replacing every match across a file or project. Patterns match across the whole file and can span lines (^ and $ anchor to file start and end). Directory runs stop near 100 matches unless maxMatches is raised. Returns match counts, modified files, and an undo id. Use dryRun to preview wide scopes. Use edit for a single unique snippet, and patch to apply unified diffs.",
       "inputSchema": {
         "type": "object",
         "properties": {
