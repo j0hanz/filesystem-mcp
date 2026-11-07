@@ -144,6 +144,39 @@ describe('UndoJournal', () => {
     assert.strictEqual(journal.get(second), undefined);
   });
 
+  it('tracks entry byte weight incrementally without re-weighing existing entries on add or eviction', () => {
+    const journal = new UndoJournal(1100);
+    const rec = writeRecord(6);
+    let weighCount = 0;
+    const trackedRecords = new Proxy([rec, writeRecord(6)], {
+      get(target, prop, receiver) {
+        if (prop === 'reduce') weighCount++;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const first = journal.add('edit', trackedRecords);
+    assert.strictEqual(weighCount, 1, 'weighed once on add');
+
+    // Shrink first to 1 record (518 bytes) and add a second 518-byte entry
+    const shrunkRecords = new Proxy([rec], {
+      get(target, prop, receiver) {
+        if (prop === 'reduce') weighCount++;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    journal.replaceRecords(first, shrunkRecords);
+    const second = journal.add('edit', [writeRecord(6)]);
+    assert.ok(journal.get(first), 'shrunk first entry must still fit alongside second');
+    assert.ok(journal.get(second));
+
+    // Adding a third 518-byte entry evicts `first` without re-weighing existing entries
+    const third = journal.add('edit', [writeRecord(6)]);
+    assert.strictEqual(journal.get(first), undefined);
+    assert.ok(journal.get(second));
+    assert.ok(journal.get(third));
+    assert.strictEqual(weighCount, 2, 'weighed only once on add and once on replaceRecords');
+  });
+
   it('a maxBytes of 0 disables the journal', () => {
     assert.strictEqual(new UndoJournal(0).enabled, false);
     assert.strictEqual(new UndoJournal(1).enabled, true);
