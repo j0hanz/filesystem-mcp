@@ -25,43 +25,43 @@ const lines = (prefix: string, n: number): string =>
   Array.from({ length: n }, (_, i) => `${prefix}${String(i)}`).join('\n') + '\n';
 
 describe('core/diff', () => {
-  it('counts added and removed lines from a patch', () => {
+  it('counts added and removed lines from a patch', async () => {
     const a = 'one\ntwo\nthree\n';
     const b = 'one\n2\nthree\nfour\n';
-    const patch = unifiedPatch('f', a, b);
+    const patch = await unifiedPatch('f', a, b);
     assert.ok(patch);
     assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 2, linesRemoved: 1 });
   });
 
-  it('counts content lines that start with -- or ++ (not just the file header)', () => {
+  it('counts content lines that start with -- or ++ (not just the file header)', async () => {
     const a = '---\ntitle: x\n---\nbody\n';
     const b = 'title: x\nbody\n++new\n';
-    const patch = unifiedPatch('f', a, b);
+    const patch = await unifiedPatch('f', a, b);
     assert.ok(patch);
     assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 1, linesRemoved: 2 });
   });
 
-  it('gives up past the deadline instead of blocking', () => {
+  it('gives up past the deadline instead of blocking', async () => {
     const a = lines('a', 4000);
     const b = lines('b', 4000);
-    assert.strictEqual(unifiedPatch('f', a, b, 1), undefined);
+    assert.strictEqual(await unifiedPatch('f', a, b, 1), undefined);
   });
 
   for (const [what, a, b] of [
     ['changed', 'one\ntwo\n', 'one\n2\n'],
     ['identical', 'one\n', 'one\n'],
   ] as const) {
-    it(`writes a plain ASCII name as the diff package does (${what} files)`, () => {
+    it(`writes a plain ASCII name as the diff package does (${what} files)`, async () => {
       const expected = createTwoFilesPatch('f.txt', 'f.txt', a, b, 'Original', 'Modified');
-      assert.strictEqual(unifiedPatch('f.txt', a, b), expected);
+      assert.strictEqual(await unifiedPatch('f.txt', a, b), expected);
     });
   }
 
-  it('writes a non-ASCII name as it is, with the body unchanged', () => {
+  it('writes a non-ASCII name as it is, with the body unchanged', async () => {
     const name = 'dir/år 日本語.txt';
     const expected = createTwoFilesPatch('f', 'f', 'one\n', 'two\n', 'Original', 'Modified');
     assert.strictEqual(
-      unifiedPatch(name, 'one\n', 'two\n'),
+      await unifiedPatch(name, 'one\n', 'two\n'),
       expected
         .replace('Index: f', `Index: ${name}`)
         .replace('--- f', `--- ${name}`)
@@ -73,15 +73,15 @@ describe('core/diff', () => {
     ['changed', 'one\n', 'two\n'],
     ['identical', 'one\n', 'one\n'],
   ] as const) {
-    it(`writes two different names as the diff package does (${what} files)`, () => {
+    it(`writes two different names as the diff package does (${what} files)`, async () => {
       const options = { context: 1, timeout: 1000 };
       const expected = createTwoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options);
-      assert.strictEqual(twoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options), expected);
+      assert.strictEqual(await twoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options), expected);
     });
   }
 
-  it('keeps a lone surrogate escaped', () => {
-    const patch = unifiedPatch('a\ud800b', 'one\n', 'two\n');
+  it('keeps a lone surrogate escaped', async () => {
+    const patch = await unifiedPatch('a\ud800b', 'one\n', 'two\n');
     assert.ok(patch?.includes('--- "a\\357\\277\\275b"\t'), patch);
   });
 
@@ -101,8 +101,8 @@ describe('core/diff', () => {
     'år\nb',
     'x\n--- forged\n+++ forged\n@@ -1,1 +1,1 @@\n-one\n+forged',
   ]) {
-    it(`keeps ${JSON.stringify(name)} escaped so it cannot forge a header line`, () => {
-      const patch = unifiedPatch(name, 'one\n', 'two\n');
+    it(`keeps ${JSON.stringify(name)} escaped so it cannot forge a header line`, async () => {
+      const patch = await unifiedPatch(name, 'one\n', 'two\n');
       assert.ok(patch);
       assert.ok(!patch.includes(name), 'the raw name must not reach the text');
       assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 1, linesRemoved: 1 });
@@ -113,6 +113,83 @@ describe('core/diff', () => {
       assert.strictEqual(parsed[0]?.hunks.length, 1);
     });
   }
+  it('a diff over the inline threshold returns the full patch', async () => {
+    // 600 + 600 lines is over INLINE_DIFF_MAX_LINES, so it runs in the worker.
+    const big = await unifiedPatch('f', lines('a', 600), lines('b', 600));
+    assert.ok(big?.startsWith('Index: f\n'), big?.slice(0, 80));
+    assert.ok(big);
+    assert.deepStrictEqual(diffStatsFromPatch(big), { linesAdded: 600, linesRemoved: 600 });
+  });
+
+  it('a worker diff writes headers exactly as an inline one', async () => {
+    const name = 'a"b';
+    const small = await unifiedPatch(name, 'one\n', 'two\n');
+    const big = await unifiedPatch(name, lines('a', 600), lines('b', 600));
+    const header = (patch: string | undefined) => patch?.split('@@', 1)[0];
+    assert.ok(small && big);
+    assert.strictEqual(header(big), header(small));
+  });
+
+  it('a big diff leaves the event loop free', async () => {
+    let maxGap = 0;
+    let last = performance.now();
+    const tick = setInterval(() => {
+      const now = performance.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 10);
+    const patch = unifiedPatch('f', lines('a', 4000), lines('b', 4000));
+    // An inline diff blocks before any tick fires, so close the last gap too.
+    maxGap = Math.max(maxGap, performance.now() - last);
+    await patch;
+    clearInterval(tick);
+    assert.ok(maxGap < 200, `event loop blocked ${maxGap.toFixed(0)} ms`);
+  });
+
+  it('a worker diff past its deadline resolves undefined', async () => {
+    const t = performance.now();
+    assert.strictEqual(await unifiedPatch('f', lines('a', 8000), lines('b', 8000), 50), undefined);
+    assert.ok(performance.now() - t < 1500);
+  });
+
+  it('concurrent worker diffs all complete', async () => {
+    const out = await Promise.all(
+      [0, 1, 2].map((i) =>
+        unifiedPatch('f', lines(`a${String(i)}-`, 600), lines(`b${String(i)}-`, 600)),
+      ),
+    );
+    assert.ok(out.every((p) => p !== undefined));
+  });
+
+  it('a few very long lines still leave the event loop free', async () => {
+    // Under the line threshold, but megabytes of text: the byte gate must catch it.
+    const long = (tag: string) =>
+      Array.from({ length: 400 }, (_, i) => `${'x'.repeat(20_000)}${tag}${String(i)}`).join('\n');
+    const a = long('a');
+    const b = long('b');
+    let maxGap = 0;
+    let last = performance.now();
+    const tick = setInterval(() => {
+      const now = performance.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 10);
+    const patch = unifiedPatch('f', a, b);
+    maxGap = Math.max(maxGap, performance.now() - last);
+    await patch;
+    clearInterval(tick);
+    assert.ok(maxGap < 100, `event loop blocked ${maxGap.toFixed(0)} ms`);
+  });
+
+  it('a burst past the worker queue cap gives up at once', async () => {
+    // Four worker diffs may be pending; the rest degrade instead of holding their text.
+    const out = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        unifiedPatch('f', lines(`a${String(i)}-`, 600), lines(`b${String(i)}-`, 600)),
+      ),
+    );
+    assert.strictEqual(out.filter((p) => p === undefined).length, 4);
+  });
 });
 
 describe('non-ASCII names in every diff header', () => {

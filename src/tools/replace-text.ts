@@ -207,7 +207,7 @@ type ScannedOutcome = Exclude<EntryOutcome, { kind: 'failed' }> & { index: numbe
 async function processEntry(
   entryPath: string,
   ctx: ReplaceContext,
-  onChanged: (done: Rewritten<number>) => Patch,
+  onChanged: (done: Rewritten<number>) => Promise<Patch>,
 ): Promise<EntryOutcome | ScanSkip | undefined> {
   const { dryRun, signal, matcher, replacement } = ctx;
   // Discovery/read failures on a walked file are counted as inaccessible; a
@@ -268,7 +268,7 @@ async function processEntry(
 
     // Reached only after the write succeeds (or in dryRun, where there is no
     // write): a failed write must not count the file as changed.
-    return { kind: 'changed', path: entryPath, matches: done.result, ...onChanged(done) };
+    return { kind: 'changed', path: entryPath, matches: done.result, ...(await onChanged(done)) };
   } catch (error) {
     // A timeout/cancel aborts the whole scan, not just this file: scan reports
     // the run as stoppedReason 'timeout' and counts nothing for it.
@@ -462,7 +462,7 @@ async function handleSearchAndReplace(
         },
       },
       async (entry) => {
-        const o = await processEntry(entry.path, context, (done) => {
+        const o = await processEntry(entry.path, context, async (done) => {
           if (primary === undefined || entry.index < primary.index) {
             primary = { index: entry.index, report: done.report };
           }

@@ -618,7 +618,7 @@ async function editOnce(
   // One Myers pass serves both the dry-run preview and the line counts.
   const patch =
     editResult.appliedEdits > 0
-      ? unifiedPatch(basename(done.validPath), done.before, done.after)
+      ? await unifiedPatch(basename(done.validPath), done.before, done.after)
       : undefined;
   if (patch !== undefined) Object.assign(editResult, diffStatsFromPatch(patch));
   if (options.dryRun && patch !== undefined) editResult.diff = patch;

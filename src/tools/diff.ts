@@ -44,7 +44,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
       ]);
 
     // Synchronous Myers diff; `timeout` is the only thing that can stop it.
-    const diffText = twoFilesPatch(
+    const diffText = await twoFilesPatch(
       basename(validA),
       basename(validB),
       contentA,
