@@ -717,7 +717,7 @@ describe('HTTP Policy & Security', () => {
     });
 
     it('TC-SEC-037b: bounds tracked client buckets to maxBuckets by evicting expired then oldest IPs', (t) => {
-      let now = 1_000_000;
+      const now = 1_000_000;
       t.mock.method(Date, 'now', () => now);
       const limiter = createRateLimiter(1, 2);
 

@@ -310,7 +310,11 @@ describe('read body', () => {
     const errors = result.structured.results.map((r) => errorOf(r));
     assert.strictEqual(errors.length, 3);
     assert.strictEqual(errors[0], undefined, 'first path in input order must be kept');
-    assert.strictEqual(errors[1]?.code, 'TOO_LARGE', 'second path exceeding budget must be skipped');
+    assert.strictEqual(
+      errors[1]?.code,
+      'TOO_LARGE',
+      'second path exceeding budget must be skipped',
+    );
     assert.match(errors[1]?.message ?? '', /maxTotalSize \(524288 bytes\)/);
     assert.strictEqual(
       errors[1]?.suggestion,

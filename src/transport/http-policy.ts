@@ -380,7 +380,7 @@ interface RateBucket {
 // Fixed 60s window; never tuned, so it is a constant rather than config plumbing.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-export const MAX_RATE_LIMIT_BUCKETS = 10_000;
+const MAX_RATE_LIMIT_BUCKETS = 10_000;
 
 /**
  * Fixed-window per-client-IP rate limiter.

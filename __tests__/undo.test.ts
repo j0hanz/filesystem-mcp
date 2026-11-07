@@ -148,23 +148,19 @@ describe('UndoJournal', () => {
     const journal = new UndoJournal(1100);
     const rec = writeRecord(6);
     let weighCount = 0;
-    const trackedRecords = new Proxy([rec, writeRecord(6)], {
-      get(target, prop, receiver) {
-        if (prop === 'reduce') weighCount++;
-        return Reflect.get(target, prop, receiver);
-      },
-    });
-    const first = journal.add('edit', trackedRecords);
+    const track = (records: ReturnType<typeof writeRecord>[]): ReturnType<typeof writeRecord>[] => {
+      const origReduce = records.reduce.bind(records);
+      records.reduce = ((...args: Parameters<typeof origReduce>) => {
+        weighCount++;
+        return origReduce(...args);
+      }) as typeof records.reduce;
+      return records;
+    };
+    const first = journal.add('edit', track([rec, writeRecord(6)]));
     assert.strictEqual(weighCount, 1, 'weighed once on add');
 
     // Shrink first to 1 record (518 bytes) and add a second 518-byte entry
-    const shrunkRecords = new Proxy([rec], {
-      get(target, prop, receiver) {
-        if (prop === 'reduce') weighCount++;
-        return Reflect.get(target, prop, receiver);
-      },
-    });
-    journal.replaceRecords(first, shrunkRecords);
+    journal.replaceRecords(first, track([rec]));
     const second = journal.add('edit', [writeRecord(6)]);
     assert.ok(journal.get(first), 'shrunk first entry must still fit alongside second');
     assert.ok(journal.get(second));
