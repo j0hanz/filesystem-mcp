@@ -95,6 +95,7 @@ function setupExpressApp(
   sharedPathGuard: PathGuard,
   sharedRegistry: WatcherRegistry,
   notifier: ServerNotifier,
+  trustProxy: string | undefined,
 ): Express {
   const allowedOriginHostnames = computeAllowedOriginHostnames(process.env['FS_ALLOWED_ORIGINS']);
   // Read once here and passed down, like every other env-derived policy input:
@@ -116,7 +117,6 @@ function setupExpressApp(
     app.use(localhostOriginValidation());
   }
 
-  const trustProxy = resolveTrustProxySetting(process.env['FS_TRUST_PROXY']);
   if (trustProxy !== undefined) {
     app.set('trust proxy', trustProxy);
   }
@@ -275,6 +275,8 @@ export async function startHttpServer(
     allowedHosts,
     parseTrueEnvFlag(process.env['FS_ALLOW_UNRESTRICTED_HOSTS'], 'FS_ALLOW_UNRESTRICTED_HOSTS'),
   );
+  // Validated with the other bind policy, before any server state exists.
+  const trustProxy = resolveTrustProxySetting(process.env['FS_TRUST_PROXY']);
 
   // One state for the whole endpoint. The modern leg builds a fresh McpServer
   // per request, so per-request state would discard every accepted access
@@ -339,6 +341,7 @@ export async function startHttpServer(
     state.pathGuard,
     state.watcherRegistry,
     modernHandler.notify,
+    trustProxy,
   );
 
   const httpServer = createHttpServer(app);

@@ -88,7 +88,7 @@ const ENV_HELP: HelpRow[] = [
   { flags: 'FS_API_KEY', desc: 'HTTP API key' },
   {
     flags: 'FS_TRUST_PROXY',
-    desc: 'Express trust-proxy setting: hop count or expression (unset = do not trust X-Forwarded-*)',
+    desc: 'Address of the reverse proxy in front: IP, CIDR or a name such as loopback; no hop counts (unset = ignore X-Forwarded-*)',
   },
   {
     flags: 'FS_ALLOW_SENSITIVE',
