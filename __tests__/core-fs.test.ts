@@ -208,6 +208,52 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(result.content, 'Line 8\nLine 9\nLine 10');
     });
 
+    it('tail across 64 KiB chunks stops at exact newline count with and without trailing newline', async () => {
+      // 40 KiB first line + 64 KiB second line + "\nL98\nL99" (total > 64 KiB STREAM_CHUNK_SIZE).
+      // The final 64 KiB chunk contains only the 2 newlines before L98 and L99, so tail: 2
+      // without a trailing LF already has both complete tail lines in chunk 1.
+      const prefix = `${'a'.repeat(40 * 1024)}\n${'b'.repeat(64 * 1024)}\nL98\nL99`;
+      const noTrailingLf = join(tmpDir, 'tail-multi-nolf.txt');
+      await writeFile(noTrailingLf, prefix);
+
+      let abortChecksNoLf = 0;
+      const controllerNoLf = new AbortController();
+      controllerNoLf.signal.throwIfAborted = () => {
+        abortChecksNoLf++;
+      };
+      const resNoLf = await fs.readFile(noTrailingLf, {
+        kind: 'tail',
+        lines: 2,
+        signal: controllerNoLf.signal,
+      });
+      assert.strictEqual(resNoLf.linesRead, 2);
+      assert.strictEqual(resNoLf.hasMoreLines, true);
+      assert.strictEqual(resNoLf.content, 'L98\nL99');
+
+      // With a trailing LF, the final 64 KiB chunk has 3 newlines (before L98, before L99, and EOF),
+      // which also fits in 1 chunk; both should perform the exact same number of chunk reads (1).
+      const withTrailingLf = join(tmpDir, 'tail-multi-lf.txt');
+      await writeFile(withTrailingLf, `${prefix}\n`);
+      let abortChecksLf = 0;
+      const controllerLf = new AbortController();
+      controllerLf.signal.throwIfAborted = () => {
+        abortChecksLf++;
+      };
+      const resLf = await fs.readFile(withTrailingLf, {
+        kind: 'tail',
+        lines: 2,
+        signal: controllerLf.signal,
+      });
+      assert.strictEqual(resLf.linesRead, 2);
+      assert.strictEqual(resLf.hasMoreLines, true);
+      assert.strictEqual(resLf.content, 'L98\nL99');
+      assert.strictEqual(
+        abortChecksNoLf,
+        abortChecksLf,
+        'file without trailing LF must not read an extra 64 KiB chunk when tail newlines are already present',
+      );
+    });
+
     it('TC-FUNC-004: readFile with line range returns specific lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_range.txt', 10);
       const result = await fs.readFile(filePath, {

@@ -294,7 +294,7 @@ function patchContent(
   const { linesAdded, linesRemoved } = countAddedRemoved(parsedPatch);
   // Backstop for placements the clamp cannot see, such as zero-context hunks
   // whose headers point past the end of the file: refuse rather than write.
-  if (countLines(patched) !== countLines(content) + linesAdded - linesRemoved) {
+  if (countLines(patched) !== fileLines + linesAdded - linesRemoved) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
       'patch would duplicate or drop lines: a hunk overlaps an earlier one or starts past the end of the file',

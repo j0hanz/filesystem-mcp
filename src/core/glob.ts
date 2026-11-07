@@ -4,13 +4,19 @@ import {
   readFile as fsReadFile,
   lstat,
 } from 'node:fs/promises';
-import { basename, dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
+import { dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
 import { processInParallel } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  isNotFoundErrno,
+  rethrowIfAborted,
+} from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import {
@@ -235,36 +241,28 @@ export function isSafeGlobSyntax(pattern: string): boolean {
 
 /** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
 const MAX_GITIGNORE_BYTES = MIB;
+const GLOB_BATCH_CONCURRENCY = 64;
 
-async function loadGitignoreFiles(
-  root: string,
-  gitignorePaths: readonly string[],
-  manager: GitignoreManager,
+async function readGitignoreMatcher(
+  absPath: string,
   signal?: AbortSignal,
-): Promise<void> {
-  await processInParallel(
-    gitignorePaths,
-    async (relPath) => {
-      const absPath = join(root, relPath);
-      try {
-        // lstat, not stat: a symlinked .gitignore may point at a device, a
-        // FIFO or a huge file outside the root. Only a plain, small file is a
-        // rule set worth reading.
-        const info = await lstat(absPath);
-        if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) return;
-        const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
-        const matcher = ignore();
-        matcher.add(contents);
-        const dir = toPosixPath(dirname(relPath));
-        manager.addMatcher(dir === '.' ? '' : dir, matcher);
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') throw error;
-        Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
-      }
-    },
-    GLOB_BATCH_CONCURRENCY,
-    signal,
-  );
+): Promise<Ignore | undefined> {
+  try {
+    // lstat, not stat: a symlinked .gitignore may point at a device, a
+    // FIFO or a huge file outside the root. Only a plain, small file is a
+    // rule set worth reading.
+    const info = await lstat(absPath);
+    if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) return undefined;
+    const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
+    return ignore().add(contents);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    rethrowIfAborted(error);
+    if (!isNotFoundErrno(error)) {
+      Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
+    }
+    return undefined;
+  }
 }
 
 /**
@@ -302,7 +300,8 @@ async function loadAncestorGitignores(
       if (matcher.test(`${prefix}/`).ignored) continue;
       manager.addAncestorMatcher(prefix, matcher);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw error;
+      if (signal?.aborted) throw error;
+      rethrowIfAborted(error);
       // ENOENT is the normal case (no .gitignore at this level); anything else is not worth a warning per walk
     }
   }
@@ -329,38 +328,56 @@ class GitignoreManager {
     signal?: AbortSignal,
     maxDepth?: number,
     ignoreCeiling?: string,
+    pathGuard?: Pick<PathGuard, 'isSensitive'>,
   ): Promise<GitignoreManager | null> {
+    const resolvedRoot = resolve(root);
     const manager = new GitignoreManager();
     try {
-      const gitignorePaths: string[] = [];
-      // Search dot-directories (.venv, .terraform, ...) for rules only when the
-      // walk includes hidden entries; for any other walk, enumerating every
-      // hidden tree would cost more than the walk itself.
-      const gitignorePatterns = includeHidden
-        ? [...buildHiddenPatterns('**/.gitignore')]
-        : ['**/.gitignore'];
-      const gitignoreEntries = fsGlob(gitignorePatterns, {
-        cwd: root,
-        // Skip what the walk itself skips, and stop one level past its depth
-        // bound: a .gitignore at depth d only affects entries at depth >= d.
-        exclude: (entry: string) => {
-          if (signal?.aborted) return true;
-          const name = basename(entry);
-          if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) return true;
-          return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
-        },
-      });
-      for await (const match of gitignoreEntries) {
-        if (signal?.aborted) break;
-        gitignorePaths.push(match);
-      }
-
-      await loadGitignoreFiles(root, gitignorePaths, manager, signal);
       if (ignoreCeiling !== undefined) {
-        await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
+        await loadAncestorGitignores(resolvedRoot, ignoreCeiling, manager, signal);
+      }
+      let frontier: string[] = [''];
+      for (let depth = 0; frontier.length > 0; depth++) {
+        signal?.throwIfAborted();
+        const nextFrontier: string[] = [];
+        const canDescend = maxDepth === undefined || depth < maxDepth;
+        await processInParallel(
+          frontier,
+          async (dir) => {
+            const absDir = dir === '' ? resolvedRoot : join(resolvedRoot, dir);
+            if (!canDescend) {
+              const matcher = await readGitignoreMatcher(join(absDir, '.gitignore'), signal);
+              if (matcher) manager.addMatcher(dir, matcher);
+              return;
+            }
+            const entries = await fsReaddir(absDir, { withFileTypes: true }).catch(() => undefined);
+            if (!entries) return;
+            const gitignoreEntry = entries.find(
+              (entry) => normalizeCaseForComparison(entry.name) === '.gitignore',
+            );
+            if (gitignoreEntry) {
+              const matcher = await readGitignoreMatcher(join(absDir, gitignoreEntry.name), signal);
+              if (matcher) manager.addMatcher(dir, matcher);
+            }
+            for (const entry of entries) {
+              if (!entry.isDirectory()) continue;
+              const name = entry.name;
+              if (!includeHidden && name.startsWith('.')) continue;
+              if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) continue;
+              if (pathGuard?.isSensitive(join(absDir, name))) continue;
+              const childRel = dir === '' ? name : `${dir}/${name}`;
+              if (manager.isIgnored(childRel, true)) continue;
+              nextFrontier.push(childRel);
+            }
+          },
+          GLOB_BATCH_CONCURRENCY,
+          signal,
+        );
+        frontier = nextFrontier;
       }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw error;
+      if (signal?.aborted) throw error;
+      rethrowIfAborted(error);
       Logger.warn(
         `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
       );
@@ -483,7 +500,6 @@ export interface GlobEntriesOptions {
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
-const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
 function normalizePattern(pattern: string, baseNameMatch: boolean): string {
   const normalized = toPosixPath(pattern);
@@ -859,6 +875,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
         signal,
         maxDepth,
         options.ignoreCeiling,
+        options.pathGuard,
       )
     : null;
 

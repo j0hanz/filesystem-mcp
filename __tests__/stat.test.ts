@@ -125,6 +125,27 @@ describe('stat body', () => {
     assert.strictEqual(value.symlinkTarget, target);
   });
 
+  it('propagates TimeoutError when lstat on a symlink aborts on deadline', async () => {
+    const file = await writeTestFile(root, 'stat-timeout-target.txt', 'hello');
+    const timeoutErr = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    const fs = new (class extends GuardedFileSystem {
+      override async statDetailed(
+        filePath: string,
+        options?: { signal?: AbortSignal },
+      ): ReturnType<GuardedFileSystem['statDetailed']> {
+        const res = await super.statDetailed(filePath, options);
+        return { ...res, isSymlink: true };
+      }
+      override lstat(): Promise<never> {
+        return Promise.reject(timeoutErr);
+      }
+    })(guard);
+
+    const { structured, isError } = await stat({ path: file }, { fs });
+    assert.strictEqual(isError, true);
+    assert.strictEqual(errorOf(structured.results[0])?.code, 'TIMEOUT');
+  });
+
   it('reports a regular file under a symlinked parent as a file', async (t) => {
     const targetDir = join(root, 'stat-real-parent');
     await mkdir(targetDir);

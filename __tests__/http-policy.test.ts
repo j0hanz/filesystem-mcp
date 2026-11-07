@@ -715,6 +715,27 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(nextB2, false);
       assert.strictEqual(resB2.statusCode, 429);
     });
+
+    it('TC-SEC-037b: bounds tracked client buckets to maxBuckets by evicting expired then oldest IPs', (t) => {
+      const now = 1_000_000;
+      t.mock.method(Date, 'now', () => now);
+      const limiter = createRateLimiter(1, 2);
+
+      const hit = (ip: string): number | undefined => {
+        const res = createMockResponse();
+        limiter(createMockRequest({ ip }), res, () => {});
+        return res.statusCode;
+      };
+
+      assert.strictEqual(hit('10.0.0.1'), undefined);
+      assert.strictEqual(hit('10.0.0.2'), undefined);
+      // Third distinct IP at capacity evicts the oldest (10.0.0.1)
+      assert.strictEqual(hit('10.0.0.3'), undefined);
+      // 10.0.0.2 is still tracked and rate-limited
+      assert.strictEqual(hit('10.0.0.2'), 429);
+      // 10.0.0.1 was evicted so its fresh request gets a new bucket
+      assert.strictEqual(hit('10.0.0.1'), undefined);
+    });
   });
 
   describe('Utility functions (isLoopbackHttpHost, splitCsvList, resolveTrustProxySetting)', () => {

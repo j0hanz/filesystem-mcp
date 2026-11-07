@@ -137,6 +137,9 @@ interface FailureRow {
 
 /** Keeps the MAX_FAILURES failures first in walk order, sorted by index. */
 function keepFailure(rows: FailureRow[], row: FailureRow): void {
+  if (rows.length === MAX_FAILURES && (rows[MAX_FAILURES - 1]?.index ?? Infinity) < row.index) {
+    return;
+  }
   rows.push(row);
   rows.sort((a, b) => a.index - b.index);
   if (rows.length > MAX_FAILURES) rows.pop();

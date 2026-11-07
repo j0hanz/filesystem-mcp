@@ -10,6 +10,7 @@ import {
 
 import { runExclusive } from './concurrency.ts';
 import type { DiffWorkerRequest } from './diff-worker.ts';
+import { PARALLEL_CONCURRENCY } from './util.ts';
 
 // Unified-diff computation over two text buffers. Kept out of `fmt.ts`, which
 // formats terminal output and has no business pulling in the `diff` package.
@@ -43,8 +44,22 @@ const WORKER_URL = new URL(
 const INLINE_DIFF_MAX_CHARS = 64 * 1024;
 
 // Worker diffs pending at once, running or queued; each holds both texts.
-const MAX_PENDING_WORKER_DIFFS = 4;
+const MAX_PENDING_WORKER_DIFFS = PARALLEL_CONCURRENCY;
 let pendingWorkerDiffs = 0;
+let warmWorker: Worker | undefined;
+
+function getDiffWorker(): Worker {
+  if (warmWorker !== undefined) return warmWorker;
+  const worker = new Worker(WORKER_URL);
+  worker.unref();
+  const clear = (): void => {
+    if (warmWorker === worker) warmWorker = undefined;
+  };
+  worker.once('error', clear);
+  worker.once('exit', clear);
+  warmWorker = worker;
+  return worker;
+}
 
 function overInlineLimit(before: string, after: string): boolean {
   if (before.length + after.length > INLINE_DIFF_MAX_CHARS) return true;
@@ -62,31 +77,41 @@ function patchInWorker(request: DiffWorkerRequest): Promise<StructuredPatch | un
   return new Promise((resolve) => {
     let worker: Worker | undefined;
     let settled = false;
-    const finish = (patch: StructuredPatch | undefined): void => {
+    const onMessage = (patch: StructuredPatch | null): void => {
+      finish(patch ?? undefined, false);
+    };
+    const onAbortOrCrash = (): void => {
+      finish(undefined, true);
+    };
+    const finish = (patch: StructuredPatch | undefined, destroy: boolean): void => {
       if (settled) return;
       settled = true;
       clearTimeout(kill);
+      if (worker !== undefined) {
+        worker.off('message', onMessage);
+        worker.off('error', onAbortOrCrash);
+        worker.off('exit', onAbortOrCrash);
+        worker.unref();
+        if (destroy) {
+          if (warmWorker === worker) warmWorker = undefined;
+          void worker.terminate();
+        }
+      }
       resolve(patch);
-      void worker?.terminate();
     };
     const kill = setTimeout(() => {
-      finish(undefined);
+      finish(undefined, true);
     }, request.options.timeout + WORKER_KILL_GRACE_MS);
     try {
-      worker = new Worker(WORKER_URL);
-      worker.once('message', (patch: StructuredPatch | null) => {
-        finish(patch ?? undefined);
-      });
-      worker.once('error', () => {
-        finish(undefined);
-      });
-      worker.once('exit', () => {
-        finish(undefined);
-      });
+      worker = getDiffWorker();
+      worker.ref();
+      worker.on('message', onMessage);
+      worker.on('error', onAbortOrCrash);
+      worker.on('exit', onAbortOrCrash);
       worker.postMessage(request);
     } catch {
       // A worker that cannot start degrades like one past its deadline.
-      finish(undefined);
+      finish(undefined, true);
     }
   });
 }

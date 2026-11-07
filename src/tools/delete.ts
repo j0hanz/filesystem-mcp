@@ -100,11 +100,8 @@ async function planPath(
   if (fs.pathGuard.isAllowedRoot(validPath)) {
     return {
       status: 'fail',
-      // Keyed by the REQUESTED path, like every other failure here: handleDelete
-      // orders results by input path, and a resolved key would not be found for
-      // a relative request.
       failure: {
-        path: inputPath,
+        path: validPath,
         error: Problem.accessDenied('Deleting a workspace root directory is not allowed', {
           path: validPath,
         }),
@@ -117,9 +114,9 @@ async function planPath(
     firstStats = await fs.lstat(validPath);
   } catch (error) {
     if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
-      return { status: 'noop', deleted: inputPath };
+      return { status: 'noop', deleted: validPath };
     }
-    return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
+    return { status: 'fail', failure: toDeleteFailure(validPath, error) };
   }
 
   const itemType = resolveEntryType(firstStats.stats);
@@ -131,7 +128,7 @@ async function planPath(
       // Only a pending directory needs the walk: nothing else is deleted with contents.
       holdsProtected = hasChildren && (await fs.holdsProtectedEntry(validPath, inputPath, signal));
     } catch (error) {
-      return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
+      return { status: 'fail', failure: toDeleteFailure(validPath, error) };
     }
   }
   return {
@@ -157,7 +154,7 @@ async function finalizeDeletion(
     if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
       return { deleted: plan.validPath };
     }
-    return { failure: toDeleteFailure(plan.inputPath, error) };
+    return { failure: toDeleteFailure(plan.validPath, error) };
   }
 
   // Identity comparison, not just the coarse category: a swap during the
@@ -194,8 +191,8 @@ async function finalizeDeletion(
     const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
     return {
       failure: {
-        path: plan.inputPath,
-        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.inputPath, rows),
+        path: plan.validPath,
+        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.validPath, rows),
       },
     };
   }

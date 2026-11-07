@@ -960,6 +960,7 @@ export class GuardedFileSystem {
         created = true;
       } catch (error) {
         if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
+        own.abandon('file was created concurrently');
         handle = await fsOpen(validPath, APPEND_NOFOLLOW);
       }
     }
