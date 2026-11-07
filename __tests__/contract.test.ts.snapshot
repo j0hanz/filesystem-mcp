@@ -448,7 +448,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Pass path, or paths for a batch, not both. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource, with no slice. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file. Use search_text to find text and list for directories.",
+      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -646,7 +646,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep. Returns matching lines with line numbers and root-relative or absolute paths, and read accepts either form. searchPattern is the text to find, matched within one line; pattern filters files by glob. A named file prints its path once, as a header. Pass the trailer's cursor for the next page. find_files matches file names.",
+      "description": "Search file contents for text or an RE2 regex, like grep. Use when searching for keywords or patterns across files. searchPattern matches line by line (case-insensitive by default); pattern filters files by glob (e.g. **/*.ts). Returns matching lines with line numbers grouped by file, plus a nextCursor for paging. Use read to view full context, and find_files to find by name.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld. Fields are type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Pass path, or paths for a batch, not both. Each missing path gets its own NOT_FOUND entry, so stat also checks existence. On Windows a rewrite resets created unless the file has other hard links. read returns contents; list lists a directory.",
+      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks return link targets without following. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. Use read to view contents, and list to browse directories.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1058,7 +1058,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Pass path, or paths for a batch, not both. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource, with no slice. A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file. Use search_text to find text and list for directories.",
+      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1149,7 +1149,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep. Returns matching lines with line numbers and root-relative or absolute paths, and read accepts either form. searchPattern is the text to find, matched within one line; pattern filters files by glob. A named file prints its path once, as a header. Pass the trailer's cursor for the next page. find_files matches file names.",
+      "description": "Search file contents for text or an RE2 regex, like grep. Use when searching for keywords or patterns across files. searchPattern matches line by line (case-insensitive by default); pattern filters files by glob (e.g. **/*.ts). Returns matching lines with line numbers grouped by file, plus a nextCursor for paging. Use read to view full context, and find_files to find by name.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld. Fields are type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Pass path, or paths for a batch, not both. Each missing path gets its own NOT_FOUND entry, so stat also checks existence. On Windows a rewrite resets created unless the file has other hard links. read returns contents; list lists a directory.",
+      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks return link targets without following. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. Use read to view contents, and list to browse directories.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -194,10 +194,11 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
   description:
-    'Search file contents for literal text or an RE2 regex, like grep. Returns matching lines with line numbers ' +
-    'and root-relative or absolute paths, and read accepts either form. ' +
-    'searchPattern is the text to find, matched within one line; pattern filters files by glob. ' +
-    "A named file prints its path once, as a header. Pass the trailer's cursor for the next page. find_files matches file names.",
+    'Search file contents for text or an RE2 regex, like grep. ' +
+    'Use when searching for keywords or patterns across files. ' +
+    'searchPattern matches line by line (case-insensitive by default); pattern filters files by glob (e.g. **/*.ts). ' +
+    'Returns matching lines with line numbers grouped by file, plus a nextCursor for paging. ' +
+    'Use read to view full context, and find_files to find by name.',
   input: GrepInputSchema,
   readOnlyHint: true,
   deadline: true,

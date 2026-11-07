@@ -512,11 +512,10 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   name: 'read',
   title: 'Read File',
   description:
-    'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Pass path, or paths for a batch, not both. ' +
-    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource, with no slice. ' +
-    'A large result may exceed what the client shows inline: stat gives tokenEstimate, and a slice costs less than a whole file. ' +
-    'Use search_text to find text and list for directories.',
+    'Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. ' +
+    'Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). ' +
+    'Images and audio return as media. Returns file text or slice, or per-path results for batches. ' +
+    'Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.',
   input: ReadFileInputSchema,
   // Claude Code spills a text result over 50,000 characters to a file, which
   // may sit outside the roots where this server's own tools cannot read it.
