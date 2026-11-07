@@ -335,6 +335,7 @@ async function readTailContent(
   const chunks: Buffer[] = [];
   let totalLen = 0;
   let newlines = 0;
+  let endsWithLf = false;
   let stoppedByLimit = false;
 
   while (position > 0) {
@@ -351,22 +352,30 @@ async function readTailContent(
     }
     position -= chunkSize;
 
-    for (const byte of buffer) {
-      if (byte === 0x0a) newlines++;
+    if (chunks.length === 0 && bytesRead > 0) {
+      endsWithLf = buffer[bytesRead - 1] === LF;
     }
 
-    chunks.unshift(buffer);
+    for (const byte of buffer) {
+      if (byte === LF) newlines++;
+    }
+
+    chunks.push(buffer);
     totalLen += chunkSize;
 
-    // One newline more than `tail`: the oldest segment in the buffer starts
-    // mid-line whenever we stop before the file start, and gets dropped below.
-    if (newlines > tail) break;
+    // A trailing LF produces an empty final segment after split('\n'), so a
+    // newline-terminated file needs `tail + 1` LFs while an unterminated file
+    // needs `tail` LFs; the oldest partial segment before the first LF is
+    // dropped below whenever `position > 0`.
+    const neededNewlines = endsWithLf ? tail + 1 : tail;
+    if (newlines >= neededNewlines) break;
     if (totalLen > options.maxSize) {
       stoppedByLimit = true;
       break;
     }
   }
 
+  chunks.reverse();
   const allBytes = Buffer.concat(chunks, totalLen);
   let lines = allBytes.toString(encoding).split('\n');
 
