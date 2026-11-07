@@ -80,6 +80,28 @@ describe('globEntries', () => {
     });
   }
 
+  for (const skipIgnored of [false, true]) {
+    it(`a timed-out walk throws TimeoutError instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
+      const root = await createTestRoot();
+      try {
+        await mkdir(join(root, 'sub'), { recursive: true });
+        await writeFile(join(root, '.gitignore'), '*.log\n');
+        const timeoutErr = new DOMException('timed out', 'TimeoutError');
+        await assert.rejects(
+          walk({
+            cwd: root,
+            pattern: '**/*.nomatch',
+            skipIgnored,
+            signal: AbortSignal.abort(timeoutErr),
+          }),
+          (err: unknown) => err === timeoutErr,
+        );
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
   it('globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
     const root = await createTestRoot();
     try {
@@ -517,6 +539,44 @@ describe('globEntries', () => {
         await harness.close();
       }
     });
+  });
+
+  it('does not pre-walk or read .gitignore files inside gitignored directories', async () => {
+    const root = await createTestRoot();
+    try {
+      await writeFile(join(root, '.gitignore'), 'ignored_dir/\n');
+      await writeFile(join(root, 'keep.txt'), 'x');
+      for (let i = 0; i < 25; i++) {
+        const sub = join(root, 'ignored_dir', `d${String(i)}`, 'nested');
+        await mkdir(sub, { recursive: true });
+        await writeFile(join(sub, '.gitignore'), '!*\n');
+        await writeFile(join(sub, 'secret.txt'), 'x');
+      }
+
+      const controller = new AbortController();
+      let abortedChecks = 0;
+      Object.defineProperty(controller.signal, 'aborted', {
+        get() {
+          abortedChecks++;
+          return false;
+        },
+      });
+
+      const seen = await walk({
+        cwd: root,
+        pattern: '**/*',
+        skipIgnored: true,
+        onlyFiles: true,
+        signal: controller.signal,
+      });
+      assert.deepStrictEqual(seen, ['keep.txt']);
+      assert.ok(
+        abortedChecks < 15,
+        `expected ignored_dir subtree not to be walked, but signal.aborted was checked ${String(abortedChecks)} times`,
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
   });
 
   it('ignores a .gitignore that is a symlink or oversized', async (t) => {

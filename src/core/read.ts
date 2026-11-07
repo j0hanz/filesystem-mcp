@@ -37,14 +37,21 @@ export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promi
   return buffer.subarray(0, bytesRead);
 }
 
+interface ReadSpecBase {
+  signal?: AbortSignal;
+  maxSize?: number;
+  hardCap?: boolean;
+}
+
 export type ReadSpec =
-  | { kind: 'full'; signal?: AbortSignal }
-  | { kind: 'head'; lines: number; signal?: AbortSignal }
-  | { kind: 'tail'; lines: number; signal?: AbortSignal }
-  | { kind: 'range'; start: number; end?: number; signal?: AbortSignal };
+  | ({ kind: 'full' } & ReadSpecBase)
+  | ({ kind: 'head'; lines: number } & ReadSpecBase)
+  | ({ kind: 'tail'; lines: number } & ReadSpecBase)
+  | ({ kind: 'range'; start: number; end?: number } & ReadSpecBase);
 
 interface ReadOptions {
   maxSize: number;
+  hardCap?: boolean;
   signal?: AbortSignal;
 }
 
@@ -280,6 +287,9 @@ async function readRangeContent(
       // join('\n') puts a separator only between lines, so the first costs none.
       const lineBytes = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? newlineBytes : 0);
       if (lines.length > 0 && estimatedBytes + lineBytes > options.maxSize) {
+        if (options.hardCap) {
+          throw createTooLargeError(estimatedBytes + lineBytes, options.maxSize, filePath);
+        }
         hasMoreLines = true;
         break;
       }
@@ -288,6 +298,9 @@ async function readRangeContent(
 
       estimatedBytes += lineBytes;
       if (estimatedBytes > options.maxSize) {
+        if (options.hardCap) {
+          throw createTooLargeError(estimatedBytes, options.maxSize, filePath);
+        }
         hasMoreLines = await peekHasMore(iterator);
         break;
       }
@@ -335,6 +348,7 @@ async function readTailContent(
   const chunks: Buffer[] = [];
   let totalLen = 0;
   let newlines = 0;
+  let endsWithLf = false;
   let stoppedByLimit = false;
 
   while (position > 0) {
@@ -351,22 +365,38 @@ async function readTailContent(
     }
     position -= chunkSize;
 
-    for (const byte of buffer) {
-      if (byte === 0x0a) newlines++;
+    if (chunks.length === 0 && bytesRead > 0) {
+      endsWithLf = buffer[bytesRead - 1] === LF;
     }
 
-    chunks.unshift(buffer);
-    totalLen += chunkSize;
+    // A trailing LF produces an empty final segment after split('\n'), so a
+    // newline-terminated file needs `tail + 1` LFs while an unterminated file
+    // needs `tail` LFs; the oldest partial segment before the first LF is
+    // dropped below whenever `position > 0`.
+    const neededNewlines = endsWithLf ? tail + 1 : tail;
+    let sliceStart = 0;
+    for (let i = bytesRead - 1; i >= 0; i--) {
+      if (buffer[i] === LF && ++newlines === neededNewlines) {
+        sliceStart = i;
+        position += i;
+        break;
+      }
+    }
 
-    // One newline more than `tail`: the oldest segment in the buffer starts
-    // mid-line whenever we stop before the file start, and gets dropped below.
-    if (newlines > tail) break;
-    if (totalLen > options.maxSize) {
+    const kept =
+      sliceStart > 0 ? buffer.subarray(sliceStart, bytesRead) : buffer.subarray(0, bytesRead);
+    chunks.push(kept);
+    totalLen += kept.length;
+
+    const effectiveBytes = totalLen - (endsWithLf ? 1 : 0) - (sliceStart > 0 ? 1 : 0);
+    if (position > 0 && effectiveBytes > options.maxSize) {
       stoppedByLimit = true;
       break;
     }
+    if (newlines >= neededNewlines) break;
   }
 
+  chunks.reverse();
   const allBytes = Buffer.concat(chunks, totalLen);
   let lines = allBytes.toString(encoding).split('\n');
 
@@ -384,13 +414,6 @@ async function readTailContent(
     lines = lines.slice(1);
   }
 
-  if (stoppedByLimit && lines.length < tail) {
-    throw createTooLargeError(totalLen, options.maxSize, filePath, {
-      label: `could not collect ${tail} lines`,
-      suggestion: 'Use a narrower tail or head.',
-    });
-  }
-
   let hasMoreLines = stoppedByLimit || position > 0;
   if (lines.length > tail) {
     hasMoreLines = true;
@@ -398,6 +421,16 @@ async function readTailContent(
   }
 
   const content = lines.join('\n');
+  const contentBytes = Buffer.byteLength(content, encoding);
+  if ((stoppedByLimit || contentBytes > options.maxSize) && lines.length < tail) {
+    throw createTooLargeError(totalLen, options.maxSize, filePath, {
+      label: `could not collect ${tail} lines`,
+      suggestion: 'Use a narrower tail or head.',
+    });
+  }
+  if (options.hardCap && contentBytes > options.maxSize) {
+    throw createTooLargeError(contentBytes, options.maxSize, filePath);
+  }
   return {
     content,
     linesRead: lines.length,
@@ -524,7 +557,8 @@ export async function readFileWithStats(
   openVerified: () => Promise<FileHandle>,
 ): Promise<ReadFileResult> {
   const options: ReadOptions = {
-    maxSize: getMaxTextFileSize(),
+    maxSize: spec.maxSize ?? getMaxTextFileSize(),
+    ...(spec.hardCap ? { hardCap: true } : {}),
     ...(spec.signal ? { signal: spec.signal } : {}),
   };
   spec.signal?.throwIfAborted();

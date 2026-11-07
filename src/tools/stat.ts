@@ -149,8 +149,6 @@ async function getFileInfo(
       entryCount = await fs.countEntries(requestedPath, { signal });
     } catch (error) {
       rethrowIfAborted(error);
-      // A deadline is not an abort to rethrowIfAborted, but it must still end the call as TIMEOUT.
-      signal.throwIfAborted();
       log('warning', `stat: entry count failed for "${requestedPath}": ${String(error)}`, 'stat');
     }
   }

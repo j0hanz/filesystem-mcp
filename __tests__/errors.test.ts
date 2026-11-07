@@ -9,6 +9,7 @@ import {
   isSkippable,
   isSkippableErrno,
   Problem,
+  rethrowIfAborted,
 } from '../src/core/errors.ts';
 
 const errnoError = (code: string, path?: string): NodeJS.ErrnoException =>
@@ -36,6 +37,43 @@ describe('classifyCauseChain', () => {
       cause: Object.assign(new Error('stop'), { name: 'AbortError' }),
     });
     assert.strictEqual(classifyCauseChain(wrapped).code, ErrorCode.CANCELLED);
+  });
+  it('classifies Node AbortError wrapping a TimeoutError cause as TIMEOUT, not CANCELLED', () => {
+    const timeoutCause = new DOMException(
+      'The operation was aborted due to timeout',
+      'TimeoutError',
+    );
+    const abortErr = Object.assign(
+      new Error('The operation was aborted', { cause: timeoutCause }),
+      {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      },
+    );
+    const classified = classifyCauseChain(abortErr);
+    assert.strictEqual(classified.code, ErrorCode.TIMEOUT);
+  });
+  it('rethrowIfAborted rethrows TimeoutError, FsError(TIMEOUT), and AbortError wrapping TimeoutError', () => {
+    const timeoutDom = new DOMException('timed out', 'TimeoutError');
+    assert.throws(
+      () => rethrowIfAborted(timeoutDom),
+      (err) => err === timeoutDom,
+    );
+
+    const fsTimeout = new FsError(ErrorCode.TIMEOUT, 'timed out');
+    assert.throws(
+      () => rethrowIfAborted(fsTimeout),
+      (err) => err === fsTimeout,
+    );
+
+    const wrapped = Object.assign(new Error('aborted', { cause: timeoutDom }), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    assert.throws(
+      () => rethrowIfAborted(wrapped),
+      (err) => err === wrapped,
+    );
   });
 });
 

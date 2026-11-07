@@ -132,20 +132,24 @@ type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
 const READ_TOOL_LABEL = 'Read';
 
 function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
-  const signalPart = signal ? { signal } : {};
+  const slice = args.paths !== undefined && hasLineRange(args);
+  const base = {
+    ...(signal ? { signal } : {}),
+    ...(slice ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true } : {}),
+  };
   const { head, tail, startLine, endLine } = args;
 
-  if (head !== undefined) return { kind: 'head', lines: head, ...signalPart };
-  if (tail !== undefined) return { kind: 'tail', lines: tail, ...signalPart };
+  if (head !== undefined) return { kind: 'head', lines: head, ...base };
+  if (tail !== undefined) return { kind: 'tail', lines: tail, ...base };
   if (startLine !== undefined || endLine !== undefined) {
     return {
       kind: 'range',
       start: startLine ?? 1,
       ...(endLine !== undefined ? { end: endLine } : {}),
-      ...signalPart,
+      ...base,
     };
   }
-  return { kind: 'full', ...signalPart };
+  return { kind: 'full', ...base };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
@@ -469,6 +473,14 @@ async function readOnePath(
   try {
     result = await ctx.fs.readFile(filePath, spec);
   } catch (error: unknown) {
+    if (
+      args.paths !== undefined &&
+      isRangeRead &&
+      error instanceof FsError &&
+      error.code === ErrorCode.TOO_LARGE
+    ) {
+      throw budgetSkip(filePath, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
+    }
     if (!isBinaryRefusal(error)) throw error;
     // The schema refuses binary with a range, so this is always a full read.
     if (args.binary) return await readBinaryResource(filePath, args, ctx);
@@ -532,7 +544,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const slice = args.paths !== undefined && hasLineRange(args);
-    const items: BudgetItem[] =
+    const rawItems: BudgetItem[] =
       args.paths === undefined
         ? [{ path: args.path ?? '' }]
         : slice
@@ -546,21 +558,50 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
                 binary: args.binary,
               },
             );
+    const items = rawItems.map((item, index) => ({ ...item, index }));
     let charged = 0;
+    let nextToCharge = 0;
+    const waiters = new Map<number, () => void>();
+    const waitForTurn = (index: number): Promise<void> =>
+      nextToCharge === index
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            waiters.set(index, resolve);
+          });
+    const advanceTurn = (): void => {
+      nextToCharge += 1;
+      const wake = waiters.get(nextToCharge);
+      if (wake) {
+        waiters.delete(nextToCharge);
+        wake();
+      }
+    };
     const { results: ordered, summary } = await runOverPaths(
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      async ({ path, skip }) => {
-        if (skip) throw skip;
-        const value = await readOnePath(path, args, ctx);
-        if (!slice) return value;
-        // A slice's cost is known only once read; charged in completion order, so memory stays bounded.
-        const size = Buffer.byteLength(value.content ?? '', 'utf8');
-        if (charged + size > READ_MANY_MAX_TOTAL_BYTES) {
+      async ({ path, skip, index }) => {
+        let value: PerPathReadValue | undefined;
+        try {
+          if (skip) throw skip;
+          value = await readOnePath(path, args, ctx);
+        } finally {
+          if (slice) {
+            await waitForTurn(index);
+            if (value !== undefined) {
+              const size = Buffer.byteLength(value.content ?? '', 'utf8');
+              if (charged + size <= READ_MANY_MAX_TOTAL_BYTES) {
+                charged += size;
+              } else {
+                value = undefined;
+              }
+            }
+            advanceTurn();
+          }
+        }
+        if (value === undefined) {
           throw budgetSkip(path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
         }
-        charged += size;
         return value;
       },
     );

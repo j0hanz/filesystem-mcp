@@ -144,6 +144,35 @@ describe('UndoJournal', () => {
     assert.strictEqual(journal.get(second), undefined);
   });
 
+  it('tracks entry byte weight incrementally without re-weighing existing entries on add or eviction', () => {
+    const journal = new UndoJournal(1100);
+    const rec = writeRecord(6);
+    let weighCount = 0;
+    const track = (records: ReturnType<typeof writeRecord>[]): ReturnType<typeof writeRecord>[] => {
+      const origReduce = records.reduce.bind(records);
+      records.reduce = ((...args: Parameters<typeof origReduce>) => {
+        weighCount++;
+        return origReduce(...args);
+      }) as typeof records.reduce;
+      return records;
+    };
+    const first = journal.add('edit', track([rec, writeRecord(6)]));
+    assert.strictEqual(weighCount, 1, 'weighed once on add');
+
+    // Shrink first to 1 record (518 bytes) and add a second 518-byte entry
+    journal.replaceRecords(first, track([rec]));
+    const second = journal.add('edit', [writeRecord(6)]);
+    assert.ok(journal.get(first), 'shrunk first entry must still fit alongside second');
+    assert.ok(journal.get(second));
+
+    // Adding a third 518-byte entry evicts `first` without re-weighing existing entries
+    const third = journal.add('edit', [writeRecord(6)]);
+    assert.strictEqual(journal.get(first), undefined);
+    assert.ok(journal.get(second));
+    assert.ok(journal.get(third));
+    assert.strictEqual(weighCount, 2, 'weighed only once on add and once on replaceRecords');
+  });
+
   it('a maxBytes of 0 disables the journal', () => {
     assert.strictEqual(new UndoJournal(0).enabled, false);
     assert.strictEqual(new UndoJournal(1).enabled, true);
@@ -242,6 +271,31 @@ describe('UndoCapture via GuardedFileSystem', () => {
     if (!isWrite(rec)) assert.fail('expected a write record');
     assert.strictEqual(rec.bytes.toString('utf8'), 'abc');
     assert.strictEqual(rec.expect, sha256Hex('abcdef'));
+  });
+
+  it('append when a concurrent writer creates the file after lstat abandons capture instead of recording remove', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const file = join(tmpDir, 'concurrent-append.txt');
+    const cap = capture();
+    let checks = 0;
+    // Line 952 calls signal.throwIfAborted() right after fsLstat saw ENOENT and right before fsOpen(O_CREAT|O_EXCL).
+    const signal = {
+      aborted: false,
+      throwIfAborted() {
+        if (++checks === 1) writeFileSync(file, 'concurrent-data');
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+    const fs = makeFs(cap);
+    await fs.appendFile(file, '-appended', { signal });
+    assert.strictEqual(await readFile(file, 'utf8'), 'concurrent-data-appended');
+    assert.strictEqual(
+      cap.unavailableReason(),
+      'concurrent-append.txt: file was created concurrently',
+    );
+    assert.deepStrictEqual(cap.journalRecords(), []);
+    cap.release();
   });
 
   it('mkdir -p a/b/c pushes 3 rmdir, top-down', async () => {

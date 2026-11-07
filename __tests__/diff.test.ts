@@ -6,6 +6,7 @@ import { createTwoFilesPatch, parsePatch } from 'diff';
 
 import { diffStatsFromPatch, twoFilesPatch, unifiedPatch } from '../src/core/diff.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
+import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import { DIFF } from '../src/tools/diff.ts';
 import { EDIT } from '../src/tools/edit.ts';
 import { PATCH } from '../src/tools/patch.ts';
@@ -182,13 +183,15 @@ describe('core/diff', () => {
   });
 
   it('a burst past the worker queue cap gives up at once', async () => {
-    // Four worker diffs may be pending; the rest degrade instead of holding their text.
+    // PARALLEL_CONCURRENCY worker diffs may be pending; the rest degrade instead of holding their text.
+    const overflow = 4;
     const out = await Promise.all(
-      Array.from({ length: 8 }, (_, i) =>
+      Array.from({ length: PARALLEL_CONCURRENCY + overflow }, (_, i) =>
         unifiedPatch('f', lines(`a${String(i)}-`, 600), lines(`b${String(i)}-`, 600)),
       ),
     );
-    assert.strictEqual(out.filter((p) => p === undefined).length, 4);
+    assert.strictEqual(out.filter((p) => p !== undefined).length, PARALLEL_CONCURRENCY);
+    assert.strictEqual(out.filter((p) => p === undefined).length, overflow);
   });
 });
 

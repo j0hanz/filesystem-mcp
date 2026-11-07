@@ -111,10 +111,11 @@ const weigh = (records: readonly UndoRecord[]): number =>
 
 export class UndoJournal {
   // Insertion order is call order; nothing ever re-inserts, so the last key is the newest call.
-  readonly #byId = new Map<string, UndoEntry>();
+  readonly #byId = new Map<string, UndoEntry & { weight: number }>();
   /** Move records by the identity they track; rebuilt lazily after the journal changes. */
   #renameIndex: Map<string, RenameRecord[]> | undefined;
   readonly maxBytes: number;
+  #bytes = 0;
 
   constructor(maxBytes = getMaxUndoBytes()) {
     this.maxBytes = maxBytes;
@@ -124,11 +125,18 @@ export class UndoJournal {
     return this.maxBytes > 0;
   }
 
+  #deleteEntry(id: string): void {
+    const existing = this.#byId.get(id);
+    if (!existing) return;
+    this.#byId.delete(id);
+    this.#bytes -= existing.weight;
+    this.#renameIndex = undefined;
+  }
+
   #pruneExpired(now: number): void {
     for (const [id, entry] of this.#byId) {
       if (now - entry.createdAt >= TTL_MS) {
-        this.#byId.delete(id);
-        this.#renameIndex = undefined;
+        this.#deleteEntry(id);
       }
     }
   }
@@ -156,15 +164,14 @@ export class UndoJournal {
     const now = Date.now();
     this.#pruneExpired(now);
     const id = this.#newId();
+    const weight = weigh(records);
     this.#renameIndex = undefined;
-    this.#byId.set(id, { id, tool, createdAt: now, records });
-    while (
-      this.#byId.size > MAX_ENTRIES ||
-      [...this.#byId.values()].reduce((n, e) => n + weigh(e.records), 0) > this.maxBytes
-    ) {
+    this.#byId.set(id, { id, tool, createdAt: now, records, weight });
+    this.#bytes += weight;
+    while (this.#byId.size > MAX_ENTRIES || this.#bytes > this.maxBytes) {
       const oldest = this.#byId.keys().next().value;
       if (oldest === undefined) break;
-      this.#byId.delete(oldest);
+      this.#deleteEntry(oldest);
     }
     return id;
   }
@@ -182,11 +189,16 @@ export class UndoJournal {
   replaceRecords(id: string, records: UndoRecord[]): void {
     this.#renameIndex = undefined;
     if (records.length === 0) {
-      this.#byId.delete(id);
+      this.#deleteEntry(id);
       return;
     }
     const entry = this.#byId.get(id);
-    if (entry) entry.records = records;
+    if (entry) {
+      const nextWeight = weigh(records);
+      this.#bytes += nextWeight - entry.weight;
+      entry.records = records;
+      entry.weight = nextWeight;
+    }
   }
 
   /**
@@ -222,6 +234,7 @@ export class UndoJournal {
 
   clear(): void {
     this.#renameIndex = undefined;
+    this.#bytes = 0;
     this.#byId.clear();
   }
 }
