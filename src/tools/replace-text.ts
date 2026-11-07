@@ -522,11 +522,12 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
   name: 'replace_text',
   title: 'Search and Replace',
   description:
-    'Find and replace every occurrence of literal text or an RE2 regex, like sed -i, in one file or all files ' +
-    'under a directory, optionally filtered by glob. The pattern runs over the whole file, so it can span lines, ' +
-    'and ^ and $ anchor to file start and end. A directory run stops near 100 matches; maxMatches sets a strict cap. ' +
-    'Each file is written separately; preview wide scopes with dryRun, revert with undo. ' +
-    'Use edit for one unique exact match.',
+    'Find and replace text or an RE2 regex across one file or all files under a directory, like sed -i. ' +
+    'Use when replacing every match across a file or project. ' +
+    'Patterns match across the whole file and can span lines (^ and $ anchor to file start and end). ' +
+    'Directory runs stop near 100 matches unless maxMatches is raised. ' +
+    'Returns match counts, modified files, and an undo id. Use dryRun to preview wide scopes. ' +
+    'Use edit for a single unique snippet, and patch to apply unified diffs.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
   deadline: true,
