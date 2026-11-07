@@ -94,7 +94,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   // A dry run shows where the hunks landed, like edit's, and counts what it
   // shows: a hunk that re-adds unchanged lines counts more than it changes.
   const computed = args.dryRun
-    ? unifiedPatch(basename(done.validPath), done.before, done.after)
+    ? await unifiedPatch(basename(done.validPath), done.before, done.after)
     : undefined;
   const { linesAdded, linesRemoved } = computed ? diffStatsFromPatch(computed) : done.result;
   // The patched file used to come back whole in the text block, so a one-line

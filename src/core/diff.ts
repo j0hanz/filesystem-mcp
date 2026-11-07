@@ -1,4 +1,15 @@
-import { FILE_HEADERS_ONLY, formatPatch, OMIT_HEADERS, structuredPatch } from 'diff';
+import { Worker } from 'node:worker_threads';
+
+import {
+  FILE_HEADERS_ONLY,
+  formatPatch,
+  OMIT_HEADERS,
+  type StructuredPatch,
+  structuredPatch,
+} from 'diff';
+
+import { runExclusive } from './concurrency.ts';
+import type { DiffWorkerRequest } from './diff-worker.ts';
 
 // Unified-diff computation over two text buffers. Kept out of `fmt.ts`, which
 // formats terminal output and has no business pulling in the `diff` package.
@@ -8,9 +19,63 @@ import { FILE_HEADERS_ONLY, formatPatch, OMIT_HEADERS, structuredPatch } from 'd
  * quadratic in differing lines (8k changed lines ≈ 11 s), and neither the tool
  * timeout nor the abort signal can interrupt it. Past the deadline the `diff`
  * package returns `undefined`; callers degrade (no preview / no counts) instead
- * of freezing the process.
+ * of freezing the process. A diff over INLINE_DIFF_MAX_LINES runs in a worker,
+ * so the deadline holds the worker, not the event loop (GHSA-9p5w-jvxw-wrcg).
  */
 export const DIFF_TIMEOUT_MS = 1000;
+
+/** Lines in both sides at or under which a diff runs inline: worst case ~33 ms. */
+const INLINE_DIFF_MAX_LINES = 1000;
+
+// Slack past DIFF_TIMEOUT_MS before a worker that never answered is killed.
+const WORKER_KILL_GRACE_MS = 500;
+
+// One diff worker at a time: a burst queues instead of taking every core.
+const DIFF_WORKER_KEY = Symbol('diff-worker');
+
+// tsc leaves this string alone, so pick the extension the running module has.
+const WORKER_URL = new URL(
+  import.meta.url.endsWith('.ts') ? './diff-worker.ts' : './diff-worker.js',
+  import.meta.url,
+);
+
+function overInlineLimit(before: string, after: string): boolean {
+  let count = 2;
+  for (const text of [before, after]) {
+    for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) {
+      if (++count > INLINE_DIFF_MAX_LINES) return true;
+    }
+  }
+  return false;
+}
+
+/** Runs one structuredPatch in a worker; `undefined` on its deadline, a crash, or the kill timer. */
+function patchInWorker(request: DiffWorkerRequest): Promise<StructuredPatch | undefined> {
+  return new Promise((resolve) => {
+    const worker = new Worker(WORKER_URL);
+    let settled = false;
+    const finish = (patch: StructuredPatch | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(kill);
+      resolve(patch);
+      void worker.terminate();
+    };
+    const kill = setTimeout(() => {
+      finish(undefined);
+    }, request.options.timeout + WORKER_KILL_GRACE_MS);
+    worker.once('message', (patch: StructuredPatch | null) => {
+      finish(patch ?? undefined);
+    });
+    worker.once('error', () => {
+      finish(undefined);
+    });
+    worker.once('exit', () => {
+      finish(undefined);
+    });
+    worker.postMessage(request);
+  });
+}
 
 /**
  * What could break a header line, misorder it on screen, or be lost when it is
@@ -26,7 +91,7 @@ function headerName(name: string): string {
 }
 
 /** `createTwoFilesPatch` with readable names; `undefined` past `options.timeout`. */
-export function twoFilesPatch(
+export async function twoFilesPatch(
   oldName: string,
   newName: string,
   before: string,
@@ -34,8 +99,12 @@ export function twoFilesPatch(
   oldHeader: string,
   newHeader: string,
   options: { context?: number; timeout: number },
-): string | undefined {
-  const patch = structuredPatch(oldName, newName, before, after, oldHeader, newHeader, options);
+): Promise<string | undefined> {
+  const patch = overInlineLimit(before, after)
+    ? await runExclusive(DIFF_WORKER_KEY, () =>
+        patchInWorker({ oldName, newName, before, after, oldHeader, newHeader, options }),
+      )
+    : structuredPatch(oldName, newName, before, after, oldHeader, newHeader, options);
   if (patch === undefined) return undefined;
   const shownOld = headerName(oldName);
   const header =
@@ -49,7 +118,7 @@ export function unifiedPatch(
   original: string,
   modified: string,
   timeoutMs = DIFF_TIMEOUT_MS,
-): string | undefined {
+): Promise<string | undefined> {
   return twoFilesPatch(label, label, original, modified, 'Original', 'Modified', {
     timeout: timeoutMs,
   });

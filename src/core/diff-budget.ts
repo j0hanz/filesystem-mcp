@@ -51,21 +51,23 @@ export function finishDiff(budget: DiffBudget): void {
  * Diffs one file as it finishes, so no file's contents outlive it. A patch is
  * refused only when the first-fit fold would drop it in any order.
  */
-export function patchWithinBudget(
+export async function patchWithinBudget(
   budget: DiffBudget,
   index: number,
   header: string,
   done: Rewritten<number>,
-): Patch {
+): Promise<Patch> {
   // First-fit over the settled walk-order prefix is final, and later patches
   // only add to what the final pass uses before this index. A lower patch
   // still running may displace a kept one, so the unsettled ones do not count.
-  const remaining = MAX_DIFF_SIZE - budget.folded.length;
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
-  if (remaining === 0) return { diffTruncated: true };
-  const patch = unifiedPatch(header, done.before, done.after);
-  if (patch === undefined || patch.length > remaining) return { diffTruncated: true };
+  if (budget.folded.length === MAX_DIFF_SIZE) return { diffTruncated: true };
+  const patch = await unifiedPatch(header, done.before, done.after);
+  // Read after the await: other files may have folded while this one diffed.
+  if (patch === undefined || patch.length > MAX_DIFF_SIZE - budget.folded.length) {
+    return { diffTruncated: true };
+  }
   budget.stored.set(index, patch);
   return {};
 }
