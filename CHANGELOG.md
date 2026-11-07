@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.3] - 2026-11-07
+
+Fixes to `read`, `delete`, `undo` and error reporting, lower memory and event-loop
+cost for large trees and diffs, and rewritten tool descriptions. Nothing needs
+adapting before upgrading.
+
+### Security
+
+- **The HTTP rate limiter bounds its per-IP table.** A flood of distinct addresses can no longer grow it without limit.
+
+### Changed
+
+- **Tool descriptions are rewritten.** All 14 tools now say when to use them, what they return, and which sibling tool fits. Inputs, results and behavior are unchanged.
+
+### Fixed
+
+- **`read` accepts a single-line tail at the exact budget.** A `tail` read of a file whose text fit the batch budget by one byte was rejected because the trailing newline was counted.
+- **`read` batches stay within memory and charge the budget in input order.** Over-budget slices are no longer held in memory.
+- **`delete` reports a missing path once.** With `ignoreIfNotExists`, paths that resolve to the same location are no longer listed twice.
+- **`undo` abandons an append capture when the file is created at the same time**, instead of recording a wrong restore point.
+- **A timeout is reported as a timeout.** `TimeoutError` now takes priority over an outer `AbortError`, and failed requests give a clearer message.
+
+### Performance
+
+- **`.gitignore` files load on demand** during a glob instead of in a walk of the whole tree, and ignore files are read asynchronously.
+- **`diff` reuses a warm worker thread**, and its queue holds 16 waiting diffs.
+- **`undo` tracks its journal size incrementally**, and `patch` and `replace_text` skip work they do not need.
+
 ## [2.19.2] - 2026-11-07
 
 A description-only release: the `diff` tool now says when it gives up. Nothing
