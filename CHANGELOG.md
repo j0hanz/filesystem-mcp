@@ -5,12 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.19.1] - 2026-11-07
+
+Two security fixes: a rate-limit bypass over HTTP and a diff that stalled the
+server. Before upgrading, read Security if you set `FS_TRUST_PROXY`: a hop
+count such as `1` now stops the server from starting.
 
 ### Security
 
 - **`FS_TRUST_PROXY` no longer accepts a hop count** ([GHSA-f423-gwmw-6wwh](https://github.com/j0hanz/filesystem-mcp/security/advisories/GHSA-f423-gwmw-6wwh)). A hop count let a client that reached the server directly forge `X-Forwarded-For` and skip the per-IP rate limit. Replace `FS_TRUST_PROXY=1` with your proxy's address, such as `loopback`. The server now refuses to start with a hop count or `true`/`false`.
-
 - **Big diffs no longer stall the server** ([GHSA-9p5w-jvxw-wrcg](https://github.com/j0hanz/filesystem-mcp/security/advisories/GHSA-9p5w-jvxw-wrcg)). A diff of two large, mostly different files held the event loop for up to 1 s, and a stream of them kept every other client waiting. Diffs over 1000 lines or 64 KiB now run in a worker thread, one at a time, and other requests are served meanwhile. When four big diffs are already waiting, a further one is skipped the way a diff past its deadline is: `diff` answers "too large", and `edit`, `patch` and `replace_text` leave out the preview.
 
 ## [2.19.0] - 2026-11-06
