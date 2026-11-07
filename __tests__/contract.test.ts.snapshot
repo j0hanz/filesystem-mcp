@@ -123,7 +123,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused, and files too different give TOO_LARGE.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. Rejects binary files and paths outside allowed roots. Use read to inspect full files or slices first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -287,7 +287,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern; read returns file contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Traversal is one level deep unless maxDepth is raised. Skips hidden and ignored files (.git, node_modules) by default. sortBy: size orders largest first. Returns formatted tree text with nextCursor when paged. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -631,7 +631,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Call it first when you do not know where paths may point. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the workspace directory roots this server can access, including session-granted roots. Use when starting a session or checking accessible directory boundaries. Returns { roots, readOnlyDirs } as absolute paths. Mutating operations under readOnlyDirs are refused with ACCESS_DENIED. Other tools prompt for approval when accessing paths outside these roots.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -733,7 +733,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Returns root-relative or absolute paths, and read accepts either form. A pattern without / matches file names at any depth. Hidden and ignored files are skipped by default. Pass the trailer's cursor for the next page. list browses directories; search_text searches contents.",
+      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches relative paths (src/**/*.ts). Skips hidden and ignored files by default. Returns matching paths and a nextCursor for paging. Use list to browse directory trees, and search_text to search file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -954,7 +954,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Identical files give no hunks; binary and non-UTF-8 files are refused, and files too different give TOO_LARGE.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. Rejects binary files and paths outside allowed roots. Use read to inspect full files or slices first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -993,7 +993,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree, one level deep unless maxDepth is raised. Hidden entries are skipped unless includeHidden is set, and ignored ones (.gitignore matches, .git, node_modules, dist, build, out, tmp) unless includeIgnored is set. includeSizes adds sizes and a total; stat returns dates; find_files searches by name pattern; read returns file contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Traversal is one level deep unless maxDepth is raised. Skips hidden and ignored files (.git, node_modules) by default. sortBy: size orders largest first. Returns formatted tree text with nextCursor when paged. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1134,7 +1134,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the directories this server can access, as absolute paths, including any the user granted during this session. Call it first when you do not know where paths may point. Directories marked read-only appear in readOnlyDirs; writes, moves, and deletes under them are refused. Other tools can ask the user to grant access to a path outside them.",
+      "description": "List the workspace directory roots this server can access, including session-granted roots. Use when starting a session or checking accessible directory boundaries. Returns { roots, readOnlyDirs } as absolute paths. Mutating operations under readOnlyDirs are refused with ACCESS_DENIED. Other tools prompt for approval when accessing paths outside these roots.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -1236,7 +1236,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Returns root-relative or absolute paths, and read accepts either form. A pattern without / matches file names at any depth. Hidden and ignored files are skipped by default. Pass the trailer's cursor for the next page. list browses directories; search_text searches contents.",
+      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches relative paths (src/**/*.ts). Skips hidden and ignored files by default. Returns matching paths and a nextCursor for paging. Use list to browse directory trees, and search_text to search file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
