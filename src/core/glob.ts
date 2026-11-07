@@ -1,16 +1,22 @@
+import { lstatSync, readFileSync } from 'node:fs';
 import {
   glob as fsGlob,
   readdir as fsReaddir,
   readFile as fsReadFile,
   lstat,
 } from 'node:fs/promises';
-import { basename, dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
+import { dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
-import { processInParallel } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from './errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  isNotFoundErrno,
+  rethrowIfAborted,
+} from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import {
@@ -236,37 +242,6 @@ export function isSafeGlobSyntax(pattern: string): boolean {
 /** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
 const MAX_GITIGNORE_BYTES = MIB;
 
-async function loadGitignoreFiles(
-  root: string,
-  gitignorePaths: readonly string[],
-  manager: GitignoreManager,
-  signal?: AbortSignal,
-): Promise<void> {
-  await processInParallel(
-    gitignorePaths,
-    async (relPath) => {
-      const absPath = join(root, relPath);
-      try {
-        // lstat, not stat: a symlinked .gitignore may point at a device, a
-        // FIFO or a huge file outside the root. Only a plain, small file is a
-        // rule set worth reading.
-        const info = await lstat(absPath);
-        if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) return;
-        const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
-        const matcher = ignore();
-        matcher.add(contents);
-        const dir = toPosixPath(dirname(relPath));
-        manager.addMatcher(dir === '.' ? '' : dir, matcher);
-      } catch (error) {
-        rethrowIfAborted(error);
-        Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
-      }
-    },
-    GLOB_BATCH_CONCURRENCY,
-    signal,
-  );
-}
-
 /**
  * Load `.gitignore` from each ancestor of `root` up to and including `ceiling`,
  * farthest first. A rule set that ignores `root` itself is skipped: the caller
@@ -309,63 +284,85 @@ async function loadAncestorGitignores(
 }
 
 class GitignoreManager {
-  private matchers = new Map<string, Ignore>();
+  private readonly root: string;
+  private readonly includeHidden: boolean;
+  private readonly maxDepth: number | undefined;
+  private matchers = new Map<string, Ignore | null>();
   /** Rules from directories above the walk root, farthest first; `prefix` re-bases a walk-relative path to that directory. */
   private ancestors: { prefix: string; matcher: Ignore }[] = [];
   private dirCache = new Map<string, boolean>();
 
-  addMatcher(dir: string, matcher: Ignore): void {
-    this.matchers.set(dir, matcher);
+  constructor(root: string, includeHidden: boolean, maxDepth?: number) {
+    this.root = resolve(root);
+    this.includeHidden = includeHidden;
+    this.maxDepth = maxDepth;
   }
 
   addAncestorMatcher(prefix: string, matcher: Ignore): void {
     this.ancestors.push({ prefix, matcher });
   }
 
-  /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
   static async load(
     root: string,
     includeHidden: boolean,
     signal?: AbortSignal,
     maxDepth?: number,
     ignoreCeiling?: string,
-  ): Promise<GitignoreManager | null> {
-    const manager = new GitignoreManager();
+  ): Promise<GitignoreManager> {
+    const manager = new GitignoreManager(root, includeHidden, maxDepth);
     try {
-      const gitignorePaths: string[] = [];
-      // Search dot-directories (.venv, .terraform, ...) for rules only when the
-      // walk includes hidden entries; for any other walk, enumerating every
-      // hidden tree would cost more than the walk itself.
-      const gitignorePatterns = includeHidden
-        ? [...buildHiddenPatterns('**/.gitignore')]
-        : ['**/.gitignore'];
-      const gitignoreEntries = fsGlob(gitignorePatterns, {
-        cwd: root,
-        // Skip what the walk itself skips, and stop one level past its depth
-        // bound: a .gitignore at depth d only affects entries at depth >= d.
-        exclude: (entry: string) => {
-          if (signal?.aborted) return true;
-          const name = basename(entry);
-          if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) return true;
-          return maxDepth !== undefined && toPosixPath(entry).split('/').length - 1 > maxDepth;
-        },
-      });
-      for await (const match of gitignoreEntries) {
-        if (signal?.aborted) break;
-        gitignorePaths.push(match);
-      }
-
-      await loadGitignoreFiles(root, gitignorePaths, manager, signal);
       if (ignoreCeiling !== undefined) {
         await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
       }
     } catch (error) {
       rethrowIfAborted(error);
       Logger.warn(
-        `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
+        `Failed to load ancestor .gitignore files above ${root}: ${formatUnknownErrorMessage(error)}`,
       );
     }
-    return manager.matchers.size === 0 && manager.ancestors.length === 0 ? null : manager;
+    return manager;
+  }
+
+  private getMatcher(dir: string): Ignore | null {
+    const cached = this.matchers.get(dir);
+    if (cached !== undefined) return cached;
+
+    if (dir !== '') {
+      const segments = dir.split('/');
+      if (this.maxDepth !== undefined && segments.length > this.maxDepth) {
+        this.matchers.set(dir, null);
+        return null;
+      }
+      // Search dot-directories (.venv, .terraform, ...) for rules only when the
+      // walk includes hidden entries; for any other walk, reading rules inside
+      // hidden trees would diverge from non-hidden discovery.
+      if (!this.includeHidden && segments.some((part) => part.startsWith('.'))) {
+        this.matchers.set(dir, null);
+        return null;
+      }
+    }
+
+    const absPath = dir === '' ? join(this.root, '.gitignore') : join(this.root, dir, '.gitignore');
+    try {
+      // lstat, not stat: a symlinked .gitignore may point at a device, a
+      // FIFO or a huge file outside the root. Only a plain, small file is a
+      // rule set worth reading.
+      const info = lstatSync(absPath);
+      if (!info.isFile() || info.size > MAX_GITIGNORE_BYTES) {
+        this.matchers.set(dir, null);
+        return null;
+      }
+      const contents = readFileSync(absPath, 'utf-8');
+      const matcher = ignore().add(contents);
+      this.matchers.set(dir, matcher);
+      return matcher;
+    } catch (error) {
+      if (!isNotFoundErrno(error)) {
+        Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
+      }
+      this.matchers.set(dir, null);
+      return null;
+    }
   }
 
   isIgnored(relativePath: string, isDirectory: boolean): boolean {
@@ -409,7 +406,7 @@ class GitignoreManager {
     for (const { prefix, matcher } of this.ancestors) apply(matcher, `${prefix}/${posixPath}`);
 
     // Check root level
-    const rootMatcher = this.matchers.get('');
+    const rootMatcher = this.getMatcher('');
     if (rootMatcher) apply(rootMatcher, posixPath);
 
     // Check subdirectories
@@ -419,7 +416,7 @@ class GitignoreManager {
       const part = parts[i];
       if (!part) continue;
       currentDir = currentDir ? `${currentDir}/${part}` : part;
-      const matcher = this.matchers.get(currentDir);
+      const matcher = this.getMatcher(currentDir);
       if (matcher) apply(matcher, parts.slice(i + 1).join('/'));
     }
 
@@ -483,7 +480,6 @@ export interface GlobEntriesOptions {
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
-const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
 function normalizePattern(pattern: string, baseNameMatch: boolean): string {
   const normalized = toPosixPath(pattern);
