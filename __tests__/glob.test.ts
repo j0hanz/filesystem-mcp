@@ -80,6 +80,28 @@ describe('globEntries', () => {
     });
   }
 
+  for (const skipIgnored of [false, true]) {
+    it(`a timed-out walk throws TimeoutError instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
+      const root = await createTestRoot();
+      try {
+        await mkdir(join(root, 'sub'), { recursive: true });
+        await writeFile(join(root, '.gitignore'), '*.log\n');
+        const timeoutErr = new DOMException('timed out', 'TimeoutError');
+        await assert.rejects(
+          walk({
+            cwd: root,
+            pattern: '**/*.nomatch',
+            skipIgnored,
+            signal: AbortSignal.abort(timeoutErr),
+          }),
+          (err: unknown) => err === timeoutErr,
+        );
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
   it('globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
     const root = await createTestRoot();
     try {

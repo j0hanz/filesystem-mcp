@@ -10,7 +10,7 @@ import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
 import { processInParallel } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, rethrowIfAborted } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import {
@@ -258,7 +258,7 @@ async function loadGitignoreFiles(
         const dir = toPosixPath(dirname(relPath));
         manager.addMatcher(dir === '.' ? '' : dir, matcher);
       } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') throw error;
+        rethrowIfAborted(error);
         Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
       }
     },
@@ -302,7 +302,7 @@ async function loadAncestorGitignores(
       if (matcher.test(`${prefix}/`).ignored) continue;
       manager.addAncestorMatcher(prefix, matcher);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw error;
+      rethrowIfAborted(error);
       // ENOENT is the normal case (no .gitignore at this level); anything else is not worth a warning per walk
     }
   }
@@ -360,7 +360,7 @@ class GitignoreManager {
         await loadAncestorGitignores(root, ignoreCeiling, manager, signal);
       }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw error;
+      rethrowIfAborted(error);
       Logger.warn(
         `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
       );

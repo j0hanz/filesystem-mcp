@@ -209,12 +209,12 @@ function scanCauseChain(error: unknown): {
   return { aborted, timedOut, errno };
 }
 
-/** The scan's facts as a Problem: an abort wins, then a timeout, then errno. */
+/** The scan's facts as a Problem: a timeout wins over an outer abort wrapper, then abort, then errno. */
 export function classifyCauseChain(error: unknown, rows?: ErrnoRows): Problem {
   const message = formatUnknownErrorMessage(error);
   const { aborted, timedOut, errno } = scanCauseChain(error);
-  if (aborted) return Problem.cancelled(message);
   if (timedOut) return build(ErrorCode.TIMEOUT, message);
+  if (aborted) return Problem.cancelled(message);
   if (errno !== undefined) {
     const row = rows?.[errno.code];
     if (row !== undefined) return build(row.code, row.message, { path: errno.path });
@@ -286,10 +286,11 @@ export function isSkippable(error: unknown): boolean {
  */
 export function rethrowIfAborted(error: unknown): void {
   if (isFsError(error)) {
-    if (error.code === ErrorCode.CANCELLED) throw error;
+    if (error.code === ErrorCode.CANCELLED || error.code === ErrorCode.TIMEOUT) throw error;
     return;
   }
-  if (scanCauseChain(error).aborted) throw error;
+  const { aborted, timedOut } = scanCauseChain(error);
+  if (aborted || timedOut) throw error;
 }
 
 export function formatUnknownErrorMessage(error: unknown): string {
