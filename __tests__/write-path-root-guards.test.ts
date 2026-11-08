@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 
-import { ErrorCode } from '../src/core/errors.ts';
+import { ErrorCode, FsError, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -209,6 +209,18 @@ describe('Write-path and root guards (issue #200)', () => {
       assert.equal(matcher.isSensitive('/proj/a.deck'), true);
       assert.equal(matcher.isSensitive('/proj/main.ts'), false);
     });
+  });
+
+  it('validatePathForDelete rejects an allowed root directory', async () => {
+    await assert.rejects(
+      () => ctx.pathGuard.validatePathForDelete(tmpDir),
+      (err: unknown) => {
+        assert.ok(isFsError(err));
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        assert.match(err.message, /Deleting a workspace root directory is not allowed/i);
+        return true;
+      },
+    );
   });
 
   it('a newline-separated FS_ALLOWLIST relieves every listed name', async () => {
