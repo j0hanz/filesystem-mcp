@@ -679,6 +679,31 @@ describe('delete body', () => {
     assert.strictEqual(result.structured.summary.total, 1);
     assert.strictEqual(result.structured.results[0]?.value?.deleted, true);
   });
+
+  it('retains distinct on-disk case spellings as separate deletion targets without collapsing them', async () => {
+    const fileA = join(root, 'case_test_file.txt');
+    const fileB = join(root, 'CASE_TEST_FILE.txt');
+    const mockFs = {
+      planDelete: async (path: string) => ({
+        inputPath: path,
+        validPath: path,
+        itemType: 'file' as const,
+        pending: false,
+        holdsProtected: false,
+        noop: false,
+        recursive: false,
+        ignoreIfNotExists: false,
+      }),
+      executeDelete: async (plan: { validPath: string }) => ({ deleted: plan.validPath }),
+    } as unknown as GuardedFileSystem;
+
+    const result = await del({ paths: [fileA, fileB] }, { fs: mockFs });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structured.results.length, 2);
+    assert.strictEqual(result.structured.summary.total, 2);
+    assert.strictEqual(result.structured.summary.succeeded, 2);
+  });
 });
 
 describe('nestedIndexes', () => {
@@ -696,6 +721,12 @@ describe('nestedIndexes', () => {
   });
   it('case-folded where the filesystem folds', { skip: !IS_CASE_INSENSITIVE_FS }, () => {
     assert.deepEqual(nestedIndexes(p('A', 'a/b')), new Set([0, 1]));
+  });
+  it('exact duplicates', () => {
+    assert.deepEqual(nestedIndexes(p('a', 'a')), new Set([0, 1]));
+  });
+  it('distinct case siblings are not nested', () => {
+    assert.equal(nestedIndexes(p('Foo.txt', 'foo.txt')).size, 0);
   });
   it('1,000 siblings', () => {
     assert.equal(nestedIndexes(p(...Array.from({ length: 1000 }, (_, i) => `d${i}`))).size, 0);

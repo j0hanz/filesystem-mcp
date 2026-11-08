@@ -159,7 +159,7 @@ async function handleDelete(
       out[index] = { path: r.failure.path, error: r.failure.error };
       continue;
     }
-    const target = normalizeCaseForComparison(r.status === 'noop' ? r.deleted : r.plan.validPath);
+    const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
     if (seenTargets.has(target)) {
       duplicates.add(index);
       continue;
@@ -310,7 +310,12 @@ export function nestedIndexes(paths: readonly string[]): Set<number> {
     else groups.set(key, [i]);
   }
   const nested = new Set<number>();
-  for (const group of groups.values()) if (group.length > 1) for (const i of group) nested.add(i);
+  for (const group of groups.values()) {
+    if (group.length > 1) {
+      const exact = new Set(group.map((i) => paths[i]));
+      if (exact.size < group.length) for (const i of group) nested.add(i);
+    }
+  }
   for (const [i, path] of paths.entries()) {
     for (let dir = dirname(path), up = dirname(dir); ; dir = up, up = dirname(dir)) {
       const group = groups.get(normalizeCaseForComparison(dir));
