@@ -147,6 +147,23 @@ export interface ExecuteTransferOptions {
 }
 
 /**
+ * A Deletion settled by `planDelete`, before any change and before any
+ * Confirmation. Plain data: a Confirmation ends the call, so the next round
+ * plans again rather than holding one open.
+ */
+export interface DeletePlan {
+  readonly inputPath: string;
+  readonly validPath: string;
+  readonly itemType: FileType;
+  readonly firstStats?: { stats: Stats; validPath: string } | undefined;
+  readonly pending: boolean;
+  readonly holdsProtected: boolean;
+  readonly noop: boolean;
+  readonly recursive: boolean;
+  readonly ignoreIfNotExists: boolean;
+}
+
+/**
  * The validation regime: what an operation does to a path decides which
  * PathGuard check it gets. Every GuardedFileSystem method declares its kind
  * through `#guard`; none picks a validator itself, so a new method adds a call
@@ -627,6 +644,151 @@ export class GuardedFileSystem {
   ): Promise<void> {
     const plan = await this.planTransfer('move', { source: oldPath, destination: newPath });
     await this.executeTransfer(plan, { crossDevice });
+  }
+
+  /**
+   * Plan a Deletion (see GLOSSARY.md): validate the path, enforce root
+   * protection, inspect entry type, check children and sensitive policies.
+   * Makes no mutations. A missing path with `ignoreIfNotExists` returns `noop: true`.
+   */
+  async planDelete(
+    path: string,
+    options?: { recursive?: boolean; ignoreIfNotExists?: boolean; signal?: AbortSignal },
+  ): Promise<DeletePlan> {
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+    const recursive = Boolean(options?.recursive);
+    const ignoreIfNotExists = Boolean(options?.ignoreIfNotExists);
+
+    let validPath: string;
+    try {
+      validPath = await this.pathGuard.validatePathForDelete(path);
+    } catch (error) {
+      if (ignoreIfNotExists && isMissing(error)) {
+        return {
+          inputPath: path,
+          validPath: path,
+          itemType: 'file',
+          pending: false,
+          holdsProtected: false,
+          noop: true,
+          recursive,
+          ignoreIfNotExists,
+        };
+      }
+      throw error;
+    }
+
+    if (this.pathGuard.isAllowedRoot(validPath)) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Deleting a workspace root directory is not allowed',
+        path,
+      );
+    }
+
+    let firstStats: { stats: Stats; validPath: string };
+    try {
+      firstStats = await this.lstat(validPath, { signal });
+    } catch (error) {
+      if (isNotFoundErrno(error) && ignoreIfNotExists) {
+        return {
+          inputPath: path,
+          validPath,
+          itemType: 'file',
+          pending: false,
+          holdsProtected: false,
+          noop: true,
+          recursive,
+          ignoreIfNotExists,
+        };
+      }
+      throw error;
+    }
+
+    const itemType = resolveEntryType(firstStats.stats);
+    let hasChildren = false;
+    let holdsProtected = false;
+    if (recursive && itemType === 'directory') {
+      hasChildren = await this.hasChildrenUnchecked(validPath);
+      holdsProtected = hasChildren && (await this.holdsProtectedEntry(validPath, path, signal));
+    }
+
+    return {
+      inputPath: path,
+      validPath,
+      itemType,
+      firstStats,
+      pending: hasChildren,
+      holdsProtected,
+      noop: false,
+      recursive,
+      ignoreIfNotExists,
+    };
+  }
+
+  /**
+   * Carry out a planned Deletion. Re-checks the entry identity against the
+   * plan's first stat; an entry replaced while a Confirmation was open is
+   * refused with `CANCELLED`. Dispatches `rmdir` for non-recursive directories
+   * and `rm` for everything else.
+   */
+  async executeDelete(
+    plan: DeletePlan,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ deleted: string }> {
+    if (plan.noop) {
+      return { deleted: plan.validPath };
+    }
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+
+    let currentStats: { stats: Stats; validPath: string };
+    try {
+      currentStats = await this.lstat(plan.validPath, { signal });
+    } catch (error) {
+      if (isNotFoundErrno(error) && plan.ignoreIfNotExists) {
+        return { deleted: plan.validPath };
+      }
+      throw error;
+    }
+
+    if (plan.firstStats !== undefined) {
+      const identityChanged = !sameIdentity(
+        identityOf(plan.firstStats.stats),
+        identityOf(currentStats.stats),
+      );
+      if (identityChanged) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `Delete cancelled: "${plan.validPath}" was replaced after the delete was approved.`,
+          plan.validPath,
+        );
+      }
+    }
+
+    if (currentStats.stats.isDirectory() && !plan.recursive) {
+      await this.rmdir(plan.validPath);
+    } else {
+      await this.rm(
+        plan.validPath,
+        { recursive: plan.recursive, force: plan.ignoreIfNotExists },
+        signal,
+      );
+    }
+
+    return { deleted: plan.validPath };
+  }
+
+  /**
+   * One-shot delete: `planDelete` then `executeDelete`, with no Confirmation.
+   */
+  async delete(
+    path: string,
+    options?: { recursive?: boolean; ignoreIfNotExists?: boolean; signal?: AbortSignal },
+  ): Promise<{ deleted: string }> {
+    const plan = await this.planDelete(path, options);
+    return this.executeDelete(plan, options);
   }
 
   /**

@@ -35,7 +35,7 @@ import {
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
-import { normalizePath } from '../src/core/path-utils.ts';
+import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
 import { UndoJournal } from '../src/core/undo.ts';
@@ -1162,6 +1162,46 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await fs.rm(dirToDelete, { recursive: true, force: true });
 
       await assert.rejects(() => fs.stat(dirToDelete), fsErrorMatcher(ErrorCode.NOT_FOUND));
+    });
+
+    it('planDelete and executeDelete remove a file and detect write-time identity swap', async () => {
+      const filePath = await writeTestFile(tmpDir, 'del-test.txt', 'hello');
+      const plan = await fs.planDelete(filePath);
+      assert.strictEqual(plan.noop, false);
+      assert.strictEqual(plan.pending, false);
+
+      // Simulate swap before execution
+      await rm(plan.validPath);
+      await writeTestFile(tmpDir, 'del-test.txt', 'different');
+      await assert.rejects(
+        () => fs.executeDelete(plan),
+        (err: unknown) => {
+          assert.ok(isFsError(err));
+          assert.strictEqual(err.code, ErrorCode.CANCELLED);
+          assert.match(err.message, /replaced after the delete was approved/i);
+          return true;
+        },
+      );
+    });
+
+    it('executeDelete removes a verified entry and handles noop cleanly', async () => {
+      const filePath = await writeTestFile(tmpDir, 'del-real.txt', 'content');
+      const plan = await fs.planDelete(filePath);
+      const res = await fs.executeDelete(plan);
+      assert.strictEqual(res.deleted, plan.validPath);
+      await assert.rejects(() => fs.lstat(plan.validPath));
+
+      const missingPlan = await fs.planDelete(join(tmpDir, 'missing.txt'), { ignoreIfNotExists: true });
+      assert.strictEqual(missingPlan.noop, true);
+      const noopRes = await fs.executeDelete(missingPlan);
+      assert.strictEqual(noopRes.deleted, missingPlan.validPath);
+    });
+
+    it('one-shot delete removes a planned entry', async () => {
+      const filePath = await writeTestFile(tmpDir, 'del-oneshot.txt', 'content');
+      const res = await fs.delete(filePath);
+      assert.ok(isSamePath(res.deleted, filePath));
+      await assert.rejects(() => fs.lstat(filePath));
     });
   });
 
