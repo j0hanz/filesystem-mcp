@@ -72,7 +72,6 @@ import {
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
-export type { FileType };
 export type { Stats };
 
 // Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
@@ -653,7 +652,11 @@ export class GuardedFileSystem {
    */
   async planDelete(
     path: string,
-    options?: { recursive?: boolean; ignoreIfNotExists?: boolean; signal?: AbortSignal },
+    options?: {
+      recursive?: boolean | undefined;
+      ignoreIfNotExists?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
   ): Promise<DeletePlan> {
     const signal = options?.signal;
     signal?.throwIfAborted();
@@ -735,7 +738,7 @@ export class GuardedFileSystem {
    */
   async executeDelete(
     plan: DeletePlan,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ deleted: string }> {
     if (plan.noop) {
       return { deleted: plan.validPath };
@@ -785,7 +788,11 @@ export class GuardedFileSystem {
    */
   async delete(
     path: string,
-    options?: { recursive?: boolean; ignoreIfNotExists?: boolean; signal?: AbortSignal },
+    options?: {
+      recursive?: boolean | undefined;
+      ignoreIfNotExists?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
   ): Promise<{ deleted: string }> {
     const plan = await this.planDelete(path, options);
     return this.executeDelete(plan, options);

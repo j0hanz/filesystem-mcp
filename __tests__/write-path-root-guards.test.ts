@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 
-import { ErrorCode, FsError, isFsError } from '../src/core/errors.ts';
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { normalizePath } from '../src/core/path-utils.ts';

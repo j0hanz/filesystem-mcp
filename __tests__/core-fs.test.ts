@@ -1191,7 +1191,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(res.deleted, plan.validPath);
       await assert.rejects(() => fs.lstat(plan.validPath));
 
-      const missingPlan = await fs.planDelete(join(tmpDir, 'missing.txt'), { ignoreIfNotExists: true });
+      const missingPlan = await fs.planDelete(join(tmpDir, 'missing.txt'), {
+        ignoreIfNotExists: true,
+      });
       assert.strictEqual(missingPlan.noop, true);
       const noopRes = await fs.executeDelete(missingPlan);
       assert.strictEqual(noopRes.deleted, missingPlan.validPath);

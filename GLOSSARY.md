@@ -71,6 +71,14 @@ content (`edit`, `patch`, `replace_text`), under the file's write lock unless
 it is a dry run, which reads and reports but writes nothing.
 _Avoid_: edit (one tool), transaction, write (`create` also writes)
 
+**Deletion**:
+The removal of one or more entries from the filesystem under the sensitive-file
+and workspace root policies, planned before any confirmation is asked for and
+checked again before anything is removed. A recursive deletion of a non-empty
+directory requires Confirmation; an entry replaced while the prompt was open
+is refused, not deleted.
+_Avoid_: remove, rm, unlink
+
 ## Undo
 
 **Capture**:

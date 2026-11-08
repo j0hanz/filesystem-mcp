@@ -15,7 +15,12 @@ import {
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import { type DeletePlan, type GuardedFileSystem, identityOf } from '../core/fs.ts';
+import {
+  type DeletePlan,
+  type GuardedFileSystem,
+  identityOf,
+  UNKNOWN_IDENTITY,
+} from '../core/fs.ts';
 import { canElicit } from '../core/input-required.ts';
 import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
@@ -154,9 +159,7 @@ async function handleDelete(
       out[index] = { path: r.failure.path, error: r.failure.error };
       continue;
     }
-    const target = normalizeCaseForComparison(
-      r.status === 'noop' ? r.deleted : r.plan.validPath,
-    );
+    const target = normalizeCaseForComparison(r.status === 'noop' ? r.deleted : r.plan.validPath);
     if (seenTargets.has(target)) {
       duplicates.add(index);
       continue;
@@ -195,7 +198,7 @@ async function handleDelete(
     'delete',
     plans.map(({ plan }) => ({
       path: plan.validPath,
-      identity: plan.firstStats ? identityOf(plan.firstStats.stats) : undefined,
+      identity: plan.firstStats ? identityOf(plan.firstStats.stats) : UNKNOWN_IDENTITY,
       required: plan.pending,
       message: deletePrompt(plan),
     })),
