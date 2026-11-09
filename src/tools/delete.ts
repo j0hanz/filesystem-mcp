@@ -231,7 +231,13 @@ async function handleDelete(
         const r = await executePlan(plan, c, confirmed);
         if ('skipped' in r) return { deleted: false };
         if ('failure' in r) {
-          throw new FsError(r.failure.error.code, r.failure.error.message, r.failure.path);
+          throw new FsError(
+            r.failure.error.code,
+            r.failure.error.message,
+            r.failure.path,
+            undefined,
+            r.failure.error.suggestion,
+          );
         }
         return { deleted: true };
       },

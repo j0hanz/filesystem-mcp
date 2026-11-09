@@ -19,6 +19,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { MOVE } from '../src/tools/move.ts';
@@ -1075,6 +1076,77 @@ describe('move body', () => {
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(await readFile(join(root, 'indX2'), 'utf-8'), 'X\n');
       assert.strictEqual(await readFile(join(root, 'indY2'), 'utf-8'), 'Y\n');
+    });
+
+    it('returns failures in input order when mixing planning and execution failures', async () => {
+      const a = await writeTestFile(root, 'order_a.txt', 'A\n');
+      const b = join(root, 'nonexistent_b.txt');
+      const destA = join(root, 'order_dest_a.txt');
+      const destB = join(root, 'order_dest_b.txt');
+
+      const mockFs = {
+        planTransfer: async (_op: string, pair: { source: string; destination: string }) => {
+          if (pair.source === b) {
+            throw new FsError(ErrorCode.NOT_FOUND, 'Source does not exist', pair.source);
+          }
+          return {
+            request: pair,
+            source: pair.source,
+            destination: pair.destination,
+            entry: pair.source,
+            landing: root,
+            noop: false,
+          };
+        },
+        refuseDirectoryMerge: async () => undefined,
+        executeTransfer: async () => {
+          throw new FsError(ErrorCode.IO_ERROR, 'Execution write failed', a);
+        },
+      } as unknown as GuardedFileSystem;
+
+      const result = await move(
+        {
+          moves: [
+            { source: a, destination: destA },
+            { source: b, destination: destB },
+          ],
+        },
+        { fs: mockFs },
+      );
+
+      assert.strictEqual(result.isError, true);
+      const failures = result.structured.failures ?? [];
+      assert.strictEqual(failures.length, 2);
+      assert.strictEqual(failures[0]?.source, a);
+      assert.strictEqual(failures[1]?.source, b);
+    });
+
+    it('reports missing source on execution failure rather than destination', async () => {
+      const src = await writeTestFile(root, 'source_missing_exec.txt', 'content');
+      const dest = join(root, 'dest_missing_exec.txt');
+
+      const mockFs = {
+        planTransfer: async (_op: string, pair: { source: string; destination: string }) => ({
+          request: pair,
+          source: pair.source,
+          destination: pair.destination,
+          entry: pair.source,
+          landing: root,
+          noop: false,
+        }),
+        refuseDirectoryMerge: async () => undefined,
+        executeTransfer: async () => {
+          throw new FsError(ErrorCode.NOT_FOUND, 'Source vanished', src);
+        },
+      } as unknown as GuardedFileSystem;
+
+      const result = await move({ moves: [{ source: src, destination: dest }] }, { fs: mockFs });
+
+      assert.strictEqual(result.isError, true);
+      const failure = result.structured.failures?.[0];
+      assert.strictEqual(failure?.source, src);
+      assert.strictEqual(failure?.error.code, ErrorCode.NOT_FOUND);
+      assert.strictEqual(failure?.error.path, src);
     });
   });
 });
