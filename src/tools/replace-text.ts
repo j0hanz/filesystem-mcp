@@ -527,7 +527,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     'Patterns can span multiple lines, and regex replacements support $1 capture groups. ' +
     'In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. ' +
     'Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. ' +
-    'Use edit for a single unique snippet, and patch for unified diffs.',
+    'Use edit for a single unique snippet, and patch when you already hold a unified diff.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
   deadline: true,

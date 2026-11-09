@@ -18,7 +18,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files (create, overwrite, or append) or make empty directories. Use when creating new files, replacing full contents, or creating folders. Missing parent directories are created automatically. Replacing an existing file requires overwrite: true or user confirmation. Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.",
+      "description": "Write whole text files (create, overwrite, or append) or make empty directories. Use when creating new files, replacing full contents, or creating folders. Missing parent directories are created automatically. Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). Non-empty directories require recursive: true and confirmation. Set ignoreIfNotExists: true to succeed cleanly if a path is already absent. Returns { path, deleted } per path and an undo id. Use move to relocate a path instead.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. Paths nested inside each other are refused, so delete the outer one alone. One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. Use move to relocate a path instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -99,7 +99,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "recursive": {
             "default": false,
-            "description": "Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT and nothing in the call is deleted.",
+            "description": "Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT.",
             "type": "boolean"
           },
           "ignoreIfNotExists": {
@@ -162,7 +162,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "edit",
       "title": "Edit Files",
-      "description": "Edit text files in place by replacing exact oldText with newText. Use when changing specific unique snippets in one or more files. Each oldText must match exactly once; unmatched or ambiguous text fails and leaves the file untouched. Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. Use replace_text for multiple occurrences or regex, patch to apply unified diffs, and create for new files.",
+      "description": "Edit text files in place by replacing exact oldText with newText. Use when changing specific unique snippets in one or more files. Unmatched or ambiguous text fails and leaves the file untouched. One failed file does not stop the others. Applied edits are permanent until undone. Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. Use replace_text for every match of a pattern, patch when you already hold a unified diff, and create for new files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -287,7 +287,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Traversal is one level deep unless maxDepth is raised. Skips hidden and ignored files (.git, node_modules) by default. sortBy: size orders largest first. Returns formatted tree text with nextCursor when paged. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -410,7 +410,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "patch",
       "title": "Patch",
-      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns path, linesAdded, linesRemoved, and an undo id for undo. dryRun adds the preview diff and writes nothing. Use edit for unique snippet replacements, and replace_text for regex across files.",
+      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. The file is written only when every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns path, linesAdded, linesRemoved, and an undo id. dryRun adds the preview diff and writes nothing. Use edit when you know the exact text to swap, and replace_text for every match of a pattern.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -448,7 +448,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
+      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -524,7 +524,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch for unified diffs.",
+      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch when you already hold a unified diff.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -993,7 +993,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Traversal is one level deep unless maxDepth is raised. Skips hidden and ignored files (.git, node_modules) by default. sortBy: size orders largest first. Returns formatted tree text with nextCursor when paged. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1058,7 +1058,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
+      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
       "inputSchema": {
         "type": "object",
         "properties": {

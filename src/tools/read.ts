@@ -513,7 +513,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. ' +
-    'Use when inspecting file contents. Pass binary: true to read binary files as base64 resources (slicing disabled). ' +
+    'Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. ' +
     'Images and audio return as media. Returns file text or slice, or per-path results for batches. ' +
     'Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.',
   input: ReadFileInputSchema,

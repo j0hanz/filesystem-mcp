@@ -42,7 +42,7 @@ const DeleteInputSchema = z.strictObject({
     .max(1000)
     .describe('Paths to delete (max 1000); accepts files, directories, or symlinks'),
   recursive: defaultFalseBoolean(
-    'Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT and nothing in the call is deleted.',
+    'Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT.',
   ),
   ignoreIfNotExists: defaultFalseBoolean(
     'Silently succeed if a path does not exist instead of returning an error',
@@ -261,9 +261,11 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   description:
     'Delete files, directories, or symlinks, like rm or rm -r. ' +
     'Use when permanently removing paths. Paths are exact (globs are not expanded). ' +
-    'Non-empty directories require recursive: true and confirmation. ' +
-    'Set ignoreIfNotExists: true to succeed cleanly if a path is already absent. ' +
-    'Returns { path, deleted } per path and an undo id. Use move to relocate a path instead.',
+    'While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. ' +
+    'Paths nested inside each other are refused, so delete the outer one alone. ' +
+    'One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. ' +
+    'Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. ' +
+    'Use move to relocate a path instead.',
   input: DeleteInputSchema,
   readOnlyHint: false,
   progress: (args) => ({

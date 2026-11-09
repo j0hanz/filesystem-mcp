@@ -65,9 +65,9 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
     'Apply a single-file unified diff to an existing text file, like git apply. ' +
     'Use when applying diffs produced by diff tools or git. ' +
     'path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. ' +
-    'Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. ' +
-    'Returns path, linesAdded, linesRemoved, and an undo id for undo. dryRun adds the preview diff and writes nothing. ' +
-    'Use edit for unique snippet replacements, and replace_text for regex across files.',
+    'The file is written only when every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. ' +
+    'Returns path, linesAdded, linesRemoved, and an undo id. dryRun adds the preview diff and writes nothing. ' +
+    'Use edit when you know the exact text to swap, and replace_text for every match of a pattern.',
   input: PatchInputSchema,
   readOnlyHint: false,
   progress: (args) => ({

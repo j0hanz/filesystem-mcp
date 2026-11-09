@@ -1060,8 +1060,22 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // in-place irreversibility without undo, and safety previews; measured 24011 / 11082.
     // Lowered 2026-11-09 to 24750 full and 11550 read-only: create and stat
     // return to concise wording after hosted scoring; measured 24738 / 11511.
-    const BUDGET_CHARS = 24_750;
-    const BUDGET_CHARS_READ_ONLY = 11_550;
+    // Raised 2026-11-09 to 25150 full and 11750 read-only: delete and list
+    // report-gap wording adds the confirmation gate, nested-path refusal,
+    // ACCESS_DENIED, sort order, exact totals, and return shape;
+    // measured 25130 / 11735.
+    // Raised 2026-11-09 to 25300 full (read-only unchanged): edit, patch, and
+    // replace_text route on what the caller already holds — pattern, exact
+    // text, or a diff — to lift coherence disambiguation; measured 25261.
+    // Lowered 2026-11-09 to 25050 full and 11700 read-only: unslop pass cuts
+    // description text the input schemas already state (edit oldText, create
+    // overwrite, list maxDepth, patch undo, read slicing, delete recursive
+    // INVALID_INPUT tail); measured 25021 / 11651.
+    // Raised 2026-11-09 to 25200 full and 11750 read-only: PR review asked the
+    // delete and list claims to admit retry-cancelled paths and the listing
+    // cap and timeout truncation; measured 25176 / 11735.
+    const BUDGET_CHARS = 25_200;
+    const BUDGET_CHARS_READ_ONLY = 11_750;
 
     const full = await createTestClientPair([tmpDir]);
     try {
