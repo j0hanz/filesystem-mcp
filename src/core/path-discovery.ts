@@ -144,6 +144,7 @@ const MAX_PROJECT_ROOT_WALK_DEPTH = 32;
 export async function findProjectRoot(startDir: string, ceiling: string[]): Promise<string> {
   const normCeiling = ceiling.map(normalizePath);
   let current = normalizePath(startDir);
+  const relevantCeilings = normCeiling.filter((c) => isPathInsideDirectory(c, current));
   let depth = 0;
 
   for (;;) {
@@ -173,8 +174,8 @@ export async function findProjectRoot(startDir: string, ceiling: string[]): Prom
       break;
     }
 
-    // Check if the parent is still within the ceiling
-    if (!isPathWithinDirectories(parent, normCeiling)) {
+    // Check if the parent is still within any applicable ceiling
+    if (relevantCeilings.length > 0 && !isPathWithinDirectories(parent, relevantCeilings)) {
       break;
     }
 

@@ -1621,7 +1621,12 @@ export class PathGuard {
       const walkCwd =
         cli.allowCwdWalk ?? parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
       if (walkCwd) {
-        cwd = await findProjectRoot(cwd, [...boundaries, homedir()]);
+        const home = normalizePath(homedir());
+        const walkCeiling = [
+          ...boundaries,
+          ...(isPathInsideDirectory(home, cwd) ? [home] : []),
+        ];
+        cwd = await findProjectRoot(cwd, walkCeiling);
       }
       if (isUnsafeCwdPath(cwd)) {
         Logger.warn(`Skipped adding unsafe current working directory to allowed list: ${cwd}`);
