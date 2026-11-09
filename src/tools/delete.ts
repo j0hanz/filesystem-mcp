@@ -11,7 +11,7 @@ import {
   DELETE_ERRNOS,
   DELETE_ERRNOS_NO_CONFIRM,
   ErrorCode,
-  type PerPathResult,
+  FsError,
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
@@ -25,7 +25,13 @@ import { canElicit } from '../core/input-required.ts';
 import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, failureLines, isTotalFailure, summarize } from './batch.ts';
+import {
+  type BatchResult,
+  type BatchSlot,
+  executeBatchSlots,
+  failureLines,
+  isTotalFailure,
+} from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -45,7 +51,6 @@ const DeleteInputSchema = z.strictObject({
 
 type DeleteInput = z.infer<typeof DeleteInputSchema>;
 type DeleteOutput = BatchResult<{ deleted: boolean }>;
-type DeletePerPathResult = PerPathResult<{ deleted: boolean }>;
 
 // Internal types for error handling
 interface DeleteFailure {
@@ -150,25 +155,36 @@ async function handleDelete(
     ctx.signal,
   );
 
-  const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
+  const slots = new Array<BatchSlot<{ deleted: boolean }>>(paths.length);
   let plans: { plan: DeletePlan; index: number }[] = [];
   const seenTargets = new Set<string>();
-  const duplicates = new Set<number>();
+
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') {
-      out[index] = { path: r.failure.path, error: r.failure.error };
+      slots[index] = { status: 'failure', path: r.failure.path, error: r.failure.error };
       continue;
     }
     const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
     if (seenTargets.has(target)) {
-      duplicates.add(index);
+      slots[index] = { status: 'omitted' };
       continue;
     }
     seenTargets.add(target);
-    if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else plans.push({ plan: r.plan, index });
+    if (r.status === 'noop') {
+      slots[index] = { status: 'settled', path: r.deleted, value: { deleted: true } };
+    } else {
+      plans.push({ plan: r.plan, index });
+    }
   }
-  // planPath returns its failures; a slot it never filled falls to the fallback below.
+
+  for (const { index, error } of planned.errors) {
+    const path = paths[index] ?? '(unknown)';
+    slots[index] = {
+      status: 'failure',
+      path,
+      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
+    };
+  }
 
   // One entry inside another would race the other's recursive delete, and
   // accepting the parent would remove a child whose own prompt was skipped.
@@ -178,7 +194,8 @@ async function handleDelete(
   if (nested.size > 0) {
     for (const { plan, index } of plans) {
       if (!nested.has(index)) continue;
-      out[index] = {
+      slots[index] = {
+        status: 'failure',
         path: plan.validPath,
         error: Problem.invalidInput(
           'Delete refused: this path contains, or is inside, another path in the batch. Delete the outer one alone.',
@@ -206,47 +223,36 @@ async function handleDelete(
   if (isInputRequiredResult(confirmed)) return confirmed;
 
   // Phase 2 (mutation): execute deletions for every planned path.
-  const executed = await processInParallel(
-    plans,
-    ({ plan }) => executePlan(plan, ctx, confirmed),
-    PARALLEL_CONCURRENCY,
-    ctx.signal,
-  );
-
-  for (const { index, value: r } of executed.results) {
-    const slot = plans[index]?.index;
-    if (slot === undefined) continue;
-    if ('skipped' in r) {
-      out[slot] = { path: r.path, value: { deleted: false } };
-    } else if ('failure' in r) {
-      out[slot] = { path: r.failure.path, error: r.failure.error };
-    } else {
-      out[slot] = { path: r.deleted, value: { deleted: true } };
-    }
-  }
-  for (const { index, error } of executed.errors) {
-    const slot = plans[index]?.index;
-    if (slot === undefined) continue;
-    out[slot] = {
-      path: paths[slot] ?? '(unknown)',
-      error: { code: ErrorCode.UNKNOWN, message: error.message },
+  for (const { plan, index } of plans) {
+    slots[index] = {
+      status: 'pending',
+      path: plan.validPath,
+      run: async (c) => {
+        const r = await executePlan(plan, c, confirmed);
+        if ('skipped' in r) return { deleted: false };
+        if ('failure' in r) {
+          throw new FsError(
+            r.failure.error.code,
+            r.failure.error.message,
+            r.failure.path,
+            undefined,
+            r.failure.error.suggestion,
+          );
+        }
+        return { deleted: true };
+      },
     };
   }
 
-  // Emit in the caller's input order so `results[i]` lines up with `paths[i]`
-  // the way read/stat guarantee.
-  const results: DeletePerPathResult[] = paths.flatMap((requested, i) => {
-    if (duplicates.has(i)) return [];
-    const entry = out[i];
-    return [
-      entry ?? {
-        path: requested,
-        error: { code: ErrorCode.UNKNOWN, message: 'Unknown delete failure' },
-      },
-    ];
-  });
+  for (let i = 0; i < paths.length; i++) {
+    slots[i] ??= {
+      status: 'failure',
+      path: paths[i] ?? '(unknown)',
+      error: Problem.fromUnknown(new Error('Unknown delete failure'), ErrorCode.UNKNOWN, paths[i]),
+    };
+  }
 
-  return { results, summary: summarize(results) };
+  return executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
 }
 
 export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({

@@ -704,6 +704,38 @@ describe('delete body', () => {
     assert.strictEqual(result.structured.summary.total, 2);
     assert.strictEqual(result.structured.summary.succeeded, 2);
   });
+
+  it('preserves custom suggestion when execution delete fails', async () => {
+    const file = await writeTestFile(root, 'suggest-test.txt', 'hello');
+
+    const customSuggestion = 'Custom suggestion for recovery';
+    const mockFs = {
+      planDelete: async (path: string) => ({
+        inputPath: path,
+        validPath: path,
+        itemType: 'file' as const,
+        pending: false,
+        holdsProtected: false,
+        noop: false,
+        recursive: false,
+        ignoreIfNotExists: false,
+      }),
+      executeDelete: async (plan: { validPath: string }) => {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Access denied',
+          plan.validPath,
+          undefined,
+          customSuggestion,
+        );
+      },
+    } as unknown as GuardedFileSystem;
+
+    const result = await del({ paths: [file] }, { fs: mockFs });
+    const entry = only(result);
+    assert.strictEqual(entry.error?.code, ErrorCode.ACCESS_DENIED);
+    assert.strictEqual((entry.error as { suggestion?: string })?.suggestion, customSuggestion);
+  });
 });
 
 describe('nestedIndexes', () => {
