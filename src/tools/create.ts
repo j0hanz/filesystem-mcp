@@ -83,6 +83,29 @@ const CreateInputSchema = z
       });
     }
     const files = value.files ?? [];
+    const dirs = value.directories ?? [];
+    for (const [index, dir] of dirs.entries()) {
+      const first = dirs.findIndex((other) => isEquivalentPath(other, dir));
+      if (first < index) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['directories', index],
+          message: `duplicate of directories[${String(first)}]; one entry per directory`,
+          input: value,
+        });
+      }
+    }
+    for (const [fileIndex, file] of files.entries()) {
+      const dirIndex = dirs.findIndex((dir) => isEquivalentPath(dir, file.path));
+      if (dirIndex !== -1) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['files', fileIndex, 'path'],
+          message: `conflicts with directories[${String(dirIndex)}]; path cannot be both a file and a directory`,
+          input: value,
+        });
+      }
+    }
     // Entries write in parallel and each replaces its file whole, so two
     // entries for one path race: the last rename wins and the other's
     // content is lost while both report success. One entry per file, counting

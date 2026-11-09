@@ -141,6 +141,33 @@ describe('create body', () => {
     await assert.rejects(access(file), 'nothing may be written when the batch is refused');
   });
 
+  it('refuses a batch that names the same directory twice', async () => {
+    const dir = join(root, 'dup-dir');
+    const issues = await schemaIssues(
+      create({
+        directories: [dir, dir],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.startsWith('duplicate of directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('refuses a batch that names the same path as both a directory and a file', async () => {
+    const target = join(root, 'dir-file-collision');
+    const issues = await schemaIssues(
+      create({
+        directories: [target],
+        files: [{ path: target, content: 'conflict content' }],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('conflicts with directories[0]')),
+      issues.join('; '),
+    );
+  });
+
   it('is a total failure when every requested file was denied', async () => {
     // create publishes {files, failures} with no `summary`; the total-failure
     // check must still fire for a fully-denied write.
