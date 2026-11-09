@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { processInParallel, withAbort } from '../src/core/concurrency.ts';
+import { processInParallel, runExclusive, withAbort } from '../src/core/concurrency.ts';
 
 describe('withAbort', () => {
   it('a pre-aborted call leaves no unhandled rejection behind', async () => {
@@ -56,5 +56,15 @@ describe('Concurrency Tests', () => {
         controller.signal,
       ),
     );
+  });
+});
+
+describe('runExclusive argument isolation', () => {
+  it('invokes fn with zero arguments', async () => {
+    let argCount = -1;
+    await runExclusive('test-arg-count', async (...args: unknown[]) => {
+      argCount = args.length;
+    });
+    assert.strictEqual(argCount, 0, 'expected fn to be called with 0 arguments');
   });
 });

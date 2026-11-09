@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Windows device paths**: block CONIN$, CONOUT$, COM0, and LPT0 device names to prevent console input hangs.
 - **Path guard**: dynamically discover Windows system directory roots from environment variables rather than assuming drive C.
 - **Create tool validation**: validate against duplicate directory paths and file/directory name collisions before executing batch creation.
+- **Concurrency lock queue**: isolate exclusive task callbacks from resolution payloads so callers receive zero arguments.
 
 ## [2.19.3] - 2026-11-07
 
