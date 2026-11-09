@@ -150,6 +150,15 @@ export interface ExecuteTransferOptions {
  * Confirmation. Plain data: a Confirmation ends the call, so the next round
  * plans again rather than holding one open.
  */
+/** A settled Creation: what planCreate ruled about one write. */
+export interface CreatePlan {
+  readonly inputPath: string;
+  readonly validPath: string;
+  readonly kind: 'append' | 'overwrite' | 'clear' | 'pending';
+  /** The sealed Landing identity; present iff kind is 'pending'. */
+  readonly identity?: EntryIdentity;
+}
+
 export interface DeletePlan {
   readonly inputPath: string;
   readonly validPath: string;
@@ -796,6 +805,46 @@ export class GuardedFileSystem {
   ): Promise<{ deleted: string }> {
     const plan = await this.planDelete(path, options);
     return this.executeDelete(plan, options);
+  }
+
+  /**
+   * Plan a Creation (see GLOSSARY.md): validate the write path, name the
+   * Landing identity of a file that would be replaced, and classify the
+   * write. An append, or an overwrite the client declared up front, destroys
+   * nothing and is pre-settled; a path that names a directory is refused
+   * here, before the Confirmation round; a clear path is guarded at execute;
+   * a pending path seals its identity for the Confirmation. Makes no
+   * mutations. A destination whose stat was refused names UNKNOWN_IDENTITY,
+   * so it is confirmed, never written over as absent.
+   */
+  async planCreate(
+    path: string,
+    options?: {
+      append?: boolean | undefined;
+      overwrite?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
+  ): Promise<CreatePlan> {
+    options?.signal?.throwIfAborted();
+    const validPath = await this.pathGuard.validatePathForWrite(path);
+    const identity = await destIdentity(this, validPath, 'create');
+    if (identity?.itemType === 'directory') {
+      throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
+    }
+    const kind: CreatePlan['kind'] =
+      options?.append === true
+        ? 'append'
+        : options?.overwrite === true
+          ? 'overwrite'
+          : identity !== undefined
+            ? 'pending'
+            : 'clear';
+    return {
+      inputPath: path,
+      validPath,
+      kind,
+      ...(kind === 'pending' ? { identity } : {}),
+    };
   }
 
   /**

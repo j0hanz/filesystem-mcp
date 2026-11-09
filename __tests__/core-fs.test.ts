@@ -1207,6 +1207,31 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     });
   });
 
+  describe('Creation lifecycle (planCreate)', () => {
+    it('planCreate classifies each write and refuses a directory', async () => {
+      const fresh = await fs.planCreate(join(tmpDir, 'create-new.txt'), {});
+      assert.strictEqual(fresh.kind, 'clear');
+
+      const existing = await writeTestFile(tmpDir, 'create-existing.txt', 'old');
+      const pending = await fs.planCreate(existing, {});
+      assert.strictEqual(pending.kind, 'pending');
+      assert.strictEqual(pending.identity?.itemType, 'file');
+
+      assert.strictEqual((await fs.planCreate(existing, { overwrite: true })).kind, 'overwrite');
+      assert.strictEqual((await fs.planCreate(existing, { append: true })).kind, 'append');
+
+      await assert.rejects(
+        () => fs.planCreate(tmpDir, {}),
+        (err: unknown) => {
+          assert.ok(isFsError(err));
+          assert.strictEqual(err.code, ErrorCode.NOT_FILE);
+          assert.strictEqual(err.message, 'Not a regular file');
+          return true;
+        },
+      );
+    });
+  });
+
   describe('Invalid setting warnings (TC-FUNC-019b)', () => {
     it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', async (t) => {
       await withEnv({ FS_LOG_LEVEL: 'error', FS_MAX_FILE_SIZE: 'not-a-number' }, () => {
