@@ -3,8 +3,96 @@ import { describe, it } from 'node:test';
 
 import { ErrorCode, Problem } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
-import { runOverPaths, summarize } from '../src/tools/batch.ts';
+import {
+  type BatchSlot,
+  executeBatchSlots,
+  runOverPaths,
+  summarize,
+} from '../src/tools/batch.ts';
 import type { ToolCtx } from '../src/tools/define.ts';
+
+describe('executeBatchSlots', () => {
+  it('preserves input order across settled, failure, omitted, and pending slots', async () => {
+    const slots: BatchSlot<{ val: number }>[] = [
+      { status: 'settled', path: 'a.txt', value: { val: 1 } },
+      { status: 'omitted' },
+      {
+        status: 'failure',
+        path: 'c.txt',
+        error: { code: ErrorCode.NOT_FOUND, message: 'c.txt not found', path: 'c.txt' },
+      },
+      { status: 'pending', path: 'd.txt', run: async () => ({ val: 4 }) },
+    ];
+    const ctx = { onProgress: () => undefined } as unknown as ToolCtx;
+    const res = await executeBatchSlots(slots, ctx);
+    assert.strictEqual(res.results.length, 3);
+    assert.strictEqual(res.results[0]?.path, 'a.txt');
+    assert.deepStrictEqual(res.results[0]?.value, { val: 1 });
+    assert.strictEqual(res.results[1]?.path, 'c.txt');
+    assert.ok(res.results[1] && 'error' in res.results[1]);
+    assert.strictEqual(res.results[2]?.path, 'd.txt');
+    assert.deepStrictEqual(res.results[2]?.value, { val: 4 });
+    assert.deepStrictEqual(res.summary, { total: 3, succeeded: 2, failed: 1 });
+  });
+
+  it('preserves completed items when aborted and marks unstarted items', async () => {
+    const controller = new AbortController();
+    const ctx = { signal: controller.signal, onProgress: () => undefined } as unknown as ToolCtx;
+    const slots: BatchSlot<string>[] = Array.from(
+      { length: PARALLEL_CONCURRENCY + 2 },
+      (_, i) => ({
+        status: 'pending',
+        path: `p${String(i)}`,
+        run: async () => {
+          controller.abort(new DOMException('cancelled', 'AbortError'));
+          await Promise.resolve();
+          return `done-${String(i)}`;
+        },
+      }),
+    );
+
+    const res = await executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
+    assert.strictEqual(res.results.length, slots.length);
+    assert.deepStrictEqual(res.results[0], { path: 'p0', value: 'done-0' });
+    const last = res.results.at(-1);
+    assert.strictEqual(last?.path, `p${String(slots.length - 1)}`);
+    assert.ok(last && 'error' in last);
+    assert.strictEqual(last.error.code, ErrorCode.CANCELLED);
+    assert.strictEqual(res.summary.succeeded, 1);
+    assert.strictEqual(res.summary.failed, slots.length - 1);
+  });
+
+  it('honors progressOffset and progressTotal for multi-stage tracking', async () => {
+    const ticks: { current: number; total: number }[] = [];
+    const ctx = {
+      onProgress: (p: { current: number; total: number }) => {
+        ticks.push(p);
+      },
+    } as unknown as ToolCtx;
+
+    const slots: BatchSlot<number>[] = [
+      { status: 'pending', path: '1', run: async () => 1 },
+      { status: 'pending', path: '2', run: async () => 2 },
+    ];
+
+    await executeBatchSlots(slots, ctx, { progressOffset: 3, progressTotal: 10 });
+    assert.strictEqual(ticks.length, 2);
+    assert.deepStrictEqual(ticks[0], { current: 4, total: 10 });
+    assert.deepStrictEqual(ticks[1], { current: 5, total: 10 });
+  });
+
+  it('handles an empty slot array without calling onProgress', async () => {
+    let called = false;
+    const ctx = {
+      onProgress: () => {
+        called = true;
+      },
+    } as unknown as ToolCtx;
+    const res = await executeBatchSlots([], ctx);
+    assert.deepStrictEqual(res, { results: [], summary: { total: 0, succeeded: 0, failed: 0 } });
+    assert.strictEqual(called, false);
+  });
+});
 
 describe('runOverPaths', () => {
   it('a deadline before the last items start keeps finished results and fails the rest', async () => {
