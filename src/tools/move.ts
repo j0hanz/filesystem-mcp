@@ -13,7 +13,7 @@ import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { failureLines } from './batch.ts';
+import { type BatchSlot, executeBatchSlots, failureLines } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -244,46 +244,52 @@ async function runTransfers(
   );
   if (isInputRequiredResult(confirmed)) return confirmed;
 
-  const total = safe.length;
-  let completed = 0;
-  const tick = (): void => {
-    completed += 1;
-    ctx.onProgress({ current: completed, total });
-  };
-  const { results: execResults, errors: execErrors } = await processInParallel(
-    safe,
-    async (plan): Promise<TransferExecResult> => {
-      try {
-        const verdict = confirmed.verdict(plan.destination);
-        if (verdict === 'skipped') return { skipped: plan.request.destination };
-        if (verdict !== 'proceed') throw cancelled(op, plan, verdict);
-        const moved = await ctx.fs.executeTransfer(plan, {
+  for (const plan of safe) {
+    const verdict = confirmed.verdict(plan.destination);
+    if (verdict !== 'proceed' && verdict !== 'skipped') {
+      throw cancelled(op, plan, verdict);
+    }
+  }
+
+  const slots: BatchSlot<TransferExecResult>[] = safe.map((plan) => {
+    const verdict = confirmed.verdict(plan.destination);
+    if (verdict === 'skipped') {
+      return {
+        status: 'settled',
+        path: plan.destination,
+        value: { skipped: plan.request.destination },
+      };
+    }
+    return {
+      status: 'pending',
+      path: plan.destination,
+      run: async (c) => {
+        const moved = await c.fs.executeTransfer(plan, {
           createParents: true,
-          signal: ctx.signal,
+          signal: c.signal,
         });
         if (op === 'move') {
-          ctx.log('info', `move: ${plan.request.source} -> ${plan.request.destination}`, 'move');
+          c.log('info', `move: ${plan.request.source} -> ${plan.request.destination}`, 'move');
         }
         return { value: moved };
-      } finally {
-        tick();
-      }
-    },
-    PARALLEL_CONCURRENCY,
-    ctx.signal,
-  );
+      },
+    };
+  });
 
-  for (const { error, index } of execErrors) {
-    rethrowIfAborted(error);
-    const failed = safe[index];
-    if (failed) failures.push(pairFailure(failed.request, error));
-  }
+  const batchRes = await executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
 
   const results: MoveItemResult[] = [];
   const skipped: string[] = [];
-  for (const { value } of execResults) {
-    if ('skipped' in value) skipped.push(value.skipped);
-    else results.push(value.value);
+  for (const [index, r] of batchRes.results.entries()) {
+    const plan = safe[index];
+    if (!plan) continue;
+    if ('error' in r) {
+      failures.push(pairFailure(plan.request, r.error));
+    } else if ('skipped' in r.value) {
+      skipped.push(r.value.skipped);
+    } else {
+      results.push(r.value.value);
+    }
   }
 
   return { results, skipped, failures };
