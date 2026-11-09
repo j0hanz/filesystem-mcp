@@ -352,8 +352,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   description:
     'List directory contents as a tree of names, like ls or tree. ' +
     'Use when exploring directory structure or checking folder contents. ' +
-    'Traversal is one level deep unless maxDepth is raised. Skips hidden and ignored files (.git, node_modules) by default. ' +
-    'sortBy: size orders largest first. Returns formatted tree text with nextCursor when paged. ' +
+    'Skips hidden and ignored files (.git, node_modules) by default. ' +
+    'Directories sort before files within each folder. ' +
+    'Totals count the whole walk, not just the page, and only entries the depth reaches. ' +
+    'Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the full list when the first page is cut short. ' +
     'Use find_files to find files by name, stat for metadata, and read for contents.',
   input: ListInputSchema,
   readOnlyHint: true,

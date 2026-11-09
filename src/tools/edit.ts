@@ -699,9 +699,9 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
   description:
     'Edit text files in place by replacing exact oldText with newText. ' +
     'Use when changing specific unique snippets in one or more files. ' +
-    'Each oldText must match exactly once; unmatched or ambiguous text fails and leaves the file untouched. ' +
-    'Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. ' +
-    'Use replace_text for multiple occurrences or regex, patch to apply unified diffs, and create for new files.',
+    'Unmatched or ambiguous text fails and leaves the file untouched. One failed file does not stop the others. ' +
+    'Applied edits are permanent until undone. Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. ' +
+    'Use replace_text for every match of a pattern, patch when you already hold a unified diff, and create for new files.',
   input: EditFileInputSchema,
   readOnlyHint: false,
   deadline: true,
