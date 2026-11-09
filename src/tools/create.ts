@@ -21,7 +21,7 @@ import { isEquivalentPath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { isTotalFailure, runOverPaths } from './batch.ts';
+import { type BatchSlot, executeBatchSlots, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -189,28 +189,31 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     const confirmed = await confirm(ctx, 'create', 'overwrite', [...items.values()]);
     if (isInputRequiredResult(confirmed)) return confirmed;
 
-    // One counter across both batches: ProgressSession drops a value at or below its last one.
-    const progressTotal = dirs.length + files.length;
-    const progressFrom = (offset: number): ToolCtx => ({
-      ...ctx,
-      onProgress: ({ current }) => {
-        ctx.onProgress({ current: offset + current, total: progressTotal });
-      },
-    });
-
     // Directories wait for the overwrite question above, so nothing is written
     // before the user answers.
-    const dirBatch = await runOverPaths(dirs, progressFrom(0), ErrorCode.UNKNOWN, async (dir) => {
-      await ctx.fs.mkdir(dir, { recursive: true });
-      return dir;
+    const progressTotal = dirs.length + files.length;
+    const dirSlots: BatchSlot<string>[] = dirs.map((dir) => ({
+      status: 'pending',
+      path: dir,
+      run: async () => {
+        await ctx.fs.mkdir(dir, { recursive: true });
+        return dir;
+      },
+    }));
+    const dirBatch = await executeBatchSlots(dirSlots, ctx, {
+      progressOffset: 0,
+      progressTotal,
+      defaultErrorCode: ErrorCode.UNKNOWN,
     });
 
-    const filesCtx = progressFrom(dirs.length);
-    const batch = await runOverPaths<
-      z.infer<typeof CreateFileItemSchema>,
+    const fileSlots: BatchSlot<
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
-      if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
+    >[] = files.map((item) => ({
+      status: 'pending',
+      path: item.path,
+      run: async () => {
+        const { path, content, append, overwrite } = item;
+        if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
       const pending = pendingByPath.get(path);
       if (pending !== undefined) {
         const verdict = confirmed.verdict(pending.validPath);
@@ -256,7 +259,13 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         }
         return createOne(path, content, append, ctx);
       });
-    });
+    },
+  }));
+  const batch = await executeBatchSlots(fileSlots, ctx, {
+    progressOffset: dirs.length,
+    progressTotal,
+    defaultErrorCode: ErrorCode.UNKNOWN,
+  });
 
     const results: CreateFileResult[] = [];
     const directories: string[] = [];
