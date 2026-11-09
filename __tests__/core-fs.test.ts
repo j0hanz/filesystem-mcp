@@ -1242,7 +1242,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         (err: unknown) =>
           isFsError(err) &&
           err.code === ErrorCode.CANCELLED &&
-          /replaced after the overwrite was approved/u.test(err.message),
+          err.message.includes('replaced after the overwrite was approved'),
       );
       assert.strictEqual(await readFile(p, 'utf-8'), 'other');
     });
@@ -1256,7 +1256,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         (err: unknown) =>
           isFsError(err) &&
           err.code === ErrorCode.CANCELLED &&
-          /appeared after overwrite confirmation was checked/u.test(err.message),
+          err.message.includes('appeared after overwrite confirmation was checked'),
       );
       assert.strictEqual(await readFile(p, 'utf-8'), 'raced');
     });

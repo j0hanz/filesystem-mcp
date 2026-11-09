@@ -839,12 +839,10 @@ export class GuardedFileSystem {
           : identity !== undefined
             ? 'pending'
             : 'clear';
-    return {
-      inputPath: path,
-      validPath,
-      kind,
-      ...(kind === 'pending' ? { identity } : {}),
-    };
+    if (kind === 'pending' && identity !== undefined) {
+      return { inputPath: path, validPath, kind, identity };
+    }
+    return { inputPath: path, validPath, kind };
   }
 
   /**

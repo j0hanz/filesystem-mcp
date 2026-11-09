@@ -161,7 +161,8 @@ it('executeCreate refuses a pending overwrite replaced since the plan', async ()
   await assert.rejects(
     () => fs.executeCreate(plan, 'new'),
     (err: unknown) =>
-      isFsError(err) && err.code === ErrorCode.CANCELLED &&
+      isFsError(err) &&
+      err.code === ErrorCode.CANCELLED &&
       /replaced after the overwrite was approved/u.test(err.message),
   );
   assert.strictEqual(await readFile(p, 'utf-8'), 'other');
@@ -174,7 +175,8 @@ it('executeCreate refuses a file that appeared at a clear path since the plan', 
   await assert.rejects(
     () => fs.executeCreate(plan, 'new'),
     (err: unknown) =>
-      isFsError(err) && err.code === ErrorCode.CANCELLED &&
+      isFsError(err) &&
+      err.code === ErrorCode.CANCELLED &&
       /appeared after overwrite confirmation was checked/u.test(err.message),
   );
   assert.strictEqual(await readFile(p, 'utf-8'), 'raced');
