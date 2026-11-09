@@ -96,6 +96,36 @@ describe('Real HTTP Server integration', () => {
     }
   });
 
+  it('closes immediately on shutdown even with an idle keep-alive client connected', async () => {
+    const srv = await startHttpServer(0, { cliAllowedDirs: [tmpDir] }, { apiKey: TEST_API_KEY });
+    const srvPort = (srv.address() as AddressInfo).port;
+    const agent = new Agent({ keepAlive: true });
+    try {
+      const res = await new Promise<{ statusCode: number | undefined }>((resolve, reject) => {
+        const req = request(
+          new URL(`http://127.0.0.1:${srvPort}/healthz`),
+          { method: 'GET', agent },
+          (r) => {
+            r.resume();
+            r.on('end', () => resolve({ statusCode: r.statusCode }));
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      assert.strictEqual(res.statusCode, 200);
+
+      const start = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        srv.close((err) => (err ? reject(err) : resolve()));
+      });
+      const elapsed = Date.now() - start;
+      assert.ok(elapsed < 2000, `Expected server to close in <2s, took ${elapsed}ms`);
+    } finally {
+      agent.destroy();
+    }
+  });
+
   it('2. POST /mcp without Authorization -> 401', async () => {
     const r = await fetch(base, {
       method: 'POST',

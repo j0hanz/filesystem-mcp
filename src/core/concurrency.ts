@@ -10,7 +10,10 @@ const exclusiveChains = new Map<unknown, Promise<unknown>>();
  * instance (allowed-set grants) or a resolved write target (per-file writes).
  */
 export async function runExclusive<T>(key: unknown, fn: () => Promise<T>): Promise<T> {
-  const run = (exclusiveChains.get(key) ?? Promise.resolve()).then(() => fn());
+  const run = (exclusiveChains.get(key) ?? Promise.resolve()).then(
+    () => fn(),
+    () => fn(),
+  );
   const tail = run.then(
     () => undefined,
     () => undefined,

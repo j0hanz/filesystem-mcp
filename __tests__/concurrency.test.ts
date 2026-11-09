@@ -67,4 +67,23 @@ describe('runExclusive argument isolation', () => {
     });
     assert.strictEqual(argCount, 0, 'expected fn to be called with 0 arguments');
   });
+
+  it('does not pass previous rejection reason as an argument to the next caller', async () => {
+    const key = 'test-lock-key';
+    let receivedArg: unknown = 'initial';
+
+    const failingTask = runExclusive(key, async () => {
+      throw new Error('previous failure');
+    });
+
+    const nextTask = runExclusive(key, async (optionalArg?: unknown) => {
+      receivedArg = optionalArg;
+      return 'success';
+    });
+
+    await assert.rejects(failingTask, { message: 'previous failure' });
+    const result = await nextTask;
+    assert.strictEqual(result, 'success');
+    assert.strictEqual(receivedArg, undefined, 'expected optionalArg to be undefined');
+  });
 });
