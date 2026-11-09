@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
+- **Windows device paths**: block CONIN$, CONOUT$, COM0, and LPT0 device names to prevent console input hangs.
 
 ## [2.19.3] - 2026-11-07
 
