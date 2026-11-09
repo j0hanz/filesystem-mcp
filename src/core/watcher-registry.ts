@@ -6,6 +6,7 @@ import { formatUnknownErrorMessage } from './errors.ts';
 import { extractPath } from './file-uri.ts';
 import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
+import { isSamePath } from './path-utils.ts';
 import { parseEnvInt } from './util.ts';
 
 // Cap concurrent file watchers to avoid exhausting OS-level watch handles
@@ -212,7 +213,7 @@ export function createWatcherRegistry() {
             notifyAll(uri);
           })
         : watch(dirname(resolvedPath), (_event, filename) => {
-            if (filename === null || filename === basename(resolvedPath)) notifyAll(uri);
+            if (filename === null || isSamePath(filename, basename(resolvedPath))) notifyAll(uri);
           });
       watcher.on('error', (err: Error) => {
         Logger.warn(`Watcher error for ${uri}: ${err.message}`);
