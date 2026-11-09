@@ -38,6 +38,7 @@ import { defineTool } from './define.ts';
 interface CollectedEntry {
   name: string;
   relativePath: string; // POSIX
+  parent: string;
   type: EntryType;
   size?: number;
 }
@@ -69,19 +70,21 @@ export interface CollectResult {
   ignoredDirs?: ExcludedDirs;
 }
 
+function parentOfRelative(relativePath: string): string {
+  const slash = relativePath.lastIndexOf('/');
+  return slash === -1 ? '' : relativePath.slice(0, slash);
+}
+
 /** The entry's parent folder, relative like the entry; '' at the top level. */
 function parentOf(entry: CollectedEntry): string {
-  const slash = entry.relativePath.lastIndexOf('/');
-  return slash === -1 ? '' : entry.relativePath.slice(0, slash);
+  return entry.parent;
 }
 
 // Compare by parent directory first (depth-level grouping), then within the
 // same parent: directories first, then by size (descending) or alphabetical.
 function entryComparator(sortBy: 'name' | 'size') {
   return (a: CollectedEntry, b: CollectedEntry): number => {
-    const parentA = parentOf(a);
-    const parentB = parentOf(b);
-    if (parentA !== parentB) return parentA.localeCompare(parentB);
+    if (a.parent !== b.parent) return a.parent.localeCompare(b.parent);
     const rankDiff = Number(b.type === 'directory') - Number(a.type === 'directory');
     if (rankDiff !== 0) return rankDiff;
     if (sortBy === 'size') {
@@ -162,6 +165,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       entries.push({
         name,
         relativePath: relPath,
+        parent: parentOfRelative(relPath),
         type: entryType,
         ...(size !== undefined ? { size } : {}),
       });
@@ -221,7 +225,12 @@ function renderMarkdown(
       dir = posix.dirname(dir)
     ) {
       present.add(dir);
-      entries.push({ name: posix.basename(dir), relativePath: dir, type: 'directory' });
+      entries.push({
+        name: posix.basename(dir),
+        relativePath: dir,
+        parent: parentOfRelative(dir),
+        type: 'directory',
+      });
     }
   }
   entries.sort(entryComparator(opts.sortBy));
