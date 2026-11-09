@@ -116,9 +116,9 @@ Expected: PASS. If either fails before edits, stop and diagnose the existing fai
   description:
     'Find files by name or glob pattern, like find. ' +
     'Use when locating files by name or pattern anywhere in the workspace. ' +
-    'A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to root (src/**/*.ts). ' +
+    'A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). ' +
     'maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. ' +
-    'Returns root, paths relative to it, totalMatches, filesScanned, and nextCursor for paging; stoppedReason reports maxResults or timeout truncation. ' +
+    'Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. ' +
     'Use list to browse directory trees, and search_text to search file contents.',
 ```
 
