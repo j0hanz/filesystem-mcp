@@ -395,9 +395,10 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
   description:
     'Move, rename, or copy files and directories, like mv or cp -r. ' +
     'Use when renaming paths, moving files between directories, or copying trees (copy: true). ' +
-    'Each destination must be the full target path, not an existing directory to move into. ' +
-    'Overwrite applies only to copies; moving onto an existing file requires confirmation. ' +
-    'Returns moved paths and an undo id. Use delete to remove paths.',
+    'Each moves entry is { source, destination }; destination is the full target path, not a directory to move into. ' +
+    'copy: true leaves sources in place. overwrite applies only to copies; moving onto an existing file requires confirmation. ' +
+    'Returns { moves: [{ from, to }], failures?, skipped? } and an undo id for undo; one failed pair does not roll back completed transfers. ' +
+    'Use delete to remove paths.',
   input: MoveInputSchema,
   readOnlyHint: false,
   progress: (args) => {

@@ -170,9 +170,10 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   description:
     'Get metadata without reading file contents, like ls -ld. ' +
     'Use when checking file existence, size, type, or timestamps. ' +
-    'Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. ' +
-    'Symlinks report their target after validating the path. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. ' +
-    'Use read to view contents, and list to browse directories.',
+    'Both path and paths return { results, summary }, with value or error for each path. Missing paths get NOT_FOUND; one failure does not fail a batch, but an all-failed batch sets isError. ' +
+    'Symlinks return their own metadata and symlinkTarget after path validation. ' +
+    'Returns name, path, type, timestamps, and isHidden; files add size and tokenEstimate, directories entryCount. ' +
+    'mimeType comes from the extension. Windows returns readOnly instead of POSIX permissions. Use read to view contents, and list to browse directories.',
   input: StatInputSchema,
   readOnlyHint: true,
   deadline: true,
