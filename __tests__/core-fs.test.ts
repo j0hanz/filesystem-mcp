@@ -1207,6 +1207,83 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     });
   });
 
+  describe('Creation lifecycle (planCreate)', () => {
+    it('planCreate classifies each write and refuses a directory', async () => {
+      const fresh = await fs.planCreate(join(tmpDir, 'create-new.txt'), {});
+      assert.strictEqual(fresh.kind, 'clear');
+
+      const existing = await writeTestFile(tmpDir, 'create-existing.txt', 'old');
+      const pending = await fs.planCreate(existing, {});
+      assert.strictEqual(pending.kind, 'pending');
+      assert.strictEqual(pending.identity?.itemType, 'file');
+
+      assert.strictEqual((await fs.planCreate(existing, { overwrite: true })).kind, 'overwrite');
+      assert.strictEqual((await fs.planCreate(existing, { append: true })).kind, 'append');
+
+      await assert.rejects(
+        () => fs.planCreate(tmpDir, {}),
+        (err: unknown) => {
+          assert.ok(isFsError(err));
+          assert.strictEqual(err.code, ErrorCode.NOT_FILE);
+          assert.strictEqual(err.message, 'Not a regular file');
+          return true;
+        },
+      );
+    });
+
+    it('executeCreate refuses a pending overwrite replaced since the plan', async () => {
+      const p = join(tmpDir, 'create-swap.txt');
+      await writeTestFile(tmpDir, 'create-swap.txt', 'old');
+      const plan = await fs.planCreate(p, {});
+      await rm(p);
+      await writeTestFile(tmpDir, 'create-swap.txt', 'other');
+      await assert.rejects(
+        () => fs.executeCreate(plan, 'new'),
+        (err: unknown) =>
+          isFsError(err) &&
+          err.code === ErrorCode.CANCELLED &&
+          err.message.includes('replaced after the overwrite was approved'),
+      );
+      assert.strictEqual(await readFile(p, 'utf-8'), 'other');
+    });
+
+    it('executeCreate refuses a file that appeared at a clear path since the plan', async () => {
+      const p = join(tmpDir, 'create-appeared.txt');
+      const plan = await fs.planCreate(p, {});
+      await writeTestFile(tmpDir, 'create-appeared.txt', 'raced');
+      await assert.rejects(
+        () => fs.executeCreate(plan, 'new'),
+        (err: unknown) =>
+          isFsError(err) &&
+          err.code === ErrorCode.CANCELLED &&
+          err.message.includes('appeared after overwrite confirmation was checked'),
+      );
+      assert.strictEqual(await readFile(p, 'utf-8'), 'raced');
+    });
+
+    it('executeCreate writes a clear path, appends a missing file, and clobbers under overwrite', async () => {
+      const clearPlan = await fs.planCreate(join(tmpDir, 'create-write.txt'), {});
+      const wrote = await fs.executeCreate(clearPlan, 'hello');
+      assert.strictEqual(wrote.validPath, clearPlan.validPath);
+      assert.ok(wrote.writtenAt instanceof Date);
+
+      const appendPlan = await fs.planCreate(join(tmpDir, 'create-append.txt'), { append: true });
+      await fs.executeCreate(appendPlan, 'line');
+      assert.strictEqual(await readFile(appendPlan.validPath, 'utf-8'), 'line');
+
+      const clobber = join(tmpDir, 'create-clobber.txt');
+      await writeTestFile(tmpDir, 'create-clobber.txt', 'old');
+      await fs.executeCreate(await fs.planCreate(clobber, { overwrite: true }), 'new');
+      assert.strictEqual(await readFile(clobber, 'utf-8'), 'new');
+    });
+
+    it('one-shot create plans then executes', async () => {
+      const res = await fs.create(join(tmpDir, 'create-oneshot.txt'), 'content');
+      assert.ok(isSamePath(res.validPath, join(tmpDir, 'create-oneshot.txt')));
+      assert.strictEqual(await readFile(res.validPath, 'utf-8'), 'content');
+    });
+  });
+
   describe('Invalid setting warnings (TC-FUNC-019b)', () => {
     it('TC-FUNC-019b: a rejected numeric setting warns once and is not gated by --log-level', async (t) => {
       await withEnv({ FS_LOG_LEVEL: 'error', FS_MAX_FILE_SIZE: 'not-a-number' }, () => {

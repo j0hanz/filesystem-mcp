@@ -1,27 +1,21 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
-import { isInputRequiredResult } from '@modelcontextprotocol/server';
+import { type InputRequiredResult, isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { basename, dirname } from 'node:path';
+import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { confirm, type ConfirmItem } from '../core/confirmation.ts';
-import {
-  ErrorCode,
-  formatUnknownErrorMessage,
-  FsError,
-  type Problem,
-  rethrowIfAborted,
-} from '../core/errors.ts';
+import { confirm } from '../core/confirmation.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import { destIdentity, type EntryIdentity, sameIdentity, type Stats } from '../core/fs.ts';
+import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchSlot, executeBatchSlots, isTotalFailure } from './batch.ts';
+import { type BatchResult, type BatchSlot, executeBatchSlots, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -157,6 +151,9 @@ interface CreateOutput {
   skipped?: string[];
 }
 
+type CreateInput = z.infer<typeof CreateInputSchema>;
+type CreateFileItem = z.infer<typeof CreateFileItemSchema>;
+
 export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   name: 'create',
   title: 'Create Files',
@@ -173,130 +170,11 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     ...(args.directories ? { directories: args.directories.map((dir) => fn(dir)) } : {}),
   }),
   run: async (args, ctx) => {
-    const files = args.files ?? [];
-    const dirs = args.directories ?? [];
-    // Phase 1 (no mutation): which entries would replace a file that exists
-    // right now? Those need the user's word before anything is written (R14).
-    // append never destroys, and overwrite: true is that word given up front.
-    // A path that fails validation here is left for runOverPaths to report.
-    // A file that appears between rounds is asked about again on the retry.
-    // A folder can never be replaced, so no answer could help: it fails below, unasked.
-    const folders = new Set<string>();
-    const { results: planned } = await processInParallel(
-      files,
-      async (entry) => {
-        if (entry.append) return undefined;
-        try {
-          const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
-          const identity = await destIdentity(ctx.fs, validPath, 'create');
-          if (identity?.itemType === 'directory') {
-            folders.add(entry.path);
-            return undefined;
-          }
-          if (entry.overwrite) return undefined;
-          return identity && { validPath, identity };
-        } catch (error) {
-          rethrowIfAborted(error);
-          return undefined;
-        }
-      },
-      PARALLEL_CONCURRENCY,
-      ctx.signal,
-    );
-    const pendingByPath = new Map<string, { validPath: string; identity: EntryIdentity }>();
-    const items = new Map<string, ConfirmItem>();
-    for (const { index, value } of planned) {
-      const requested = files[index]?.path;
-      if (!value || !requested) continue;
-      pendingByPath.set(requested, value);
-      items.set(value.validPath, {
-        path: value.validPath,
-        identity: value.identity,
-        required: true,
-        message: `"${value.validPath}" already exists. Overwrite it?`,
-      });
-    }
-    // Round 1 returns input_required while an overwrite needs approval (R14).
-    const confirmed = await confirm(ctx, 'create', 'overwrite', [...items.values()]);
-    if (isInputRequiredResult(confirmed)) return confirmed;
-
-    // Directories wait for the overwrite question above, so nothing is written
-    // before the user answers.
-    const progressTotal = dirs.length + files.length;
-    const dirSlots: BatchSlot<string>[] = dirs.map((dir) => ({
-      status: 'pending',
-      path: dir,
-      run: async () => {
-        await ctx.fs.mkdir(dir, { recursive: true });
-        return dir;
-      },
-    }));
-    const dirBatch = await executeBatchSlots(dirSlots, ctx, {
-      progressOffset: 0,
-      progressTotal,
-      defaultErrorCode: ErrorCode.UNKNOWN,
-    });
-
-    const fileSlots: BatchSlot<
-      { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >[] = files.map((item) => ({
-      status: 'pending',
-      path: item.path,
-      run: async () => {
-        const { path, content, append, overwrite } = item;
-        if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
-        const pending = pendingByPath.get(path);
-        if (pending !== undefined) {
-          const verdict = confirmed.verdict(pending.validPath);
-          if (verdict === 'skipped') return { skipped: path };
-          if (verdict !== 'proceed') {
-            throw new FsError(
-              ErrorCode.CANCELLED,
-              verdict === 'changed'
-                ? `create cancelled: "${path}" was replaced again while the prompt was open.`
-                : `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
-              path,
-            );
-          }
-        }
-
-        // Lock per resolved file so two entries naming one file (e.g. through a
-        // symlinked parent) cannot clobber each other.
-        return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
-          // Replaced since approval: the verdict only covers the identity it sealed.
-          // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the rename; lock the file across processes if that window matters
-          if (pending !== undefined) {
-            const now = await destIdentity(ctx.fs, resolvedTarget, 'create');
-            if (now && !sameIdentity(now, pending.identity)) {
-              throw new FsError(
-                ErrorCode.CANCELLED,
-                `create cancelled: "${path}" was replaced after the overwrite was approved.`,
-                path,
-              );
-            }
-          }
-          // The file may have appeared since the overwrite set was planned.
-          if (
-            !append &&
-            !overwrite &&
-            pending === undefined &&
-            (await destIdentity(ctx.fs, resolvedTarget, 'create')) !== undefined
-          ) {
-            throw new FsError(
-              ErrorCode.CANCELLED,
-              `create refused: "${path}" appeared after overwrite confirmation was checked`,
-              path,
-            );
-          }
-          return createOne(path, content, append, ctx);
-        });
-      },
-    }));
-    const batch = await executeBatchSlots(fileSlots, ctx, {
-      progressOffset: dirs.length,
-      progressTotal,
-      defaultErrorCode: ErrorCode.UNKNOWN,
-    });
+    const r = await handleCreate(args, ctx);
+    // input_required is a return value, not a completed call: surface it
+    // verbatim so the executor short-circuits before building a CallToolResult.
+    if (isInputRequiredResult(r)) return r;
+    const { dirBatch, batch } = r;
 
     const results: CreateFileResult[] = [];
     const directories: string[] = [];
@@ -354,14 +232,161 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   },
 });
 
+interface CreateFailure {
+  path: string;
+  error: Problem;
+}
+
+function toCreateFailure(path: string, error: unknown): CreateFailure {
+  return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path) };
+}
+
+type CreateSlotValue =
+  { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string };
+
+type CreateFilePlanResult =
+  { status: 'plan'; plan: CreatePlan } | { status: 'fail'; failure: CreateFailure };
+
+/**
+ * Phase 1 (no mutation): plan one file through the guarded filesystem.
+ */
+async function planFile(
+  file: CreateFileItem,
+  ctx: Pick<ToolCtx, 'fs' | 'signal'>,
+): Promise<CreateFilePlanResult> {
+  try {
+    const plan = await ctx.fs.planCreate(file.path, {
+      append: file.append,
+      overwrite: file.overwrite,
+      signal: ctx.signal,
+    });
+    return { status: 'plan', plan };
+  } catch (error) {
+    return { status: 'fail', failure: toCreateFailure(file.path, error) };
+  }
+}
+
+/**
+ * Plan every file, ask the Confirmation for the overwrites that need the
+ * user's word (R14), then execute the plans and the directories. A path that
+ * names a directory is refused at plan, unasked, before the round.
+ */
+async function handleCreate(
+  args: CreateInput,
+  ctx: ToolCtx,
+): Promise<
+  InputRequiredResult | { dirBatch: BatchResult<string>; batch: BatchResult<CreateSlotValue> }
+> {
+  const files = args.files ?? [];
+  const dirs = args.directories ?? [];
+
+  const planned = await processInParallel(
+    files,
+    (file) => planFile(file, ctx),
+    PARALLEL_CONCURRENCY,
+    ctx.signal,
+  );
+
+  const slots = new Array<BatchSlot<CreateSlotValue>>(files.length);
+  const plans = new Map<number, CreatePlan>();
+  for (const { index, value } of planned.results) {
+    if (value.status === 'fail') {
+      slots[index] = { status: 'failure', path: value.failure.path, error: value.failure.error };
+    } else {
+      plans.set(index, value.plan);
+    }
+  }
+  for (const { index, error } of planned.errors) {
+    const path = files[index]?.path ?? '(unknown)';
+    slots[index] = {
+      status: 'failure',
+      path,
+      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
+    };
+  }
+
+  // Round 1 returns input_required while an overwrite needs approval (R14).
+  // append never destroys, and overwrite: true is that word given up front,
+  // so neither asks. Two spellings of one file ask one question: the answers
+  // are keyed by path, so a second prompt would be answered or skipped
+  // without ever being read.
+  const confirmItems = new Map<
+    string,
+    { path: string; identity: NonNullable<CreatePlan['identity']>; required: true; message: string }
+  >();
+  for (const plan of plans.values()) {
+    if (plan.kind !== 'pending' || plan.identity === undefined) continue;
+    confirmItems.set(plan.validPath, {
+      path: plan.validPath,
+      identity: plan.identity,
+      required: true,
+      message: `"${plan.validPath}" already exists. Overwrite it?`,
+    });
+  }
+  const confirmed = await confirm(ctx, 'create', 'overwrite', [...confirmItems.values()]);
+  if (isInputRequiredResult(confirmed)) return confirmed;
+
+  // Phase 2 (mutation): execute every planned write.
+  for (const [index, plan] of plans) {
+    const file = files[index];
+    if (!file) continue;
+    slots[index] = {
+      status: 'pending',
+      path: plan.inputPath,
+      run: async (c) => {
+        if (plan.kind === 'pending') {
+          const verdict = confirmed.verdict(plan.validPath);
+          if (verdict === 'skipped') return { skipped: plan.inputPath };
+          if (verdict !== 'proceed') {
+            throw new FsError(
+              ErrorCode.CANCELLED,
+              verdict === 'changed'
+                ? `create cancelled: "${plan.inputPath}" was replaced again while the prompt was open.`
+                : `create cancelled: overwrite of "${plan.inputPath}" was ${verdict.refused}`,
+              plan.inputPath,
+            );
+          }
+        }
+        const { validPath, writtenAt } = await c.fs.executeCreate(plan, file.content, {
+          signal: c.signal,
+        });
+        return createOne(validPath, writtenAt, file.content, file.append, c);
+      },
+    };
+  }
+
+  // Directories wait for the overwrite question above, so nothing is written
+  // before the user answers.
+  const progressTotal = dirs.length + files.length;
+  const dirSlots: BatchSlot<string>[] = dirs.map((dir) => ({
+    status: 'pending',
+    path: dir,
+    run: async () => {
+      await ctx.fs.mkdir(dir, { recursive: true });
+      return dir;
+    },
+  }));
+  const dirBatch = await executeBatchSlots(dirSlots, ctx, {
+    progressOffset: 0,
+    progressTotal,
+    defaultErrorCode: ErrorCode.UNKNOWN,
+  });
+
+  const batch = await executeBatchSlots(slots, ctx, {
+    progressOffset: dirs.length,
+    progressTotal,
+    defaultErrorCode: ErrorCode.UNKNOWN,
+  });
+  return { dirBatch, batch };
+}
+
 async function createOne(
-  path: string,
+  validPath: string,
+  writtenAt: Date,
   content: string,
   append: boolean | undefined,
   ctx: ToolCtx,
 ): Promise<{ file: CreateFileResult; resourceLink?: ContentBlock }> {
-  await ctx.fs.mkdir(dirname(path), { recursive: true });
-
   // Overwrite: file content == `content`, so content-derived meta is
   // exact and the atomic temp+rename write protects the existing mode.
   // Append: the resulting file is everything that was there plus
@@ -369,16 +394,10 @@ async function createOne(
   // stat, MIME from the resulting file's leading bytes, and the line
   // count streams the file — reading a multi-GB log back whole is the
   // round-trip append exists to avoid.
-  let validPath: string;
   let meta: WrittenFileMeta;
   let created: string;
   let modified: string;
   if (append) {
-    const appended = await ctx.fs.appendFile(path, content, {
-      signal: ctx.signal,
-    });
-    const writtenAt = new Date();
-    validPath = appended.validPath;
     // The append is the commit point: the bytes are on disk, so
     // everything below is best-effort RESULT METADATA, not part of the
     // write. It runs unwired to ctx.signal, and a metadata failure
@@ -392,28 +411,28 @@ async function createOne(
     let kind: FileKind;
     let lineCount = 0;
     try {
-      stats = (await ctx.fs.stat(appended.validPath)).stats;
+      stats = (await ctx.fs.stat(validPath)).stats;
       // Sniff the resulting file's leading bytes, not the appended
       // chunk: text appended to a binary file is still a binary file.
-      const sample = await ctx.fs.readLeadingSample(appended.validPath);
-      const mimeInfo = detectMimeFromContent(appended.validPath, sample);
+      const sample = await ctx.fs.readLeadingSample(validPath);
+      const mimeInfo = detectMimeFromContent(validPath, sample);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
       // Past the limit the scan costs seconds per append (5.9 s at 2 GiB), so
       // the count stays the unknown-as-zero the catch below also reports.
       if (stats.size <= getMaxTextFileSize()) {
-        lineCount = await ctx.fs.countFileLines(appended.validPath);
+        lineCount = await ctx.fs.countFileLines(validPath);
       }
     } catch (error) {
       ctx.log(
         'warning',
-        `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
+        `create append: result metadata degraded for ${validPath}: ${formatUnknownErrorMessage(error)}`,
         'create',
       );
       // A POSIX mode-0222 file appends fine but cannot be opened 'r';
       // fall back to the chunk for MIME (an approximation) and report
       // the line count as unknown-as-zero rather than fail the append.
-      const mimeInfo = detectMimeFromContent(appended.validPath, content);
+      const mimeInfo = detectMimeFromContent(validPath, content);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
     }
@@ -424,7 +443,7 @@ async function createOne(
       mimeType,
       kind,
       ...writtenFileLinks(
-        appended.validPath,
+        validPath,
         mimeType,
         stats?.size,
         false,
@@ -437,16 +456,11 @@ async function createOne(
     created = (stats?.birthtime ?? EPOCH).toISOString();
     modified = modifiedAfterWrite(stats, writtenAt);
   } else {
-    const written = await ctx.fs.writeFile(path, content, {
-      signal: ctx.signal,
-    });
-    validPath = written.validPath;
-    const writtenAt = new Date();
-    const fileStats = await statAfterWrite(ctx.fs, written.validPath);
+    const fileStats = await statAfterWrite(ctx.fs, validPath);
     created = (fileStats?.birthtime ?? writtenAt).toISOString();
     modified = modifiedAfterWrite(fileStats, writtenAt);
     meta = buildWrittenFileMeta({
-      validPath: written.validPath,
+      validPath,
       content,
       lastModified: modified,
       transport: ctx.transport,

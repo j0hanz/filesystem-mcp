@@ -79,6 +79,17 @@ directory requires Confirmation; an entry replaced while the prompt was open
 is refused, not deleted.
 _Avoid_: remove, rm, unlink
 
+**Creation**:
+The writing of a whole text file on a client's behalf — a new file, an
+overwrite, or an append — planned before any Confirmation is asked for and
+checked again before anything is written. A plan seals the Landing identity
+of a file that would be replaced: an entry replaced while the prompt was
+open is refused, not overwritten, and one that appeared while it was open is
+refused too, not clobbered. An append, or an overwrite the client declared
+up front, destroys nothing, so it is pre-settled with no prompt.
+_Avoid_: write (a Rewrite replaces content; a Creation fills a file whole),
+create (one tool), mkdir (one kind of Creation)
+
 ## Batches
 
 **Batch**:

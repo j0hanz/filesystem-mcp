@@ -150,6 +150,15 @@ export interface ExecuteTransferOptions {
  * Confirmation. Plain data: a Confirmation ends the call, so the next round
  * plans again rather than holding one open.
  */
+/** A settled Creation: what planCreate ruled about one write. */
+export interface CreatePlan {
+  readonly inputPath: string;
+  readonly validPath: string;
+  readonly kind: 'append' | 'overwrite' | 'clear' | 'pending';
+  /** The sealed Landing identity; present iff kind is 'pending'. */
+  readonly identity?: EntryIdentity;
+}
+
 export interface DeletePlan {
   readonly inputPath: string;
   readonly validPath: string;
@@ -796,6 +805,106 @@ export class GuardedFileSystem {
   ): Promise<{ deleted: string }> {
     const plan = await this.planDelete(path, options);
     return this.executeDelete(plan, options);
+  }
+
+  /**
+   * Plan a Creation (see GLOSSARY.md): validate the write path, name the
+   * Landing identity of a file that would be replaced, and classify the
+   * write. An append, or an overwrite the client declared up front, destroys
+   * nothing and is pre-settled; a path that names a directory is refused
+   * here, before the Confirmation round; a clear path is guarded at execute;
+   * a pending path seals its identity for the Confirmation. Makes no
+   * mutations. A destination whose stat was refused names UNKNOWN_IDENTITY,
+   * so it is confirmed, never written over as absent.
+   */
+  async planCreate(
+    path: string,
+    options?: {
+      append?: boolean | undefined;
+      overwrite?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
+  ): Promise<CreatePlan> {
+    options?.signal?.throwIfAborted();
+    const validPath = await this.pathGuard.validatePathForWrite(path);
+    const identity = await destIdentity(this, validPath, 'create');
+    if (identity?.itemType === 'directory') {
+      throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
+    }
+    const kind: CreatePlan['kind'] =
+      options?.append === true
+        ? 'append'
+        : options?.overwrite === true
+          ? 'overwrite'
+          : identity !== undefined
+            ? 'pending'
+            : 'clear';
+    if (kind === 'pending' && identity !== undefined) {
+      return { inputPath: path, validPath, kind, identity };
+    }
+    return { inputPath: path, validPath, kind };
+  }
+
+  /**
+   * Carry out a planned Creation. Takes the write lock, re-checks the Landing
+   * identity of a pending overwrite — an entry replaced while a Confirmation
+   * was open is refused with `CANCELLED` — refuses a clear path that gained a
+   * file since the plan, then creates the parent directory and dispatches the
+   * write or append. The Capture is taken inside `writeFile`/`appendFile`,
+   * where it is today.
+   */
+  async executeCreate(
+    plan: CreatePlan,
+    content: string,
+    options?: { signal?: AbortSignal | undefined },
+  ): Promise<{ validPath: string; writtenAt: Date }> {
+    options?.signal?.throwIfAborted();
+    return this.lockForWrite(plan.validPath, async (resolvedTarget) => {
+      if (plan.kind === 'pending') {
+        const now = await destIdentity(this, resolvedTarget, 'create');
+        // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the write; lock the file across processes if that window matters
+        if (now !== undefined && plan.identity !== undefined && !sameIdentity(now, plan.identity)) {
+          throw new FsError(
+            ErrorCode.CANCELLED,
+            `create cancelled: "${plan.inputPath}" was replaced after the overwrite was approved.`,
+            plan.inputPath,
+          );
+        }
+      }
+      if (
+        plan.kind === 'clear' &&
+        (await destIdentity(this, resolvedTarget, 'create')) !== undefined
+      ) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `create refused: "${plan.inputPath}" appeared after overwrite confirmation was checked`,
+          plan.inputPath,
+        );
+      }
+      await this.mkdir(dirname(plan.validPath), { recursive: true });
+      const written =
+        plan.kind === 'append'
+          ? await this.appendFile(plan.validPath, content, { signal: options?.signal })
+          : await this.writeFile(plan.validPath, content, { signal: options?.signal });
+      return { validPath: written.validPath, writtenAt: new Date() };
+    });
+  }
+
+  /**
+   * One-shot Creation: `planCreate` then `executeCreate`, with no
+   * Confirmation, mirroring `delete`.
+   */
+  async create(
+    path: string,
+    content: string,
+    options?: {
+      append?: boolean | undefined;
+      overwrite?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
+  ): Promise<{ validPath: string; writtenAt: Date }> {
+    const plan = await this.planCreate(path, options);
+    return this.executeCreate(plan, content, options);
   }
 
   /**
