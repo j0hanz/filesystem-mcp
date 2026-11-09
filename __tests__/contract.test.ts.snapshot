@@ -524,7 +524,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. Files are modified in place as they are scanned. Reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch for unified diffs.",
+      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch for unified diffs.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -549,7 +549,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty."
+            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty or whitespace-only."
           },
           "replacement": {
             "type": "string",
@@ -597,7 +597,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "boolean"
           },
           "maxMatches": {
-            "description": "Maximum matches across all files before stopping (default: 100). Reaching it stops the scan early and leaves files rewritten up to that point changed.",
+            "description": "Maximum matches across all files before stopping (default: 100). In live runs, reaching it stops the scan early and leaves files rewritten up to that point changed.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000

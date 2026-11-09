@@ -64,7 +64,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty.',
+      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
     ),
   replacement: z
     .string()
@@ -93,7 +93,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe(
-      `Maximum matches across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). Reaching it stops the scan early and leaves files rewritten up to that point changed.`,
+      `Maximum matches across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). In live runs, reaching it stops the scan early and leaves files rewritten up to that point changed.`,
     ),
   maxFiles: z
     .uint32()
@@ -525,7 +525,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     'Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. ' +
     'Use when updating every occurrence across a project. ' +
     'Patterns can span multiple lines, and regex replacements support $1 capture groups. ' +
-    'Files are modified in place as they are scanned. Reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. ' +
+    'In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. ' +
     'Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. ' +
     'Use edit for a single unique snippet, and patch for unified diffs.',
   input: SearchAndReplaceInputSchema,

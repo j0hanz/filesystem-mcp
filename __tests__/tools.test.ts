@@ -1057,7 +1057,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // and cross-tool disambiguation; measured 23870 / 11082.
     // Raised 2026-11-09 to 24050 full and 11150 read-only: TDQS description
     // refinement for replace_text details partial application on maxMatches,
-    // in-place irreversibility without undo, and safety previews; measured 23964 / 11082.
+    // in-place irreversibility without undo, and safety previews; measured 24011 / 11082.
     const BUDGET_CHARS = 24_050;
     const BUDGET_CHARS_READ_ONLY = 11_150;
 
