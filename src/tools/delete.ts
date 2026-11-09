@@ -11,15 +11,18 @@ import {
   DELETE_ERRNOS,
   DELETE_ERRNOS_NO_CONFIRM,
   ErrorCode,
-  isMissing,
-  isNotFoundErrno,
   type PerPathResult,
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
-import { type FileType, type GuardedFileSystem, identityOf, sameIdentity } from '../core/fs.ts';
+import {
+  type DeletePlan,
+  type GuardedFileSystem,
+  identityOf,
+  UNKNOWN_IDENTITY,
+} from '../core/fs.ts';
 import { canElicit } from '../core/input-required.ts';
-import { normalizeCaseForComparison, resolveEntryType } from '../core/path-utils.ts';
+import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, summarize } from './batch.ts';
@@ -54,163 +57,40 @@ function toDeleteFailure(path: string, error: unknown): DeleteFailure {
   return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path, DELETE_ERRNOS) };
 }
 
-type LstatResult = Awaited<ReturnType<GuardedFileSystem['lstat']>>;
-
-/** A path's pre-checked plan: validated, statted, and flagged if it needs confirmation. */
-interface DeletePlan {
-  inputPath: string;
-  validPath: string;
-  itemType: FileType;
-  firstStats: LstatResult;
-  /** Recursive + non-empty directory: needs a round-trip confirmation. */
-  pending: boolean;
-  /** Pending, and holds an entry the sensitive-file policy protects. */
-  holdsProtected: boolean;
-}
-
 type PlanResult =
   | { status: 'fail'; failure: DeleteFailure }
   | { status: 'noop'; deleted: string }
   | { status: 'plan'; plan: DeletePlan };
 
 /**
- * Phase 1 (no mutation): validate, stat, and decide whether a path needs a
- * confirmation before anything is deleted. A pending path is a recursive
- * non-empty directory; everything else is ready to delete directly.
+ * Phase 1 (no mutation): plan every path through the guarded filesystem.
  */
 async function planPath(
   inputPath: string,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  fs: Pick<
-    GuardedFileSystem,
-    'pathGuard' | 'lstat' | 'hasChildrenUnchecked' | 'holdsProtectedEntry'
-  >,
+  fs: GuardedFileSystem,
   signal?: AbortSignal,
 ): Promise<PlanResult> {
-  let validPath: string;
   try {
-    validPath = await fs.pathGuard.validatePathForDelete(inputPath);
+    const plan = await fs.planDelete(inputPath, {
+      recursive: args.recursive,
+      ignoreIfNotExists: args.ignoreIfNotExists,
+      signal,
+    });
+    if (plan.noop) return { status: 'noop', deleted: plan.validPath };
+    return { status: 'plan', plan };
   } catch (error) {
-    if (args.ignoreIfNotExists && isMissing(error)) {
-      return { status: 'noop', deleted: inputPath };
-    }
     return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
   }
-
-  if (fs.pathGuard.isAllowedRoot(validPath)) {
-    return {
-      status: 'fail',
-      failure: {
-        path: validPath,
-        error: Problem.accessDenied('Deleting a workspace root directory is not allowed', {
-          path: validPath,
-        }),
-      },
-    };
-  }
-
-  let firstStats: LstatResult;
-  try {
-    firstStats = await fs.lstat(validPath);
-  } catch (error) {
-    if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
-      return { status: 'noop', deleted: validPath };
-    }
-    return { status: 'fail', failure: toDeleteFailure(validPath, error) };
-  }
-
-  const itemType = resolveEntryType(firstStats.stats);
-  let hasChildren = false;
-  let holdsProtected = false;
-  if (args.recursive && itemType === 'directory') {
-    try {
-      hasChildren = await fs.hasChildrenUnchecked(validPath);
-      // Only a pending directory needs the walk: nothing else is deleted with contents.
-      holdsProtected = hasChildren && (await fs.holdsProtectedEntry(validPath, inputPath, signal));
-    } catch (error) {
-      return { status: 'fail', failure: toDeleteFailure(validPath, error) };
-    }
-  }
-  return {
-    status: 'plan',
-    plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren, holdsProtected },
-  };
 }
 
 /**
- * Phase 2 (mutation): TOCTOU re-stat against the plan's first stat, then
- * delete. A type or identity change across the confirmation gap fails closed
- * rather than deleting a replacement object the user never confirmed.
- */
-async function finalizeDeletion(
-  plan: DeletePlan,
-  args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
-): Promise<{ deleted: string } | { failure: DeleteFailure }> {
-  let currentStats: LstatResult;
-  try {
-    currentStats = await ctx.fs.lstat(plan.validPath);
-  } catch (error) {
-    if (isNotFoundErrno(error) && args.ignoreIfNotExists) {
-      return { deleted: plan.validPath };
-    }
-    return { failure: toDeleteFailure(plan.validPath, error) };
-  }
-
-  // Identity comparison, not just the coarse category: a swap during the
-  // confirmation gap (delete original, create a same-named replacement) keeps
-  // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
-  // cross-platform signal — dev/ino can read 0 on some non-POSIX drivers — so
-  // combine all three rather than trusting dev/ino alone.
-  // sameIdentity also compares the item type.
-  const identityChanged = !sameIdentity(
-    identityOf(plan.firstStats.stats),
-    identityOf(currentStats.stats),
-  );
-  if (identityChanged) {
-    return {
-      failure: {
-        path: plan.validPath,
-        error: Problem.cancelled(
-          `Delete cancelled: "${plan.validPath}" was replaced after the delete was approved.`,
-          { path: plan.validPath },
-        ),
-      },
-    };
-  }
-
-  try {
-    if (currentStats.stats.isDirectory() && !args.recursive) await ctx.fs.rmdir(plan.validPath);
-    else
-      await ctx.fs.rm(
-        plan.validPath,
-        { recursive: args.recursive, force: args.ignoreIfNotExists },
-        ctx.signal,
-      );
-  } catch (error) {
-    const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
-    return {
-      failure: {
-        path: plan.validPath,
-        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.validPath, rows),
-      },
-    };
-  }
-
-  ctx.log('info', `rm: ${plan.inputPath}`, 'delete');
-  return { deleted: plan.validPath };
-}
-
-/**
- * Execute one planned path on the retry round. A pending path deletes only on
- * an accepted choice; decline, cancel, a missing key, or an entry replaced
- * again after the re-prompt report `CANCELLED` for that path (R3 proceed,
- * R4/R5 cancelled). A non-pending path deletes directly (R14: non-pending
- * items proceed alongside accepted ones).
+ * Execute one planned path on the retry round through the guarded filesystem.
+ * A pending path deletes only on an accepted choice; decline, cancel, a missing key,
+ * or an entry replaced again after the re-prompt report CANCELLED for that path.
  */
 async function executePlan(
   plan: DeletePlan,
-  args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
   confirmed: Confirmed,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
@@ -228,7 +108,19 @@ async function executePlan(
       },
     };
   }
-  return finalizeDeletion(plan, args, ctx);
+  try {
+    const res = await ctx.fs.executeDelete(plan, { signal: ctx.signal });
+    ctx.log('info', `rm: ${plan.inputPath}`, 'delete');
+    return res;
+  } catch (error) {
+    const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
+    return {
+      failure: {
+        path: plan.validPath,
+        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.validPath, rows),
+      },
+    };
+  }
 }
 
 /** What the Confirmation asks. A person cannot see protected files in any listing, so it names them. */
@@ -306,7 +198,7 @@ async function handleDelete(
     'delete',
     plans.map(({ plan }) => ({
       path: plan.validPath,
-      identity: identityOf(plan.firstStats.stats),
+      identity: plan.firstStats ? identityOf(plan.firstStats.stats) : UNKNOWN_IDENTITY,
       required: plan.pending,
       message: deletePrompt(plan),
     })),
@@ -316,7 +208,7 @@ async function handleDelete(
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    ({ plan }) => executePlan(plan, args, ctx, confirmed),
+    ({ plan }) => executePlan(plan, ctx, confirmed),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
@@ -418,7 +310,12 @@ export function nestedIndexes(paths: readonly string[]): Set<number> {
     else groups.set(key, [i]);
   }
   const nested = new Set<number>();
-  for (const group of groups.values()) if (group.length > 1) for (const i of group) nested.add(i);
+  for (const group of groups.values()) {
+    if (group.length > 1) {
+      const exact = new Set(group.map((i) => paths[i]));
+      if (exact.size < group.length) for (const i of group) nested.add(i);
+    }
+  }
   for (const [i, path] of paths.entries()) {
     for (let dir = dirname(path), up = dirname(dir); ; dir = up, up = dirname(dir)) {
       const group = groups.get(normalizeCaseForComparison(dir));
