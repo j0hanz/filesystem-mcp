@@ -64,7 +64,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
+      'Exact literal text or RE2 regex pattern to search for. Patterns can span lines. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
     ),
   replacement: z
     .string()
@@ -84,7 +84,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     ),
   wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
   dryRun: defaultFalseBoolean(
-    'Preview replacements without writing to disk (default: false = apply changes)',
+    'Preview replacements without writing to disk (default: false = apply changes). Pair with returnDiff=true to inspect proposed unified diffs before modifying files.',
   ),
   returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
   maxMatches: z
@@ -93,7 +93,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe(
-      `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)})`,
+      `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). Reaching it stops the scan early; files rewritten before the limit remain changed on disk.`,
     ),
   maxFiles: z
     .uint32()
@@ -522,11 +522,11 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
   name: 'replace_text',
   title: 'Search and Replace',
   description:
-    'Find and replace text or an RE2 regex across one file or all files under a directory, like sed -i. ' +
+    'Find and replace text or an RE2 regex across one file or all files under a directory in place, like sed -i. ' +
     'Use when replacing every match across a file or project. ' +
-    'Patterns match across the whole file and can span lines (^ and $ anchor to file start and end). ' +
-    'Directory runs stop near 100 matches unless maxMatches is raised. ' +
-    'Returns match counts, modified files, and an undo id. Use dryRun to preview wide scopes. ' +
+    'Patterns match whole files and can span lines (^ and $ anchor to file start and end); isRegex: true enables $1 capture replacements. ' +
+    'Directory runs rewrite files as they scan; hitting maxMatches (default: 100) stops early and leaves reached files modified. Changes require undo to revert. ' +
+    'Returns structured results with totalMatches, filesScanned, changed paths, and an undo id; pair dryRun: true with returnDiff: true to preview diffs cleanly. ' +
     'Use edit for a single unique snippet, and patch to apply unified diffs.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
