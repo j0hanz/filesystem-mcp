@@ -75,12 +75,19 @@ function getWindowsSystemDirs(): string[] {
   return [...dirs];
 }
 
-function getUnsafeSystemDirs(): string[] {
-  return withRealSpellings(
-    IS_WINDOWS
-      ? getWindowsSystemDirs()
-      : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'],
-  );
+let cachedSystemDirs: { key: string; dirs: string[] } | undefined;
+
+export function getUnsafeSystemDirs(): string[] {
+  const raw = IS_WINDOWS
+    ? getWindowsSystemDirs()
+    : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'];
+  const key = raw.join(';');
+  if (cachedSystemDirs?.key === key) {
+    return cachedSystemDirs.dirs;
+  }
+  const resolved = withRealSpellings(raw);
+  cachedSystemDirs = { key, dirs: resolved };
+  return resolved;
 }
 
 function withRealSpellings(dirs: readonly string[]): string[] {

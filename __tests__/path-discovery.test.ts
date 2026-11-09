@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { findProjectRoot, isUnsafeCwdPath } from '../src/core/path-discovery.ts';
+import { findProjectRoot, getUnsafeSystemDirs, isUnsafeCwdPath } from '../src/core/path-discovery.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { cleanupTestRoot, createTestRoot, withEnv } from './helpers.ts';
@@ -92,5 +92,11 @@ describe('findProjectRoot (--walk-cwd)', () => {
       assert.strictEqual(isUnsafeCwdPath('D:\\Windows\\System32'), true);
       assert.strictEqual(isUnsafeCwdPath('D:\\Program Files\\App'), true);
     });
+  });
+
+  it('caches resolved system directories across calls with unchanged environment', () => {
+    const first = getUnsafeSystemDirs();
+    const second = getUnsafeSystemDirs();
+    assert.strictEqual(first, second, 'must return the exact cached array instance');
   });
 });
