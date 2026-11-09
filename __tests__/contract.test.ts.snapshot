@@ -123,7 +123,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. The diff has ---/+++ headers and @@ hunks; - lines are from a and + lines from b. context changes only the surrounding lines. Metadata includes resolved a and b paths, linesAdded, and linesRemoved; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -352,7 +352,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Use when renaming paths, moving files between directories, or copying trees (copy: true). Each destination must be the full target path, not an existing directory to move into. Overwrite applies only to copies; moving onto an existing file requires confirmation. Returns moved paths and an undo id. Use delete to remove paths.",
+      "description": "Move, rename, or copy files and directories, like mv or cp -r. Use when renaming paths, moving files between directories, or copying trees (copy: true). Each moves entry is { source, destination }; destination is the full target path, not a directory to move into. copy: true leaves sources in place. overwrite applies only to copies; moving onto an existing file requires confirmation. Returns { moves: [{ from, to }], failures?, skipped? } and an undo id for undo; one failed pair does not roll back completed transfers. Use delete to remove paths.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -410,7 +410,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "patch",
       "title": "Patch",
-      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns lines added and removed, plus an undo id. Use dryRun to test applicability cleanly. Use edit for unique snippet replacements, and replace_text for regex across files.",
+      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. Writes nothing unless every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns path, linesAdded, linesRemoved, and an undo id for undo. dryRun adds the preview diff and writes nothing. Use edit for unique snippet replacements, and replace_text for regex across files.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -733,7 +733,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches relative paths (src/**/*.ts). Skips hidden and ignored files by default. Returns matching paths and a nextCursor for paging. Use list to browse directory trees, and search_text to search file contents.",
+      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. Use list to browse directory trees, and search_text to search file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks report their target after validating the path. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. Use read to view contents, and list to browse directories.",
+      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks include symlinkTarget when available. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType; entryCount is omitted if counting fails. Use read to view contents, and list to browse directories.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -954,7 +954,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. Returns the unified diff with linesAdded and linesRemoved in metadata; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
+      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. The diff has ---/+++ headers and @@ hunks; - lines are from a and + lines from b. context changes only the surrounding lines. Metadata includes resolved a and b paths, linesAdded, and linesRemoved; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1236,7 +1236,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches relative paths (src/**/*.ts). Skips hidden and ignored files by default. Returns matching paths and a nextCursor for paging. Use list to browse directory trees, and search_text to search file contents.",
+      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. Use list to browse directory trees, and search_text to search file contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks report their target after validating the path. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType. Use read to view contents, and list to browse directories.",
+      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks include symlinkTarget when available. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType; entryCount is omitted if counting fails. Use read to view contents, and list to browse directories.",
       "inputSchema": {
         "type": "object",
         "properties": {
