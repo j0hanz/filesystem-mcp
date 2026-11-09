@@ -913,7 +913,7 @@ export class PathGuard {
     if (root === undefined) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        'No roots configured. Use the roots tool or --allow-cwd.',
+        'No roots configured. Use list_roots or --allow-cwd.',
       );
     }
     if (roots.length > 1) {
