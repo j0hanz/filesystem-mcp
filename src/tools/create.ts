@@ -133,9 +133,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     'Write whole text files (create, overwrite, or append) or make empty directories. ' +
     'Use when creating new files, replacing full contents, or creating folders. ' +
     'Missing parent directories are created automatically. Replacing an existing file requires overwrite: true or user confirmation. ' +
-    'Each file and the whole batch share the FS_MAX_FILE_SIZE UTF-8 byte limit. ' +
-    'Returns { files, directories?, failures?, skipped? } and an undo id for undo; one failed entry does not roll back the rest. ' +
-    'Use edit or patch to modify parts of an existing file.',
+    'Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.',
   input: CreateInputSchema,
   readOnlyHint: false,
   mapPaths: (args, fn) => ({
