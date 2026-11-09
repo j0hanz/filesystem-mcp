@@ -3,12 +3,7 @@ import { describe, it } from 'node:test';
 
 import { ErrorCode, Problem } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
-import {
-  type BatchSlot,
-  executeBatchSlots,
-  runOverPaths,
-  summarize,
-} from '../src/tools/batch.ts';
+import { type BatchSlot, executeBatchSlots, runOverPaths, summarize } from '../src/tools/batch.ts';
 import type { ToolCtx } from '../src/tools/define.ts';
 
 describe('executeBatchSlots', () => {
@@ -26,30 +21,31 @@ describe('executeBatchSlots', () => {
     const ctx = { onProgress: () => undefined } as unknown as ToolCtx;
     const res = await executeBatchSlots(slots, ctx);
     assert.strictEqual(res.results.length, 3);
-    assert.strictEqual(res.results[0]?.path, 'a.txt');
-    assert.deepStrictEqual(res.results[0]?.value, { val: 1 });
+    const first = res.results[0];
+    assert.strictEqual(first?.path, 'a.txt');
+    assert.ok(first && 'value' in first);
+    assert.deepStrictEqual(first.value, { val: 1 });
     assert.strictEqual(res.results[1]?.path, 'c.txt');
     assert.ok(res.results[1] && 'error' in res.results[1]);
-    assert.strictEqual(res.results[2]?.path, 'd.txt');
-    assert.deepStrictEqual(res.results[2]?.value, { val: 4 });
+    const third = res.results[2];
+    assert.strictEqual(third?.path, 'd.txt');
+    assert.ok(third && 'value' in third);
+    assert.deepStrictEqual(third.value, { val: 4 });
     assert.deepStrictEqual(res.summary, { total: 3, succeeded: 2, failed: 1 });
   });
 
   it('preserves completed items when aborted and marks unstarted items', async () => {
     const controller = new AbortController();
     const ctx = { signal: controller.signal, onProgress: () => undefined } as unknown as ToolCtx;
-    const slots: BatchSlot<string>[] = Array.from(
-      { length: PARALLEL_CONCURRENCY + 2 },
-      (_, i) => ({
-        status: 'pending',
-        path: `p${String(i)}`,
-        run: async () => {
-          controller.abort(new DOMException('cancelled', 'AbortError'));
-          await Promise.resolve();
-          return `done-${String(i)}`;
-        },
-      }),
-    );
+    const slots: BatchSlot<string>[] = Array.from({ length: PARALLEL_CONCURRENCY + 2 }, (_, i) => ({
+      status: 'pending',
+      path: `p${String(i)}`,
+      run: async () => {
+        controller.abort(new DOMException('cancelled', 'AbortError'));
+        await Promise.resolve();
+        return `done-${String(i)}`;
+      },
+    }));
 
     const res = await executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
     assert.strictEqual(res.results.length, slots.length);

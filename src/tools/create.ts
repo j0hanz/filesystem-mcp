@@ -214,58 +214,58 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       run: async () => {
         const { path, content, append, overwrite } = item;
         if (folders.has(path)) throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', path);
-      const pending = pendingByPath.get(path);
-      if (pending !== undefined) {
-        const verdict = confirmed.verdict(pending.validPath);
-        if (verdict === 'skipped') return { skipped: path };
-        if (verdict !== 'proceed') {
-          throw new FsError(
-            ErrorCode.CANCELLED,
-            verdict === 'changed'
-              ? `create cancelled: "${path}" was replaced again while the prompt was open.`
-              : `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
-            path,
-          );
-        }
-      }
-
-      // Lock per resolved file so two entries naming one file (e.g. through a
-      // symlinked parent) cannot clobber each other.
-      return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
-        // Replaced since approval: the verdict only covers the identity it sealed.
-        // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the rename; lock the file across processes if that window matters
+        const pending = pendingByPath.get(path);
         if (pending !== undefined) {
-          const now = await destIdentity(ctx.fs, resolvedTarget, 'create');
-          if (now && !sameIdentity(now, pending.identity)) {
+          const verdict = confirmed.verdict(pending.validPath);
+          if (verdict === 'skipped') return { skipped: path };
+          if (verdict !== 'proceed') {
             throw new FsError(
               ErrorCode.CANCELLED,
-              `create cancelled: "${path}" was replaced after the overwrite was approved.`,
+              verdict === 'changed'
+                ? `create cancelled: "${path}" was replaced again while the prompt was open.`
+                : `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
               path,
             );
           }
         }
-        // The file may have appeared since the overwrite set was planned.
-        if (
-          !append &&
-          !overwrite &&
-          pending === undefined &&
-          (await destIdentity(ctx.fs, resolvedTarget, 'create')) !== undefined
-        ) {
-          throw new FsError(
-            ErrorCode.CANCELLED,
-            `create refused: "${path}" appeared after overwrite confirmation was checked`,
-            path,
-          );
-        }
-        return createOne(path, content, append, ctx);
-      });
-    },
-  }));
-  const batch = await executeBatchSlots(fileSlots, ctx, {
-    progressOffset: dirs.length,
-    progressTotal,
-    defaultErrorCode: ErrorCode.UNKNOWN,
-  });
+
+        // Lock per resolved file so two entries naming one file (e.g. through a
+        // symlinked parent) cannot clobber each other.
+        return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+          // Replaced since approval: the verdict only covers the identity it sealed.
+          // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the rename; lock the file across processes if that window matters
+          if (pending !== undefined) {
+            const now = await destIdentity(ctx.fs, resolvedTarget, 'create');
+            if (now && !sameIdentity(now, pending.identity)) {
+              throw new FsError(
+                ErrorCode.CANCELLED,
+                `create cancelled: "${path}" was replaced after the overwrite was approved.`,
+                path,
+              );
+            }
+          }
+          // The file may have appeared since the overwrite set was planned.
+          if (
+            !append &&
+            !overwrite &&
+            pending === undefined &&
+            (await destIdentity(ctx.fs, resolvedTarget, 'create')) !== undefined
+          ) {
+            throw new FsError(
+              ErrorCode.CANCELLED,
+              `create refused: "${path}" appeared after overwrite confirmation was checked`,
+              path,
+            );
+          }
+          return createOne(path, content, append, ctx);
+        });
+      },
+    }));
+    const batch = await executeBatchSlots(fileSlots, ctx, {
+      progressOffset: dirs.length,
+      progressTotal,
+      defaultErrorCode: ErrorCode.UNKNOWN,
+    });
 
     const results: CreateFileResult[] = [];
     const directories: string[] = [];

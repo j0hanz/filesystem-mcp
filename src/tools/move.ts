@@ -54,6 +54,17 @@ const VERB: Readonly<Record<PairOp, string>> = { move: 'Move', copy: 'Copy' };
 /** A discriminated union, so the fold below narrows without a generic cast. */
 type TransferExecResult = { readonly skipped: string } | { readonly value: MoveItemResult };
 
+function isProblem(error: unknown): error is Problem {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    !(error instanceof Error) &&
+    'code' in error &&
+    'message' in error &&
+    typeof (error as { code: unknown }).code === 'string'
+  );
+}
+
 function pairFailure(
   pair: { source: string; destination: string },
   error: unknown,
@@ -61,7 +72,7 @@ function pairFailure(
   return {
     source: pair.source,
     destination: pair.destination,
-    error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, pair.source),
+    error: isProblem(error) ? error : Problem.fromUnknown(error, ErrorCode.UNKNOWN, pair.source),
   };
 }
 

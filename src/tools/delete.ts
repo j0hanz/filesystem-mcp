@@ -11,7 +11,7 @@ import {
   DELETE_ERRNOS,
   DELETE_ERRNOS_NO_CONFIRM,
   ErrorCode,
-  type PerPathResult,
+  FsError,
   Problem,
 } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
@@ -31,7 +31,6 @@ import {
   executeBatchSlots,
   failureLines,
   isTotalFailure,
-  summarize,
 } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -52,7 +51,6 @@ const DeleteInputSchema = z.strictObject({
 
 type DeleteInput = z.infer<typeof DeleteInputSchema>;
 type DeleteOutput = BatchResult<{ deleted: boolean }>;
-type DeletePerPathResult = PerPathResult<{ deleted: boolean }>;
 
 // Internal types for error handling
 interface DeleteFailure {
@@ -157,7 +155,7 @@ async function handleDelete(
     ctx.signal,
   );
 
-  const slots = new Array<BatchSlot<DeleteResult>>(paths.length);
+  const slots = new Array<BatchSlot<{ deleted: boolean }>>(paths.length);
   let plans: { plan: DeletePlan; index: number }[] = [];
   const seenTargets = new Set<string>();
 
@@ -232,7 +230,9 @@ async function handleDelete(
       run: async (c) => {
         const r = await executePlan(plan, c, confirmed);
         if ('skipped' in r) return { deleted: false };
-        if ('failure' in r) throw r.failure.error;
+        if ('failure' in r) {
+          throw new FsError(r.failure.error.code, r.failure.error.message, r.failure.path);
+        }
         return { deleted: true };
       },
     };

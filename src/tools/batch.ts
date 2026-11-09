@@ -14,12 +14,30 @@ export type BatchSlot<T> =
   | { readonly status: 'settled'; readonly path: string; readonly value: T }
   | { readonly status: 'failure'; readonly path: string; readonly error: Problem }
   | { readonly status: 'omitted' }
-  | { readonly status: 'pending'; readonly path: string; readonly run: (ctx: ToolCtx) => Promise<T> };
+  | {
+      readonly status: 'pending';
+      readonly path: string;
+      readonly run: (ctx: ToolCtx) => Promise<T>;
+    };
 
 export interface BatchExecutionOptions {
   readonly defaultErrorCode?: ErrorCode;
   readonly progressOffset?: number;
   readonly progressTotal?: number;
+}
+
+function toProblem(error: unknown, defaultCode: ErrorCode, path: string): Problem {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    !(error instanceof Error) &&
+    'code' in error &&
+    'message' in error &&
+    typeof (error as { code: unknown }).code === 'string'
+  ) {
+    return error as Problem;
+  }
+  return Problem.fromUnknown(error, defaultCode, path);
 }
 
 /**
@@ -36,7 +54,7 @@ export async function executeBatchSlots<T>(
 ): Promise<BatchResult<T>> {
   const totalSlots = slots.length;
   const defaultErrorCode = options?.defaultErrorCode ?? ErrorCode.UNKNOWN;
-  const results: (PerPathResult<T> | undefined)[] = new Array(totalSlots);
+  const results = new Array<PerPathResult<T> | undefined>(totalSlots);
 
   for (let i = 0; i < totalSlots; i++) {
     const slot = slots[i];
@@ -79,7 +97,7 @@ export async function executeBatchSlots<T>(
         } catch (error: unknown) {
           results[index] = {
             path: slot.path,
-            error: Problem.fromUnknown(error, defaultErrorCode, slot.path),
+            error: toProblem(error, defaultErrorCode, slot.path),
           };
         } finally {
           tick();
@@ -94,7 +112,7 @@ export async function executeBatchSlots<T>(
     for (const { slot, index } of pending) {
       results[index] ??= {
         path: slot.path,
-        error: Problem.fromUnknown(error, defaultErrorCode, slot.path),
+        error: toProblem(error, defaultErrorCode, slot.path),
       };
     }
   }
