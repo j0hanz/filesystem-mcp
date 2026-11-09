@@ -1071,8 +1071,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // description text the input schemas already state (edit oldText, create
     // overwrite, list maxDepth, patch undo, read slicing, delete recursive
     // INVALID_INPUT tail); measured 25021 / 11651.
-    const BUDGET_CHARS = 25_050;
-    const BUDGET_CHARS_READ_ONLY = 11_700;
+    // Raised 2026-11-09 to 25200 full and 11750 read-only: PR review asked the
+    // delete and list claims to admit retry-cancelled paths and the listing
+    // cap and timeout truncation; measured 25176 / 11735.
+    const BUDGET_CHARS = 25_200;
+    const BUDGET_CHARS_READ_ONLY = 11_750;
 
     const full = await createTestClientPair([tmpDir]);
     try {

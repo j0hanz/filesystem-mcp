@@ -354,8 +354,8 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     'Use when exploring directory structure or checking folder contents. ' +
     'Skips hidden and ignored files (.git, node_modules) by default. ' +
     'Directories sort before files within each folder. ' +
-    'Totals count the whole walk, not just the page, and only entries the depth reaches. ' +
-    'Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the full list when the first page is cut short. ' +
+    'Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. ' +
+    'Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. ' +
     'Use find_files to find files by name, stat for metadata, and read for contents.',
   input: ListInputSchema,
   readOnlyHint: true,

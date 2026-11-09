@@ -261,7 +261,8 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   description:
     'Delete files, directories, or symlinks, like rm or rm -r. ' +
     'Use when permanently removing paths. Paths are exact (globs are not expanded). ' +
-    'Nothing in the call is deleted until every confirmation is answered; paths nested inside each other are refused, so delete the outer one alone. ' +
+    'While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. ' +
+    'Paths nested inside each other are refused, so delete the outer one alone. ' +
     'One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. ' +
     'Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. ' +
     'Use move to relocate a path instead.',

@@ -81,7 +81,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "delete",
       "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). Nothing in the call is deleted until every confirmation is answered; paths nested inside each other are refused, so delete the outer one alone. One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. Use move to relocate a path instead.",
+      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. Paths nested inside each other are refused, so delete the outer one alone. One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. Use move to relocate a path instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -287,7 +287,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the full list when the first page is cut short. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -993,7 +993,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the full list when the first page is cut short. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
