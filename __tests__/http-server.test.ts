@@ -86,7 +86,11 @@ describe('Real HTTP Server integration', () => {
     };
     try {
       srv.close();
-      assert.strictEqual(calledSync, true, 'closeIdleConnections must be called synchronously on close()');
+      assert.strictEqual(
+        calledSync,
+        true,
+        'closeIdleConnections must be called synchronously on close()',
+      );
     } finally {
       await new Promise<void>((resolve) => srv.close(() => resolve())).catch(() => {});
     }
