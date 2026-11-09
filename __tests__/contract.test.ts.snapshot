@@ -524,7 +524,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Find and replace text or an RE2 regex across one file or all files under a directory, like sed -i. Use when replacing every match across a file or project. Patterns match across the whole file and can span lines (^ and $ anchor to file start and end). Directory runs stop near 100 matches unless maxMatches is raised. Returns match counts, modified files, and an undo id. Use dryRun to preview wide scopes. Use edit for a single unique snippet, and patch to apply unified diffs.",
+      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch for unified diffs.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -549,12 +549,12 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only."
+            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty or whitespace-only."
           },
           "replacement": {
             "type": "string",
             "maxLength": 10000,
-            "description": "Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.",
+            "description": "Replacement text. When isRegex=true, supports capture groups ($1, $2, etc.). Use an empty string to delete matches.",
             "examples": [
               "$1_renamed",
               "",
@@ -563,7 +563,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "isRegex": {
             "default": false,
-            "description": "Treat searchPattern as a RE2 regex (default: literal text match)",
+            "description": "Treat searchPattern as an RE2 regex (default: literal text match)",
             "type": "boolean"
           },
           "includeHidden": {
@@ -578,7 +578,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "caseSensitive": {
             "default": true,
-            "description": "Match case exactly (default: true). Pass false to ignore case. search_text ignores case by default, so matches it reports can include case variants this call does not replace.",
+            "description": "Match case exactly (default: true). Pass false to ignore case. Unlike search_text, this defaults to true.",
             "type": "boolean"
           },
           "wholeWord": {
@@ -588,7 +588,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "dryRun": {
             "default": false,
-            "description": "Preview replacements without writing to disk (default: false = apply changes)",
+            "description": "Preview replacements without writing to disk (default: false). Pair with returnDiff=true to inspect the unified diff first.",
             "type": "boolean"
           },
           "returnDiff": {
@@ -597,7 +597,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "boolean"
           },
           "maxMatches": {
-            "description": "Maximum total match count across all files before stopping (default: 100)",
+            "description": "Maximum matches across all files before stopping (default: 100). In live runs, reaching it stops the scan early and leaves files rewritten up to that point changed.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
