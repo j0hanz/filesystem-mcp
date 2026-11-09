@@ -736,6 +736,12 @@ describe('HTTP Policy & Security', () => {
       // 10.0.0.1 was evicted so its fresh request gets a new bucket
       assert.strictEqual(hit('10.0.0.1'), undefined);
     });
+
+    it('TC-SEC-038: createRateLimiter exposes close() to clean up interval and state', () => {
+      const limiter = createRateLimiter(10);
+      assert.strictEqual(typeof limiter.close, 'function');
+      limiter.close();
+    });
   });
 
   describe('Utility functions (isLoopbackHttpHost, splitCsvList, resolveTrustProxySetting)', () => {

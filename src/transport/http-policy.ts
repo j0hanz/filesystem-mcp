@@ -382,13 +382,17 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 
 const MAX_RATE_LIMIT_BUCKETS = 10_000;
 
+export interface RateLimiterMiddleware extends RequestHandler {
+  close: () => void;
+}
+
 /**
  * Fixed-window per-client-IP rate limiter.
  */
 export function createRateLimiter(
   max: number,
   maxBuckets = MAX_RATE_LIMIT_BUCKETS,
-): RequestHandler {
+): RateLimiterMiddleware {
   const buckets = new Map<string, RateBucket>();
   const sweep = setInterval(() => {
     const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS * 2;
@@ -398,7 +402,7 @@ export function createRateLimiter(
   }, RATE_LIMIT_WINDOW_MS);
   sweep.unref();
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  const middleware: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
     const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
     const now = Date.now();
     let bucket = buckets.get(ip);
@@ -432,4 +436,11 @@ export function createRateLimiter(
       'Retry-After': String(retryAfterSec),
     });
   };
+
+  const limiter = middleware as RateLimiterMiddleware;
+  limiter.close = () => {
+    clearInterval(sweep);
+    buckets.clear();
+  };
+  return limiter;
 }
