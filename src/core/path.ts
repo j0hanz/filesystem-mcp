@@ -1622,10 +1622,7 @@ export class PathGuard {
         cli.allowCwdWalk ?? parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
       if (walkCwd) {
         const home = normalizePath(homedir());
-        const walkCeiling = [
-          ...boundaries,
-          ...(isPathInsideDirectory(home, cwd) ? [home] : []),
-        ];
+        const walkCeiling = [...boundaries, ...(isPathInsideDirectory(home, cwd) ? [home] : [])];
         cwd = await findProjectRoot(cwd, walkCeiling);
       }
       if (isUnsafeCwdPath(cwd)) {

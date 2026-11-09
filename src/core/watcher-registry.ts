@@ -5,8 +5,8 @@ import { basename, dirname } from 'node:path';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { extractPath } from './file-uri.ts';
 import { Logger } from './observability.ts';
-import type { PathGuard } from './path.ts';
 import { isSamePath } from './path-utils.ts';
+import type { PathGuard } from './path.ts';
 import { parseEnvInt } from './util.ts';
 
 // Cap concurrent file watchers to avoid exhausting OS-level watch handles
