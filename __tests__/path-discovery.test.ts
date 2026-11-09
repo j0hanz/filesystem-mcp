@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { findProjectRoot } from '../src/core/path-discovery.ts';
+import { findProjectRoot, isUnsafeCwdPath } from '../src/core/path-discovery.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { cleanupTestRoot, createTestRoot, withEnv } from './helpers.ts';
@@ -84,5 +84,13 @@ describe('findProjectRoot (--walk-cwd)', () => {
         }
       },
     );
+  });
+
+  it('flags system root directories derived from environment variables', async () => {
+    if (process.platform !== 'win32') return;
+    await withEnv({ SystemRoot: 'D:\\Windows', ProgramFiles: 'D:\\Program Files' }, async () => {
+      assert.strictEqual(isUnsafeCwdPath('D:\\Windows\\System32'), true);
+      assert.strictEqual(isUnsafeCwdPath('D:\\Program Files\\App'), true);
+    });
   });
 });

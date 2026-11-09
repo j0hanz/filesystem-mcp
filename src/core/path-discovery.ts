@@ -58,11 +58,30 @@ export async function resolveConfiguredDirs(
 // against the cwd, so a cross-platform list would make the cwd itself
 // "contain a system dir" and refuse --allow-cwd.
 // Each entry also counts by its real spelling: on macOS /etc is /private/etc.
-const UNSAFE_SYSTEM_DIRS = withRealSpellings(
-  IS_WINDOWS
-    ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
-    : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'],
-);
+function getWindowsSystemDirs(): string[] {
+  const dirs = new Set<string>();
+  const addIfSet = (envVar: string) => {
+    const val = process.env[envVar];
+    if (val && val.trim().length > 0) dirs.add(val.trim());
+  };
+  addIfSet('SystemRoot');
+  addIfSet('ProgramFiles');
+  addIfSet('ProgramFiles(x86)');
+  addIfSet('ProgramData');
+  dirs.add('C:\\Windows');
+  dirs.add('C:\\Program Files');
+  dirs.add('C:\\Program Files (x86)');
+  dirs.add('C:\\ProgramData');
+  return [...dirs];
+}
+
+function getUnsafeSystemDirs(): string[] {
+  return withRealSpellings(
+    IS_WINDOWS
+      ? getWindowsSystemDirs()
+      : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'],
+  );
+}
 
 function withRealSpellings(dirs: readonly string[]): string[] {
   const all = [...dirs];
@@ -97,7 +116,7 @@ export function isUnsafeCwdPath(normalizedCwd: string): boolean {
   const home = normalizePath(homedir());
   if (isSamePath(candidate, parse(candidate).root)) return true;
   if (isPathInsideDirectory(candidate, home)) return true;
-  for (const dir of UNSAFE_SYSTEM_DIRS) {
+  for (const dir of getUnsafeSystemDirs()) {
     const system = normalizePath(dir);
     if (isPathInsideDirectory(candidate, system)) return true;
     if (isPathInsideDirectory(system, candidate)) return true;
