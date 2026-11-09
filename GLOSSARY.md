@@ -79,6 +79,17 @@ directory requires Confirmation; an entry replaced while the prompt was open
 is refused, not deleted.
 _Avoid_: remove, rm, unlink
 
+## Batches
+
+**Batch**:
+A multi-item execution on a client's behalf that preserves the client's input
+order across all settled items. Pre-settled items (noops, duplicates, plan-time
+refusals) take their slots without mutation; pending items run concurrently under
+the call's concurrency and cancellation rules. On abort or deadline, finished
+items are preserved and unstarted items report the abort, so a retried call knows
+what already landed.
+_Avoid_: parallel loop, bulk run, multi-op
+
 ## Undo
 
 **Capture**:
