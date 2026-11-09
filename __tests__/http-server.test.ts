@@ -76,6 +76,22 @@ describe('Real HTTP Server integration', () => {
     assert.strictEqual(body.status, 'ok');
   });
 
+  it('calls closeIdleConnections immediately when httpServer.close is invoked', async () => {
+    const srv = await startHttpServer(0, { cliAllowedDirs: [tmpDir] }, { apiKey: TEST_API_KEY });
+    let calledSync = false;
+    const orig = srv.closeIdleConnections.bind(srv);
+    srv.closeIdleConnections = () => {
+      calledSync = true;
+      return orig();
+    };
+    try {
+      srv.close();
+      assert.strictEqual(calledSync, true, 'closeIdleConnections must be called synchronously on close()');
+    } finally {
+      await new Promise<void>((resolve) => srv.close(() => resolve())).catch(() => {});
+    }
+  });
+
   it('2. POST /mcp without Authorization -> 401', async () => {
     const r = await fetch(base, {
       method: 'POST',

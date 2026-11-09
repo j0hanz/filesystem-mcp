@@ -366,6 +366,7 @@ export async function startHttpServer(
   };
   const originalClose = httpServer.close.bind(httpServer);
   httpServer.close = function (callback?: (error?: Error) => void) {
+    httpServer.closeIdleConnections();
     void teardown().then(() => {
       originalClose(callback);
     });

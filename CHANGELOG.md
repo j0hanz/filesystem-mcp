@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
+
 ## [2.19.3] - 2026-11-07
 
 Fixes to `read`, `delete`, `undo` and error reporting, lower memory and event-loop
