@@ -74,3 +74,9 @@ as Transfer and Deletion:
   `__tests__/create.test.ts` keeps the Confirmation flow, batch policy,
   metadata degradation and wire behavior.
 - `GLOSSARY.md` gains the **Creation** term.
+- **Residual, accepted 2026-11-09:** `executeCreate` releases the write lock
+  before the tool reads result metadata, so two symlink-aliased entries in one
+  batch can interleave: a result row may report a size from before and a line
+  count from after the second entry's append. Writes stay serialized; only
+  the reported metadata can mix versions. Fixing it would widen the plan/execute
+  interface this record settled on a minimal return.

@@ -388,6 +388,40 @@ describe('create body', () => {
     assert.strictEqual(await readFile(fresh, 'utf-8'), 'brand new\n');
   });
 
+  it('asks once about two spellings of one file; the skip is honored', async (t) => {
+    const own = await createTestRoot();
+    try {
+      const file = join(own, 'alias-dedupe.txt');
+      await writeTestFile(own, 'alias-dedupe.txt', 'keep me\n');
+      const alias = join(own, 'create-alias');
+      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
+      const asked: string[] = [];
+      const result = await create(
+        {
+          files: [
+            { path: file, content: 'clobber\n' },
+            { path: join(alias, 'alias-dedupe.txt'), content: 'clobber\n' },
+          ],
+        },
+        {
+          fs: new GuardedFileSystem(await makeGuard([own])),
+          confirm: (prompt) => {
+            asked.push(prompt.message);
+            return { action: 'accept', content: { choice: 'skip' } };
+          },
+        },
+      );
+
+      assert.strictEqual(asked.length, 1, 'two spellings of one file ask one question');
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(result.structured.files.length, 0, 'a skipped overwrite writes nothing');
+      assert.strictEqual(result.structured.skipped?.length, 2, 'both spellings report skipped');
+      assert.strictEqual(await readFile(file, 'utf-8'), 'keep me\n');
+    } finally {
+      await cleanupTestRoot(own);
+    }
+  });
+
   it('replaces the file once the overwrite is approved', async () => {
     const existing = await writeTestFile(root, 'create_ow_existing.txt', 'old\n');
     const result = await create(
