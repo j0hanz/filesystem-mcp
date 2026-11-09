@@ -3,7 +3,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { findProjectRoot, getUnsafeSystemDirs, isUnsafeCwdPath } from '../src/core/path-discovery.ts';
+import {
+  findProjectRoot,
+  getUnsafeSystemDirs,
+  isUnsafeCwdPath,
+} from '../src/core/path-discovery.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { cleanupTestRoot, createTestRoot, withEnv } from './helpers.ts';

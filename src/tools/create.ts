@@ -17,7 +17,7 @@ import {
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import { destIdentity, type EntryIdentity, sameIdentity, type Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
-import { isEquivalentPath } from '../core/path-utils.ts';
+import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -85,7 +85,8 @@ const CreateInputSchema = z
     const files = value.files ?? [];
     const dirs = value.directories ?? [];
     for (const [index, dir] of dirs.entries()) {
-      const first = dirs.findIndex((other) => isEquivalentPath(other, dir));
+      const normDir = normalizePath(dir);
+      const first = dirs.findIndex((other) => isEquivalentPath(normalizePath(other), normDir));
       if (first < index) {
         ctx.addIssue({
           code: 'custom',
@@ -96,7 +97,11 @@ const CreateInputSchema = z
       }
     }
     for (const [fileIndex, file] of files.entries()) {
-      const dirIndex = dirs.findIndex((dir) => isEquivalentPath(dir, file.path));
+      const normFile = normalizePath(file.path);
+      const dirIndex = dirs.findIndex((dir) => {
+        const normDir = normalizePath(dir);
+        return isEquivalentPath(normDir, normFile) || isPathInsideDirectory(normFile, normDir);
+      });
       if (dirIndex !== -1) {
         ctx.addIssue({
           code: 'custom',
@@ -111,7 +116,10 @@ const CreateInputSchema = z
     // content is lost while both report success. One entry per file, counting
     // the Unicode spellings the path guard resolves to one name (#101).
     for (const [index, file] of files.entries()) {
-      const first = files.findIndex((other) => isEquivalentPath(other.path, file.path));
+      const normFile = normalizePath(file.path);
+      const first = files.findIndex((other) =>
+        isEquivalentPath(normalizePath(other.path), normFile),
+      );
       if (first < index) {
         ctx.addIssue({
           code: 'custom',

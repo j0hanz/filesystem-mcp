@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -164,6 +165,34 @@ describe('create body', () => {
     );
     assert.ok(
       issues.some((m) => m.includes('conflicts with directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('refuses a batch when a file path is an ancestor of a requested directory', async () => {
+    const parent = join(root, 'ancestor-parent');
+    const child = join(parent, 'child');
+    const issues = await schemaIssues(
+      create({
+        directories: [child],
+        files: [{ path: parent, content: 'parent content' }],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('conflicts with directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('detects duplicate directories across home alias spellings', async () => {
+    const homeDir = homedir();
+    const issues = await schemaIssues(
+      create({
+        directories: ['~/test-dup-dir', join(homeDir, 'test-dup-dir')],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('duplicate of directories[0]')),
       issues.join('; '),
     );
   });
