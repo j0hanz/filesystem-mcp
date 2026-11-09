@@ -848,6 +848,68 @@ export class GuardedFileSystem {
   }
 
   /**
+   * Carry out a planned Creation. Takes the write lock, re-checks the Landing
+   * identity of a pending overwrite — an entry replaced while a Confirmation
+   * was open is refused with `CANCELLED` — refuses a clear path that gained a
+   * file since the plan, then creates the parent directory and dispatches the
+   * write or append. The Capture is taken inside `writeFile`/`appendFile`,
+   * where it is today.
+   */
+  async executeCreate(
+    plan: CreatePlan,
+    content: string,
+    options?: { signal?: AbortSignal | undefined },
+  ): Promise<{ validPath: string; writtenAt: Date }> {
+    options?.signal?.throwIfAborted();
+    return this.lockForWrite(plan.validPath, async (resolvedTarget) => {
+      if (plan.kind === 'pending') {
+        const now = await destIdentity(this, resolvedTarget, 'create');
+        // shortcut: lockForWrite is in-process only, so an outside process can still swap between this re-check and the write; lock the file across processes if that window matters
+        if (now !== undefined && plan.identity !== undefined && !sameIdentity(now, plan.identity)) {
+          throw new FsError(
+            ErrorCode.CANCELLED,
+            `create cancelled: "${plan.inputPath}" was replaced after the overwrite was approved.`,
+            plan.inputPath,
+          );
+        }
+      }
+      if (
+        plan.kind === 'clear' &&
+        (await destIdentity(this, resolvedTarget, 'create')) !== undefined
+      ) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `create refused: "${plan.inputPath}" appeared after overwrite confirmation was checked`,
+          plan.inputPath,
+        );
+      }
+      await this.mkdir(dirname(plan.validPath), { recursive: true });
+      const written =
+        plan.kind === 'append'
+          ? await this.appendFile(plan.validPath, content, { signal: options?.signal })
+          : await this.writeFile(plan.validPath, content, { signal: options?.signal });
+      return { validPath: written.validPath, writtenAt: new Date() };
+    });
+  }
+
+  /**
+   * One-shot Creation: `planCreate` then `executeCreate`, with no
+   * Confirmation, mirroring `delete`.
+   */
+  async create(
+    path: string,
+    content: string,
+    options?: {
+      append?: boolean | undefined;
+      overwrite?: boolean | undefined;
+      signal?: AbortSignal | undefined;
+    },
+  ): Promise<{ validPath: string; writtenAt: Date }> {
+    const plan = await this.planCreate(path, options);
+    return this.executeCreate(plan, content, options);
+  }
+
+  /**
    * A rename never merges directories, so refuse before a prompt or a
    * cross-device copy is spent on one. `entry` is read as itself, since moving
    * a link renames the link; `destination` is already resolved through links.

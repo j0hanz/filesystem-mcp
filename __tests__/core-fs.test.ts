@@ -1230,6 +1230,58 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         },
       );
     });
+
+    it('executeCreate refuses a pending overwrite replaced since the plan', async () => {
+      const p = join(tmpDir, 'create-swap.txt');
+      await writeTestFile(tmpDir, 'create-swap.txt', 'old');
+      const plan = await fs.planCreate(p, {});
+      await rm(p);
+      await writeTestFile(tmpDir, 'create-swap.txt', 'other');
+      await assert.rejects(
+        () => fs.executeCreate(plan, 'new'),
+        (err: unknown) =>
+          isFsError(err) &&
+          err.code === ErrorCode.CANCELLED &&
+          /replaced after the overwrite was approved/u.test(err.message),
+      );
+      assert.strictEqual(await readFile(p, 'utf-8'), 'other');
+    });
+
+    it('executeCreate refuses a file that appeared at a clear path since the plan', async () => {
+      const p = join(tmpDir, 'create-appeared.txt');
+      const plan = await fs.planCreate(p, {});
+      await writeTestFile(tmpDir, 'create-appeared.txt', 'raced');
+      await assert.rejects(
+        () => fs.executeCreate(plan, 'new'),
+        (err: unknown) =>
+          isFsError(err) &&
+          err.code === ErrorCode.CANCELLED &&
+          /appeared after overwrite confirmation was checked/u.test(err.message),
+      );
+      assert.strictEqual(await readFile(p, 'utf-8'), 'raced');
+    });
+
+    it('executeCreate writes a clear path, appends a missing file, and clobbers under overwrite', async () => {
+      const clearPlan = await fs.planCreate(join(tmpDir, 'create-write.txt'), {});
+      const wrote = await fs.executeCreate(clearPlan, 'hello');
+      assert.strictEqual(wrote.validPath, clearPlan.validPath);
+      assert.ok(wrote.writtenAt instanceof Date);
+
+      const appendPlan = await fs.planCreate(join(tmpDir, 'create-append.txt'), { append: true });
+      await fs.executeCreate(appendPlan, 'line');
+      assert.strictEqual(await readFile(appendPlan.validPath, 'utf-8'), 'line');
+
+      const clobber = join(tmpDir, 'create-clobber.txt');
+      await writeTestFile(tmpDir, 'create-clobber.txt', 'old');
+      await fs.executeCreate(await fs.planCreate(clobber, { overwrite: true }), 'new');
+      assert.strictEqual(await readFile(clobber, 'utf-8'), 'new');
+    });
+
+    it('one-shot create plans then executes', async () => {
+      const res = await fs.create(join(tmpDir, 'create-oneshot.txt'), 'content');
+      assert.ok(isSamePath(res.validPath, join(tmpDir, 'create-oneshot.txt')));
+      assert.strictEqual(await readFile(res.validPath, 'utf-8'), 'content');
+    });
   });
 
   describe('Invalid setting warnings (TC-FUNC-019b)', () => {
