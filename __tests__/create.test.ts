@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -139,6 +140,61 @@ describe('create body', () => {
       );
     }
     await assert.rejects(access(file), 'nothing may be written when the batch is refused');
+  });
+
+  it('refuses a batch that names the same directory twice', async () => {
+    const dir = join(root, 'dup-dir');
+    const issues = await schemaIssues(
+      create({
+        directories: [dir, dir],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.startsWith('duplicate of directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('refuses a batch that names the same path as both a directory and a file', async () => {
+    const target = join(root, 'dir-file-collision');
+    const issues = await schemaIssues(
+      create({
+        directories: [target],
+        files: [{ path: target, content: 'conflict content' }],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('conflicts with directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('refuses a batch when a file path is an ancestor of a requested directory', async () => {
+    const parent = join(root, 'ancestor-parent');
+    const child = join(parent, 'child');
+    const issues = await schemaIssues(
+      create({
+        directories: [child],
+        files: [{ path: parent, content: 'parent content' }],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('conflicts with directories[0]')),
+      issues.join('; '),
+    );
+  });
+
+  it('detects duplicate directories across home alias spellings', async () => {
+    const homeDir = homedir();
+    const issues = await schemaIssues(
+      create({
+        directories: ['~/test-dup-dir', join(homeDir, 'test-dup-dir')],
+      }),
+    );
+    assert.ok(
+      issues.some((m) => m.includes('duplicate of directories[0]')),
+      issues.join('; '),
+    );
   });
 
   it('is a total failure when every requested file was denied', async () => {

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 import {
   escapeNonAscii,
+  getReservedDeviceNameForPath,
   IS_CASE_INSENSITIVE_FS,
   isPathInsideDirectory,
   isPathWithinDirectories,
@@ -129,5 +130,14 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(isSamePath('C:/x/\u212Aroot', 'C:/x/kroot'), false);
     assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/x/\u017Froot/s')), false); // long s
     assert.strictEqual(isPathInsideDirectory(root, normalizePath('C:/X/KROOT/a.txt')), true); // ASCII still folds
+  });
+
+  it('identifies CONIN$, CONOUT$, COM0, and LPT0 as reserved device names', () => {
+    assert.strictEqual(getReservedDeviceNameForPath('C:/workspace/CONIN$'), 'CONIN$');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/workspace/conin$.txt'), 'CONIN$');
+    assert.strictEqual(getReservedDeviceNameForPath('CONOUT$'), 'CONOUT$');
+    assert.strictEqual(getReservedDeviceNameForPath('COM0'), 'COM0');
+    assert.strictEqual(getReservedDeviceNameForPath('LPT0'), 'LPT0');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/workspace/valid_file.txt'), undefined);
   });
 });

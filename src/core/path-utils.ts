@@ -72,9 +72,12 @@ const HOMEDIR = homedir();
 
 const RESERVED_DEVICE_NAMES = new Set<string>([
   'CON',
+  'CONIN$',
+  'CONOUT$',
   'PRN',
   'AUX',
   'NUL',
+  'COM0',
   'COM1',
   'COM2',
   'COM3',
@@ -84,6 +87,7 @@ const RESERVED_DEVICE_NAMES = new Set<string>([
   'COM7',
   'COM8',
   'COM9',
+  'LPT0',
   'LPT1',
   'LPT2',
   'LPT3',
