@@ -1055,10 +1055,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // Raised 2026-11-07 to 23950 full and 11150 read-only: TDQS description
     // refinement adds direct "use when" routing, parameter semantics, return format descriptions,
     // and cross-tool disambiguation; measured 23870 / 11082.
-    // Raised 2026-11-09 to 24350 full and 11150 read-only: TDQS description
+    // Raised 2026-11-09 to 24050 full and 11150 read-only: TDQS description
     // refinement for replace_text details partial application on maxMatches,
-    // in-place irreversibility without undo, and structured return format; measured 24276 / 11082.
-    const BUDGET_CHARS = 24_350;
+    // in-place irreversibility without undo, and safety previews; measured 23964 / 11082.
+    const BUDGET_CHARS = 24_050;
     const BUDGET_CHARS_READ_ONLY = 11_150;
 
     const full = await createTestClientPair([tmpDir]);

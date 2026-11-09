@@ -64,27 +64,27 @@ const SearchAndReplaceInputSchema = z.strictObject({
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Exact literal text or RE2 regex pattern to search for. Patterns can span lines. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
+      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty.',
     ),
   replacement: z
     .string()
     .max(10000)
     .describe(
-      'Replacement text. Use capture group references ($1, $2, etc.) when isRegex=true. Use an empty string to delete all matches.',
+      'Replacement text. When isRegex=true, supports capture groups ($1, $2, etc.). Use an empty string to delete matches.',
     )
     .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
-  isRegex: defaultFalseBoolean('Treat searchPattern as a RE2 regex (default: literal text match)'),
+  isRegex: defaultFalseBoolean('Treat searchPattern as an RE2 regex (default: literal text match)'),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
   caseSensitive: z
     .boolean()
     .default(true)
     .describe(
-      'Match case exactly (default: true). Pass false to ignore case. search_text ignores case by default, so matches it reports can include case variants this call does not replace.',
+      'Match case exactly (default: true). Pass false to ignore case. Unlike search_text, this defaults to true.',
     ),
   wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
   dryRun: defaultFalseBoolean(
-    'Preview replacements without writing to disk (default: false = apply changes). Pair with returnDiff=true to inspect proposed unified diffs before modifying files.',
+    'Preview replacements without writing to disk (default: false). Pair with returnDiff=true to inspect the unified diff first.',
   ),
   returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
   maxMatches: z
@@ -93,7 +93,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe(
-      `Maximum total match count across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). Reaching it stops the scan early; files rewritten before the limit remain changed on disk.`,
+      `Maximum matches across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). Reaching it stops the scan early and leaves files rewritten up to that point changed.`,
     ),
   maxFiles: z
     .uint32()
@@ -522,12 +522,12 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
   name: 'replace_text',
   title: 'Search and Replace',
   description:
-    'Find and replace text or an RE2 regex across one file or all files under a directory in place, like sed -i. ' +
-    'Use when replacing every match across a file or project. ' +
-    'Patterns match whole files and can span lines (^ and $ anchor to file start and end); isRegex: true enables $1 capture replacements. ' +
-    'Directory runs rewrite files as they scan; hitting maxMatches (default: 100) stops early and leaves reached files modified. Changes require undo to revert. ' +
-    'Returns structured results with totalMatches, filesScanned, changed paths, and an undo id; pair dryRun: true with returnDiff: true to preview diffs cleanly. ' +
-    'Use edit for a single unique snippet, and patch to apply unified diffs.',
+    'Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. ' +
+    'Use when updating every occurrence across a project. ' +
+    'Patterns can span multiple lines, and regex replacements support $1 capture groups. ' +
+    'Files are modified in place as they are scanned. Reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. ' +
+    'Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. ' +
+    'Use edit for a single unique snippet, and patch for unified diffs.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
   deadline: true,
