@@ -135,7 +135,8 @@ The round in which the client approves deleting or overwriting the entries a
 call would destroy. An approval covers the exact entries the client was shown:
 an entry replaced while the prompt was open is asked about again, once.
 An entry replaced after the approval, once writing has begun, is refused,
-not asked about again. An entry that vanished needs no approval.
+not asked about again. An entry that vanished needs no approval. Two items
+that name one entry ask one question, and it is asked when either requires it.
 _Avoid_: prompt, elicitation (the protocol mechanism), access grant (widening
 the allowed roots is a different question)
 

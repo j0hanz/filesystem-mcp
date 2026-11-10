@@ -174,13 +174,10 @@ describe('planIntoSlots', () => {
       ['boom', 'bad'],
     );
     assert.match(slots[1]?.status === 'failure' ? slots[1].error.message : '', /exploded/);
-    assert.deepStrictEqual(
-      planned.map(({ index, value }) => [index, value.n]).sort(),
-      [
-        [0, 1],
-        [3, 3],
-      ],
-    );
+    assert.deepStrictEqual(planned.map(({ index, value }) => [index, value.n]).sort(), [
+      [0, 1],
+      [3, 3],
+    ]);
   });
 
   it('rejects when the signal is already aborted', async () => {
