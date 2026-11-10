@@ -38,24 +38,17 @@ export function createYielder(signal: AbortSignal | undefined): () => Promise<bo
  * aborts the module. 4 MiB leaves room for the copy and the pattern set.
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
-/** One line's matches: how many, and where the first starts (UTF-16 units). */
-export interface LineHit {
-  count: number;
-  column: number;
-}
-
 /**
  * A literal needle matched in native code, as RE2 would match it. RE2 copies
  * its whole input into the wasm heap on every call, and for a literal that
  * copy is most of what a search costs: once per file to rule it out, then once
  * per line of every file it could not rule out.
  */
-export interface LiteralMatcher {
+interface LiteralMatcher {
   /** True when this file holds a character RE2 folds onto one of the needle's letters. */
   needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
   mayMatch(buffer: Buffer): boolean;
-  matchLine(line: string): LineHit | undefined;
 }
 /** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
 const KELVIN_SIGN = '\u212A'; // folds onto k
@@ -66,18 +59,6 @@ function foldAsciiCase(text: string): string {
   // String#toLowerCase turns U+0130 into two code units, which shifts every
   // later column and spells an `i` RE2 does not match.
   return text.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase());
-}
-/** Non-overlapping occurrences, left to right, as a global RE2 exec walks them. */
-function countOccurrences(line: string, needle: string): LineHit | undefined {
-  const column = line.indexOf(needle);
-  if (column === -1) return undefined;
-  let count = 0;
-  let at = column;
-  while (at !== -1 && count < MAX_MATCHES_PER_LINE) {
-    count++;
-    at = line.indexOf(needle, at + needle.length);
-  }
-  return { count, column };
 }
 const LITERAL_PREFILTER_CHUNK_SIZE = 64 * 1024;
 
@@ -112,7 +93,6 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     return {
       needsRe2: () => false,
       mayMatch: (buffer) => buffer.includes(bytes),
-      matchLine: (line) => countOccurrences(line, needle),
     };
   }
   // Every non-ASCII character takes more than one UTF-8 byte per UTF-16 unit.
@@ -128,7 +108,6 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
     // is found exactly where the bytes spell it in either case.
     mayMatch: (buffer) => asciiBufferMayMatch(buffer, lower),
-    matchLine: (line) => countOccurrences(foldAsciiCase(line), lower),
   };
 }
 
@@ -206,7 +185,7 @@ export function freeRegex(regex: Regex | undefined): void {
   }
 }
 
-export interface RegexMatch {
+interface RegexMatch {
   /** The matched text. */
   text: string;
   /** Capture groups, 1-indexed in the pattern, 0-indexed here. */
@@ -245,7 +224,7 @@ const codePointLength = (text: string): number =>
  * matches, the next search starts on that character instead, so it can lead the
  * next match. A resume point never moves back to or before the current search start.
  */
-export function* execMatches(
+function* execMatches(
   regex: Regex,
   text: string,
   keepLast = false,
@@ -313,7 +292,7 @@ export function planMatch(
 }
 
 /** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can change what `.`, `^` and `$` match. */
-export const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
+const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
 // A backslash escape other than these may name a line break (\n, \s, \W, \x0a, \012, ...).
 const UNSAFE_ESCAPE_RE = /\\(?![dwbBSt]|[^a-zA-Z0-9])/u;
 
@@ -375,6 +354,8 @@ export function createMatchEngine(
   // planMatch only gives a case-insensitive literal plan for an ASCII needle.
   const folded = flags.caseSensitive ? needle : needle.toLowerCase();
   let regex: Regex | undefined;
+  /** Line mode's whole-text "cannot match" test, compiled with `m`. */
+  let prefilter: Regex | undefined;
 
   /** RE2's matches in `input`, which starts at `offset` in the whole text. */
   function* regexMatches(input: string, offset: number): Generator<TextMatch, undefined> {
@@ -449,6 +430,16 @@ export function createMatchEngine(
       yield* checked(regexMatches(text, 0));
       return;
     }
+    // One whole-text test rules out most texts far faster than a call per line. With `m`,
+    // ^ and $ stay line-relative, but $ cannot see past a kept CR, so such a text skips it.
+    if (!wholeWord && !overRe2Bound(text) && !(plan.source.includes('$') && text.includes('\r'))) {
+      prefilter ??= compileRegex(plan.source, {
+        caseSensitive: flags.caseSensitive,
+        multiline: true,
+      });
+      prefilter.lastIndex = 0;
+      if (prefilter.exec(text) === null) return;
+    }
     const lines = text.split('\n');
     // A final newline splits into a phantom empty last element, which is not a line.
     if (text.endsWith('\n') || text === '') lines.pop();
@@ -471,7 +462,9 @@ export function createMatchEngine(
     matches,
     dispose() {
       freeRegex(regex);
+      freeRegex(prefilter);
       regex = undefined;
+      prefilter = undefined;
     },
   };
 }

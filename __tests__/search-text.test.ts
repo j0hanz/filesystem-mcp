@@ -468,8 +468,9 @@ describe('search_text body', () => {
     assert.deepStrictEqual(await run(String.raw`\bimport\b`, true), ['lf.txt:2:0', 'lf.txt:3:2']);
     assert.deepStrictEqual(await run('IMPORT', false, false), ['lf.txt:2:0', 'lf.txt:3:2']);
     assert.deepStrictEqual(await run('foo$bar', false), ['lf.txt:4:0']);
-    assert.deepStrictEqual(await run(String.raw`\Aimport`, true), ['lf.txt:2:0']);
-    assert.deepStrictEqual(await run('(?-m)^import', true), ['lf.txt:2:0']);
+    // \A and an inline (?-m) can cross lines, so they match over the whole text: file start only.
+    assert.deepStrictEqual(await run(String.raw`\Aimport`, true), []);
+    assert.deepStrictEqual(await run('(?-m)^import', true), []);
     assert.deepStrictEqual(await run('(?i)IMPORT', true), ['lf.txt:2:0', 'lf.txt:3:2']);
   });
 
@@ -832,5 +833,64 @@ describe('search_text body', () => {
     );
     assert.strictEqual(structured.filesScanned, 2);
     assert.strictEqual(structured.skippedBinary, 1);
+  });
+
+  describe('regex across lines', () => {
+    /** 5 MiB of 1 KiB lines, then a cross-line pair and a line-bound needle. */
+    const bigBody = (): string => `${`${'x'.repeat(1023)}\n`.repeat(5 * 1024)}a\nb\nneedle1\n`;
+
+    it('a regex match across a line break is reported on its first line', async () => {
+      const file = await writeTestFile(join(root, 'cross'), 'f.txt', 'a\nb\nc\n');
+      const { structured } = await search({ path: file, searchPattern: 'a\\s+b', isRegex: true });
+      assert.strictEqual(structured.matches.length, 1);
+      const [hit] = structured.matches;
+      assert.strictEqual(hit?.line, 1);
+      assert.strictEqual(hit.column, 0);
+      assert.strictEqual(hit.content, 'a');
+      assert.strictEqual(hit.matchCount, 1);
+    });
+
+    it('context shows the lines a cross-line match runs onto', async () => {
+      const file = await writeTestFile(join(root, 'cross_ctx'), 'f.txt', 'a\nb\nc\n');
+      const { structured } = await search({
+        path: file,
+        searchPattern: 'a\\s+b',
+        isRegex: true,
+        context: 1,
+      });
+      assert.deepStrictEqual(structured.matches[0]?.after, ['b']);
+    });
+
+    it('a dot does not match across a line break', async () => {
+      const file = await writeTestFile(join(root, 'cross_dot'), 'f.txt', 'a\nb\n');
+      const { structured } = await search({ path: file, searchPattern: 'a.b', isRegex: true });
+      assert.deepStrictEqual(structured.matches, []);
+    });
+
+    it('a named file over 4 MiB refuses a regex that can cross a line', async () => {
+      const file = await writeTestFile(join(root, 'cross_big_named'), 'big.txt', bigBody());
+      await assert.rejects(
+        search({ path: file, searchPattern: 'a\\s+b', isRegex: true }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE),
+      );
+    });
+
+    it('a walked file over 4 MiB is counted too large for a regex that can cross a line', async () => {
+      const dir = join(root, 'cross_big_walked');
+      await writeTestFile(dir, 'big.txt', bigBody());
+      const { structured } = await search({ path: dir, searchPattern: 'a\\s+b', isRegex: true });
+      assert.strictEqual(structured.skippedTooLarge, 1);
+      assert.deepStrictEqual(structured.matches, []);
+    });
+
+    it('a line-bound regex searches a file over 4 MiB', async () => {
+      const file = await writeTestFile(join(root, 'line_big'), 'big.txt', bigBody());
+      const { structured } = await search({
+        path: file,
+        searchPattern: 'needle\\d',
+        isRegex: true,
+      });
+      assert.strictEqual(structured.matches.length, 1);
+    });
   });
 });

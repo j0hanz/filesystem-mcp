@@ -1,19 +1,11 @@
 import { ErrorCode, FsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
-  compileRegex,
-  createYielder,
-  execMatches,
-  freeRegex,
-  INLINE_FLAGS_RE,
+  createMatchEngine,
   isRe2Abort,
-  type LineHit,
-  type LiteralMatcher,
+  type MatchEngine,
   MAX_MATCHES_PER_LINE,
-  planMatch,
-  RE2_MAX_INPUT_BYTES,
   re2AbortError,
-  type Regex,
 } from './matcher.ts';
 import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
@@ -73,29 +65,6 @@ interface SearchResult {
   after?: string[];
 }
 
-const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
-
-/**
- * Find non-overlapping occurrences of a global regex in a single line, reporting
- * the first match's column alongside the count.
- */
-async function findLineMatches(
-  regex: Regex,
-  line: string,
-  tick: () => Promise<boolean>,
-): Promise<LineHit | undefined> {
-  let count = 0;
-  let column = -1;
-  // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
-  // lastIndex from its own match before every exec, with no await inside.
-  for (const match of execMatches(regex, line)) {
-    if (column === -1) column = match.start;
-    count++;
-    if (count >= MAX_MATCHES_PER_LINE || (await tick())) break;
-  }
-  return count > 0 ? { count, column } : undefined;
-}
-
 export interface SearchContentOptions {
   caseSensitive?: boolean;
   isRegex?: boolean;
@@ -143,11 +112,7 @@ interface ScanContext {
   fs: GuardedFileSystem;
   signal: AbortSignal | undefined;
   maxResults: number;
-  regex: Regex;
-  prefilter: Regex;
-  /** Set for a literal needle it can match; RE2 then judges only the files it hands back. */
-  literal: LiteralMatcher | undefined;
-  source: string;
+  engine: MatchEngine;
   context: number;
   /** A file the client named: an overlong line refuses the call instead of skipping. */
   named: boolean;
@@ -184,78 +149,69 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
     return new ScanSkip({ kind: 'binary', utf16: false });
   }
 
-  const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
-  // No prefilter bytes (a CR in the file) means it may match: the view decides below.
-  const probe = literal ? prefilterBytes(buffer) : undefined;
-  if (literal && probe && !literal.mayMatch(probe)) return { matches: [] };
+  // The prefilter tests raw bytes, so it runs only where bytes and view text agree.
+  const probe = prefilterBytes(buffer);
+  if (probe !== undefined && !scanCtx.engine.mayMatch(probe)) return { matches: [] };
   // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
   const content = viewText(buffer.toString('utf-8')).text;
-  // RE2 receives the decoded text, not the raw bytes. Each invalid byte in an
-  // undecodable file decodes to U+FFFD, which is 3 bytes, so the raw size can
-  // understate the input threefold and exhaust the engine's fixed heap.
-  const decodedBytes = verdict.kind === 'text' ? buffer.length : Buffer.byteLength(content, 'utf8');
-  if (!literal && canPrefilter(scanCtx.source, content, decodedBytes)) {
-    scanCtx.prefilter.lastIndex = 0;
-    if (scanCtx.prefilter.exec(content) === null) return { matches: [] };
-  }
 
-  const lines = content.split(/\r?\n/u);
-  // A trailing newline splits into a phantom empty last element, and an
-  // empty file splits into one empty element: neither is a line the
-  // file has, for matching or for context.
-  const lineCount =
-    content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-  // A single line past RE2_MAX_INPUT_BYTES aborts the wasm module and leaks its
-  // heap; report the file tooLarge instead. Only decoded text over the bound can
-  // hold such a line, so ordinary files skip the per-line measure, and a literal
-  // match never hands a line to RE2.
-  const checkLineSize = !literal && decodedBytes > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
-  const yielder = createYielder(scanCtx.signal);
+  let lines: string[] | undefined;
+  let lineCount = 0;
+  // The line holding the current match: its 0-based index, start offset, and the next LF.
+  let line = 0;
+  let lineStart = 0;
+  let nextLf = content.indexOf('\n');
+  let hit: SearchResult | undefined;
   let cut = false;
-  const tick = async (): Promise<boolean> => (cut ||= await yielder());
-  for (let i = 0; i < lineCount; i++) {
-    const line = lines[i];
-    if (line === undefined) continue;
-    if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
-      if (scanCtx.named) {
-        // "File too large" would be false: the file fits, one line of it does not.
-        throw new FsError(
-          ErrorCode.TOO_LARGE,
-          'A line in this file is too long for a regex search. Regex mode is used for isRegex or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern.',
-          entryPath,
-        );
+  try {
+    for await (const match of scanCtx.engine.matches(content, {
+      ...(scanCtx.signal ? { signal: scanCtx.signal } : {}),
+      path: entryPath,
+    })) {
+      while (nextLf !== -1 && nextLf < match.start) {
+        line++;
+        lineStart = nextLf + 1;
+        nextLf = content.indexOf('\n', lineStart);
       }
-      return new ScanSkip({ kind: 'tooLarge', size: buffer.length });
-    }
-    // Yield between lines too: millions of short lines never yield per-match.
-    if (await tick()) break;
-    // One scan per line: the helper resets lastIndex itself, so it
-    // doubles as the "does this line match" test.
-    const found = literal
-      ? literal.matchLine(line)
-      : await findLineMatches(scanCtx.regex, line, tick);
-    if (found) {
-      matches.push({
+      if (hit?.line === line + 1) {
+        if (hit.matchCount < MAX_MATCHES_PER_LINE) hit.matchCount++;
+        continue;
+      }
+      // One past the cap, so searchContent can tell a file was cut by it.
+      if (matches.length > scanCtx.maxResults) break;
+      if (!lines) {
+        lines = content.split(/\r?\n/u);
+        // A trailing newline splits into a phantom empty last element, which is not a line.
+        lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
+      }
+      const text = lines[line] ?? '';
+      const column = match.start - lineStart;
+      hit = {
         file: entryPath,
-        line: i + 1,
-        column: found.column,
-        content: own(clipLine(line, found.column)),
-        matchCount: found.count,
+        line: line + 1,
+        column,
+        content: own(clipLine(text, column)),
+        matchCount: 1,
         ...(scanCtx.context > 0
           ? {
               before: lines
-                .slice(Math.max(0, i - scanCtx.context), i)
+                .slice(Math.max(0, line - scanCtx.context), line)
                 .map((l) => own(clipLine(l, 0))),
               after: lines
-                .slice(i + 1, Math.min(lineCount, i + 1 + scanCtx.context))
+                .slice(line + 1, Math.min(lineCount, line + 1 + scanCtx.context))
                 .map((l) => own(clipLine(l, 0))),
             }
           : {}),
-      });
-      // One past the cap, so searchContent can tell a file was cut by it.
-      if (matches.length > scanCtx.maxResults) break;
+      };
+      matches.push(hit);
     }
+  } catch (error) {
+    // The engine throws the signal's reason; scan cannot see the timeout, so report the cut.
+    if (scanCtx.signal?.aborted) cut = true;
+    else if (error instanceof FsError && error.code === ErrorCode.TOO_LARGE && !scanCtx.named) {
+      return new ScanSkip({ kind: 'tooLarge', size: buffer.length });
+    } else throw error;
   }
   return { matches, cut };
 }
@@ -266,28 +222,14 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const plan = planMatch(pattern, {
+  const engine = createMatchEngine(pattern, {
     isRegex: Boolean(options.isRegex),
     caseSensitive: Boolean(options.caseSensitive),
   });
-  const source = plan.source;
-  // Compiles live inside the try so a failing second compile does not leak the
-  // first's wasm memory; freeRegex is null-safe.
-  let regex: Regex | undefined;
-  let prefilter: Regex | undefined;
   try {
-    regex = compileRegex(source, {
-      caseSensitive: Boolean(options.caseSensitive),
-    });
-    // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
-    // buffer hit (the converse can be false — a false positive just falls through
-    // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
-    // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
-    // the prefilter (see canPrefilter).
-    prefilter = compileRegex(source, {
-      caseSensitive: Boolean(options.caseSensitive),
-      multiline: true,
-    });
+    // The engine compiles on first use; one empty line compiles it now, so an
+    // invalid regex fails the request before any file is read.
+    await engine.matches('\n').next();
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const context = options.context ?? 0;
@@ -299,10 +241,7 @@ export async function searchContent(
       fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
       maxResults,
-      regex,
-      prefilter,
-      literal: plan.literal,
-      source,
+      engine,
       context,
       named: scope.explicitFile !== undefined,
     };
@@ -361,17 +300,6 @@ export async function searchContent(
       },
     };
   } finally {
-    freeRegex(prefilter);
-    freeRegex(regex);
+    engine.dispose();
   }
-}
-
-/** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
-function canPrefilter(source: string, content: string, decodedBytes: number): boolean {
-  if (decodedBytes > RE2_MAX_INPUT_BYTES) return false;
-  if (BUFFER_ANCHOR_RE.test(source)) return false;
-  // Inline flags can undo the `m` the prefilter relies on.
-  if (INLINE_FLAGS_RE.test(source)) return false;
-  if (source.includes('$') && content.includes('\r')) return false;
-  return true;
 }
