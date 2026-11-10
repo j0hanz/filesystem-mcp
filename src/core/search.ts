@@ -187,7 +187,9 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
 
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
   if (literal && !literal.mayMatch(buffer)) return { matches: [] };
-  const content = buffer.toString('utf-8');
+  const decoded = buffer.toString('utf-8');
+  // A leading BOM is an encoding mark, not text: left in, ^ misses line 1 and its columns shift.
+  const content = decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
   // RE2 receives the decoded text, not the raw bytes. Each invalid byte in an
   // undecodable file decodes to U+FFFD, which is 3 bytes, so the raw size can
   // understate the input threefold and exhaust the engine's fixed heap.
