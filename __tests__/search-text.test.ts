@@ -7,7 +7,7 @@ import type * as z from 'zod/v4';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
+import { MAX_MATCHES_PER_LINE, RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
@@ -881,6 +881,22 @@ describe('search_text body', () => {
       const { structured } = await search({ path: dir, searchPattern: 'a\\s+b', isRegex: true });
       assert.strictEqual(structured.skippedTooLarge, 1);
       assert.deepStrictEqual(structured.matches, []);
+    });
+
+    it('a dense line is cut at the per-line cap and the next line is still searched', async () => {
+      const file = await writeTestFile(
+        join(root, 'dense'),
+        'f.txt',
+        `${'a'.repeat(MAX_MATCHES_PER_LINE + 10)}\nb a\n`,
+      );
+      const { structured } = await search({ path: file, searchPattern: 'a', caseSensitive: true });
+      assert.deepStrictEqual(
+        structured.matches.map((m) => [m.line, m.matchCount]),
+        [
+          [1, MAX_MATCHES_PER_LINE],
+          [2, 1],
+        ],
+      );
     });
 
     it('a line-bound regex searches a file over 4 MiB', async () => {

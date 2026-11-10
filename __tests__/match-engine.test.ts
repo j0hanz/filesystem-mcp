@@ -189,6 +189,25 @@ describe('MatchEngine', () => {
       engine.dispose();
     }
   });
+
+  for (const [label, needle, flags] of [
+    ['a literal', 'a', {}],
+    ['a case-insensitive literal', 'A', { caseSensitive: false }],
+    ['a regex', 'a+?', re],
+    ['a wholeWord regex', 'a', { ...re, wholeWord: true }],
+  ] as [string, string, Flags][]) {
+    it(`${label} yields maxPerLine matches from a line, then goes on to the next`, async () => {
+      const engine = createMatchEngine(needle, { isRegex: false, caseSensitive: true, ...flags });
+      const text = flags.wholeWord === true ? 'a a a a a\na a\n' : 'aaaaa\naa\n';
+      try {
+        const starts: number[] = [];
+        for await (const m of engine.matches(text, { maxPerLine: 2 })) starts.push(m.start);
+        assert.deepEqual(starts, flags.wholeWord === true ? [0, 2, 10, 12] : [0, 1, 6, 7]);
+      } finally {
+        engine.dispose();
+      }
+    });
+  }
 });
 
 const LIMITS = { maxMatches: 1000, maxBytes: 1 << 20, path: 'p' };

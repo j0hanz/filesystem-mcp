@@ -327,11 +327,12 @@ export interface MatchEngine {
   /**
    * Every match in view text, left to right, never overlapping. Yields to the
    * event loop and throws the signal's reason on abort. Throws TOO_LARGE by
-   * the 4 MiB rule; `path` labels that error.
+   * the 4 MiB rule; `path` labels that error. After `maxPerLine` matches start
+   * on one line, the walk skips to the next line.
    */
   matches(
     text: string,
-    options?: { signal?: AbortSignal; path?: string },
+    options?: { signal?: AbortSignal; path?: string; maxPerLine?: number },
   ): AsyncGenerator<TextMatch, void>;
   /** Releases every compiled pattern. Idempotent. */
   dispose(): void;
@@ -387,20 +388,29 @@ export function createMatchEngine(
   }
 
   /** Native indexOf over the whole text; foldAsciiCase keeps every UTF-16 offset. */
-  function* literalMatches(text: string): Generator<TextMatch, undefined> {
+  function* literalMatches(text: string, maxPerLine: number): Generator<TextMatch, undefined> {
     const haystack = flags.caseSensitive ? text : foldAsciiCase(text);
+    // The LF ending the line the current match starts on, and the matches started there.
+    let lineEnd = -1;
+    let onLine = 0;
     for (let at = haystack.indexOf(folded); at !== -1;) {
+      if (at > lineEnd) {
+        lineEnd = haystack.indexOf('\n', at);
+        if (lineEnd === -1) lineEnd = haystack.length;
+        onLine = 0;
+      }
       const end = at + folded.length;
       yield { start: at, end, text: text.slice(at, end), groups: [], named: undefined };
-      at = haystack.indexOf(folded, end > at ? end : end + 1);
+      const next = end > at ? end : end + 1;
+      at = haystack.indexOf(folded, ++onLine >= maxPerLine ? Math.max(next, lineEnd + 1) : next);
     }
   }
 
   async function* matches(
     text: string,
-    options: { signal?: AbortSignal; path?: string } = {},
+    options: { signal?: AbortSignal; path?: string; maxPerLine?: number } = {},
   ): AsyncGenerator<TextMatch, void> {
-    const { signal, path } = options;
+    const { signal, path, maxPerLine = Infinity } = options;
     const tick = createYielder(signal);
     let cursor = 0;
     // Awaiting mid-walk is safe with the shared regex: execMatches re-writes
@@ -416,7 +426,7 @@ export function createMatchEngine(
     }
 
     if (plan.literal && !wholeWord && !plan.literal.needsRe2(text)) {
-      yield* checked(literalMatches(text));
+      yield* checked(literalMatches(text, maxPerLine));
       return;
     }
     if (crossesLines) {
@@ -427,6 +437,7 @@ export function createMatchEngine(
           path,
         );
       }
+      // Text mode ignores maxPerLine: its one RE2 input is at most 4 MiB.
       yield* checked(regexMatches(text, 0));
       return;
     }
@@ -449,7 +460,12 @@ export function createMatchEngine(
       if (await tick()) signal?.throwIfAborted();
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
       if (overRe2Bound(line)) throw new FsError(ErrorCode.TOO_LARGE, LINE_TOO_LONG, path);
-      yield* checked(regexMatches(line, offset));
+      let onLine = 0;
+      // Leaving the loop closes the line's walk, so no further exec runs on it.
+      for await (const match of checked(regexMatches(line, offset))) {
+        yield match;
+        if (++onLine >= maxPerLine) break;
+      }
       offset += raw.length + 1;
     }
   }

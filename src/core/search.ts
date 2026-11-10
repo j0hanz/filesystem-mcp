@@ -168,6 +168,7 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
     for await (const match of scanCtx.engine.matches(content, {
       ...(scanCtx.signal ? { signal: scanCtx.signal } : {}),
       path: entryPath,
+      maxPerLine: MAX_MATCHES_PER_LINE,
     })) {
       while (nextLf !== -1 && nextLf < match.start) {
         line++;
@@ -178,8 +179,6 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
         if (hit.matchCount < MAX_MATCHES_PER_LINE) hit.matchCount++;
         continue;
       }
-      // One past the cap, so searchContent can tell a file was cut by it.
-      if (matches.length > scanCtx.maxResults) break;
       if (!lines) {
         lines = content.split(/\r?\n/u);
         // A trailing newline splits into a phantom empty last element, which is not a line.
@@ -205,6 +204,8 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
           : {}),
       };
       matches.push(hit);
+      // One past the cap, so searchContent can tell a file was cut by it.
+      if (matches.length > scanCtx.maxResults) break;
     }
   } catch (error) {
     // The engine throws the signal's reason; scan cannot see the timeout, so report the cut.
