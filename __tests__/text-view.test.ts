@@ -23,6 +23,13 @@ describe('Text view', () => {
     assert.equal(view.restore('a\nx\nb\n'), 'a\r\nx\r\nb\r\n');
   });
 
+  it('restore gives each text its own result when called again', () => {
+    const view = viewText('a\r\nb\r\n');
+    assert.equal(view.restore('x\n'), 'x\r\n');
+    assert.equal(view.restore('x\n'), 'x\r\n');
+    assert.equal(view.restore('y\n'), 'y\r\n');
+  });
+
   it('restore does not double a CR a transform wrote', () => {
     assert.equal(viewText('a\r\nb\r\n').restore('a\r\nb\n'), 'a\r\nb\r\n');
   });

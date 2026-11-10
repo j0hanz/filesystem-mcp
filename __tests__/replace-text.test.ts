@@ -243,9 +243,12 @@ describe('replace_text body', () => {
     }
   });
 
-  it('regex mode on a file past the RE2 input cap fails that file with TOO_LARGE', async () => {
-    const size = RE2_MAX_INPUT_BYTES + 1;
-    const big = await writeTestFile(root, 'regex_cap/big.txt', 'x'.repeat(size - 5) + 'FIND\n');
+  it('regex mode on a line past the RE2 input cap fails that file with TOO_LARGE', async () => {
+    const big = await writeTestFile(
+      root,
+      'regex_cap/big.txt',
+      'x'.repeat(RE2_MAX_INPUT_BYTES - 3) + 'FIND\n',
+    );
     const asRegex = await replace({
       path: big,
       searchPattern: 'FIND',
@@ -269,7 +272,8 @@ describe('replace_text body', () => {
   });
 
   it('regex mode on an all-CRLF file past the RE2 input cap fails that file with TOO_LARGE', async () => {
-    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES) + '\r\nFIND\r\n';
+    // The view drops the CRs; the engine's line bound must still refuse the long line.
+    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES - 3) + 'FIND\r\nFIND\r\n';
     const big = await writeTestFile(root, 'regex_cap/crlf.txt', body);
     const result = await replace({
       path: big,
@@ -280,7 +284,7 @@ describe('replace_text body', () => {
     assert.strictEqual(result.isError, true);
     const failure = result.rows[0]?.error;
     assert.strictEqual(failure?.code, 'TOO_LARGE');
-    assert.match(failure?.message ?? '', /File too large for a regex replace/);
+    assert.match(failure?.message ?? '', /too long for the regex engine/);
     assert.strictEqual(await readFile(big, 'utf-8'), body, 'file must be untouched');
   });
 
@@ -447,6 +451,44 @@ describe('replace_text body', () => {
     }
   });
 
+  it('^ does not add a line after the final newline', async () => {
+    const file = await writeTestFile(root, 'rt-engine/caret.txt', 'a\nb\n');
+    await replace({ path: file, searchPattern: '^', isRegex: true, replacement: 'x' });
+    assert.strictEqual(await readFile(file, 'utf-8'), 'xa\nxb\n');
+  });
+
+  it('a line-bound regex replaces in a file over 4 MiB', async () => {
+    const big =
+      'x'
+        .repeat(1023)
+        .concat('\n')
+        .repeat(5 * 1024) + 'needle1\n';
+    const file = await writeTestFile(root, 'rt-engine/big.txt', big);
+    const result = await replace({
+      path: file,
+      searchPattern: 'needle\\d',
+      isRegex: true,
+      replacement: 'done',
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.ok((await readFile(file, 'utf-8')).endsWith('done\n'));
+  });
+
+  it('refuses an invalid regex before reading any file', async () => {
+    await mkdir(join(root, 'rt-engine-empty'), { recursive: true });
+    await assert.rejects(
+      replace({
+        path: join(root, 'rt-engine-empty'),
+        searchPattern: '(?=a)',
+        isRegex: true,
+        replacement: 'x',
+      }),
+      (error: unknown) =>
+        error instanceof SyntaxError &&
+        error.message.endsWith('lookahead, lookbehind, and backreferences are not supported.'),
+    );
+  });
+
   it("honors the allowed root's .gitignore below it", async () => {
     // root is the allowed root; the walk is scoped to a subdirectory.
     await writeFile(join(root, '.gitignore'), 'scoped_ignored/*.log\n');
@@ -601,7 +643,7 @@ describe('replace_text body', () => {
 
   it('failure rows name same-named files by their full relative paths', async () => {
     const dir = join(root, 'regex_cap_rows');
-    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES + 1 - 5) + 'FIND\n';
+    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES - 3) + 'FIND\n';
     await writeTestFile(dir, 'a/big.txt', body);
     await writeTestFile(dir, 'b/big.txt', body);
     const swept = await replace({

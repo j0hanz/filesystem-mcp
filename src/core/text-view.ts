@@ -23,6 +23,8 @@ export function viewText(disk: string): TextView {
   const bom = disk.charCodeAt(0) === 0xfeff;
   const body = bom ? disk.slice(1) : disk;
   const crlf = body.includes('\r\n') && !/(?<!\r)\n|\r(?!\n)/u.test(body);
+  // The last restore: replace_text's size check and the Rewrite's write restore the same text.
+  let last: { text: string; disk: string } | undefined;
   return {
     disk,
     text: crlf ? body.replaceAll('\r\n', '\n') : body,
@@ -33,8 +35,10 @@ export function viewText(disk: string): TextView {
       return crlf ? bare.replaceAll('\r\n', '\n') : bare;
     },
     restore(text) {
+      if (last?.text === text) return last.disk;
       const eol = crlf ? text.replace(/\r?\n/g, '\r\n') : text;
-      return bom ? BOM + eol : eol;
+      last = { text, disk: bom ? BOM + eol : eol };
+      return last.disk;
     },
   };
 }
