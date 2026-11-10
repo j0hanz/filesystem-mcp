@@ -3,8 +3,10 @@ import type { Stats } from 'node:fs';
 import { withAbort } from './concurrency.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
+import { createTooLargeError } from './read.ts';
 import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
 import { type TextView, viewText } from './text-view.ts';
+import { getMaxTextFileSize } from './util.ts';
 
 /**
  * The Rewrite: a call that replaces a text file's content with a transform of
@@ -137,6 +139,14 @@ async function apply<T>(
   const { fs, dryRun, signal, transport } = request;
   const after = view.restore(change.content);
   const written = !dryRun && change.write;
+  // Every Rewrite tool refuses to read a file over the limit, so writing one would lock the caller out of it.
+  const afterBytes = change.write ? Buffer.byteLength(after, 'utf8') : 0;
+  if (afterBytes > getMaxTextFileSize()) {
+    throw createTooLargeError(afterBytes, getMaxTextFileSize(), request.path, {
+      label: 'after the change',
+      suggestion: 'Nothing was written. Make a smaller change, or split the file.',
+    });
+  }
   if (dryRun && change.write) fs.assertNoReadOnlyHardLink(validPath, stats);
   let modified = stats.mtime.toISOString();
   if (written) {

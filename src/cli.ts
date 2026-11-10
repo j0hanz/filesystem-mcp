@@ -215,7 +215,9 @@ export async function parseArgs(): Promise<{
     // core readers (path, sensitive, observability, util) consult before
     // falling back to the operator's environment. Nothing writes process.env.
     const httpHost = v['http-host'] ?? process.env['FS_HTTP_HOST'];
-    const apiKey = v['api-key'] ?? process.env['FS_API_KEY'];
+    // '' reads as unset, like FS_PORT: a set-but-empty FS_API_KEY (compose templating) means no key.
+    const rawApiKey = v['api-key'] ?? process.env['FS_API_KEY'];
+    const apiKey = rawApiKey === '' ? undefined : rawApiKey;
     if (v['log-level'] !== undefined) cli.logLevel = v['log-level'];
     if (v['max-file-size'] !== undefined) cli.maxFileSize = v['max-file-size'];
     if (v['tool-timeout'] !== undefined) cli.toolTimeout = v['tool-timeout'];

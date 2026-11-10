@@ -10,7 +10,7 @@ import { normalizePath } from '../src/core/path-utils.ts';
 import type { Change } from '../src/core/rewrite.ts';
 import { rewriteEntry, rewriteFile } from '../src/core/rewrite.ts';
 import { ScanSkip } from '../src/core/scan.ts';
-import { MIB } from '../src/core/util.ts';
+import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
 import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard, withEnv } from './helpers.ts';
 
 const upper = (c: string): Change<number> => ({ content: c.toUpperCase(), result: 1, write: true });
@@ -44,6 +44,21 @@ describe('Rewrite', () => {
     assert.equal(await readFile(path, 'utf8'), '\uFEFFone\r\ntwo\r\nthree\r\n');
     assert.equal(done.before, '\uFEFFone\r\ntwo\r\n');
     assert.equal(done.after, '\uFEFFone\r\ntwo\r\nthree\r\n');
+  });
+
+  it('a change that would grow the file past the size limit is refused, real or dry', async () => {
+    const tooBig = 'x'.repeat(getMaxTextFileSize() + 1);
+    for (const dryRun of [false, true]) {
+      await assert.rejects(
+        rewriteFile({ fs, path, dryRun, tool: 'edit' }, () => ({
+          content: tooBig,
+          result: 1,
+          write: true,
+        })),
+        (error: unknown) => (error as { code?: unknown }).code === ErrorCode.TOO_LARGE,
+      );
+    }
+    assert.equal(await readFile(path, 'utf8'), 'hello\n');
   });
 
   it('a dry run reports the on-disk text it would write', async () => {
