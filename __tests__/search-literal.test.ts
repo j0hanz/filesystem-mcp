@@ -48,6 +48,12 @@ const CASES: { name: string; content: string | Buffer; needle: string; hits: num
     needle: `b${REPLACEMENT}c`,
     hits: 1,
   },
+  {
+    name: 'BOM and CRLF lines',
+    content: '\uFEFFone needle\r\ntwo\r\nneedle\r\n',
+    needle: 'needle',
+    hits: 2,
+  },
   { name: 'CRLF lines', content: 'one needle\r\ntwo\r\nneedle\r\n', needle: 'needle', hits: 2 },
   { name: 'mixed-case needle', content: 'needle NEEDLE\nnEeDlE\n', needle: 'NeEdLe', hits: 2 },
   { name: 'non-ASCII needle', content: 'STRASSE straße Straße\n', needle: 'Straße', hits: 1 },
@@ -89,6 +95,38 @@ describe('literal search matches what RE2 would', () => {
       });
     }
   }
+});
+
+describe('a CRLF file with no hit', () => {
+  it('is rejected on its raw bytes, without decoding', async () => {
+    const root = await createTestRoot();
+    try {
+      const file = join(root, 'crlf.txt');
+      const bytes = Buffer.from('one\r\ntwo\r\nthree\r\n');
+      await writeFile(file, bytes);
+      const original = Buffer.prototype.toString;
+      let decodes = 0;
+      Buffer.prototype.toString = function (this: Buffer, ...args: [BufferEncoding?]) {
+        // The needle's own UTF-8 round trip also decodes; only a file-sized buffer counts.
+        if (this.length === bytes.length && args[0] === 'utf-8') decodes++;
+        return original.apply(this, args) as string;
+      };
+      try {
+        const outcome = await searchContent(
+          { root, explicitFile: file },
+          'needle',
+          { isRegex: false, caseSensitive: true },
+          await makeGuard([root]),
+        );
+        assert.strictEqual(outcome.matches.length, 0);
+      } finally {
+        Buffer.prototype.toString = original;
+      }
+      assert.strictEqual(decodes, 0);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });
 
 // procfs reports a size of 0 for files that hold text; a read sized by fstat
