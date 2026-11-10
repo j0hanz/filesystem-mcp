@@ -509,6 +509,15 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFfirst\n\uFEFFdone\n');
   });
 
+  it('a BOM-led oldText that matches only deeper in a BOM file is unmatched', async () => {
+    const before = '\uFEFFa\nb\nc\nd\nx\n';
+    const file = await writeTestFile(root, 'bom/deep.txt', before);
+    const result = await edit({ path: file, edits: [{ oldText: '\uFEFFx', newText: '\uFEFFy' }] });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.text ?? '', /no match for oldText/);
+    assert.strictEqual(await readFile(file, 'utf-8'), before);
+  });
+
   it("dryRun reports the file's own modified time", async () => {
     const file = await writeTestFile(root, 'edit_dry_mtime.txt', 'alpha\n');
     const old = new Date('2001-01-01T00:00:00Z');
