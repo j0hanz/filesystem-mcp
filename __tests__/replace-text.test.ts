@@ -1290,6 +1290,65 @@ describe('replace_text body', () => {
     }
   });
 
+  it('ignores a UTF-8 BOM when matching line 1, and keeps the mark in the file', async () => {
+    const file = await writeTestFile(root, 'bom/a.txt', '');
+    const cases: {
+      searchPattern: string;
+      extra?: Partial<ReplaceArgs>;
+      before: string;
+      after: string;
+      matches: number;
+    }[] = [
+      {
+        searchPattern: '^using',
+        extra: { isRegex: true },
+        before: '﻿using A;\nusing B;\n',
+        after: '﻿X A;\nX B;\n',
+        matches: 2,
+      },
+      // A literal never saw the mark as text, and must still keep it.
+      {
+        searchPattern: 'using',
+        before: '﻿using A;\nusing B;\n',
+        after: '﻿X A;\nX B;\n',
+        matches: 2,
+      },
+      {
+        searchPattern: '^foo',
+        extra: { isRegex: true },
+        before: '﻿foo\nbar\n',
+        after: '﻿X\nbar\n',
+        matches: 1,
+      },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await replace({
+        path: file,
+        searchPattern: c.searchPattern,
+        replacement: 'X',
+        caseSensitive: true,
+        ...c.extra,
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(result.structured.totalMatches, c.matches, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+    }
+    // A dry run previews the same matches and never writes the mark off.
+    await writeFile(file, '﻿using A;\nusing B;\n');
+    const dry = await replace({
+      path: file,
+      searchPattern: '^using',
+      replacement: 'X',
+      caseSensitive: true,
+      isRegex: true,
+      dryRun: true,
+    });
+    assert.notStrictEqual(dry.isError, true);
+    assert.strictEqual(dry.structured.totalMatches, 2);
+    assert.strictEqual(await readFile(file, 'utf-8'), '﻿using A;\nusing B;\n');
+  });
+
   it('explains a zero-match result in the text (#55)', async () => {
     const dir = join(root, 'zero_hint');
     await writeTestFile(dir, 'a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');
