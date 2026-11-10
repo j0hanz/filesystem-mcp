@@ -56,4 +56,8 @@ describe('Text view', () => {
     assert.deepEqual(prefilterBytes(Buffer.from('ab')), Buffer.from('ab'));
     assert.equal(prefilterBytes(Buffer.from('a\r\nb')), undefined);
   });
+
+  it('prefilterBytes keeps CRLF bytes, minus the BOM, for a needle with no line break', () => {
+    assert.deepEqual(prefilterBytes(Buffer.from(`${BOM}a\r\nb`), true), Buffer.from('a\r\nb'));
+  });
 });

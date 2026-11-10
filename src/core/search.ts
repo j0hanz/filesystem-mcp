@@ -18,6 +18,7 @@ import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
 import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
 import { readText, scan, ScanSkip, skipOf } from './scan.ts';
+import { prefilterBytes, viewText } from './text-view.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
@@ -74,7 +75,6 @@ interface SearchResult {
 const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
 /** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
 const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
-const CR = 13;
 
 /**
  * Find non-overlapping occurrences of a global regex in a single line, reporting
@@ -186,15 +186,16 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   }
 
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
-  if (literal && !literal.mayMatch(buffer)) return { matches: [] };
-  const decoded = buffer.toString('utf-8');
-  // A leading BOM is an encoding mark, not text: left in, ^ misses line 1 and its columns shift.
-  const content = decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
+  // No prefilter bytes (a CR a needle could span) means it may match: the view decides below.
+  const probe = literal ? prefilterBytes(buffer, literal.lineBreakFree) : undefined;
+  if (literal && probe && !literal.mayMatch(probe)) return { matches: [] };
+  // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
+  const content = viewText(buffer.toString('utf-8')).text;
   // RE2 receives the decoded text, not the raw bytes. Each invalid byte in an
   // undecodable file decodes to U+FFFD, which is 3 bytes, so the raw size can
   // understate the input threefold and exhaust the engine's fixed heap.
   const decodedBytes = verdict.kind === 'text' ? buffer.length : Buffer.byteLength(content, 'utf8');
-  if (!literal && canPrefilter(scanCtx.source, buffer, decodedBytes)) {
+  if (!literal && canPrefilter(scanCtx.source, content, decodedBytes)) {
     scanCtx.prefilter.lastIndex = 0;
     if (scanCtx.prefilter.exec(content) === null) return { matches: [] };
   }
@@ -367,10 +368,10 @@ export async function searchContent(
 }
 
 /** Whether one whole-buffer RE2 test is a sound "cannot match" check for this file. */
-function canPrefilter(source: string, buffer: Buffer, decodedBytes: number): boolean {
+function canPrefilter(source: string, content: string, decodedBytes: number): boolean {
   if (decodedBytes > RE2_MAX_INPUT_BYTES) return false;
   if (BUFFER_ANCHOR_RE.test(source)) return false;
   if (INLINE_FLAGS_RE.test(source)) return false;
-  if (source.includes('$') && buffer.includes(CR)) return false;
+  if (source.includes('$') && content.includes('\r')) return false;
   return true;
 }
