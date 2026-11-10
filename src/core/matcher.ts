@@ -10,7 +10,7 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { prefilterBytes, type TextView, viewText } from './text-view.ts';
+import { prefilterBytes, type TextView } from './text-view.ts';
 import { escapeRegExp, MIB } from './util.ts';
 
 export type Regex = RE2;
@@ -514,12 +514,11 @@ export function createMatchEngine(
     input: TextView | string,
     options: { signal?: AbortSignal; path?: string; maxPerLine?: number } = {},
   ): AsyncGenerator<TextMatch, void> {
-    const view = typeof input === 'string' ? viewText(input) : input;
-    if (view.crlf && lfVariant) {
-      yield* lfVariant.matches(view.text, options);
+    if (typeof input !== 'string' && input.crlf && lfVariant) {
+      yield* lfVariant.matches(input, options);
       return;
     }
-    const text = view.text;
+    const text = typeof input === 'string' ? input : input.text;
     const { signal, path, maxPerLine = Infinity } = options;
     const tick = createYielder(signal);
     let cursor = 0;
@@ -664,10 +663,12 @@ export function createMatchEngine(
     },
     matches,
     async replace(view, replacement, options = {}) {
-      const tv = typeof view === 'string' ? viewText(view) : view;
+      const isView = typeof view !== 'string';
+      const text = isView ? view.text : view;
+      const isCrlf = isView && view.crlf;
       const effectiveReplacement =
-        tv.crlf && !flags.isRegex ? replacement.replaceAll('\r\n', '\n') : replacement;
-      const targetEngine = tv.crlf && lfVariant ? lfVariant : this;
+        isCrlf && !flags.isRegex ? replacement.replaceAll('\r\n', '\n') : replacement;
+      const targetEngine = isCrlf && lfVariant ? lfVariant : this;
       const expand = Boolean(options.expand);
       const signal = options.signal;
       const limits = options.limits;
@@ -675,9 +676,8 @@ export function createMatchEngine(
       let more = false;
       let updated = '';
       let cursor = 0;
-      const text = tv.text;
       try {
-        for await (const m of targetEngine.matches(tv, {
+        for await (const m of targetEngine.matches(view, {
           ...(signal ? { signal } : {}),
           ...(limits ? { path: limits.path } : {}),
         })) {
@@ -699,8 +699,13 @@ export function createMatchEngine(
         throw error;
       }
       const finalContent = updated + text.slice(cursor);
-      if (limits && Buffer.byteLength(tv.restore(finalContent), 'utf8') > limits.maxBytes) {
-        throw outputTooLarge(limits);
+      if (limits) {
+        const diskBytes = isView
+          ? Buffer.byteLength(view.restore(finalContent), 'utf8')
+          : Buffer.byteLength(finalContent, 'utf8');
+        if (diskBytes > limits.maxBytes) {
+          throw outputTooLarge(limits);
+        }
       }
       return { content: finalContent, matchCount, more };
     },

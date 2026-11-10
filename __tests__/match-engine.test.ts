@@ -235,6 +235,39 @@ describe('MatchEngine', () => {
     engine.dispose();
   });
 
+  it('engine.matches on raw string preserves offsets without CRLF normalization', async () => {
+    const engine = createMatchEngine('b', { isRegex: false, caseSensitive: true });
+    const matches: TextMatch[] = [];
+    for await (const m of engine.matches('a\r\nb')) {
+      matches.push(m);
+    }
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.start, 3);
+    assert.equal(matches[0]?.end, 4);
+    assert.equal(matches[0]?.text, 'b');
+    engine.dispose();
+  });
+
+  it('engine.matches and engine.replace agree on offsets in CRLF file with multiple leading BOM characters', async () => {
+    const engine = createMatchEngine('one\r\ntwo', { isRegex: false, caseSensitive: true });
+    // First U+FEFF is stripped by viewText, leaving the second U+FEFF at index 0 of view.text.
+    const view = viewText('\uFEFF\uFEFFone\r\ntwo\r\n');
+    const matches: TextMatch[] = [];
+    for await (const m of engine.matches(view)) {
+      matches.push(m);
+    }
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.start, 1);
+    assert.equal(matches[0]?.end, 8);
+    assert.equal(matches[0]?.text, 'one\ntwo');
+
+    const { content, matchCount } = await engine.replace(view, 'renamed');
+    assert.equal(matchCount, 1);
+    assert.equal(content, '\uFEFFrenamed\n');
+    assert.equal(view.restore(content), '\uFEFF\uFEFFrenamed\r\n');
+    engine.dispose();
+  });
+
   it('engine.replace throws outputTooLarge when restored disk text exceeds maxBytes', async () => {
     const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
     const view = viewText('aaa\r\n');
