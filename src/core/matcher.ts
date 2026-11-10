@@ -1,9 +1,10 @@
 /**
- * The Match plan module (see GLOSSARY.md): what a search or a replacement
- * settles about its needle before any text is read. One module owns the
- * judgment — the native literal pass with its per-text RE2 bails, and the
- * RE2 plumbing — and search and replace both ask it, so a preview judges
- * exactly what its replacement will touch.
+ * The Match plan and the MatchEngine (see GLOSSARY.md): what a search or a
+ * replacement settles about its needle before any text is read, and the one
+ * engine that finds its matches in a Text view. One module owns the native
+ * literal pass with its per-text RE2 bails and the RE2 plumbing; search_text
+ * and replace_text drive the same engine, so a preview judges exactly what
+ * its replacement will touch.
  */
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
@@ -41,8 +42,8 @@ export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 /**
  * A literal needle matched in native code, as RE2 would match it. RE2 copies
  * its whole input into the wasm heap on every call, and for a literal that
- * copy is most of what a search costs: once per file to rule it out, then once
- * per line of every file it could not rule out.
+ * copy is most of what a search costs. The MatchEngine runs this native pass
+ * once over the whole text, and RE2 only for a text `needsRe2` flags.
  */
 interface LiteralMatcher {
   /** True when this file holds a character RE2 folds onto one of the needle's letters. */
@@ -322,6 +323,8 @@ export interface TextMatch {
 export interface MatchEngine {
   /** Whether the needle may match a line break. */
   readonly crossesLines: boolean;
+  /** Compiles a regex plan now, so an invalid pattern throws before any text is read. No-op for a literal. */
+  compile(): void;
   /** False only when these bytes cannot hold a match. Give it `prefilterBytes`' result. */
   mayMatch(bytes: Buffer): boolean;
   /**
@@ -339,7 +342,7 @@ export interface MatchEngine {
 }
 
 const LINE_TOO_LONG =
-  'A line in this file is too long for a regex search. Regex mode is used for isRegex or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern.';
+  'A line in this file is too long for the regex engine. It is used for isRegex, wholeWord, or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern and no wholeWord.';
 
 /** Whether `text` is over RE2's input bound; a UTF-16 unit is at most 3 UTF-8 bytes, so most texts skip the measure. */
 const overRe2Bound = (text: string): boolean =>
@@ -358,22 +361,25 @@ export function createMatchEngine(
   /** Line mode's whole-text "cannot match" test, compiled with `m`. */
   let prefilter: Regex | undefined;
 
-  /** RE2's matches in `input`, which starts at `offset` in the whole text. */
-  function* regexMatches(input: string, offset: number): Generator<TextMatch, undefined> {
-    regex ??= compileRegex(plan.source, {
+  const compiled = (): Regex =>
+    (regex ??= compileRegex(plan.source, {
       caseSensitive: flags.caseSensitive,
       // wholeWord scans behind a TEXT_START newline, so ^ must match after it.
       multiline: crossesLines || wholeWord,
-    });
+    }));
+
+  /** RE2's matches in `input`, which starts at `offset` in the whole text. */
+  function* regexMatches(input: string, offset: number): Generator<TextMatch, undefined> {
+    const re = compiled();
     if (!wholeWord) {
-      for (const found of execMatches(regex, input)) {
+      for (const found of execMatches(re, input)) {
         yield { ...found, start: found.start + offset, end: found.end + offset };
       }
       return;
     }
     // wholeWord's lead and trail groups are boundary characters, trimmed from the match.
     // The scanned text starts with TEXT_START, so offsets shift back by one.
-    for (const found of execMatches(regex, TEXT_START + input, true, ENDS_NON_WORD)) {
+    for (const found of execMatches(re, TEXT_START + input, true, ENDS_NON_WORD)) {
       const lead = found.groups[0] ?? '';
       const trail = found.groups[found.groups.length - 1] ?? '';
       const start = found.start + lead.length - TEXT_START.length + offset;
@@ -481,6 +487,9 @@ export function createMatchEngine(
 
   return {
     crossesLines,
+    compile() {
+      if (!plan.literal) compiled();
+    },
     mayMatch(bytes) {
       return plan.literal ? plan.literal.needsRe2(bytes) || plan.literal.mayMatch(bytes) : true;
     },

@@ -235,9 +235,8 @@ export async function searchContent(
   const engine = createMatchEngine(pattern, flags);
   const lf = createLfEngine(pattern, flags);
   try {
-    // The engine compiles on first use; one empty line compiles it now, so an
-    // invalid regex fails the request before any file is read.
-    await engine.matches('\n').next();
+    // An invalid regex fails the request before any file is read.
+    engine.compile();
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const context = options.context ?? 0;

@@ -207,6 +207,20 @@ describe('MatchEngine', () => {
     }
   });
 
+  it('compile throws for an invalid regex before any text is read, and not for a literal', () => {
+    const bad = createMatchEngine('(', { isRegex: true, caseSensitive: true });
+    const literal = createMatchEngine('(', { isRegex: false, caseSensitive: true });
+    try {
+      assert.throws(() => {
+        bad.compile();
+      }, SyntaxError);
+      literal.compile();
+    } finally {
+      bad.dispose();
+      literal.dispose();
+    }
+  });
+
   it('stops when the signal aborts', async () => {
     const engine = createMatchEngine('a', { isRegex: true, caseSensitive: true });
     const controller = new AbortController();

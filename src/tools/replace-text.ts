@@ -393,9 +393,8 @@ async function handleSearchAndReplace(
   const engine = createMatchEngine(args.searchPattern, args);
   let lf: ReplaceContext['lf'];
   try {
-    // The engine compiles on first use; one empty line compiles it now, so an
-    // invalid regex fails the request even when no file is read.
-    await engine.matches('\n').next();
+    // An invalid regex fails the request even when no file is read.
+    engine.compile();
     lf = createLfVariant(args, engine);
   } catch (error) {
     engine.dispose();
