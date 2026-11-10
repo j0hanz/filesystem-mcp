@@ -100,6 +100,9 @@ const TTL_MS = 30 * 60 * 1000;
  * it exists so a tree of empty entries cannot bypass the byte budget.
  */
 const RECORD_OVERHEAD_BYTES = 512;
+// Copied files are hashed after the copy, a second full read. Past this many
+// budgets' worth, undo is not worth that read: 256 MiB at the default 32 MiB.
+const COPY_HASH_BUDGETS = 8;
 
 /** Memory weight of one record: its saved bytes plus object/path overhead. */
 const recordWeight = (record: UndoRecord): number =>
@@ -247,6 +250,8 @@ interface LivePool {
 export interface PathCapture {
   /** False only for NOT_RECORDING; stays true after abandon. */
   readonly recording: boolean;
+  /** The undo byte budget this capture charges against. */
+  readonly maxBytes: number;
   reserve(n: number): boolean;
   abandon(reason: string): void;
   push(...records: UndoRecord[]): void;
@@ -258,6 +263,7 @@ export interface PathCapture {
 /** The PathCapture of a call with no Capture: it records nothing. */
 export const NOT_RECORDING: PathCapture = {
   recording: false,
+  maxBytes: 0,
   reserve: () => false,
   abandon: () => undefined,
   push: () => undefined,
@@ -570,6 +576,7 @@ export async function planCopyUndo(
   validDest: string,
 ): Promise<CopyTarget[]> {
   const targets: CopyTarget[] = [];
+  let hashBytes = 0;
   const walk = async (source: string, dest: string, destAbsent: boolean): Promise<void> => {
     if (fs.pathGuard.isSensitive(dest)) {
       capture.abandon('contains protected files');
@@ -581,6 +588,12 @@ export async function planCopyUndo(
       // shortcut: no record removes a link a call created; add one if clients copy trees with links
       capture.abandon('copied links are not undoable');
     } else if (src.isFile()) {
+      // Every copied file is re-read to hash it; stop before the copy, not after.
+      hashBytes += Number(src.size);
+      if (hashBytes > capture.maxBytes * COPY_HASH_BUDGETS) {
+        capture.abandon('too large to keep for undo');
+        return;
+      }
       if (existing === undefined) {
         // Charged now, so a huge new tree stops here instead of after the copy.
         if (!capture.reserve(0)) return;
