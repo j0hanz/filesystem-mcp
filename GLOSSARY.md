@@ -60,7 +60,9 @@ and a file whose every line ends in CRLF is shown with LF endings; a file
 with mixed endings is shown as written. A write through the view puts both
 back, so the file keeps its mark and its endings. A text search and every
 Rewrite read through one view; what a Rewrite reports as before and after is
-the text on disk, not the view.
+the text on disk, not the view. Text a client typed keeps a leading U+FEFF as
+content; only the tool that places the text rules it the file's mark, where
+the text sits at the start of the file.
 _Avoid_: normalised text, decoded content, prepared text
 
 ## Matching

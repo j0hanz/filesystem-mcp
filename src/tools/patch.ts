@@ -90,7 +90,9 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       tool: 'patch',
     },
     (content, view: TextView) => {
-      const result = patchContent({ ...args, diff: view.accept(args.diff) }, content, view.bom);
+      // A leading U+FEFF is the diff's own mark, whatever the file holds.
+      const diff = view.accept(args.diff.startsWith('\uFEFF') ? args.diff.slice(1) : args.diff);
+      const result = patchContent({ ...args, diff }, content, (text) => view.unmark(text));
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };
     },
@@ -216,7 +218,7 @@ function mismatchDetail(
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
   content: string,
-  bom = false,
+  unmark: (text: string) => string = (text) => text,
 ): { patched: string; linesAdded: number; linesRemoved: number } {
   // patch is single-file only: a multi-file unified diff (parsePatch length > 1)
   // is rejected. Multi-file application needs per-file PathGuard-resolved loaders
@@ -238,7 +240,7 @@ function patchContent(
     );
   }
   const firstHunk = parsedPatch.hunks[0];
-  if (bom && firstHunk && firstHunk.oldStart <= 1) {
+  if (firstHunk && firstHunk.oldStart <= 1) {
     // The view hides the file's BOM; a diff copied from the raw file carries it on
     // line 1. Only the first old-side and first new-side lines are line 1, and
     // a context line is both, so each hunk line is stripped at most once.
@@ -250,7 +252,7 @@ function patchContent(
       const mark = line === '' ? ' ' : line.charAt(0);
       if (mark !== ' ' && mark !== '-' && mark !== '+') continue;
       if ((mark !== '+' && oldLine === 1) || (mark !== '-' && newLine === 1)) {
-        if (line.charAt(1) === '\uFEFF') firstHunk.lines[i] = mark + line.slice(2);
+        if (line !== '') firstHunk.lines[i] = mark + unmark(line.slice(1));
       }
       if (mark !== '+') oldLine++;
       if (mark !== '-') newLine++;
