@@ -50,45 +50,43 @@ Files:
   callback, lines 226-264.
 - `__tests__/replace-text.test.ts`: the tool's tests. The table-driven
   anchors test at line 1237 (`'regex anchors match at every line, like
-  search_text'`) is the pattern for the new test.
+search_text'`) is the pattern for the new test.
 - `CHANGELOG.md`: has `## [Unreleased]` with a `### Fixed` list.
 
 `src/tools/replace-text.ts:226-264`, the callback this plan edits (excerpt
 from commit `7de7398a`):
 
 ```ts
-        // Same rule as edit: an all-CRLF file gets its LF literal text converted.
-        const eol =
-          ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
-            ? ctx.crlf
-            : undefined;
-        if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;
-        const before = bytes.toString('utf-8');
-        const limits: ReplaceLimits = {
-          maxMatches: ctx.remaining,
-          maxBytes: ctx.maxBytes,
-          path: entryPath,
-        };
-        const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
-          before,
-          eol?.replacement ?? replacement,
-          signal,
-          limits,
-        );
-        // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
-        if (matchCount === 0) {
-          if (more) ctx.cut = true;
-          return undefined;
-        }
-        // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
-        if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
-        // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
-        ctx.remaining -= matchCount;
-        if (more) ctx.cut = true;
-        // The write is the Rewrite's next step: from here a failure is the
-        // caller's edit not landing.
-        write.started = true;
-        return { content, result: matchCount, write: true, before };
+// Same rule as edit: an all-CRLF file gets its LF literal text converted.
+const eol =
+  ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8')) ? ctx.crlf : undefined;
+if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;
+const before = bytes.toString('utf-8');
+const limits: ReplaceLimits = {
+  maxMatches: ctx.remaining,
+  maxBytes: ctx.maxBytes,
+  path: entryPath,
+};
+const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
+  before,
+  eol?.replacement ?? replacement,
+  signal,
+  limits,
+);
+// An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
+if (matchCount === 0) {
+  if (more) ctx.cut = true;
+  return undefined;
+}
+// Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
+if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+// Spent before the write: a failed write still uses its share, so the cap is never exceeded.
+ctx.remaining -= matchCount;
+if (more) ctx.cut = true;
+// The write is the Rewrite's next step: from here a failure is the
+// caller's edit not landing.
+write.started = true;
+return { content, result: matchCount, write: true, before };
 ```
 
 Facts the edit relies on:
@@ -124,11 +122,11 @@ Conventions to match:
 
 ## Commands you will need
 
-| Purpose       | Command                                                            | Expected on success |
-| :------------ | :----------------------------------------------------------------- | :------------------- |
-| Install       | `npm ci`                                                           | exit 0               |
-| One test file | `node --test --test-timeout=60000 __tests__/replace-text.test.ts`  | all pass             |
-| Full check    | `npm run check`                                                    | exit 0               |
+| Purpose       | Command                                                           | Expected on success |
+| :------------ | :---------------------------------------------------------------- | :------------------ |
+| Install       | `npm ci`                                                          | exit 0              |
+| One test file | `node --test --test-timeout=60000 __tests__/replace-text.test.ts` | all pass            |
+| Full check    | `npm run check`                                                   | exit 0              |
 
 No contract snapshot refresh: no tool description changes in this plan.
 
@@ -172,11 +170,11 @@ as a table test in the same style, calling `replace` with
 Write the BOM as the `'﻿'` escape in the string literals, never as a
 raw character.
 
-| searchPattern    | extra          | before                          | after                          | matches |
-| :--------------- | :------------- | :------------------------------ | :----------------------------- | :------ |
-| `^using`         | `isRegex: true`  | `'﻿using A;\nusing B;\n'`   | `'﻿X A;\nX B;\n'`          | 2       |
-| `using`          | none            | `'﻿using A;\nusing B;\n'`   | `'﻿X A;\nX B;\n'`          | 2       |
-| `^foo`           | `isRegex: true`  | `'﻿foo\nbar\n'`             | `'﻿X\nbar\n'`              | 1       |
+| searchPattern | extra           | before                    | after             | matches |
+| :------------ | :-------------- | :------------------------ | :---------------- | :------ |
+| `^using`      | `isRegex: true` | `'﻿using A;\nusing B;\n'` | `'﻿X A;\nX B;\n'` | 2       |
+| `using`       | none            | `'﻿using A;\nusing B;\n'` | `'﻿X A;\nX B;\n'` | 2       |
+| `^foo`        | `isRegex: true` | `'﻿foo\nbar\n'`           | `'﻿X\nbar\n'`     | 1       |
 
 Per case: write the file, run `replace`, assert `isError` is not `true`,
 assert `structured.totalMatches`, and assert the file content equals the
@@ -200,11 +198,11 @@ state", make these edits and no others:
    `testBuffer` line, and insert the strip between them:
 
    ```ts
-        const before = bytes.toString('utf-8');
-        // A leading BOM is an encoding mark, not text: search_text strips it, and
-        // left in, ^ misses line 1. It goes back on before the write below.
-        const bom = before.charCodeAt(0) === 0xfeff;
-        if (!(eol?.matcher ?? matcher).testBuffer(bom ? bytes.subarray(3) : bytes)) return undefined;
+   const before = bytes.toString('utf-8');
+   // A leading BOM is an encoding mark, not text: search_text strips it, and
+   // left in, ^ misses line 1. It goes back on before the write below.
+   const bom = before.charCodeAt(0) === 0xfeff;
+   if (!(eol?.matcher ?? matcher).testBuffer(bom ? bytes.subarray(3) : bytes)) return undefined;
    ```
 
    (the old `if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;`
@@ -220,10 +218,10 @@ state", make these edits and no others:
 3. Re-attach before the budget check and return the re-attached text:
 
    ```ts
-        // The mark goes back on, so the file keeps its BOM and the check sees final bytes.
-        const patched = bom ? before[0] + content : content;
-        // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
-        if (Buffer.byteLength(patched, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+   // The mark goes back on, so the file keeps its BOM and the check sees final bytes.
+   const patched = bom ? before[0] + content : content;
+   // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
+   if (Buffer.byteLength(patched, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
    ```
 
    and the return becomes

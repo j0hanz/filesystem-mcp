@@ -36,18 +36,18 @@
 
 ## File Structure
 
-| File | Responsibility | Tasks |
-| :-- | :-- | :-- |
-| `src/core/text-view.ts` (new) | The Text view: view, accept, restore, byte prefilter rule | 1 |
-| `__tests__/text-view.test.ts` (new) | The view's interface suite | 1 |
-| `src/core/rewrite.ts` | Hands transforms the view; restores on write | 2, 3 |
-| `src/tools/edit.ts`, `src/tools/patch.ts` | Transforms over view text | 2 |
-| `src/tools/replace-text.ts` | Transform over view text; later drives the engine | 3, 6 |
-| `src/core/util.ts` | Loses `usesCrlf`, `toCrlf` | 3 |
-| `src/core/search.ts` | Reads through the view; later drives the engine | 4, 7 |
-| `src/core/matcher.ts` | `MatchEngine`, `replaceMatches`; loses `ReplacementMatcher` | 5, 6, 7 |
-| `__tests__/match-engine.test.ts` (new) | The engine's interface suite, with search/replace parity | 5 |
-| `src/tools/search-text.ts` | Description copy | 7 |
+| File                                      | Responsibility                                              | Tasks   |
+| :---------------------------------------- | :---------------------------------------------------------- | :------ |
+| `src/core/text-view.ts` (new)             | The Text view: view, accept, restore, byte prefilter rule   | 1       |
+| `__tests__/text-view.test.ts` (new)       | The view's interface suite                                  | 1       |
+| `src/core/rewrite.ts`                     | Hands transforms the view; restores on write                | 2, 3    |
+| `src/tools/edit.ts`, `src/tools/patch.ts` | Transforms over view text                                   | 2       |
+| `src/tools/replace-text.ts`               | Transform over view text; later drives the engine           | 3, 6    |
+| `src/core/util.ts`                        | Loses `usesCrlf`, `toCrlf`                                  | 3       |
+| `src/core/search.ts`                      | Reads through the view; later drives the engine             | 4, 7    |
+| `src/core/matcher.ts`                     | `MatchEngine`, `replaceMatches`; loses `ReplacementMatcher` | 5, 6, 7 |
+| `__tests__/match-engine.test.ts` (new)    | The engine's interface suite, with search/replace parity    | 5       |
+| `src/tools/search-text.ts`                | Description copy                                            | 7       |
 
 ---
 
@@ -56,10 +56,12 @@
 ### Task 1: The Text view module
 
 **Files:**
+
 - Create: `src/core/text-view.ts`
 - Test: `__tests__/text-view.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
 
@@ -82,6 +84,7 @@ export function prefilterBytes(bytes: Buffer): Buffer | undefined;
 ```
 
 Rules the tests below do not fully determine:
+
 - `bom` is `disk.charCodeAt(0) === 0xfeff`. The body is `disk` without that character.
 - `crlf` is true when the body contains `\r\n` and matches neither a bare `\n` nor a lone `\r`: `!/(?<!\r)\n|\r(?!\n)/u.test(body)`.
 - `accept` drops a leading U+FEFF when `bom`, and replaces `\r\n` with `\n` when `crlf`; otherwise it returns its input.
@@ -176,12 +179,14 @@ git commit -m "feat(text-view): one view of a file's text for every text tool"
 ### Task 2: A named-file Rewrite reads through the view (`edit`, `patch`)
 
 **Files:**
+
 - Modify: `src/core/rewrite.ts:24-62, 123-160`
 - Modify: `src/tools/edit.ts:20, 535-560, ~593` (`applyEdits` and its `rewriteFile` call)
 - Modify: `src/tools/patch.ts:81-96, 215-230`
 - Test: `__tests__/rewrite.test.ts`, `__tests__/edit.test.ts`, `__tests__/patch.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TextView`, `viewText` from Task 1.
 - Produces:
 
@@ -278,6 +283,7 @@ git commit -m "feat(rewrite): edit and patch read a named file through the Text 
 ### Task 3: A walked-file Rewrite reads through the view (`replace_text`)
 
 **Files:**
+
 - Modify: `src/core/rewrite.ts:64-82`
 - Modify: `src/tools/replace-text.ts:197, 210-275, 315-340, 400-406, 440, 491`
 - Modify: `src/core/util.ts:124-135` (delete `usesCrlf`, `toCrlf`)
@@ -285,6 +291,7 @@ git commit -m "feat(rewrite): edit and patch read a named file through the Text 
 - Test: `__tests__/rewrite.test.ts`, `__tests__/replace-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `viewText`, `prefilterBytes`, `TextView` (Task 1); `apply` taking a view (Task 2).
 - Produces:
 
@@ -307,14 +314,14 @@ export function rewriteEntry<T>(
 
 In `__tests__/replace-text.test.ts`, through the file's harness helper. Each writes one file, runs `replace_text` on it by name, and asserts the file's bytes:
 
-| Test name | File | Args | File after |
-| :-- | :-- | :-- | :-- |
-| `a regex $ matches before CRLF` | `foo\r\nbar\r\n` | `searchPattern: 'foo$'`, `isRegex: true`, `replacement: 'X'` | `X\r\nbar\r\n` |
-| `a literal typed with CRLF matches an all-CRLF file` | `a\r\nb\r\n` | `searchPattern: 'a\r\nb'`, `replacement: 'x'` | `x\r\n` |
-| `a literal typed with LF matches an all-CRLF file` | `a\r\nb\r\n` | `searchPattern: 'a\nb'`, `replacement: 'x\ny'` | `x\r\ny\r\n` |
-| `a mixed-ending file is matched as written` | `a\r\nb\nc\n` | `searchPattern: 'b\nc'`, `replacement: 'x'` | `a\r\nx\n` |
-| `a regex \r does not match an all-CRLF file` | `a\r\nb\r\n` | `searchPattern: 'a\\r\\n'`, `isRegex: true`, `replacement: 'x'` | unchanged, 0 matches |
-| `line 1 of a BOM CRLF file matches ^ and keeps both` | `﻿a\r\nb\r\n` | `searchPattern: '^a$'`, `isRegex: true`, `replacement: 'x'` | `﻿x\r\nb\r\n` |
+| Test name                                            | File             | Args                                                            | File after           |
+| :--------------------------------------------------- | :--------------- | :-------------------------------------------------------------- | :------------------- |
+| `a regex $ matches before CRLF`                      | `foo\r\nbar\r\n` | `searchPattern: 'foo$'`, `isRegex: true`, `replacement: 'X'`    | `X\r\nbar\r\n`       |
+| `a literal typed with CRLF matches an all-CRLF file` | `a\r\nb\r\n`     | `searchPattern: 'a\r\nb'`, `replacement: 'x'`                   | `x\r\n`              |
+| `a literal typed with LF matches an all-CRLF file`   | `a\r\nb\r\n`     | `searchPattern: 'a\nb'`, `replacement: 'x\ny'`                  | `x\r\ny\r\n`         |
+| `a mixed-ending file is matched as written`          | `a\r\nb\nc\n`    | `searchPattern: 'b\nc'`, `replacement: 'x'`                     | `a\r\nx\n`           |
+| `a regex \r does not match an all-CRLF file`         | `a\r\nb\r\n`     | `searchPattern: 'a\\r\\n'`, `isRegex: true`, `replacement: 'x'` | unchanged, 0 matches |
+| `line 1 of a BOM CRLF file matches ^ and keeps both` | `﻿a\r\nb\r\n`    | `searchPattern: '^a$'`, `isRegex: true`, `replacement: 'x'`     | `﻿x\r\nb\r\n`        |
 
 In `__tests__/rewrite.test.ts`: `'rewriteEntry restores through the view its transform opened'`: file `﻿a\r\n`; the transform calls `open()`, asserts `text === 'a\n'`, returns `{ content: 'b\n', result: 1, write: true }`; assert the file is `﻿b\r\n` and `done.before === '﻿a\r\n'`.
 
@@ -374,10 +381,12 @@ git commit -m "fix(replace_text): match through the Text view, so \$ sees the en
 ### Task 4: `search_text` reads the Text view
 
 **Files:**
+
 - Modify: `src/core/search.ts:188-200, 369-376`
 - Test: `__tests__/search-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `viewText`, `prefilterBytes` (Task 1).
 - Produces: nothing new. `scanFileBody` matches `viewText(decoded).text`.
 
@@ -419,10 +428,12 @@ git commit -m "refactor(search): read each file through the Text view"
 ### Task 5: The `MatchEngine`
 
 **Files:**
+
 - Modify: `src/core/matcher.ts` (add; nothing removed in this task)
 - Test: `__tests__/match-engine.test.ts` (new)
 
 **Interfaces:**
+
 - Consumes: `planMatch`, `compileRegex`, `freeRegex`, `execMatches`, `createYielder`, `RE2_MAX_INPUT_BYTES`, the `wholeWord` lead/trail handling at `matcher.ts:423-440` (all in the same file).
 - Produces:
 
@@ -446,7 +457,10 @@ export interface MatchEngine {
    * event loop and throws the signal's reason on abort. Throws TOO_LARGE by
    * the 4 MiB rule; `path` labels that error.
    */
-  matches(text: string, options?: { signal?: AbortSignal; path?: string }): AsyncGenerator<TextMatch, void>;
+  matches(
+    text: string,
+    options?: { signal?: AbortSignal; path?: string },
+  ): AsyncGenerator<TextMatch, void>;
   /** Releases every compiled pattern. Idempotent. */
   dispose(): void;
 }
@@ -511,11 +525,38 @@ Tests, one `it` each:
 
 ```ts
 // crossesLines: line-bound
-for (const p of ['foo', 'a.b', '^a$', '\\d+\\w*', 'a\\.b', '\\bfoo\\b', '[abc]+', 'a|b', '\\S+', 'a\\tb'])
+for (const p of [
+  'foo',
+  'a.b',
+  '^a$',
+  '\\d+\\w*',
+  'a\\.b',
+  '\\bfoo\\b',
+  '[abc]+',
+  'a|b',
+  '\\S+',
+  'a\\tb',
+])
   it(`${p} cannot cross a line`, () => assert.equal(crosses(p), false));
 
 // crossesLines: Review Focus 3
-for (const p of ['a\\nb', 'a\\s+b', '[^x]', '\\W', '\\D', '\\x0a', '\\p{Cc}', '(?s)a.b', '[[:space:]]', 'a\nb', '\\Afoo', 'foo\\z', '\\Qa\\E', '\\012', '\\r'])
+for (const p of [
+  'a\\nb',
+  'a\\s+b',
+  '[^x]',
+  '\\W',
+  '\\D',
+  '\\x0a',
+  '\\p{Cc}',
+  '(?s)a.b',
+  '[[:space:]]',
+  'a\nb',
+  '\\Afoo',
+  'foo\\z',
+  '\\Qa\\E',
+  '\\012',
+  '\\r',
+])
   it(`${JSON.stringify(p)} may cross a line`, () => assert.equal(crosses(p), true));
 
 it('a literal crosses a line only when it holds a newline', () => {
@@ -524,8 +565,14 @@ it('a literal crosses a line only when it holds a newline', () => {
 });
 
 it('^ and $ match once per line and not after the final newline', async () => {
-  assert.deepEqual(await spans('^', 'a\nb\n', re), [[0, 0], [2, 2]]);
-  assert.deepEqual(await spans('$', 'a\nb\n', re), [[1, 1], [3, 3]]);
+  assert.deepEqual(await spans('^', 'a\nb\n', re), [
+    [0, 0],
+    [2, 2],
+  ]);
+  assert.deepEqual(await spans('$', 'a\nb\n', re), [
+    [1, 1],
+    [3, 3],
+  ]);
 });
 
 it('an empty text has no lines', async () => {
@@ -553,20 +600,33 @@ it('offsets are UTF-16 units after an astral character on an earlier line', asyn
 });
 
 it('a case-insensitive literal folds ASCII only', async () => {
-  assert.deepEqual(await spans('k', 'K K', { caseSensitive: false }), [[0, 1], [2, 3]]);
+  assert.deepEqual(await spans('k', 'K K', { caseSensitive: false }), [
+    [0, 1],
+    [2, 3],
+  ]);
 });
 
 it('wholeWord skips a match inside a word', async () => {
-  assert.deepEqual(await spans('cat', 'cat concat\ncat', { wholeWord: true }), [[0, 3], [11, 14]]);
+  assert.deepEqual(await spans('cat', 'cat concat\ncat', { wholeWord: true }), [
+    [0, 3],
+    [11, 14],
+  ]);
 });
 
 it('a line-bound regex matches a text over 4 MiB', async () => {
-  const text = 'x'.repeat(1024).concat('\n').repeat(5 * 1024) + 'needle1\n';
+  const text =
+    'x'
+      .repeat(1024)
+      .concat('\n')
+      .repeat(5 * 1024) + 'needle1\n';
   assert.equal((await spans('needle\\d', text, re)).length, 1);
 });
 
 it('a regex that can cross a line refuses a text over 4 MiB', async () => {
-  const text = 'x'.repeat(1024).concat('\n').repeat(5 * 1024);
+  const text = 'x'
+    .repeat(1024)
+    .concat('\n')
+    .repeat(5 * 1024);
   await assert.rejects(spans('a\\s+b', text, re), fsErrorMatcher(ErrorCode.TOO_LARGE));
 });
 
@@ -615,11 +675,13 @@ git commit -m "feat(matcher): one engine that matches by line or by text as the 
 ### Task 6: `replace_text` drives the engine
 
 **Files:**
+
 - Modify: `src/core/matcher.ts:314-328, 393-572` (delete `ReplacementMatcher`, `createRegexReplacementMatcher`, `createCaseInsensitiveLiteralMatcher`, `createCaseSensitiveLiteralMatcher`, `createReplacementMatcher`)
 - Modify: `src/tools/replace-text.ts` (context, `processEntry`, `createLfVariant`, dispose)
 - Test: `__tests__/match-engine.test.ts`, `__tests__/matcher.test.ts`, `__tests__/replace-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MatchEngine`, `createMatchEngine` (Task 5); `ReplaceLimits`, `outputTooLarge`, `expandDollarTokens` (existing).
 - Produces:
 
@@ -654,7 +716,7 @@ it('expands $1 and $& for a regex only', async () => {
   assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
   assert.equal(await rep('ab', 'ab', '$&', {}), '$&');
 });
-it('$` and $\' see the whole text, not the line', async () => {
+it("$` and $' see the whole text, not the line", async () => {
   assert.equal(await rep('b', 'a\nb\nc', "[$`|$']", re), 'a\n[a\n|\nc]\nc');
 });
 it('stops at maxMatches and says more', async () => {
@@ -664,13 +726,13 @@ it('stops at maxMatches and says more', async () => {
 
 Parity suite, same file, `describe('a search previews its replacement', …)`: for each case below, collect the engine's matches once, and assert that (a) the set of 1-based start lines equals `lines`, and (b) `replaceMatches` with replacement `'#'` changes exactly `count` places.
 
-| needle | flags | text | lines | count |
-| :-- | :-- | :-- | :-- | :-- |
-| `foo$` | regex | `foo\nfoo bar\nfoo\n` | 1, 3 | 2 |
-| `^` | regex | `a\nb\n` | 1, 2 | 2 |
-| `a\s+b` | regex | `a\nb\na b\n` | 1, 3 | 2 |
-| `K` | literal, case-insensitive | `k\nK\nK\n` | 1, 2, 3 | 3 |
-| `a\nb` | literal | `a\nb\na\nb` | 1, 3 | 2 |
+| needle  | flags                     | text                  | lines   | count |
+| :------ | :------------------------ | :-------------------- | :------ | :---- |
+| `foo$`  | regex                     | `foo\nfoo bar\nfoo\n` | 1, 3    | 2     |
+| `^`     | regex                     | `a\nb\n`              | 1, 2    | 2     |
+| `a\s+b` | regex                     | `a\nb\na b\n`         | 1, 3    | 2     |
+| `K`     | literal, case-insensitive | `k\nK\nK\n`           | 1, 2, 3 | 3     |
+| `a\nb`  | literal                   | `a\nb\na\nb`          | 1, 3    | 2     |
 
 In `__tests__/replace-text.test.ts`, through the harness:
 
@@ -710,6 +772,7 @@ git commit -m "feat(replace_text): replace through the one matching engine"
 ### Task 7: `search_text` drives the engine
 
 **Files:**
+
 - Modify: `src/core/search.ts:74-98, 143-261, 263-308, 363-376`
 - Modify: `src/tools/search-text.ts:198-199` (description)
 - Modify: `__tests__/contract.test.ts.snapshot` (regenerated)
@@ -717,10 +780,12 @@ git commit -m "feat(replace_text): replace through the one matching engine"
 - Test: `__tests__/search-text.test.ts`, `__tests__/search.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MatchEngine`, `createMatchEngine` (Task 5); `viewText`, `prefilterBytes` (Task 1).
 - Produces: `searchContent` keeps its signature and `SearchContentOutcome` its shape.
 
 Decisions:
+
 - `ScanContext` holds `engine: MatchEngine` in place of `regex`, `prefilter`, `literal` and `source`. `searchContent` builds it with `createMatchEngine(pattern, { isRegex, caseSensitive })` and disposes it in the `finally`.
 - `scanFileBody` walks `engine.matches(content, { signal, path: entryPath })` and groups matches by the line each starts on: `line` is that 1-based line, `column` the first match's offset within the line, `matchCount` the number of matches starting on the line (stop counting at `MAX_MATCHES_PER_LINE`), `content` is `own(clipLine(line, column))` for that line alone. `before`/`after` context is unchanged.
 - Split the text into lines only once a file has a match.
