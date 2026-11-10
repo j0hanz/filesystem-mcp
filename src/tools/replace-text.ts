@@ -1,7 +1,5 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { Buffer } from 'node:buffer';
-
 import * as z from 'zod/v4';
 
 import {
@@ -21,14 +19,7 @@ import {
   zeroMatchHint,
 } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
-import {
-  createLfEngine,
-  createMatchEngine,
-  type MatchEngine,
-  outputTooLarge,
-  type ReplaceLimits,
-  replaceMatches,
-} from '../core/matcher.ts';
+import { createMatchEngine, type MatchEngine, type ReplaceLimits } from '../core/matcher.ts';
 import { IS_WINDOWS } from '../core/path-utils.ts';
 import type { ResultPaths } from '../core/path.ts';
 import type { Rewritten } from '../core/rewrite.ts';
@@ -45,7 +36,6 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import { prefilterBytes } from '../core/text-view.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   getMaxTextFileSize,
@@ -196,8 +186,6 @@ interface ReplaceContext {
   remaining: number;
   /** A file had a match left unreplaced because the cap ran out. */
   cut: boolean;
-  /** Literal search typed with CRLF, as an all-CRLF file's view shows it (LF). Present only when that changes the text. */
-  lf?: { engine: MatchEngine; replacement: string };
   /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
   linked: Set<string>;
 }
@@ -233,30 +221,23 @@ async function processEntry(
           if (ctx.linked.has(id)) return undefined;
           ctx.linked.add(id);
         }
-        // A CR in the bytes (a view drops it) can hide a match only from a needle holding a line break.
-        const probe = prefilterBytes(bytes, engine.lineBreakFree);
-        if (probe !== undefined && !engine.mayMatch(probe)) return undefined;
+        if (!engine.mayMatch(bytes)) return undefined;
         const view = open();
-        const pair = view.crlf && ctx.lf ? ctx.lf : { engine, replacement };
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount, more } = await replaceMatches(
-          pair.engine,
-          view.text,
-          pair.replacement,
-          { expand, ...(signal ? { signal } : {}), limits },
-        );
+        const { content, matchCount, more } = await engine.replace(view, replacement, {
+          expand,
+          ...(signal ? { signal } : {}),
+          limits,
+        });
         // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
         if (matchCount === 0) {
           if (more) ctx.cut = true;
           return undefined;
         }
-        // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
-        if (Buffer.byteLength(view.restore(content), 'utf8') > limits.maxBytes)
-          throw outputTooLarge(limits);
         // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
         ctx.remaining -= matchCount;
         if (more) ctx.cut = true;
@@ -312,19 +293,6 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
     diff: '',
     diffTruncated: false,
   };
-}
-
-/**
- * Literal text only: a regex and its $-template are taken as written. The
- * replacement follows the needle's LF form (createLfEngine); `engine` is reused
- * when only the replacement changes.
- */
-function createLfVariant(args: SearchAndReplaceArgs, engine: MatchEngine): ReplaceContext['lf'] {
-  if (args.isRegex) return undefined;
-  const replacement = args.replacement.replaceAll('\r\n', '\n');
-  const lf = createLfEngine(args.searchPattern, args);
-  if (lf === undefined && replacement === args.replacement) return undefined;
-  return { engine: lf ?? engine, replacement };
 }
 
 function buildSearchAndReplaceStructuredResult(
@@ -391,11 +359,9 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const engine = createMatchEngine(args.searchPattern, args);
-  let lf: ReplaceContext['lf'];
   try {
     // An invalid regex fails the request even when no file is read.
     engine.compile();
-    lf = createLfVariant(args, engine);
   } catch (error) {
     engine.dispose();
     throw error;
@@ -431,7 +397,6 @@ async function handleSearchAndReplace(
     maxBytes: getMaxTextFileSize(),
     remaining: explicitCap ?? Infinity,
     cut: false,
-    ...(lf ? { lf } : {}),
     linked: new Set(),
   };
   let outcome: ScanOutcome<ScannedOutcome>;
@@ -482,7 +447,6 @@ async function handleSearchAndReplace(
     );
   } finally {
     engine.dispose();
-    if (lf && lf.engine !== engine) lf.engine.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 

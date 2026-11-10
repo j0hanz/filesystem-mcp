@@ -10,6 +10,7 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from './errors.ts';
+import { prefilterBytes, type TextView } from './text-view.ts';
 import { escapeRegExp, MIB } from './util.ts';
 
 export type Regex = RE2;
@@ -343,7 +344,7 @@ export interface MatchEngine {
   compile(): void;
   /** Pass to `prefilterBytes` as `crSafe`: a CR in the bytes cannot hide a match from `mayMatch`. */
   readonly lineBreakFree: boolean;
-  /** False only when these bytes cannot hold a match. Give it `prefilterBytes`' result. */
+  /** False only when these bytes cannot hold a match. Handles BOM and line breaks internally. */
   mayMatch(bytes: Buffer): boolean;
   /**
    * Every match in view text, left to right, never overlapping. Yields to the
@@ -352,9 +353,23 @@ export interface MatchEngine {
    * on one line, the walk skips to the next line.
    */
   matches(
-    text: string,
+    view: TextView | string,
     options?: { signal?: AbortSignal; path?: string; maxPerLine?: number },
   ): AsyncGenerator<TextMatch, void>;
+  /**
+   * Splice every match in view text, so a replacement touches exactly what a
+   * search reports. Normalizes literal replacement CRLFs for CRLF views, and
+   * verifies limits on restored output bytes.
+   */
+  replace(
+    view: TextView | string,
+    replacement: string,
+    options?: {
+      expand?: boolean;
+      signal?: AbortSignal;
+      limits?: ReplaceLimits;
+    },
+  ): Promise<{ content: string; matchCount: number; more: boolean }>;
   /** Releases every compiled pattern. Idempotent. */
   dispose(): void;
 }
@@ -366,6 +381,54 @@ const LINE_TOO_LONG =
 const overRe2Bound = (text: string): boolean =>
   text.length * 3 > RE2_MAX_INPUT_BYTES && Buffer.byteLength(text, 'utf8') > RE2_MAX_INPUT_BYTES;
 
+const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
+
+export interface ReplaceLimits {
+  maxMatches: number;
+  maxBytes: number;
+  path: string;
+}
+
+const OUTPUT_TOO_LARGE_SUGGESTION =
+  "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
+
+function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
+    limits.path,
+    cause,
+    OUTPUT_TOO_LARGE_SUGGESTION,
+  );
+}
+
+function expandDollarTokens(
+  template: string,
+  match: string,
+  groups: (string | undefined)[],
+  offset: number,
+  input: string,
+  named: Record<string, string> | undefined,
+): string {
+  return template.replace(DOLLAR_TOKEN, (token: string, kind: string, name?: string) => {
+    if (kind === '$') return '$';
+    if (kind === '&') return match;
+    if (kind === '`') return input.slice(0, offset);
+    if (kind === "'") return input.slice(offset + match.length);
+    if (name !== undefined) {
+      if (named && Object.hasOwn(named, name)) return named[name] ?? '';
+      return token;
+    }
+    const two = Number.parseInt(kind, 10);
+    if (kind.length === 2 && two >= 1 && two <= groups.length) return groups[two - 1] ?? '';
+    const one = Number.parseInt(kind.slice(0, 1), 10);
+    if (one >= 1 && one <= groups.length) {
+      return (groups[one - 1] ?? '') + (kind.length === 2 ? kind.slice(1) : '');
+    }
+    return token;
+  });
+}
+
 export function createMatchEngine(
   needle: string,
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
@@ -373,6 +436,11 @@ export function createMatchEngine(
   const plan = planMatch(needle, flags);
   const wholeWord = Boolean(flags.wholeWord);
   const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
+  const lineBreakFree = plan.literal?.lineBreakFree ?? true;
+  const lfVariant: MatchEngine | undefined =
+    !flags.isRegex && needle.includes('\r\n')
+      ? createMatchEngine(needle.replaceAll('\r\n', '\n'), flags)
+      : undefined;
   // planMatch only gives a case-insensitive literal plan for an ASCII needle.
   const folded = flags.caseSensitive ? needle : needle.toLowerCase();
   let regex: Regex | undefined;
@@ -443,9 +511,14 @@ export function createMatchEngine(
   }
 
   async function* matches(
-    text: string,
+    input: TextView | string,
     options: { signal?: AbortSignal; path?: string; maxPerLine?: number } = {},
   ): AsyncGenerator<TextMatch, void> {
+    if (typeof input !== 'string' && input.crlf && lfVariant) {
+      yield* lfVariant.matches(input, options);
+      return;
+    }
+    const text = typeof input === 'string' ? input : input.text;
     const { signal, path, maxPerLine = Infinity } = options;
     const tick = createYielder(signal);
     let cursor = 0;
@@ -578,145 +651,76 @@ export function createMatchEngine(
 
   return {
     crossesLines,
-    // A regex's mayMatch is always true, so a CR cannot hide anything from it either.
-    lineBreakFree: plan.literal?.lineBreakFree ?? true,
+    lineBreakFree,
     compile() {
       if (!plan.literal) compiled();
     },
     mayMatch(bytes) {
-      return plan.literal ? plan.literal.needsRe2(bytes) || plan.literal.mayMatch(bytes) : true;
+      if (!plan.literal) return true;
+      const probe = prefilterBytes(bytes, lineBreakFree);
+      if (probe === undefined) return true;
+      return plan.literal.needsRe2(probe) || plan.literal.mayMatch(probe);
     },
     matches,
+    async replace(view, replacement, options = {}) {
+      const isView = typeof view !== 'string';
+      const text = isView ? view.text : view;
+      const isCrlf = isView && view.crlf;
+      const effectiveReplacement =
+        isCrlf && !flags.isRegex ? replacement.replaceAll('\r\n', '\n') : replacement;
+      const targetEngine = isCrlf && lfVariant ? lfVariant : this;
+      const expand = Boolean(options.expand);
+      const signal = options.signal;
+      const limits = options.limits;
+      let matchCount = 0;
+      let more = false;
+      let updated = '';
+      let cursor = 0;
+      try {
+        for await (const m of targetEngine.matches(view, {
+          ...(signal ? { signal } : {}),
+          ...(limits ? { path: limits.path } : {}),
+        })) {
+          if (matchCount === limits?.maxMatches) {
+            more = true;
+            break;
+          }
+          matchCount++;
+          updated +=
+            text.slice(cursor, m.start) +
+            (expand
+              ? expandDollarTokens(effectiveReplacement, m.text, m.groups, m.start, text, m.named)
+              : effectiveReplacement);
+          if (limits && updated.length > limits.maxBytes) throw outputTooLarge(limits);
+          cursor = m.end;
+        }
+      } catch (error) {
+        if (error instanceof RangeError && limits) throw outputTooLarge(limits, error);
+        throw error;
+      }
+      const finalContent = updated + text.slice(cursor);
+      if (limits) {
+        const diskBytes = isView
+          ? Buffer.byteLength(view.restore(finalContent), 'utf8')
+          : Buffer.byteLength(finalContent, 'utf8');
+        if (diskBytes > limits.maxBytes) {
+          throw outputTooLarge(limits);
+        }
+      }
+      return { content: finalContent, matchCount, more };
+    },
     dispose() {
       freeRegex(regex);
       freeRegex(prefilter);
       regex = undefined;
       prefilter = undefined;
+      lfVariant?.dispose();
     },
   };
 }
-
-/**
- * An all-CRLF file is viewed with LF endings, so a literal typed with CRLF is
- * matched there as LF. Undefined for a regex, taken as written, or a needle
- * without CRLF. The caller disposes the engine.
- */
-export function createLfEngine(
-  needle: string,
-  flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
-): MatchEngine | undefined {
-  if (flags.isRegex || !needle.includes('\r\n')) return undefined;
-  return createMatchEngine(needle.replaceAll('\r\n', '\n'), flags);
-}
-const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
 // Matches a consumed text that ends in a non-word char: its last char may lead the next match.
 const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
 // wholeWord scans behind this non-word char instead of a `^` lead: an empty lead
 // cannot be backed up onto, so a match right after one at text start was missed (#158).
 const TEXT_START = '\n';
-
-export interface ReplaceLimits {
-  maxMatches: number;
-  maxBytes: number;
-  path: string;
-}
-
-const OUTPUT_TOO_LARGE_SUGGESTION =
-  "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
-
-export function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
-  return new FsError(
-    ErrorCode.TOO_LARGE,
-    `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
-    limits.path,
-    cause,
-    OUTPUT_TOO_LARGE_SUGGESTION,
-  );
-}
-/**
- * Expand `$`-substitutions in a replacement template the way `RegExp` does.
- *
- * We cannot hand the template to RE2's own string replacer: it throws
- * `Invalid replacement string` on any `$` not followed by a substitution it
- * recognises (so a replacement of `$100` or a trailing `$` fails outright,
- * where `RegExp` inserts the `$` literally), and it renders an out-of-range
- * `$5` as `$4`. The matcher splices matches itself, so this is the single owner
- * of the syntax.
- */
-function expandDollarTokens(
-  template: string,
-  match: string,
-  groups: (string | undefined)[],
-  offset: number,
-  input: string,
-  named: Record<string, string> | undefined,
-): string {
-  return template.replace(DOLLAR_TOKEN, (token: string, kind: string, name?: string) => {
-    if (kind === '$') return '$';
-    if (kind === '&') return match;
-    if (kind === '`') return input.slice(0, offset);
-    if (kind === "'") return input.slice(offset + match.length);
-    if (name !== undefined) {
-      if (named && Object.hasOwn(named, name)) return named[name] ?? '';
-      return token;
-    }
-    // `$12` prefers group 12, then falls back to group 1 followed by a literal
-    // `2`, and stays literal when neither exists — RegExp's own precedence.
-    const two = Number.parseInt(kind, 10);
-    if (kind.length === 2 && two >= 1 && two <= groups.length) return groups[two - 1] ?? '';
-    const one = Number.parseInt(kind.slice(0, 1), 10);
-    if (one >= 1 && one <= groups.length) {
-      return (groups[one - 1] ?? '') + (kind.length === 2 ? kind.slice(1) : '');
-    }
-    return token;
-  });
-}
-/**
- * Splice every match the engine finds in `text`, so a replacement touches
- * exactly what a search reports. Yields periodically and throws on abort: a
- * partial splice must never be written. Throws TOO_LARGE once the result is
- * known to exceed `limits.maxBytes` UTF-8 bytes.
- */
-export async function replaceMatches(
-  engine: MatchEngine,
-  text: string,
-  replacement: string,
-  options: {
-    /** True only for isRegex: $1, $&, $<name> are expanded. */
-    expand: boolean;
-    signal?: AbortSignal;
-    limits: ReplaceLimits;
-  },
-): Promise<{ content: string; matchCount: number; more: boolean }> {
-  const { expand, signal, limits } = options;
-  let matchCount = 0;
-  let more = false;
-  let updated = '';
-  let cursor = 0;
-  try {
-    for await (const m of engine.matches(text, {
-      ...(signal ? { signal } : {}),
-      path: limits.path,
-    })) {
-      if (matchCount === limits.maxMatches) {
-        more = true;
-        break;
-      }
-      matchCount++;
-      updated +=
-        text.slice(cursor, m.start) +
-        (expand
-          ? expandDollarTokens(replacement, m.text, m.groups, m.start, text, m.named)
-          : replacement);
-      // `updated` only grows, and each UTF-16 unit is at least one UTF-8 byte.
-      if (updated.length > limits.maxBytes) throw outputTooLarge(limits);
-      cursor = m.end;
-    }
-  } catch (error) {
-    // V8 throws RangeError once one expansion overruns its maximum string length.
-    if (error instanceof RangeError) throw outputTooLarge(limits, error);
-    throw error;
-  }
-  return { content: updated + text.slice(cursor), matchCount, more };
-}

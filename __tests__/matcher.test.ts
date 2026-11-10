@@ -2,12 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { isFsError } from '../src/core/errors.ts';
-import {
-  createMatchEngine,
-  planMatch,
-  type ReplaceLimits,
-  replaceMatches,
-} from '../src/core/matcher.ts';
+import { createMatchEngine, planMatch, type ReplaceLimits } from '../src/core/matcher.ts';
+import { viewText } from '../src/core/text-view.ts';
 
 // planMatch is the single Match plan entry (GLOSSARY.md): what a search or a
 // replacement settles about its needle before any text is read — the native
@@ -81,7 +77,7 @@ async function replaceWith(
 ): Promise<{ content: string; matchCount: number; more: boolean }> {
   const engine = createMatchEngine(needle, flags);
   try {
-    return await replaceMatches(engine, text, replacement, {
+    return await engine.replace(viewText(text), replacement, {
       expand: flags.isRegex,
       limits: replaceLimits,
     });
@@ -167,7 +163,7 @@ describe('replaceMatches', () => {
 
   it('MTCH-005: dispose is idempotent', async () => {
     const engine = createMatchEngine('a', regex);
-    await replaceMatches(engine, 'a', 'b', { expand: true, limits: limits() });
+    await engine.replace(viewText('a'), 'b', { expand: true, limits: limits() });
     engine.dispose();
     engine.dispose();
   });

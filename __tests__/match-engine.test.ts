@@ -3,13 +3,9 @@ import { describe, it } from 'node:test';
 
 import { RE2 } from '@adguard/re2-wasm';
 
-import { ErrorCode } from '../src/core/errors.ts';
-import {
-  createLfEngine,
-  createMatchEngine,
-  replaceMatches,
-  type TextMatch,
-} from '../src/core/matcher.ts';
+import { ErrorCode, FsError } from '../src/core/errors.ts';
+import { createMatchEngine, type TextMatch } from '../src/core/matcher.ts';
+import { viewText } from '../src/core/text-view.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
 interface Flags {
@@ -207,19 +203,80 @@ describe('MatchEngine', () => {
     assert.equal((await spans('needle', text)).length, 1);
   });
 
-  it('createLfEngine matches a literal typed with CRLF in LF view text, and skips a regex', async () => {
-    const flags = { isRegex: false, caseSensitive: true };
-    assert.equal(createLfEngine('one', flags), undefined);
-    assert.equal(createLfEngine('one\r\ntwo', { ...flags, isRegex: true }), undefined);
-    const lf = createLfEngine('one\r\ntwo', flags);
-    assert.ok(lf);
-    try {
-      const found: number[] = [];
-      for await (const m of lf.matches('one\ntwo\n')) found.push(m.start);
-      assert.deepEqual(found, [0]);
-    } finally {
-      lf.dispose();
+  it('engine.mayMatch accepts raw buffer and applies prefilterBytes internally', () => {
+    const engine = createMatchEngine('needle', { isRegex: false, caseSensitive: true });
+    const withBom = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('needle in haystack'),
+    ]);
+    assert.equal(engine.mayMatch(withBom), true);
+    assert.equal(engine.mayMatch(Buffer.from('other text')), false);
+    engine.dispose();
+  });
+
+  it('engine.matches matches literal typed with CRLF in CRLF TextView without caller branching', async () => {
+    const engine = createMatchEngine('one\r\ntwo', { isRegex: false, caseSensitive: true });
+    const view = viewText('one\r\ntwo\r\nthree\r\n');
+    const matches: string[] = [];
+    for await (const m of engine.matches(view)) {
+      matches.push(m.text);
     }
+    assert.deepEqual(matches, ['one\ntwo']);
+    engine.dispose();
+  });
+
+  it('engine.replace adapts replacement CRLF to LF in CRLF view and restores clean CRLF', async () => {
+    const engine = createMatchEngine('old\r\nline', { isRegex: false, caseSensitive: true });
+    const view = viewText('header\r\nold\r\nline\r\nfooter\r\n');
+    const { content, matchCount } = await engine.replace(view, 'new\r\nline');
+    assert.equal(matchCount, 1);
+    assert.equal(content, 'header\nnew\nline\nfooter\n');
+    assert.equal(view.restore(content), 'header\r\nnew\r\nline\r\nfooter\r\n');
+    engine.dispose();
+  });
+
+  it('engine.matches on raw string preserves offsets without CRLF normalization', async () => {
+    const engine = createMatchEngine('b', { isRegex: false, caseSensitive: true });
+    const matches: TextMatch[] = [];
+    for await (const m of engine.matches('a\r\nb')) {
+      matches.push(m);
+    }
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.start, 3);
+    assert.equal(matches[0]?.end, 4);
+    assert.equal(matches[0]?.text, 'b');
+    engine.dispose();
+  });
+
+  it('engine.matches and engine.replace agree on offsets in CRLF file with multiple leading BOM characters', async () => {
+    const engine = createMatchEngine('one\r\ntwo', { isRegex: false, caseSensitive: true });
+    // First U+FEFF is stripped by viewText, leaving the second U+FEFF at index 0 of view.text.
+    const view = viewText('\uFEFF\uFEFFone\r\ntwo\r\n');
+    const matches: TextMatch[] = [];
+    for await (const m of engine.matches(view)) {
+      matches.push(m);
+    }
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.start, 1);
+    assert.equal(matches[0]?.end, 8);
+    assert.equal(matches[0]?.text, 'one\ntwo');
+
+    const { content, matchCount } = await engine.replace(view, 'renamed');
+    assert.equal(matchCount, 1);
+    assert.equal(content, '\uFEFFrenamed\n');
+    assert.equal(view.restore(content), '\uFEFF\uFEFFrenamed\r\n');
+    engine.dispose();
+  });
+
+  it('engine.replace throws outputTooLarge when restored disk text exceeds maxBytes', async () => {
+    const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
+    const view = viewText('aaa\r\n');
+    await assert.rejects(
+      () =>
+        engine.replace(view, 'xxx', { limits: { maxMatches: 10, maxBytes: 5, path: 'test.txt' } }),
+      (err: unknown) => err instanceof FsError && err.code === ErrorCode.TOO_LARGE,
+    );
+    engine.dispose();
   });
 
   it('compile throws for an invalid regex before any text is read, and not for a literal', () => {
@@ -297,7 +354,7 @@ async function rep(
 ): Promise<string> {
   const engine = createMatchEngine(needle, { isRegex: false, caseSensitive: true, ...flags });
   try {
-    const done = await replaceMatches(engine, text, replacement, {
+    const done = await engine.replace(viewText(text), replacement, {
       expand: Boolean(flags.isRegex),
       limits: LIMITS,
     });
@@ -346,7 +403,7 @@ describe('replaceMatches', () => {
   it('stops at maxMatches and says more', async () => {
     const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
     try {
-      const done = await replaceMatches(engine, 'aaa', 'x', {
+      const done = await engine.replace(viewText('aaa'), 'x', {
         expand: false,
         limits: { ...LIMITS, maxMatches: 1 },
       });
@@ -360,7 +417,10 @@ describe('replaceMatches', () => {
     const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
     try {
       await assert.rejects(
-        replaceMatches(engine, 'aa', 'xxxx', { expand: false, limits: { ...LIMITS, maxBytes: 4 } }),
+        engine.replace(viewText('aa'), 'xxxx', {
+          expand: false,
+          limits: { ...LIMITS, maxBytes: 4 },
+        }),
         fsErrorMatcher(ErrorCode.TOO_LARGE),
       );
     } finally {
@@ -393,7 +453,7 @@ describe('a search previews its replacement', () => {
           starts.add(c.text.slice(0, m.start).split('\n').length);
         }
         assert.deepEqual([...starts], c.lines);
-        const done = await replaceMatches(engine, c.text, '#', {
+        const done = await engine.replace(viewText(c.text), '#', {
           expand: Boolean(c.flags.isRegex),
           limits: LIMITS,
         });

@@ -106,3 +106,31 @@ view under the Rewrite; search reads through the view; the one engine.
 - How the engine decides that a pattern cannot cross a line is not settled
   here. It must be conservative: when unsure, the pattern is treated as one
   that can.
+
+## Addendum: Deepening of MatchEngine (2026-11-10)
+
+Following the initial implementation of the Text view and MatchEngine,
+`MatchEngine` was deepened to directly accept `TextView` alongside `string`,
+internalizing several responsibilities previously scattered across callers:
+
+1. **Raw byte prefiltering (`engine.mayMatch(bytes: Buffer): boolean`)**:
+   Prefiltering logic was unified inside the engine. The engine determines
+   whether raw bytes need prefiltering, handles BOM offset adjustment,
+   CR-safety checks (avoiding false negative skips on CRLF files), and runs
+   Boyer-Moore-Horspool literal byte prefiltering before any text is decoded or
+   opened as a view.
+2. **Internalized CRLF literal variant switching**:
+   Callers no longer assemble or dispose secondary `lf` engine instances for
+   literal needles containing `\r\n`. When `matches(view)` or `replace(view)`
+   encounters an all-CRLF file (`view.crlf === true`), `MatchEngine`
+   automatically delegates to an internal lazily-instantiated LF-normalized
+   variant.
+3. **Internalized replacement execution and bounds checking**:
+   `engine.replace(view, replacement, options)` directly executes splicing and
+   expansion over the `TextView`, validating UTF-8 output byte limits
+   (`outputTooLarge`) before returning.
+4. **Caller simplification**:
+   Both `search_text` and `replace_text` interact through a clean, uniform
+   surface: `engine.mayMatch(bytes)` to pre-screen raw files,
+   `engine.matches(view, onMatch)` to scan hits, and
+   `engine.replace(view, replacement, options)` to perform atomic rewrites.
