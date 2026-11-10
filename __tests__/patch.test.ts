@@ -165,6 +165,20 @@ describe('patch body', () => {
     assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
   });
 
+  it("a diff's own leading U+FEFF is dropped for a file without a mark", async () => {
+    const f = join(root, 'patch_marked_diff.txt');
+    await writeFile(f, 'a\nb\n');
+    await patch({ path: f, diff: '﻿--- a\n+++ a\n@@ -1,2 +1,2 @@\n-a\n+z\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), 'z\nb\n');
+  });
+
+  it("a diff's own U+FEFF and a raw-copied line 1 mark are both dropped", async () => {
+    const f = join(root, 'patch_marked_diff_bom_file.txt');
+    await writeFile(f, '﻿a\nb\n');
+    await patch({ path: f, diff: '﻿--- a\n+++ a\n@@ -1,2 +1,2 @@\n-﻿a\n+﻿z\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '﻿z\nb\n');
+  });
+
   it('a raw-copied first context line loses only the BOM, not a second U+FEFF', async () => {
     const f = join(root, 'patch_bom_twice.txt');
     await writeFile(f, '\uFEFF\uFEFFa\nb\n');
