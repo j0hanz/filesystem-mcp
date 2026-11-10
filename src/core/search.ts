@@ -1,7 +1,6 @@
 import { ErrorCode, FsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
-  createLfEngine,
   createMatchEngine,
   isRe2Abort,
   type MatchEngine,
@@ -12,7 +11,7 @@ import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
 import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
 import { readText, scan, ScanSkip, skipOf } from './scan.ts';
-import { prefilterBytes, viewText } from './text-view.ts';
+import { viewText } from './text-view.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
 /**
@@ -114,8 +113,6 @@ interface ScanContext {
   signal: AbortSignal | undefined;
   maxResults: number;
   engine: MatchEngine;
-  /** The LF form of a literal typed with CRLF, for an all-CRLF file's view. */
-  lf: MatchEngine | undefined;
   context: number;
   /** A file the client named: an overlong line refuses the call instead of skipping. */
   named: boolean;
@@ -152,13 +149,10 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
     return new ScanSkip({ kind: 'binary', utf16: false });
   }
 
-  // A CR in the bytes (a view drops it) can hide a match only from a needle holding a line break.
-  const probe = prefilterBytes(buffer, scanCtx.engine.lineBreakFree);
-  if (probe !== undefined && !scanCtx.engine.mayMatch(probe)) return { matches: [] };
+  if (!scanCtx.engine.mayMatch(buffer)) return { matches: [] };
   // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
   const view = viewText(buffer.toString('utf-8'));
   const content = view.text;
-  const engine = view.crlf && scanCtx.lf ? scanCtx.lf : scanCtx.engine;
 
   const matches: SearchResult[] = [];
   let lines: string[] | undefined;
@@ -170,7 +164,7 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   let hit: SearchResult | undefined;
   let cut = false;
   try {
-    for await (const match of engine.matches(content, {
+    for await (const match of scanCtx.engine.matches(view, {
       ...(scanCtx.signal ? { signal: scanCtx.signal } : {}),
       path: entryPath,
       maxPerLine: MAX_MATCHES_PER_LINE,
@@ -233,7 +227,6 @@ export async function searchContent(
     caseSensitive: Boolean(options.caseSensitive),
   };
   const engine = createMatchEngine(pattern, flags);
-  const lf = createLfEngine(pattern, flags);
   try {
     // An invalid regex fails the request before any file is read.
     engine.compile();
@@ -249,7 +242,6 @@ export async function searchContent(
       signal: options.signal,
       maxResults,
       engine,
-      lf,
       context,
       named: scope.explicitFile !== undefined,
     };
@@ -309,6 +301,5 @@ export async function searchContent(
     };
   } finally {
     engine.dispose();
-    lf?.dispose();
   }
 }
