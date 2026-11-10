@@ -250,7 +250,7 @@ describe('search_text body', () => {
   });
 
   it('ignores a UTF-8 BOM when matching and counting columns on line 1', async () => {
-    await writeTestFile(root, 'bom/o.cs', '﻿using A;\nusing B;\n');
+    await writeTestFile(root, 'bom/o.cs', '\uFEFFusing A;\nusing B;\n');
 
     const regex = await search({
       path: join(root, 'bom'),
@@ -271,7 +271,7 @@ describe('search_text body', () => {
       literal.structured.matches[0]?.column,
       literal.structured.matches[1]?.column,
     );
-    assert.ok(!literal.structured.matches[0]?.content.startsWith('﻿'));
+    assert.ok(!literal.structured.matches[0]?.content.startsWith('\uFEFF'));
   });
 
   it('replays a stable snapshot after the file is removed', async () => {
@@ -471,6 +471,23 @@ describe('search_text body', () => {
     assert.deepStrictEqual(await run(String.raw`\Aimport`, true), ['lf.txt:2:0']);
     assert.deepStrictEqual(await run('(?-m)^import', true), ['lf.txt:2:0']);
     assert.deepStrictEqual(await run('(?i)IMPORT', true), ['lf.txt:2:0', 'lf.txt:3:2']);
+  });
+
+  it('a BOM CRLF file reports line 1 at column 0 without the mark or a CR', async () => {
+    const file = await writeTestFile(root, 'bom-crlf.txt', '\uFEFFfoo\r\nbar\r\n');
+    const { structured } = await search({ path: file, searchPattern: '^foo$', isRegex: true });
+    assert.equal(structured.matches.length, 1);
+    assert.equal(structured.matches[0]?.line, 1);
+    assert.equal(structured.matches[0]?.column, 0);
+    assert.equal(structured.matches[0]?.content, 'foo');
+  });
+
+  it('a mixed-ending file still matches $ before CRLF', async () => {
+    const file = await writeTestFile(root, 'mixed.txt', 'foo\r\nbar\n');
+    const { structured } = await search({ path: file, searchPattern: 'foo$', isRegex: true });
+    assert.equal(structured.matches.length, 1);
+    assert.equal(structured.matches[0]?.line, 1);
+    assert.equal(structured.matches[0]?.content, 'foo');
   });
 
   it('reports a UTF-16 column after an astral character', async () => {
