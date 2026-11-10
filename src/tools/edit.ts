@@ -17,7 +17,8 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { MIB, toCrlf, usesCrlf } from '../core/util.ts';
+import type { TextView } from '../core/text-view.ts';
+import { MIB } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -533,6 +534,7 @@ function ambiguousEditError(
 
 async function applyEdits(
   content: string,
+  view: TextView,
   edits: z.infer<typeof EditSpecSchema>[],
   ignoreWhitespace: boolean,
   signal: AbortSignal | undefined,
@@ -541,7 +543,6 @@ async function applyEdits(
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
-  const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
     if (await tick()) signal?.throwIfAborted();
@@ -553,8 +554,8 @@ async function applyEdits(
         `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
       );
     }
-    const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
-    const newText = crlf ? toCrlf(edit.newText) : edit.newText;
+    const oldText = view.accept(edit.oldText);
+    const newText = view.accept(edit.newText);
     const found = await findEditMatches(newContent, oldText, ignoreWhitespace, tick, signal);
 
     // A second match is an error rather than a pick: splicing the first would
@@ -599,8 +600,8 @@ async function editOnce(
       transport: ctx.transport,
       tool: 'edit',
     },
-    async (content) => {
-      const result = await applyEdits(content, edits, options.ignoreWhitespace, ctx.signal);
+    async (content, view) => {
+      const result = await applyEdits(content, view, edits, options.ignoreWhitespace, ctx.signal);
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
         throw new FsError(
           ErrorCode.INVALID_INPUT,

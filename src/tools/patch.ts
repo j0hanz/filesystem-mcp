@@ -11,6 +11,7 @@ import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { clipLine } from '../core/search.ts';
+import type { TextView } from '../core/text-view.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -88,8 +89,8 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       transport: ctx.transport,
       tool: 'patch',
     },
-    (content) => {
-      const result = patchContent(args, content);
+    (content, view: TextView) => {
+      const result = patchContent({ ...args, diff: view.accept(args.diff) }, content, view.bom);
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };
     },
@@ -215,6 +216,7 @@ function mismatchDetail(
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
   content: string,
+  bom = false,
 ): { patched: string; linesAdded: number; linesRemoved: number } {
   // patch is single-file only: a multi-file unified diff (parsePatch length > 1)
   // is rejected. Multi-file application needs per-file PathGuard-resolved loaders
@@ -234,6 +236,17 @@ function patchContent(
       'patch accepts a single-file unified diff with at least one hunk; received an empty patch',
       args.path,
     );
+  }
+  const firstHunk = parsedPatch.hunks[0];
+  if (bom && firstHunk && firstHunk.oldStart <= 1) {
+    // The view hides the file's BOM; a diff copied from the raw file carries it on line 1.
+    const strip = (marks: string): void => {
+      const i = firstHunk.lines.findIndex((l) => l !== '' && marks.includes(l.charAt(0)));
+      const line = firstHunk.lines[i];
+      if (line?.charAt(1) === '\uFEFF') firstHunk.lines[i] = line.charAt(0) + line.slice(2);
+    };
+    strip(' -');
+    strip(' +');
   }
   const fileLines = countLines(content);
   const diffLines = parsedPatch.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);

@@ -137,6 +137,34 @@ describe('patch body', () => {
     });
   });
 
+  it('a CRLF diff applies to an all-CRLF file', async () => {
+    const f = join(root, 'patch_crlf_ok.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    await patch({ path: f, diff: '--- a\r\n+++ a\r\n@@ -1,2 +1,2 @@\r\n a\r\n-b\r\n+c\r\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\r\nc\r\n');
+  });
+
+  it('an LF diff applies to an all-CRLF file', async () => {
+    const f = join(root, 'patch_lf_on_crlf.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\r\nc\r\n');
+  });
+
+  it('a diff whose first line carries the BOM applies to a BOM file', async () => {
+    const f = join(root, 'patch_bom_in_diff.txt');
+    await writeFile(f, '\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-\uFEFFa\n+\uFEFFz\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
+  });
+
+  it('a diff without the BOM applies to a BOM file', async () => {
+    const f = join(root, 'patch_bom_not_in_diff.txt');
+    await writeFile(f, '\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-a\n+z\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');
