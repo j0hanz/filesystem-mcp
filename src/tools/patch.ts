@@ -91,7 +91,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     },
     (content, view: TextView) => {
       // A leading U+FEFF is the diff's own mark, whatever the file holds.
-      const diff = view.accept(args.diff.startsWith('﻿') ? args.diff.slice(1) : args.diff);
+      const diff = view.accept(args.diff.startsWith('\uFEFF') ? args.diff.slice(1) : args.diff);
       const result = patchContent({ ...args, diff }, content, (text) => view.unmark(text));
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };
