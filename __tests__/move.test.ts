@@ -819,7 +819,7 @@ describe('move body', () => {
             { moves: [{ source: src, destination: dst }], copy },
             { confirm: () => ({ action: 'decline' }) },
           ),
-          { code: 'CANCELLED', message: /overwrite of .* was declined by the user/ },
+          { code: 'CANCELLED', message: /approval for .* was declined by the user/ },
         );
         assert.strictEqual(await readFile(src, 'utf-8'), 'new source');
         assert.strictEqual(await readFile(dst, 'utf-8'), 'existing dst');

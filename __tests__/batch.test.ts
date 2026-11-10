@@ -3,7 +3,15 @@ import { describe, it } from 'node:test';
 
 import { ErrorCode, Problem } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
-import { type BatchSlot, executeBatchSlots, runOverPaths, summarize } from '../src/tools/batch.ts';
+import {
+  type BatchSlot,
+  cancelMessage,
+  executeBatchSlots,
+  type PlanFailure,
+  planIntoSlots,
+  runOverPaths,
+  summarize,
+} from '../src/tools/batch.ts';
 import type { ToolCtx } from '../src/tools/define.ts';
 
 describe('executeBatchSlots', () => {
@@ -136,5 +144,68 @@ describe('summarize', () => {
     const summary = summarize(results);
     assert.strictEqual(summary.failed, 2);
     assert.strictEqual(summary.failed, summary.total);
+  });
+});
+
+describe('planIntoSlots', () => {
+  type R = { status: 'plan'; n: number } | PlanFailure;
+  const plan = async (item: string): Promise<R> => {
+    if (item === 'boom') throw new Error('exploded');
+    if (item === 'bad') {
+      return { status: 'fail', failure: { path: item, error: Problem.invalidInput('no') } };
+    }
+    return { status: 'plan', n: item.length };
+  };
+
+  it('fails only the items whose plan failed or threw, in input order', async () => {
+    const { slots, planned } = await planIntoSlots<string, R, number>(
+      ['a', 'boom', 'bad', 'ccc'],
+      (item) => item,
+      plan,
+      undefined,
+    );
+    assert.strictEqual(slots.length, 4);
+    assert.deepStrictEqual(
+      [slots[0], slots[3]].map((slot) => slot?.status),
+      [undefined, undefined],
+    );
+    assert.deepStrictEqual(
+      [slots[1], slots[2]].map((slot) => slot?.status === 'failure' && slot.path),
+      ['boom', 'bad'],
+    );
+    assert.match(slots[1]?.status === 'failure' ? slots[1].error.message : '', /exploded/);
+    assert.deepStrictEqual(planned.map(({ index, value }) => [index, value.n]).sort(), [
+      [0, 1],
+      [3, 3],
+    ]);
+  });
+
+  it('rejects when the signal is already aborted', async () => {
+    await assert.rejects(
+      planIntoSlots<string, R, number>(['a'], (item) => item, plan, AbortSignal.abort()),
+    );
+  });
+});
+
+describe('cancelMessage', () => {
+  it('names the op and the path for a replaced entry', () => {
+    assert.strictEqual(
+      cancelMessage('delete', '/r/dir', 'changed'),
+      'Delete cancelled: "/r/dir" was replaced again while the prompt was open.',
+    );
+  });
+
+  it('names the op and the path for a refusal', () => {
+    for (const [op, verb] of [
+      ['create', 'create'],
+      ['delete', 'Delete'],
+      ['move', 'Move'],
+      ['copy', 'Copy'],
+    ] as const) {
+      assert.strictEqual(
+        cancelMessage(op, '/r/x', { refused: 'declined by the user' }),
+        `${verb} cancelled: approval for "/r/x" was declined by the user`,
+      );
+    }
   });
 });

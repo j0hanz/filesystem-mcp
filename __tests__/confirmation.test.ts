@@ -90,6 +90,46 @@ describe('Confirmation', () => {
     assert.deepStrictEqual(Object.keys(result.inputRequests ?? {}), ['confirm_0', 'confirm_1']);
   });
 
+  it('duplicate-path: asks one question', async () => {
+    const result = await run(ctx(undefined), [item('a'), item('a')]);
+    const state = await asRound(result);
+    assert.deepStrictEqual(state.paths, ['a']);
+    assert.ok(isInputRequiredResult(result));
+    assert.deepStrictEqual(Object.keys(result.inputRequests ?? {}), ['confirm_0']);
+  });
+
+  it('duplicate-path: a required item wins over an earlier non-required one', async () => {
+    const state = await asRound(await run(ctx(undefined), [item('a', 1, false), item('a', 2)]));
+    assert.deepStrictEqual(state.identities, [{ path: 'a', ...id(2) }]);
+  });
+
+  it('duplicate-path: one answer covers both items on the retry', async () => {
+    const done = asConfirmed(
+      await run(ctx(sealed({ a: 1 }), { confirm_0: accept('skip') }), [item('a'), item('a')]),
+    );
+    assert.strictEqual(done.verdict('a'), 'skipped');
+  });
+
+  it('duplicate-path: items that disagree on identity are asked about again', async () => {
+    const state = await asRound(
+      await run(ctx(sealed({ a: 1 }), { confirm_0: accept('overwrite') }), [
+        item('a', 1),
+        item('a', 2),
+      ]),
+    );
+    assert.strictEqual(state.reprompted, true);
+  });
+
+  it('duplicate-path: a disagreement after the re-prompt is changed, not approved', async () => {
+    const done = asConfirmed(
+      await run(ctx(sealed({ a: 1 }, { reprompted: true }), { confirm_0: accept('overwrite') }), [
+        item('a', 1),
+        item('a', 2),
+      ]),
+    );
+    assert.strictEqual(done.verdict('a'), 'changed');
+  });
+
   it('accepted: proceeds', async () => {
     const done = asConfirmed(
       await run(ctx(sealed({ a: 1 }), { confirm_0: accept('overwrite') }), [item('a')]),

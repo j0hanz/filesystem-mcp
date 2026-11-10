@@ -5,7 +5,6 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.ts';
 import { confirm } from '../core/confirmation.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
@@ -14,8 +13,15 @@ import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
-import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, type BatchSlot, executeBatchSlots, isTotalFailure } from './batch.ts';
+import { getMaxTextFileSize } from '../core/util.ts';
+import {
+  type BatchResult,
+  type BatchSlot,
+  cancelMessage,
+  executeBatchSlots,
+  isTotalFailure,
+  planIntoSlots,
+} from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -280,50 +286,38 @@ async function handleCreate(
   const files = args.files ?? [];
   const dirs = args.directories ?? [];
 
-  const planned = await processInParallel(
+  const { slots, planned } = await planIntoSlots<
+    CreateFileItem,
+    CreateFilePlanResult,
+    CreateSlotValue
+  >(
     files,
+    (file) => file.path,
     (file) => planFile(file, ctx),
-    PARALLEL_CONCURRENCY,
     ctx.signal,
   );
-
-  const slots = new Array<BatchSlot<CreateSlotValue>>(files.length);
-  const plans = new Map<number, CreatePlan>();
-  for (const { index, value } of planned.results) {
-    if (value.status === 'fail') {
-      slots[index] = { status: 'failure', path: value.failure.path, error: value.failure.error };
-    } else {
-      plans.set(index, value.plan);
-    }
-  }
-  for (const { index, error } of planned.errors) {
-    const path = files[index]?.path ?? '(unknown)';
-    slots[index] = {
-      status: 'failure',
-      path,
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
-    };
-  }
+  const plans = new Map(planned.map(({ index, value }) => [index, value.plan]));
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
   // append never destroys, and overwrite: true is that word given up front,
-  // so neither asks. Two spellings of one file ask one question: the answers
-  // are keyed by path, so a second prompt would be answered or skipped
-  // without ever being read.
-  const confirmItems = new Map<
-    string,
-    { path: string; identity: NonNullable<CreatePlan['identity']>; required: true; message: string }
-  >();
-  for (const plan of plans.values()) {
-    if (plan.kind !== 'pending' || plan.identity === undefined) continue;
-    confirmItems.set(plan.validPath, {
-      path: plan.validPath,
-      identity: plan.identity,
-      required: true,
-      message: `"${plan.validPath}" already exists. Overwrite it?`,
-    });
-  }
-  const confirmed = await confirm(ctx, 'create', 'overwrite', [...confirmItems.values()]);
+  // so neither asks.
+  const confirmed = await confirm(
+    ctx,
+    'create',
+    'overwrite',
+    [...plans.values()].flatMap((plan) =>
+      plan.kind !== 'pending' || plan.identity === undefined
+        ? []
+        : [
+            {
+              path: plan.validPath,
+              identity: plan.identity,
+              required: true,
+              message: `"${plan.validPath}" already exists. Overwrite it?`,
+            },
+          ],
+    ),
+  );
   if (isInputRequiredResult(confirmed)) return confirmed;
 
   // Phase 2 (mutation): execute every planned write.
@@ -340,9 +334,7 @@ async function handleCreate(
           if (verdict !== 'proceed') {
             throw new FsError(
               ErrorCode.CANCELLED,
-              verdict === 'changed'
-                ? `create cancelled: "${plan.inputPath}" was replaced again while the prompt was open.`
-                : `create cancelled: overwrite of "${plan.inputPath}" was ${verdict.refused}`,
+              cancelMessage('create', plan.inputPath, verdict),
               plan.inputPath,
             );
           }

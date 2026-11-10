@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **create**, **delete**, **move**: a refused or dismissed confirmation now reports `<Tool> cancelled: approval for "<path>" was declined by the user` in every tool; before, each tool worded it differently and `delete` did not name the path.
 - **Undo**: a copy whose files total more than eight times the undo budget (256 MiB by default) no longer gets an undo id; before, every copied byte was read a second time to hash it. The copy itself is unaffected.
 - **search_text**: a regex that can match a line break (such as `a\s+b`) now matches across lines, and the match is reported on the line where it starts.
 - **search_text**: a regex that can match across lines skips a walked file over 4 MiB (counted in `skippedTooLarge`) and refuses a named one. Patterns that stay on one line still search files of any size.
