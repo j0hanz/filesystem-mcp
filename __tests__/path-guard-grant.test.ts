@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { realpathSync } from 'node:fs';
+import type { PathLike } from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -445,6 +448,48 @@ describe('Write/Delete PathGuard', () => {
       );
     } finally {
       await cleanupTestRoot(outsideDir);
+    }
+  });
+
+  it('validatePathForDelete refuses an existing entry whose realpath fails', async (t) => {
+    const target = await writeTestFile(root, 'stuck.txt', 'x');
+    // Reject for the target only: the guard also resolves the parent
+    // directory, which must keep working. The guard spells the request with a
+    // lowercased drive letter (normalizePath), the test root's realpath with
+    // an uppercase one — hence isSamePath, never raw equality.
+    const original = fsPromises.realpath.bind(fsPromises);
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) =>
+      isSamePath(String(path), target)
+        ? Promise.reject(Object.assign(new Error('EACCES'), { code: 'EACCES' }))
+        : original(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        guard.validatePathForDelete(target),
+        fsErrorMatcher(ErrorCode.PERMISSION_DENIED, 'Cannot access path'),
+        'should refuse an existing entry that will not resolve',
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('validatePathForDelete treats an entry that vanished before realpath as missing', async (t) => {
+    const target = await writeTestFile(root, 'stuck.txt', 'x');
+    const original = fsPromises.realpath.bind(fsPromises);
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) =>
+      isSamePath(String(path), target)
+        ? Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+        : original(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      await assert.doesNotReject(guard.validatePathForDelete(target));
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
     }
   });
 });

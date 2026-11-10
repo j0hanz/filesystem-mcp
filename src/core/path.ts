@@ -1506,13 +1506,24 @@ export class PathGuard {
     }
 
     // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
-    // and block sensitive files. A probe failure (ENOENT and friends) falls
-    // back to the parent check, which is sufficient for a path that does not
-    // exist.
+    // and block sensitive files. An entry that vanished since the lstat is a
+    // missing target; any other failure is refused, because the checks below
+    // cannot run on an entry that will not resolve.
     let realTarget: string;
     try {
       realTarget = normalizePath(await realpath(target));
-    } catch {
+    } catch (error) {
+      if (!isNotFoundErrno(error)) {
+        throw new FsError(
+          classifyCauseChain(error).code,
+          'Cannot access path',
+          requestedPath,
+          error instanceof Error ? error : undefined,
+        );
+      }
+      if (!opts?.allowReadOnly) {
+        this.assertWritable(join(normalizedRealParent, basename(target)));
+      }
       return target;
     }
     if (!isPathWithinDirectories(realTarget, allowedDirs)) {
