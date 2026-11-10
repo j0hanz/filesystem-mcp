@@ -509,6 +509,14 @@ describe('search_text body', () => {
     assert.equal(structured.matches[0]?.content, 'foo');
   });
 
+  it('an inline flag keeps $ matching before CRLF in a mixed-ending file', async () => {
+    const file = await writeTestFile(root, 'mixed-flag.txt', 'foo\r\nbar\n');
+    const { structured } = await search({ path: file, searchPattern: '(?i)foo$', isRegex: true });
+    assert.equal(structured.matches.length, 1);
+    assert.equal(structured.matches[0]?.line, 1);
+    assert.equal(structured.matches[0]?.column, 0);
+  });
+
   it('reports a UTF-16 column after an astral character', async () => {
     const file = await writeTestFile(root, 'emoji.txt', '😀 BETA\n');
     const { structured } = await search({ path: file, searchPattern: 'BETA' });

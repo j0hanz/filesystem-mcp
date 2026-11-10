@@ -118,6 +118,13 @@ describe('MatchEngine', () => {
     assert.deepEqual(await spans('foo$', 'foo\r\nbar\n', re), [[0, 3]]);
   });
 
+  it('a pattern that can cross a line matches $ before a CRLF a mixed-ending file kept', async () => {
+    assert.deepEqual(await spans('(?i)foo$', 'foo\r\nbar\n', re), [[0, 3]]);
+    // Offsets stay on the text as written: a span over the CRLF holds its CR.
+    assert.deepEqual(await spans('(?i)o\\nb', 'foo\r\nbar\n', re), [[2, 6]]);
+    assert.deepEqual(await spans('(?i)r$', 'foo\r\nbar\n', re), [[7, 8]]);
+  });
+
   it('a regex that can cross a line matches across it', async () => {
     assert.deepEqual(await spans('a\\s+b', 'a\nb\n', re), [[0, 3]]);
   });

@@ -473,8 +473,29 @@ export function createMatchEngine(
           path,
         );
       }
+      // RE2's $ cannot see past a CR, so a regex sees a mixed-ending text's CRLFs as LF,
+      // as line mode drops a line's CR. `lfs` holds each such LF's offset in `seen`.
+      const lfs: number[] = [];
+      let seen = text;
+      if (flags.isRegex && text.includes('\r\n')) {
+        for (let at = text.indexOf('\r\n'); at !== -1; at = text.indexOf('\r\n', at + 2)) {
+          lfs.push(at - lfs.length);
+        }
+        seen = text.replaceAll('\r\n', '\n');
+      }
+      /** An offset in `seen` as an offset in `text`: each dropped CR before it adds one. */
+      const back = (at: number): number => {
+        let lo = 0;
+        let hi = lfs.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if ((lfs[mid] ?? at) < at) lo = mid + 1;
+          else hi = mid;
+        }
+        return at + lo;
+      };
       // A final newline does not start a line, so nothing matches after it.
-      const end = text === '' || text.endsWith('\n') ? text.length : -1;
+      const end = seen === '' || seen.endsWith('\n') ? seen.length : -1;
       // The LF ending the line the current match starts on, the matches started there,
       // and, once they reach maxPerLine, the next line's start for RE2 to resume from.
       let lineEnd = -1;
@@ -482,15 +503,21 @@ export function createMatchEngine(
       let skipTo: number | undefined;
       yield* checked(
         (function* () {
-          for (const match of regexMatches(text, 0, () => skipTo)) {
+          for (const match of regexMatches(seen, 0, () => skipTo)) {
             if (match.start === end) return;
             if (match.start > lineEnd) {
-              lineEnd = text.indexOf('\n', match.start);
-              if (lineEnd === -1) lineEnd = text.length;
+              lineEnd = seen.indexOf('\n', match.start);
+              if (lineEnd === -1) lineEnd = seen.length;
               onLine = 0;
             }
             skipTo = ++onLine >= maxPerLine ? lineEnd + 1 : undefined;
-            yield match;
+            if (lfs.length === 0) {
+              yield match;
+              continue;
+            }
+            const start = back(match.start);
+            const stop = back(match.end);
+            yield { ...match, start, end: stop, text: text.slice(start, stop) };
           }
         })(),
       );
