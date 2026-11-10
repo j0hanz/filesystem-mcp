@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
-import { createMatchEngine, type TextMatch } from '../src/core/matcher.ts';
+import { createMatchEngine, replaceMatches, type TextMatch } from '../src/core/matcher.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
 interface Flags {
@@ -139,6 +139,13 @@ describe('MatchEngine', () => {
     }
   });
 
+  it('wholeWord keeps ^ at the start of each line', async () => {
+    assert.deepEqual(await spans('^foo', 'foo bar\nfoo', { ...re, wholeWord: true }), [
+      [0, 3],
+      [8, 11],
+    ]);
+  });
+
   it('wholeWord skips a match inside a word', async () => {
     assert.deepEqual(await spans('cat', 'cat concat\ncat', { wholeWord: true }), [
       [0, 3],
@@ -182,4 +189,99 @@ describe('MatchEngine', () => {
       engine.dispose();
     }
   });
+});
+
+const LIMITS = { maxMatches: 1000, maxBytes: 1 << 20, path: 'p' };
+
+async function rep(
+  needle: string,
+  text: string,
+  replacement: string,
+  flags: Flags = {},
+): Promise<string> {
+  const engine = createMatchEngine(needle, { isRegex: false, caseSensitive: true, ...flags });
+  try {
+    const done = await replaceMatches(engine, text, replacement, {
+      expand: Boolean(flags.isRegex),
+      limits: LIMITS,
+    });
+    return done.content;
+  } finally {
+    engine.dispose();
+  }
+}
+
+describe('replaceMatches', () => {
+  it('^ follows the lines a search reports', async () => {
+    assert.equal(await rep('^', 'a\nb\n', 'x', re), 'xa\nxb\n');
+    assert.equal(await rep('$', 'a\nb\n', 'x', re), 'ax\nbx\n');
+    assert.equal(await rep('^', '', 'x', re), '');
+  });
+
+  it('expands $1 and $& for a regex only', async () => {
+    assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
+    assert.equal(await rep('ab', 'ab', '$&', {}), '$&');
+  });
+
+  it("$` and $' see the whole text, not the line", async () => {
+    assert.equal(await rep('b', 'a\nb\nc', "[$`|$']", re), 'a\n[a\n|\nc]\nc');
+  });
+
+  it('stops at maxMatches and says more', async () => {
+    const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
+    try {
+      const done = await replaceMatches(engine, 'aaa', 'x', {
+        expand: false,
+        limits: { ...LIMITS, maxMatches: 1 },
+      });
+      assert.deepEqual(done, { content: 'xaa', matchCount: 1, more: true });
+    } finally {
+      engine.dispose();
+    }
+  });
+
+  it('refuses a result past maxBytes', async () => {
+    const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
+    try {
+      await assert.rejects(
+        replaceMatches(engine, 'aa', 'xxxx', { expand: false, limits: { ...LIMITS, maxBytes: 4 } }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE),
+      );
+    } finally {
+      engine.dispose();
+    }
+  });
+});
+
+describe('a search previews its replacement', () => {
+  const cases: { needle: string; flags: Flags; text: string; lines: number[]; count: number }[] = [
+    { needle: 'foo$', flags: re, text: 'foo\nfoo bar\nfoo\n', lines: [1, 3], count: 2 },
+    { needle: '^', flags: re, text: 'a\nb\n', lines: [1, 2], count: 2 },
+    { needle: 'a\\s+b', flags: re, text: 'a\nb\na b\n', lines: [1, 3], count: 2 },
+    { needle: 'K', flags: { caseSensitive: false }, text: 'k\nK\nK\n', lines: [1, 2, 3], count: 3 },
+    { needle: 'a\nb', flags: {}, text: 'a\nb\na\nb', lines: [1, 3], count: 2 },
+  ];
+  for (const c of cases) {
+    it(`${JSON.stringify(c.needle)} in ${JSON.stringify(c.text)}`, async () => {
+      const engine = createMatchEngine(c.needle, {
+        isRegex: false,
+        caseSensitive: true,
+        ...c.flags,
+      });
+      try {
+        const starts = new Set<number>();
+        for await (const m of engine.matches(c.text)) {
+          starts.add(c.text.slice(0, m.start).split('\n').length);
+        }
+        assert.deepEqual([...starts], c.lines);
+        const done = await replaceMatches(engine, c.text, '#', {
+          expand: Boolean(c.flags.isRegex),
+          limits: LIMITS,
+        });
+        assert.equal(done.matchCount, c.count);
+      } finally {
+        engine.dispose();
+      }
+    });
+  }
 });

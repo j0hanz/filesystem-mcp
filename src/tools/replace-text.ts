@@ -22,10 +22,11 @@ import {
 } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import {
-  createReplacementMatcher,
+  createMatchEngine,
+  type MatchEngine,
   outputTooLarge,
   type ReplaceLimits,
-  type ReplacementMatcher,
+  replaceMatches,
 } from '../core/matcher.ts';
 import { IS_WINDOWS } from '../core/path-utils.ts';
 import type { ResultPaths } from '../core/path.ts';
@@ -182,7 +183,9 @@ type SearchAndReplaceArgs = z.infer<typeof SearchAndReplaceInputSchema>;
 interface ReplaceContext {
   dryRun: boolean;
   replacement: string;
-  matcher: ReplacementMatcher;
+  engine: MatchEngine;
+  /** isRegex: the replacement's $1, $& and $<name> are expanded. */
+  expand: boolean;
   signal: AbortSignal | undefined;
   fs: GuardedFileSystem;
   transport: 'stdio' | 'http' | undefined;
@@ -193,7 +196,7 @@ interface ReplaceContext {
   /** A file had a match left unreplaced because the cap ran out. */
   cut: boolean;
   /** Literal search typed with CRLF, as an all-CRLF file's view shows it (LF). Present only when that changes the text. */
-  lf?: { matcher: ReplacementMatcher; replacement: string };
+  lf?: { engine: MatchEngine; replacement: string };
   /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
   linked: Set<string>;
 }
@@ -211,7 +214,7 @@ async function processEntry(
   ctx: ReplaceContext,
   onChanged: (done: Rewritten<number>) => Promise<Patch>,
 ): Promise<EntryOutcome | ScanSkip | undefined> {
-  const { dryRun, signal, matcher, replacement } = ctx;
+  const { dryRun, signal, engine, replacement, expand } = ctx;
   // Discovery/read failures on a walked file are counted as inaccessible; a
   // failed write is the caller's edit not landing, so it is always reported.
   const write = { started: false };
@@ -231,19 +234,19 @@ async function processEntry(
         }
         // The prefilter tests raw bytes, so it runs only where bytes and view text agree.
         const probe = prefilterBytes(bytes);
-        if (probe !== undefined && !matcher.testBuffer(probe)) return undefined;
+        if (probe !== undefined && !engine.mayMatch(probe)) return undefined;
         const view = open();
-        const pair = view.crlf && ctx.lf ? ctx.lf : { matcher, replacement };
+        const pair = view.crlf && ctx.lf ? ctx.lf : { engine, replacement };
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount, more } = await pair.matcher.replace(
+        const { content, matchCount, more } = await replaceMatches(
+          pair.engine,
           view.text,
           pair.replacement,
-          signal,
-          limits,
+          { expand, ...(signal ? { signal } : {}), limits },
         );
         // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
         if (matchCount === 0) {
@@ -313,21 +316,15 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 /**
  * Literal text only: a regex and its $-template are taken as written. An all-CRLF
  * file is shown with LF endings, so a literal typed with CRLF is matched as LF.
- * Reuses `matcher` when only the replacement changes.
+ * Reuses `engine` when only the replacement changes.
  */
-function createLfVariant(
-  args: SearchAndReplaceArgs,
-  matcher: ReplacementMatcher,
-): ReplaceContext['lf'] {
+function createLfVariant(args: SearchAndReplaceArgs, engine: MatchEngine): ReplaceContext['lf'] {
   if (args.isRegex) return undefined;
   const pattern = args.searchPattern.replaceAll('\r\n', '\n');
   const replacement = args.replacement.replaceAll('\r\n', '\n');
   if (pattern === args.searchPattern && replacement === args.replacement) return undefined;
   return {
-    matcher:
-      pattern === args.searchPattern
-        ? matcher
-        : createReplacementMatcher({ ...args, searchPattern: pattern }),
+    engine: pattern === args.searchPattern ? engine : createMatchEngine(pattern, args),
     replacement,
   };
 }
@@ -392,15 +389,18 @@ async function handleSearchAndReplace(
   // No signal: a deadline that already fired still yields a timeout result.
   const scope = await resolveScanScope(args.path, ctx.fs, { allowFile: true });
 
-  // The matcher may own a compiled RE2 pattern, whose wasm memory re2-wasm
+  // The engine may own a compiled RE2 pattern, whose wasm memory re2-wasm
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
-  const matcher = createReplacementMatcher(args);
+  const engine = createMatchEngine(args.searchPattern, args);
   let lf: ReplaceContext['lf'];
   try {
-    lf = createLfVariant(args, matcher);
+    // The engine compiles on first use; one empty line compiles it now, so an
+    // invalid regex fails the request even when no file is read.
+    await engine.matches('\n').next();
+    lf = createLfVariant(args, engine);
   } catch (error) {
-    matcher.dispose();
+    engine.dispose();
     throw error;
   }
   // The first changed file in walk order is the one the resource_link points
@@ -425,7 +425,8 @@ async function handleSearchAndReplace(
   const context: ReplaceContext = {
     dryRun: args.dryRun,
     replacement: args.replacement,
-    matcher,
+    engine,
+    expand: args.isRegex,
     signal: ctx.signal,
     fs: ctx.fs,
     transport: ctx.transport,
@@ -483,8 +484,8 @@ async function handleSearchAndReplace(
       },
     );
   } finally {
-    matcher.dispose();
-    if (lf && lf.matcher !== matcher) lf.matcher.dispose();
+    engine.dispose();
+    if (lf && lf.engine !== engine) lf.engine.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 
