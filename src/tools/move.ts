@@ -13,7 +13,7 @@ import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchSlot, executeBatchSlots, failureLines } from './batch.ts';
+import { type BatchSlot, cancelMessage, executeBatchSlots, failureLines } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -91,13 +91,7 @@ function cancelled(
   verdict: Exclude<ReturnType<Confirmed['verdict']>, 'proceed' | 'skipped'>,
 ): FsError {
   const { destination } = plan.request;
-  return new FsError(
-    ErrorCode.CANCELLED,
-    verdict === 'changed'
-      ? `${VERB[op]} cancelled: destination "${destination}" was replaced again while the prompt was open.`
-      : `${VERB[op]} cancelled: overwrite of "${destination}" was ${verdict.refused}`,
-    destination,
-  );
+  return new FsError(ErrorCode.CANCELLED, cancelMessage(op, destination, verdict), destination);
 }
 
 /**

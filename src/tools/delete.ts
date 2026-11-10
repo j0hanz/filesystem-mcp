@@ -25,6 +25,7 @@ import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import {
   type BatchResult,
+  cancelMessage,
   executeBatchSlots,
   failureLines,
   isTotalFailure,
@@ -100,10 +101,7 @@ async function executePlan(
   const verdict = confirmed.verdict(plan.validPath);
   if (verdict === 'skipped') return { skipped: true as const, path: plan.validPath };
   if (verdict !== 'proceed') {
-    const message =
-      verdict === 'changed'
-        ? `Delete cancelled: "${plan.validPath}" was replaced again while the prompt was open.`
-        : `Delete cancelled: confirmation was ${verdict.refused}`;
+    const message = cancelMessage('delete', plan.validPath, verdict);
     return {
       failure: {
         path: plan.validPath,

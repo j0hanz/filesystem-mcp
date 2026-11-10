@@ -5,6 +5,7 @@ import { ErrorCode, Problem } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import {
   type BatchSlot,
+  cancelMessage,
   executeBatchSlots,
   type PlanFailure,
   planIntoSlots,
@@ -186,5 +187,28 @@ describe('planIntoSlots', () => {
     await assert.rejects(
       planIntoSlots<string, R, number>(['a'], (item) => item, plan, AbortSignal.abort()),
     );
+  });
+});
+
+describe('cancelMessage', () => {
+  it('names the op and the path for a replaced entry', () => {
+    assert.strictEqual(
+      cancelMessage('delete', '/r/dir', 'changed'),
+      'Delete cancelled: "/r/dir" was replaced again while the prompt was open.',
+    );
+  });
+
+  it('names the op and the path for a refusal', () => {
+    for (const [op, verb] of [
+      ['create', 'create'],
+      ['delete', 'Delete'],
+      ['move', 'Move'],
+      ['copy', 'Copy'],
+    ] as const) {
+      assert.strictEqual(
+        cancelMessage(op, '/r/x', { refused: 'declined by the user' }),
+        `${verb} cancelled: approval for "/r/x" was declined by the user`,
+      );
+    }
   });
 });

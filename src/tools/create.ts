@@ -17,6 +17,7 @@ import { getMaxTextFileSize } from '../core/util.ts';
 import {
   type BatchResult,
   type BatchSlot,
+  cancelMessage,
   executeBatchSlots,
   isTotalFailure,
   planIntoSlots,
@@ -333,9 +334,7 @@ async function handleCreate(
           if (verdict !== 'proceed') {
             throw new FsError(
               ErrorCode.CANCELLED,
-              verdict === 'changed'
-                ? `create cancelled: "${plan.inputPath}" was replaced again while the prompt was open.`
-                : `create cancelled: overwrite of "${plan.inputPath}" was ${verdict.refused}`,
+              cancelMessage('create', plan.inputPath, verdict),
               plan.inputPath,
             );
           }

@@ -1,4 +1,5 @@
 import { processInParallel } from '../core/concurrency.ts';
+import type { ConfirmOp } from '../core/confirmation.ts';
 import { ErrorCode, type PerPathResult, Problem } from '../core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import type { ToolCtx } from './define.ts';
@@ -160,6 +161,24 @@ export async function planIntoSlots<TItem, R extends { readonly status: string }
     };
   }
   return { slots, planned };
+}
+
+const CANCEL_VERB: Readonly<Record<ConfirmOp, string>> = {
+  create: 'create',
+  delete: 'Delete',
+  move: 'Move',
+  copy: 'Copy',
+};
+
+/** The CANCELLED text for a Confirmation that did not approve `path`. */
+export function cancelMessage(
+  op: ConfirmOp,
+  path: string,
+  verdict: 'changed' | { readonly refused: string },
+): string {
+  return verdict === 'changed'
+    ? `${CANCEL_VERB[op]} cancelled: "${path}" was replaced again while the prompt was open.`
+    : `${CANCEL_VERB[op]} cancelled: approval for "${path}" was ${verdict.refused}`;
 }
 
 export async function runOverPaths<TItem extends string | { path: string }, TPerPath>(

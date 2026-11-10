@@ -413,7 +413,7 @@ describe('Pending confirmation outcomes', () => {
       name: 'create',
       accept: 'overwrite',
       args: (root: string) => ({ files: [{ path: join(root, 'dst.txt'), content: 'new' }] }),
-      refused: /create cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      refused: /create cancelled: approval for .*dst\.txt.* was (declined|dismissed) by the user/,
       applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'new',
     },
     {
@@ -422,7 +422,7 @@ describe('Pending confirmation outcomes', () => {
       args: (root: string) => ({
         moves: [{ source: join(root, 'src.txt'), destination: join(root, 'dst.txt') }],
       }),
-      refused: /Move cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      refused: /Move cancelled: approval for .*dst\.txt.* was (declined|dismissed) by the user/,
       applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'src',
     },
     {
@@ -432,14 +432,14 @@ describe('Pending confirmation outcomes', () => {
         moves: [{ source: join(root, 'src.txt'), destination: join(root, 'dst.txt') }],
         copy: true,
       }),
-      refused: /Copy cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      refused: /Copy cancelled: approval for .*dst\.txt.* was (declined|dismissed) by the user/,
       applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'src',
     },
     {
       name: 'delete',
       accept: 'delete',
       args: (root: string) => ({ paths: [join(root, 'dir')], recursive: true }),
-      refused: /Delete cancelled: confirmation was (declined|dismissed) by the user/,
+      refused: /Delete cancelled: approval for .*dir.* was (declined|dismissed) by the user/,
       applied: async (root: string) =>
         access(join(root, 'dir')).then(
           () => false,
