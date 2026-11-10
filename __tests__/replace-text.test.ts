@@ -1302,22 +1302,22 @@ describe('replace_text body', () => {
       {
         searchPattern: '^using',
         extra: { isRegex: true },
-        before: '﻿using A;\nusing B;\n',
-        after: '﻿X A;\nX B;\n',
+        before: '\uFEFFusing A;\nusing B;\n',
+        after: '\uFEFFX A;\nX B;\n',
         matches: 2,
       },
       // A literal never saw the mark as text, and must still keep it.
       {
         searchPattern: 'using',
-        before: '﻿using A;\nusing B;\n',
-        after: '﻿X A;\nX B;\n',
+        before: '\uFEFFusing A;\nusing B;\n',
+        after: '\uFEFFX A;\nX B;\n',
         matches: 2,
       },
       {
         searchPattern: '^foo',
         extra: { isRegex: true },
-        before: '﻿foo\nbar\n',
-        after: '﻿X\nbar\n',
+        before: '\uFEFFfoo\nbar\n',
+        after: '\uFEFFX\nbar\n',
         matches: 1,
       },
     ];
@@ -1335,7 +1335,7 @@ describe('replace_text body', () => {
       assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
     }
     // A dry run previews the same matches and never writes the mark off.
-    await writeFile(file, '﻿using A;\nusing B;\n');
+    await writeFile(file, '\uFEFFusing A;\nusing B;\n');
     const dry = await replace({
       path: file,
       searchPattern: '^using',
@@ -1346,7 +1346,7 @@ describe('replace_text body', () => {
     });
     assert.notStrictEqual(dry.isError, true);
     assert.strictEqual(dry.structured.totalMatches, 2);
-    assert.strictEqual(await readFile(file, 'utf-8'), '﻿using A;\nusing B;\n');
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFusing A;\nusing B;\n');
   });
 
   it('explains a zero-match result in the text (#55)', async () => {
