@@ -10,6 +10,7 @@ import {
   replaceMatches,
   type TextMatch,
 } from '../src/core/matcher.ts';
+import { viewText } from '../src/core/text-view.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
 interface Flags {
@@ -220,6 +221,25 @@ describe('MatchEngine', () => {
     } finally {
       lf.dispose();
     }
+  });
+
+  it('engine.mayMatch accepts raw buffer and applies prefilterBytes internally', () => {
+    const engine = createMatchEngine('needle', { isRegex: false, caseSensitive: true });
+    const withBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('needle in haystack')]);
+    assert.equal(engine.mayMatch(withBom), true);
+    assert.equal(engine.mayMatch(Buffer.from('other text')), false);
+    engine.dispose();
+  });
+
+  it('engine.matches matches literal typed with CRLF in CRLF TextView without caller branching', async () => {
+    const engine = createMatchEngine('one\r\ntwo', { isRegex: false, caseSensitive: true });
+    const view = viewText('one\r\ntwo\r\nthree\r\n');
+    const matches: string[] = [];
+    for await (const m of engine.matches(view)) {
+      matches.push(m.text);
+    }
+    assert.deepEqual(matches, ['one\ntwo']);
+    engine.dispose();
   });
 
   it('compile throws for an invalid regex before any text is read, and not for a literal', () => {

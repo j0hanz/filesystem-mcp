@@ -10,6 +10,7 @@ import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from './errors.ts';
+import { prefilterBytes, type TextView, viewText } from './text-view.ts';
 import { escapeRegExp, MIB } from './util.ts';
 
 export type Regex = RE2;
@@ -343,7 +344,7 @@ export interface MatchEngine {
   compile(): void;
   /** Pass to `prefilterBytes` as `crSafe`: a CR in the bytes cannot hide a match from `mayMatch`. */
   readonly lineBreakFree: boolean;
-  /** False only when these bytes cannot hold a match. Give it `prefilterBytes`' result. */
+  /** False only when these bytes cannot hold a match. Handles BOM and line breaks internally. */
   mayMatch(bytes: Buffer): boolean;
   /**
    * Every match in view text, left to right, never overlapping. Yields to the
@@ -352,7 +353,7 @@ export interface MatchEngine {
    * on one line, the walk skips to the next line.
    */
   matches(
-    text: string,
+    view: TextView | string,
     options?: { signal?: AbortSignal; path?: string; maxPerLine?: number },
   ): AsyncGenerator<TextMatch, void>;
   /** Releases every compiled pattern. Idempotent. */
@@ -373,6 +374,11 @@ export function createMatchEngine(
   const plan = planMatch(needle, flags);
   const wholeWord = Boolean(flags.wholeWord);
   const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
+  const lineBreakFree = plan.literal?.lineBreakFree ?? true;
+  const lfVariant: MatchEngine | undefined =
+    !flags.isRegex && needle.includes('\r\n')
+      ? createMatchEngine(needle.replaceAll('\r\n', '\n'), flags)
+      : undefined;
   // planMatch only gives a case-insensitive literal plan for an ASCII needle.
   const folded = flags.caseSensitive ? needle : needle.toLowerCase();
   let regex: Regex | undefined;
@@ -443,9 +449,15 @@ export function createMatchEngine(
   }
 
   async function* matches(
-    text: string,
+    input: TextView | string,
     options: { signal?: AbortSignal; path?: string; maxPerLine?: number } = {},
   ): AsyncGenerator<TextMatch, void> {
+    const view = typeof input === 'string' ? viewText(input) : input;
+    if (view.crlf && lfVariant) {
+      yield* lfVariant.matches(view.text, options);
+      return;
+    }
+    const text = view.text;
     const { signal, path, maxPerLine = Infinity } = options;
     const tick = createYielder(signal);
     let cursor = 0;
@@ -578,13 +590,15 @@ export function createMatchEngine(
 
   return {
     crossesLines,
-    // A regex's mayMatch is always true, so a CR cannot hide anything from it either.
-    lineBreakFree: plan.literal?.lineBreakFree ?? true,
+    lineBreakFree,
     compile() {
       if (!plan.literal) compiled();
     },
     mayMatch(bytes) {
-      return plan.literal ? plan.literal.needsRe2(bytes) || plan.literal.mayMatch(bytes) : true;
+      if (!plan.literal) return true;
+      const probe = prefilterBytes(bytes, lineBreakFree);
+      if (probe === undefined) return true;
+      return plan.literal.needsRe2(probe) || plan.literal.mayMatch(probe);
     },
     matches,
     dispose() {
@@ -592,6 +606,7 @@ export function createMatchEngine(
       freeRegex(prefilter);
       regex = undefined;
       prefilter = undefined;
+      lfVariant?.dispose();
     },
   };
 }
