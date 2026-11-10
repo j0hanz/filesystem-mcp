@@ -11,8 +11,10 @@ export interface TextView {
   readonly text: string;
   readonly bom: boolean;
   readonly crlf: boolean;
-  /** Text a client wrote against the file on disk, as the view shows it. */
+  /** Text a client wrote, with the view's line endings. A leading U+FEFF is kept. */
   accept(text: string): string;
+  /** `text` without a leading U+FEFF, when the file has a mark. */
+  unmark(text: string): string;
   /** Text produced from `text`, as it goes to disk. */
   restore(text: string): string;
 }
@@ -31,8 +33,10 @@ export function viewText(disk: string): TextView {
     bom,
     crlf,
     accept(text) {
-      const bare = bom && text.startsWith(BOM) ? text.slice(1) : text;
-      return crlf ? bare.replaceAll('\r\n', '\n') : bare;
+      return crlf ? text.replaceAll('\r\n', '\n') : text;
+    },
+    unmark(text) {
+      return bom && text.startsWith(BOM) ? text.slice(1) : text;
     },
     restore(text) {
       if (last?.text === text) return last.disk;

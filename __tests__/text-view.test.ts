@@ -53,9 +53,17 @@ describe('Text view', () => {
     assert.equal(viewText('a\nb\n').accept('a\r\nb'), 'a\r\nb');
   });
 
-  it('accept drops a leading BOM only for a BOM file', () => {
-    assert.equal(viewText(`${BOM}a\n`).accept(`${BOM}a`), 'a');
-    assert.equal(viewText('a\n').accept(`${BOM}a`), `${BOM}a`);
+  it('accept keeps a leading U+FEFF', () => {
+    assert.equal(viewText(`${BOM}a\n`).accept(`${BOM}a`), `${BOM}a`);
+    assert.equal(viewText(`${BOM}a\r\nb\r\n`).accept(`${BOM}a\r\nb`), `${BOM}a\nb`);
+  });
+
+  it('unmark drops one leading U+FEFF only for a file with a mark', () => {
+    const marked = viewText(`${BOM}a\n`);
+    assert.equal(marked.unmark(`${BOM}a`), 'a');
+    assert.equal(marked.unmark(`${BOM}${BOM}a`), `${BOM}a`);
+    assert.equal(marked.unmark('a'), 'a');
+    assert.equal(viewText('a\n').unmark(`${BOM}a`), `${BOM}a`);
   });
 
   it('prefilterBytes drops the BOM bytes and refuses bytes holding a CR', () => {
