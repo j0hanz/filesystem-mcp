@@ -52,14 +52,19 @@ export async function confirm(
   // were sealed) is no state: the client is asked afresh.
   const sealed = state?.op === op && state.identities !== undefined ? state : undefined;
   const identities = sealed?.identities ?? [];
-  // A sealed path stays pending even when the tool no longer requires it, so
-  // a directory emptied while its prompt was open still honors skip.
   // Verdicts are keyed by path, so two items for one path are one question.
+  // Items that saw different entries there cannot share an approval.
   const byPath = new Map<string, ConfirmItem>();
+  const conflicted = new Set<string>();
   for (const item of items) {
     const kept = byPath.get(item.path);
+    if (kept !== undefined && !sameIdentity(kept.identity, item.identity)) {
+      conflicted.add(item.path);
+    }
     if (kept === undefined || (!kept.required && item.required)) byPath.set(item.path, item);
   }
+  // A sealed path stays pending even when the tool no longer requires it, so
+  // a directory emptied while its prompt was open still honors skip.
   const pending = [...byPath.values()]
     .filter((item) => item.required || sealed?.paths.includes(item.path))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -105,6 +110,7 @@ export async function confirm(
         const shown = identities.find((entry) => entry.path === item.path);
         return (
           !sealed.paths.includes(item.path) ||
+          conflicted.has(item.path) ||
           shown === undefined ||
           !sameIdentity(shown, item.identity) ||
           // A warning that appeared since the prompt was never approved.

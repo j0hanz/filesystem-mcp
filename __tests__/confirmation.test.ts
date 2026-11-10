@@ -110,6 +110,26 @@ describe('Confirmation', () => {
     assert.strictEqual(done.verdict('a'), 'skipped');
   });
 
+  it('duplicate-path: items that disagree on identity are asked about again', async () => {
+    const state = await asRound(
+      await run(ctx(sealed({ a: 1 }), { confirm_0: accept('overwrite') }), [
+        item('a', 1),
+        item('a', 2),
+      ]),
+    );
+    assert.strictEqual(state.reprompted, true);
+  });
+
+  it('duplicate-path: a disagreement after the re-prompt is changed, not approved', async () => {
+    const done = asConfirmed(
+      await run(ctx(sealed({ a: 1 }, { reprompted: true }), { confirm_0: accept('overwrite') }), [
+        item('a', 1),
+        item('a', 2),
+      ]),
+    );
+    assert.strictEqual(done.verdict('a'), 'changed');
+  });
+
   it('accepted: proceeds', async () => {
     const done = asConfirmed(
       await run(ctx(sealed({ a: 1 }), { confirm_0: accept('overwrite') }), [item('a')]),
