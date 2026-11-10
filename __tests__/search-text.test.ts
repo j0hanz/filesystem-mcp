@@ -492,6 +492,15 @@ describe('search_text body', () => {
     );
   });
 
+  it('a literal typed with CRLF matches an all-CRLF file, as replace_text does', async () => {
+    const file = await writeTestFile(root, 'crlf-lit.txt', 'one\r\ntwo\r\n');
+    const { structured } = await search({ path: file, searchPattern: 'one\r\ntwo' });
+    assert.deepStrictEqual(
+      structured.matches.map((m) => m.line),
+      [1],
+    );
+  });
+
   it('a mixed-ending file still matches $ before CRLF', async () => {
     const file = await writeTestFile(root, 'mixed.txt', 'foo\r\nbar\n');
     const { structured } = await search({ path: file, searchPattern: 'foo$', isRegex: true });

@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
-import { createMatchEngine, replaceMatches, type TextMatch } from '../src/core/matcher.ts';
+import {
+  createLfEngine,
+  createMatchEngine,
+  replaceMatches,
+  type TextMatch,
+} from '../src/core/matcher.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
 interface Flags {
@@ -185,6 +190,21 @@ describe('MatchEngine', () => {
   it('a case-sensitive literal matches a text over 4 MiB without the regex engine', async () => {
     const text = 'x'.repeat(5 * 1024 * 1024) + 'needle';
     assert.equal((await spans('needle', text)).length, 1);
+  });
+
+  it('createLfEngine matches a literal typed with CRLF in LF view text, and skips a regex', async () => {
+    const flags = { isRegex: false, caseSensitive: true };
+    assert.equal(createLfEngine('one', flags), undefined);
+    assert.equal(createLfEngine('one\r\ntwo', { ...flags, isRegex: true }), undefined);
+    const lf = createLfEngine('one\r\ntwo', flags);
+    assert.ok(lf);
+    try {
+      const found: number[] = [];
+      for await (const m of lf.matches('one\ntwo\n')) found.push(m.start);
+      assert.deepEqual(found, [0]);
+    } finally {
+      lf.dispose();
+    }
   });
 
   it('stops when the signal aborts', async () => {

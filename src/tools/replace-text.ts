@@ -22,6 +22,7 @@ import {
 } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import {
+  createLfEngine,
   createMatchEngine,
   type MatchEngine,
   outputTooLarge,
@@ -314,19 +315,16 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
 }
 
 /**
- * Literal text only: a regex and its $-template are taken as written. An all-CRLF
- * file is shown with LF endings, so a literal typed with CRLF is matched as LF.
- * Reuses `engine` when only the replacement changes.
+ * Literal text only: a regex and its $-template are taken as written. The
+ * replacement follows the needle's LF form (createLfEngine); `engine` is reused
+ * when only the replacement changes.
  */
 function createLfVariant(args: SearchAndReplaceArgs, engine: MatchEngine): ReplaceContext['lf'] {
   if (args.isRegex) return undefined;
-  const pattern = args.searchPattern.replaceAll('\r\n', '\n');
   const replacement = args.replacement.replaceAll('\r\n', '\n');
-  if (pattern === args.searchPattern && replacement === args.replacement) return undefined;
-  return {
-    engine: pattern === args.searchPattern ? engine : createMatchEngine(pattern, args),
-    replacement,
-  };
+  const lf = createLfEngine(args.searchPattern, args);
+  if (lf === undefined && replacement === args.replacement) return undefined;
+  return { engine: lf ?? engine, replacement };
 }
 
 function buildSearchAndReplaceStructuredResult(

@@ -1,6 +1,7 @@
 import { ErrorCode, FsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
+  createLfEngine,
   createMatchEngine,
   isRe2Abort,
   type MatchEngine,
@@ -113,6 +114,8 @@ interface ScanContext {
   signal: AbortSignal | undefined;
   maxResults: number;
   engine: MatchEngine;
+  /** The LF form of a literal typed with CRLF, for an all-CRLF file's view. */
+  lf: MatchEngine | undefined;
   context: number;
   /** A file the client named: an overlong line refuses the call instead of skipping. */
   named: boolean;
@@ -153,7 +156,9 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   const probe = prefilterBytes(buffer);
   if (probe !== undefined && !scanCtx.engine.mayMatch(probe)) return { matches: [] };
   // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
-  const content = viewText(buffer.toString('utf-8')).text;
+  const view = viewText(buffer.toString('utf-8'));
+  const content = view.text;
+  const engine = view.crlf && scanCtx.lf ? scanCtx.lf : scanCtx.engine;
 
   const matches: SearchResult[] = [];
   let lines: string[] | undefined;
@@ -165,7 +170,7 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   let hit: SearchResult | undefined;
   let cut = false;
   try {
-    for await (const match of scanCtx.engine.matches(content, {
+    for await (const match of engine.matches(content, {
       ...(scanCtx.signal ? { signal: scanCtx.signal } : {}),
       path: entryPath,
       maxPerLine: MAX_MATCHES_PER_LINE,
@@ -223,10 +228,12 @@ export async function searchContent(
   options: SearchContentOptions,
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
-  const engine = createMatchEngine(pattern, {
+  const flags = {
     isRegex: Boolean(options.isRegex),
     caseSensitive: Boolean(options.caseSensitive),
-  });
+  };
+  const engine = createMatchEngine(pattern, flags);
+  const lf = createLfEngine(pattern, flags);
   try {
     // The engine compiles on first use; one empty line compiles it now, so an
     // invalid regex fails the request before any file is read.
@@ -243,6 +250,7 @@ export async function searchContent(
       signal: options.signal,
       maxResults,
       engine,
+      lf,
       context,
       named: scope.explicitFile !== undefined,
     };
@@ -302,5 +310,6 @@ export async function searchContent(
     };
   } finally {
     engine.dispose();
+    lf?.dispose();
   }
 }

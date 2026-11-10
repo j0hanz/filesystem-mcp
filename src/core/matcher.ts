@@ -493,6 +493,19 @@ export function createMatchEngine(
     },
   };
 }
+
+/**
+ * An all-CRLF file is viewed with LF endings, so a literal typed with CRLF is
+ * matched there as LF. Undefined for a regex, taken as written, or a needle
+ * without CRLF. The caller disposes the engine.
+ */
+export function createLfEngine(
+  needle: string,
+  flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
+): MatchEngine | undefined {
+  if (flags.isRegex || !needle.includes('\r\n')) return undefined;
+  return createMatchEngine(needle.replaceAll('\r\n', '\n'), flags);
+}
 const DOLLAR_TOKEN = /\$(\$|&|`|'|<([^>]*)>|\d{1,2})/g;
 
 // Matches a consumed text that ends in a non-word char: its last char may lead the next match.
