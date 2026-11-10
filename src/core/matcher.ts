@@ -323,6 +323,8 @@ function regexCrossesLines(source: string): boolean {
     /[\n\r]/u.test(source) ||
     source.includes('[^') ||
     source.includes('[:') ||
+    // A bracket range can span U+000A ([\t-~]); judged crossing rather than parsed.
+    (source.includes('[') && source.includes('-')) ||
     INLINE_FLAGS_RE.test(source) ||
     UNSAFE_ESCAPE_RE.test(source)
   );

@@ -64,6 +64,9 @@ describe('MatchEngine', () => {
     '\\Qa\\E',
     '\\012',
     '\\r',
+    '[\\t-~]+',
+    'a[\\t-\\-]b',
+    `[${String.fromCharCode(1)}-~]+`,
   ])
     it(`${JSON.stringify(p)} may cross a line`, () => assert.equal(crosses(p), true));
 
