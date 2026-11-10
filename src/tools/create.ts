@@ -5,7 +5,6 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.ts';
 import { confirm } from '../core/confirmation.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
@@ -14,8 +13,14 @@ import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
-import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchResult, type BatchSlot, executeBatchSlots, isTotalFailure } from './batch.ts';
+import { getMaxTextFileSize } from '../core/util.ts';
+import {
+  type BatchResult,
+  type BatchSlot,
+  executeBatchSlots,
+  isTotalFailure,
+  planIntoSlots,
+} from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
@@ -280,30 +285,17 @@ async function handleCreate(
   const files = args.files ?? [];
   const dirs = args.directories ?? [];
 
-  const planned = await processInParallel(
+  const { slots, planned } = await planIntoSlots<
+    CreateFileItem,
+    CreateFilePlanResult,
+    CreateSlotValue
+  >(
     files,
+    (file) => file.path,
     (file) => planFile(file, ctx),
-    PARALLEL_CONCURRENCY,
     ctx.signal,
   );
-
-  const slots = new Array<BatchSlot<CreateSlotValue>>(files.length);
-  const plans = new Map<number, CreatePlan>();
-  for (const { index, value } of planned.results) {
-    if (value.status === 'fail') {
-      slots[index] = { status: 'failure', path: value.failure.path, error: value.failure.error };
-    } else {
-      plans.set(index, value.plan);
-    }
-  }
-  for (const { index, error } of planned.errors) {
-    const path = files[index]?.path ?? '(unknown)';
-    slots[index] = {
-      status: 'failure',
-      path,
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
-    };
-  }
+  const plans = new Map(planned.map(({ index, value }) => [index, value.plan]));
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
   // append never destroys, and overwrite: true is that word given up front,

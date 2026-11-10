@@ -5,7 +5,6 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   DELETE_ERRNOS,
@@ -24,13 +23,12 @@ import {
 import { canElicit } from '../core/input-required.ts';
 import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
-import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import {
   type BatchResult,
-  type BatchSlot,
   executeBatchSlots,
   failureLines,
   isTotalFailure,
+  planIntoSlots,
 } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -148,22 +146,17 @@ async function handleDelete(
   const paths = [...new Set(args.paths)];
 
   // Phase 1 (no mutation): plan every path.
-  const planned = await processInParallel(
+  const { slots, planned } = await planIntoSlots<string, PlanResult, { deleted: boolean }>(
     paths,
+    (inputPath) => inputPath,
     (inputPath) => planPath(inputPath, args, ctx.fs, ctx.signal),
-    PARALLEL_CONCURRENCY,
     ctx.signal,
   );
 
-  const slots = new Array<BatchSlot<{ deleted: boolean }>>(paths.length);
   let plans: { plan: DeletePlan; index: number }[] = [];
   const seenTargets = new Set<string>();
 
-  for (const { index, value: r } of planned.results) {
-    if (r.status === 'fail') {
-      slots[index] = { status: 'failure', path: r.failure.path, error: r.failure.error };
-      continue;
-    }
+  for (const { index, value: r } of planned) {
     const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
     if (seenTargets.has(target)) {
       slots[index] = { status: 'omitted' };
@@ -175,15 +168,6 @@ async function handleDelete(
     } else {
       plans.push({ plan: r.plan, index });
     }
-  }
-
-  for (const { index, error } of planned.errors) {
-    const path = paths[index] ?? '(unknown)';
-    slots[index] = {
-      status: 'failure',
-      path,
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
-    };
   }
 
   // One entry inside another would race the other's recursive delete, and

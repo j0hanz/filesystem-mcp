@@ -121,6 +121,47 @@ export async function executeBatchSlots<T>(
   return { results: nonOmitted, summary: summarize(nonOmitted) };
 }
 
+export interface PlanFailure {
+  readonly status: 'fail';
+  readonly failure: { readonly path: string; readonly error: Problem };
+}
+
+/**
+ * Plan every item with no mutation. A failed or thrown plan takes its slot as
+ * a failure; every other result is returned for the tool to settle.
+ */
+export async function planIntoSlots<TItem, R extends { readonly status: string }, TValue>(
+  items: readonly TItem[],
+  pathOf: (item: TItem) => string,
+  plan: (item: TItem) => Promise<R>,
+  signal: AbortSignal | undefined,
+): Promise<{
+  slots: BatchSlot<TValue>[];
+  planned: { index: number; value: Exclude<R, PlanFailure> }[];
+}> {
+  const { results, errors } = await processInParallel(items, plan, PARALLEL_CONCURRENCY, signal);
+  const slots = new Array<BatchSlot<TValue>>(items.length);
+  const planned: { index: number; value: Exclude<R, PlanFailure> }[] = [];
+  for (const { index, value } of results) {
+    if (value.status === 'fail') {
+      const { failure } = value as unknown as PlanFailure;
+      slots[index] = { status: 'failure', path: failure.path, error: failure.error };
+    } else {
+      planned.push({ index, value: value as Exclude<R, PlanFailure> });
+    }
+  }
+  for (const { index, error } of errors) {
+    const item = items[index];
+    const path = item === undefined ? '(unknown)' : pathOf(item);
+    slots[index] = {
+      status: 'failure',
+      path,
+      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path),
+    };
+  }
+  return { slots, planned };
+}
+
 export async function runOverPaths<TItem extends string | { path: string }, TPerPath>(
   items: readonly TItem[],
   ctx: ToolCtx,
