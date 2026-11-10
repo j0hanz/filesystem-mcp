@@ -320,6 +320,12 @@ describe('replaceMatches', () => {
     assert.equal(await rep('^\\s*', '', 'X', re), '');
   });
 
+  it('\\z and (?-m)$ match nothing after a final newline, and \\n\\z finds the end', async () => {
+    assert.equal(await rep('\\z', 'a\n', 'X', re), 'a\n');
+    assert.equal(await rep('(?-m)$', 'a\n', 'X', re), 'a\n');
+    assert.equal(await rep('\\n\\z', 'a\n', '\nX', re), 'a\nX');
+  });
+
   it('expands $1 and $& for a regex only', async () => {
     assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
     assert.equal(await rep('ab', 'ab', '$&', {}), '$&');

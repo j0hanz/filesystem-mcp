@@ -27,12 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Path guard**: dynamically discover Windows system directory roots from environment variables rather than assuming drive C.
 - **Create tool validation**: validate against duplicate directory paths and file/directory name collisions before executing batch creation.
 - **Concurrency lock queue**: isolate exclusive task callbacks from resolution payloads so callers receive zero arguments.
-- **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` and `\z` to anchor to the whole file.
+- **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` to anchor to the start of the file; `\z` anchors to its end only when the file has no final newline.
 - **Path guard**: a delete, move or copy source that exists but cannot be resolved is now refused with "Cannot access path" instead of skipping the root, denylist and read-only checks.
 - **delete**: a recursive delete asks once more, with the protected-files warning, when such a file appears in the folder while the first prompt is open.
 - **search_text**: a literal typed with `\r\n` now matches an all-CRLF file, as it already did in `replace_text`.
 - **replace_text**: a regex that stays on one line now works on files over 4 MiB.
 - **replace_text**: `^` and `$` follow the lines `search_text` reports, so nothing is matched after the final newline or in an empty file.
+- **replace_text**: `\z` and `(?-m)$` no longer match after a file's final newline, since a final newline does not start a line. To append at the end of such a file, match `\n\z`.
 - **replace_text**: `$` now matches at every line end in a CRLF file.
 
 ## [2.19.3] - 2026-11-07
