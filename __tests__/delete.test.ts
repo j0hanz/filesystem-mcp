@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, lstat, mkdir, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -379,6 +379,50 @@ describe('delete body', () => {
 
     assert.match(message, /protected/);
     await access(join(dir, '.env'));
+  });
+
+  it('asks again, with the warning, when a protected file appears while the prompt is open', async () => {
+    const dir = await nonEmptyDir('late_env');
+    const messages: string[] = [];
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        confirm: async (prompt, round) => {
+          messages.push(prompt.message);
+          // A protected file lands in the folder while the prompt is open.
+          if (round === 1) await writeFile(join(dir, '.env'), 'X=1');
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(messages.length, 2);
+    assert.doesNotMatch(messages[0] ?? '', /protected/);
+    assert.match(messages[1] ?? '', /protected/);
+    assert.match(messages[1] ?? '', /cannot be undone/);
+    assert.notStrictEqual(result.isError, true);
+    await assert.rejects(access(dir));
+  });
+
+  it('does not ask again when the protected file is gone by the retry', async () => {
+    const dir = await nonEmptyDir('early_env');
+    await writeFile(join(dir, '.env'), 'X=1');
+    const messages: string[] = [];
+    const result = await del(
+      { paths: [dir], recursive: true },
+      {
+        confirm: async (prompt, round) => {
+          messages.push(prompt.message);
+          if (round === 1) await rm(join(dir, '.env'));
+          return choose('delete')();
+        },
+      },
+    );
+
+    assert.strictEqual(messages.length, 1);
+    assert.match(messages[0] ?? '', /protected/);
+    assert.notStrictEqual(result.isError, true);
+    await assert.rejects(access(dir));
   });
 
   it('asks the plain question when the folder holds no protected file', async () => {

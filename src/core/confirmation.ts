@@ -26,6 +26,8 @@ export interface ConfirmItem {
   /** Whether the tool's own rule asks for approval this round. */
   readonly required: boolean;
   readonly message: string;
+  /** The message carries a warning the client must see before approving. */
+  readonly warned?: boolean;
 }
 
 type Verdict = 'proceed' | 'skipped' | 'changed' | { readonly refused: string };
@@ -69,7 +71,11 @@ export async function confirm(
       {
         op,
         paths: pending.map((item) => item.path),
-        identities: pending.map((item) => ({ path: item.path, ...item.identity })),
+        identities: pending.map((item) => ({
+          path: item.path,
+          ...item.identity,
+          ...(item.warned ? { warned: true as const } : {}),
+        })),
         ...(reprompted ? { reprompted: true as const } : {}),
         // A reprompt keeps `reissued`: one call reissues at most once, so a
         // Confirmation runs three rounds at most.
@@ -94,7 +100,9 @@ export async function confirm(
         return (
           !sealed.paths.includes(item.path) ||
           shown === undefined ||
-          !sameIdentity(shown, item.identity)
+          !sameIdentity(shown, item.identity) ||
+          // A warning that appeared since the prompt was never approved.
+          (item.warned === true && shown.warned !== true)
         );
       })
       .map((item) => item.path),

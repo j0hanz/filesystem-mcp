@@ -41,6 +41,8 @@ type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 /** The entry a confirmation round showed the client for one sealed path. */
 interface SealedIdentity extends EntryIdentity {
   readonly path: string;
+  /** The round's prompt carried the tool's warning for this entry. */
+  readonly warned?: true;
 }
 
 /**

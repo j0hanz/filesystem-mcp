@@ -562,7 +562,8 @@ export function createReplacementMatcher(args: {
   if (!args.isRegex && !args.wholeWord && args.caseSensitive && plan.literal) {
     return createCaseSensitiveLiteralMatcher(args.searchPattern);
   }
-  const regex = compileRegex(plan.source, { caseSensitive: args.caseSensitive });
+  // `m`, so ^ and $ are line-relative as in search_text, which matches line by line.
+  const regex = compileRegex(plan.source, { caseSensitive: args.caseSensitive, multiline: true });
   const matcher = createRegexReplacementMatcher(regex, args.isRegex, args.wholeWord);
   // A case-insensitive literal is matched natively unless RE2 must judge the needle.
   return !args.isRegex && !args.wholeWord && plan.literal

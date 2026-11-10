@@ -90,7 +90,8 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     },
     (content) => {
       const result = patchContent(args, content);
-      return { content: result.patched, result, write: true };
+      // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
+      return { content: result.patched, result, write: result.patched !== content };
     },
   );
   // A dry run shows where the hunks landed, like edit's, and counts what it

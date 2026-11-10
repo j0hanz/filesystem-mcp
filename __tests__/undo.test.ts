@@ -496,6 +496,25 @@ describe('UndoCapture via GuardedFileSystem', () => {
     cap.release();
   });
 
+  it('a copy with more bytes than undo will re-read gives up while planning, before any hash', async () => {
+    const src = join(tmpDir, 'cpx-src.txt');
+    const dest = join(tmpDir, 'cpx-dest.txt');
+    await writeFile(src, 'x'.repeat(40_000));
+    const cap = new UndoJournal(4096).beginCapture();
+    const fs = makeFs(cap);
+    let hashed = 0;
+    const open = fs.open.bind(fs);
+    fs.open = async (...args: Parameters<typeof fs.open>) => {
+      if (args[0].includes('cpx-dest')) hashed++;
+      return open(...args);
+    };
+    await copyVia(fs, src, dest);
+    assert.match(cap.unavailableReason() ?? '', /: too large to keep for undo$/u);
+    assert.strictEqual(hashed, 0, `hashed ${String(hashed)} files after undo gave up`);
+    assert.strictEqual((await readFile(dest, 'utf8')).length, 40_000);
+    cap.release();
+  });
+
   it('a copy over a hard-linked file keeps no undo for it', async () => {
     const src = join(tmpDir, 'cphl-src.txt');
     const dest = join(tmpDir, 'cphl-dest.txt');
