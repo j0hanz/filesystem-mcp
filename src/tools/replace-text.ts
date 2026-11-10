@@ -234,6 +234,9 @@ async function processEntry(
         if (probe !== undefined && !matcher.testBuffer(probe)) return undefined;
         const view = open();
         const pair = view.crlf && ctx.lf ? ctx.lf : { matcher, replacement };
+        // No byte probe ran, so the view text takes the same test, and with it RE2's input-size check.
+        if (probe === undefined && !pair.matcher.testBuffer(Buffer.from(view.text, 'utf8')))
+          return undefined;
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
