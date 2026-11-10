@@ -1074,7 +1074,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // Raised 2026-11-09 to 25200 full and 11750 read-only: PR review asked the
     // delete and list claims to admit retry-cancelled paths and the listing
     // cap and timeout truncation; measured 25176 / 11735.
-    const BUDGET_CHARS = 25_200;
+    // Raised 2026-11-10 to 25300 full (read-only unchanged): replace_text says
+    // ^ and $ in a regex match at every line; measured 25275.
+    const BUDGET_CHARS = 25_300;
     const BUDGET_CHARS_READ_ONLY = 11_750;
 
     const full = await createTestClientPair([tmpDir]);
