@@ -62,7 +62,7 @@ export async function patchWithinBudget(
   // still running may displace a kept one, so the unsettled ones do not count.
   // Budget first: a full budget must not pay for a diff it will discard, and a
   // diff past its deadline counts as truncated output, not a failed file.
-  if (budget.folded.length === MAX_DIFF_SIZE) return { diffTruncated: true };
+  if (budget.folded.length >= MAX_DIFF_SIZE) return { diffTruncated: true };
   const patch = await unifiedPatch(header, done.before, done.after);
   // Read after the await: other files may have folded while this one diffed.
   if (patch === undefined || patch.length > MAX_DIFF_SIZE - budget.folded.length) {

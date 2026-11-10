@@ -223,6 +223,15 @@ describe('find_files body', () => {
     assert.deepStrictEqual(await names(), ['omega.ts', 'alpha.ts']);
   });
 
+  it("TC-FUNC-070: sortBy 'name' breaks ties deterministically by full path", async () => {
+    const dir = join(root, 'find_sort_tie');
+    await writeTestFile(dir, 'zzz/common.ts', '// z');
+    await writeTestFile(dir, 'aaa/common.ts', '// a');
+    const { structured } = await find({ path: dir, pattern: '**/*.ts', sortBy: 'name' });
+    const paths = structured.results.map((entry) => entry.path);
+    assert.deepStrictEqual(paths, ['find_sort_tie/aaa/common.ts', 'find_sort_tie/zzz/common.ts']);
+  });
+
   it('pages a stable snapshot and externalizes the full result only once', async () => {
     const dir = join(root, 'find_pages');
     await writeTestFile(dir, 'bravo.txt', 'x');

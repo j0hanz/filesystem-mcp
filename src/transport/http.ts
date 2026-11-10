@@ -36,6 +36,7 @@ import {
   isLoopbackHttpHost,
   JSONRPC_SERVER_ERROR,
   protectedResourceUrl,
+  type RateLimiterMiddleware,
   resolveAllowedHosts,
   resolveTrustProxySetting,
   sendJsonRpcError,
@@ -132,7 +133,9 @@ function setupExpressApp(
   // Unconditional: the spec's rate-limit MUST is not scoped to authenticated
   // binds. A keyless bind is loopback-only, so the cap is looser, not absent.
   const rpm = parseEnvInt('FS_RATE_LIMIT_RPM', apiKey ? 120 : 6_000, 1, 100_000);
-  app.use('/mcp', createRateLimiter(rpm));
+  const rateLimiter = createRateLimiter(rpm);
+  app.use('/mcp', rateLimiter);
+  app.locals['rateLimiter'] = rateLimiter;
 
   if (apiKey && allowedHosts.length > 0) {
     const metadataHandler = (req: Request, res: Response): void => {
@@ -359,6 +362,8 @@ export async function startHttpServer(
   httpServer.on('error', onHttpServerError);
 
   const teardown = (): Promise<void> => {
+    const limiter = app.locals['rateLimiter'] as RateLimiterMiddleware | undefined;
+    limiter?.close();
     state.dispose();
     return modernHandler.close().catch((err: unknown) => {
       Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));

@@ -3,6 +3,7 @@ import { access, chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
@@ -321,5 +322,18 @@ describe('Data-loss guards', () => {
     } finally {
       await h.close();
     }
+  });
+
+  it('resolvePathOrRoot refers to list_roots tool when no roots configured', () => {
+    const guard = new PathGuard();
+    assert.throws(
+      () => guard.resolvePathOrRoot(undefined),
+      (err: unknown) => {
+        assert.ok(err instanceof FsError);
+        assert.strictEqual(err.code, ErrorCode.ACCESS_DENIED);
+        assert.strictEqual(err.message, 'No roots configured. Use list_roots or --allow-cwd.');
+        return true;
+      },
+    );
   });
 });

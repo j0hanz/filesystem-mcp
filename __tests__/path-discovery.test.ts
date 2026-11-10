@@ -60,6 +60,21 @@ describe('findProjectRoot (--walk-cwd)', () => {
     assert.equal(await findProjectRoot(start, [proj]), normalizePath(start));
   });
 
+  it('walks up when ceiling is empty', async () => {
+    const proj = await dir('empty_ceiling_proj');
+    await writeFile(join(proj, 'package.json'), '{}');
+    const start = await dir('empty_ceiling_proj', 'src', 'nested');
+    assert.equal(await findProjectRoot(start, []), normalizePath(proj));
+  });
+
+  it('ignores ceilings that do not enclose startDir', async () => {
+    const proj = await dir('unrelated_ceiling_proj');
+    await writeFile(join(proj, 'package.json'), '{}');
+    const start = await dir('unrelated_ceiling_proj', 'src');
+    const unrelatedCeiling = join(root, 'completely_different_dir');
+    assert.equal(await findProjectRoot(start, [unrelatedCeiling]), normalizePath(proj));
+  });
+
   it('no marker returns the start', async () => {
     const start = await dir('e', 'proj', 'src');
     assert.equal(await findProjectRoot(start, [root]), normalizePath(start));

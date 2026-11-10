@@ -23,6 +23,7 @@ import {
   IS_CASE_INSENSITIVE_FS,
   IS_WINDOWS,
   isPathInsideDirectory,
+  isSamePath,
   normalizeCaseForComparison,
   normalizePath,
   toPosixPath,
@@ -281,11 +282,7 @@ async function loadAncestorGitignores(
   for (let dir = dirname(resolve(root)); ; dir = dirname(dir)) {
     if (!isPathInsideDirectory(normalizedCeiling, dir)) break;
     chain.push(dir);
-    if (
-      (isPathInsideDirectory(dir, normalizedCeiling) &&
-        isPathInsideDirectory(normalizedCeiling, dir)) ||
-      dirname(dir) === dir
-    ) {
+    if (isSamePath(dir, normalizedCeiling) || dirname(dir) === dir) {
       break;
     }
   }

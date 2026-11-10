@@ -143,7 +143,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           args.sortBy === 'name'
             ? results
                 .map((path) => ({ path, name: basename(path) }))
-                .sort((a, b) => a.name.localeCompare(b.name))
+                .sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path))
                 .map((item) => item.path)
             : results.toSorted((x, y) => x.localeCompare(y));
         // Relative to the root, not to scope.root: `a.ts` from a search of

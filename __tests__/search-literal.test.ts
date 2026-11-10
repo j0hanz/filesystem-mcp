@@ -4,6 +4,7 @@ import { open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { asciiBufferMayMatch } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { searchContent } from '../src/core/search.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
@@ -153,5 +154,49 @@ describe('reading a file for a search', () => {
     } finally {
       proto.read = original;
     }
+  });
+
+  it('chunked case-insensitive literal search finds needle spanning 64KB chunk boundary', async () => {
+    const chunkBoundary = 64 * 1024;
+    const needle = 'targetpattern';
+    // Position needle so it straddles the 64KB boundary
+    const prefixLen = chunkBoundary - 5;
+    const content = Buffer.concat([
+      Buffer.alloc(prefixLen, 0x61), // 'a'
+      Buffer.from('TARGETPATTERN\n', 'latin1'),
+      Buffer.alloc(1024, 0x62), // 'b'
+    ]);
+    const file = join(root, 'boundary-case.txt');
+    await writeFile(file, content);
+    const result = await searchContent(
+      { root, explicitFile: file },
+      needle,
+      { caseSensitive: false, isRegex: false },
+      await makeGuard([root]),
+    );
+    assert.strictEqual(result.matches.length, 1);
+  });
+
+  it('chunked case-insensitive literal search returns no matches when absent in large buffer', async () => {
+    const content = Buffer.alloc(128 * 1024, 0x61); // 128KB of 'a'
+    const file = join(root, 'large-no-match.txt');
+    await writeFile(file, content);
+    const result = await searchContent(
+      { root, explicitFile: file },
+      'xyz123',
+      { caseSensitive: false, isRegex: false },
+      await makeGuard([root]),
+    );
+    assert.strictEqual(result.matches.length, 0);
+  });
+
+  it('asciiBufferMayMatch scans overlapping chunks correctly', () => {
+    const buf = Buffer.concat([
+      Buffer.alloc(64 * 1024 - 4, 0x61),
+      Buffer.from('FOOBAR', 'latin1'),
+      Buffer.alloc(100, 0x61),
+    ]);
+    assert.strictEqual(asciiBufferMayMatch(buf, 'foobar'), true);
+    assert.strictEqual(asciiBufferMayMatch(buf, 'nonexistent'), false);
   });
 });

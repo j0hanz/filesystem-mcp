@@ -79,6 +79,26 @@ function countOccurrences(line: string, needle: string): LineHit | undefined {
   }
   return { count, column };
 }
+const LITERAL_PREFILTER_CHUNK_SIZE = 64 * 1024;
+
+export function asciiBufferMayMatch(buffer: Buffer, lowerNeedle: string): boolean {
+  if (
+    buffer.length <= LITERAL_PREFILTER_CHUNK_SIZE ||
+    lowerNeedle.length >= LITERAL_PREFILTER_CHUNK_SIZE
+  ) {
+    return buffer.toString('latin1').toLowerCase().includes(lowerNeedle);
+  }
+  const overlap = lowerNeedle.length - 1;
+  const step = LITERAL_PREFILTER_CHUNK_SIZE - overlap;
+  for (let offset = 0; offset < buffer.length; offset += step) {
+    const end = Math.min(offset + LITERAL_PREFILTER_CHUNK_SIZE, buffer.length);
+    const chunk = buffer.subarray(offset, end).toString('latin1').toLowerCase();
+    if (chunk.includes(lowerNeedle)) return true;
+    if (end === buffer.length) break;
+  }
+  return false;
+}
+
 /** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
 function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
   // The file is decoded with U+FFFD for every invalid byte, and a lone
@@ -107,7 +127,7 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
     // is found exactly where the bytes spell it in either case.
-    mayMatch: (buffer) => buffer.toString('latin1').toLowerCase().includes(lower),
+    mayMatch: (buffer) => asciiBufferMayMatch(buffer, lower),
     matchLine: (line) => countOccurrences(foldAsciiCase(line), lower),
   };
 }

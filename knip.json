@@ -2,5 +2,5 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": ["__tests__/**/*.test.ts"],
   "project": ["src/**/*.ts", "__tests__/helpers.ts", "__tests__/tool-harness.ts"],
-  "ignoreDependencies": ["@anthropic-ai/mcpb", "@stryker-mutator/command-runner"]
+  "ignoreDependencies": ["@stryker-mutator/command-runner"]
 }

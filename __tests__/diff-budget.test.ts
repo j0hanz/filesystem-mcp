@@ -105,4 +105,13 @@ describe('diff budget', () => {
     assert.ok(b.folded.includes('f0') && b.folded.includes('f1'));
     assert.strictEqual(b.prefix, 2);
   });
+
+  it('DB-006: returns diffTruncated immediately when folded length exceeds or equals MAX_DIFF_SIZE', async () => {
+    const b = budget();
+    b.folded = 'x'.repeat(MAX_DIFF_SIZE + 10);
+    // Passing invalid before/after: if unifiedPatch is called, it throws TypeError
+    const badDone = { before: undefined, after: undefined } as unknown as Rewritten<number>;
+    const result = await patchWithinBudget(b, 0, 'f0', badDone);
+    assert.deepStrictEqual(result, { diffTruncated: true });
+  });
 });

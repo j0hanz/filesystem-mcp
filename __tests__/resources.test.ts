@@ -21,7 +21,7 @@ import {
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { isSamePath } from '../src/core/path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, isSamePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
 import { ResourceStore } from '../src/core/store.ts';
 import { MIB } from '../src/core/util.ts';
@@ -570,6 +570,33 @@ describe('MCP Resources', () => {
 
       registry.destroy();
     });
+
+    it(
+      'TC-FUNC-063B: WatcherRegistry - notifies even when event filename casing differs from uri basename',
+      { skip: !IS_CASE_INSENSITIVE_FS },
+      async () => {
+        const registry = createWatcherRegistry();
+        const testFile = await writeTestFile(tmpDir, 'UPPER_CASE.TXT', 'initial');
+        // Create URI with lowercase spelling
+        const lowerFile = join(tmpDir, 'upper_case.txt');
+        const testUri = buildFileResourceUri(lowerFile);
+
+        const notifications: string[] = [];
+        const result = await registry.acquire(pathGuard, testUri, (uri) => {
+          notifications.push(uri);
+        });
+        assert.strictEqual(result.ok, true);
+
+        // Trigger modification
+        await writeFile(testFile, 'updated content');
+
+        await waitFor(() => notifications.length > 0, 1000);
+        assert.ok(notifications.length >= 1, 'Watcher should notify on case difference');
+        assert.strictEqual(notifications[0], testUri);
+
+        registry.destroy();
+      },
+    );
 
     it('TC-FUNC-064: WatcherRegistry - release tears down the watcher and leaves no stale state', async () => {
       const registry = createWatcherRegistry();
