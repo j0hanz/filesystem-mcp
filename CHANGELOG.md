@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Undo**: a copy whose files total more than eight times the undo budget (256 MiB by default) no longer gets an undo id; before, every copied byte was read a second time to hash it. The copy itself is unaffected.
+- **search_text**: a regex that can match a line break (such as `a\s+b`) now matches across lines, and the match is reported on the line where it starts.
+- **search_text**: a regex that can match across lines skips a walked file over 4 MiB (counted in `skippedTooLarge`) and refuses a named one. Patterns that stay on one line still search files of any size.
+- **search_text**: `\A` and `(?-m)^` now match only at the start of the file, not at the start of every line.
+- **replace_text**: a regex `\r` no longer matches in an all-CRLF file, which both tools now see with LF endings; write `\n` instead. The file keeps its CRLF endings on write.
+- **edit** and **patch**: a leading UTF-8 byte-order mark is hidden from `oldText` and from diffs, and kept on write. An all-CRLF file is matched as LF, so `oldText` and hunks may use either ending.
 
 ### Fixed
 
@@ -25,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` and `\z` to anchor to the whole file.
 - **Path guard**: a delete, move or copy source that exists but cannot be resolved is now refused with "Cannot access path" instead of skipping the root, denylist and read-only checks.
 - **delete**: a recursive delete asks once more, with the protected-files warning, when such a file appears in the folder while the first prompt is open.
+- **search_text**: a literal typed with `\r\n` now matches an all-CRLF file, as it already did in `replace_text`.
+- **replace_text**: a regex that stays on one line now works on files over 4 MiB.
+- **replace_text**: `^` and `$` follow the lines `search_text` reports, so nothing is matched after the final newline or in an empty file.
+- **replace_text**: `$` now matches at every line end in a CRLF file.
 
 ## [2.19.3] - 2026-11-07
 
