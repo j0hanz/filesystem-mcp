@@ -240,8 +240,12 @@ function patchContent(
   const firstHunk = parsedPatch.hunks[0];
   if (bom && firstHunk && firstHunk.oldStart <= 1) {
     // The view hides the file's BOM; a diff copied from the raw file carries it on line 1.
+    // A context line is both sides' first line: it is stripped once, not twice.
+    let stripped = -1;
     const strip = (marks: string): void => {
       const i = firstHunk.lines.findIndex((l) => l !== '' && marks.includes(l.charAt(0)));
+      if (i === stripped) return;
+      stripped = i;
       const line = firstHunk.lines[i];
       if (line?.charAt(1) === '\uFEFF') firstHunk.lines[i] = line.charAt(0) + line.slice(2);
     };

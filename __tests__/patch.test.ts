@@ -165,6 +165,13 @@ describe('patch body', () => {
     assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
   });
 
+  it('a raw-copied first context line loses only the BOM, not a second U+FEFF', async () => {
+    const f = join(root, 'patch_bom_twice.txt');
+    await writeFile(f, '\uFEFF\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n \uFEFF\uFEFFa\n-b\n+c\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\uFEFFa\nc\n');
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');
