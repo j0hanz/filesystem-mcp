@@ -540,7 +540,9 @@ export function createMatchEngine(
     for (const raw of lines) {
       // Yield between lines too: millions of short lines never yield per-match.
       if (await tick()) signal?.throwIfAborted();
-      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      // A regex loses the CR of a CRLF ending, as text mode does; a literal and a lone CR keep it.
+      const crlf = flags.isRegex && raw.endsWith('\r') && text[offset + raw.length] === '\n';
+      const line = crlf ? raw.slice(0, -1) : raw;
       if (overRe2Bound(line)) throw new FsError(ErrorCode.TOO_LARGE, LINE_TOO_LONG, path);
       let onLine = 0;
       // Leaving the loop closes the line's walk, so no further exec runs on it.
