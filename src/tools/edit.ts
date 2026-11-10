@@ -560,19 +560,21 @@ async function applyEdits(
         `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
       );
     }
-    // A leading U+FEFF is matched as typed first; only when that misses is it the copied file BOM.
+    // A leading U+FEFF is matched as typed first. Only when that misses, and the
+    // stripped form matches at the start of the file, is it the copied file BOM.
     const typed = asTyped(view, edit.oldText);
     const bare = view.accept(edit.oldText);
     let oldText = typed;
+    let newText = asTyped(view, edit.newText);
     let found = await findEditMatches(newContent, typed, ignoreWhitespace, tick, signal);
     if (found.count === 0 && bare !== typed) {
-      oldText = bare;
-      found = await findEditMatches(newContent, bare, ignoreWhitespace, tick, signal);
+      const stripped = await findEditMatches(newContent, bare, ignoreWhitespace, tick, signal);
+      if (stripped.first?.startIndex === 0) {
+        found = stripped;
+        oldText = bare;
+        newText = view.accept(edit.newText);
+      }
     }
-    const newText =
-      oldText !== typed && found.first?.startIndex === 0
-        ? view.accept(edit.newText)
-        : asTyped(view, edit.newText);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
