@@ -172,6 +172,14 @@ describe('patch body', () => {
     assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\uFEFFa\nc\n');
   });
 
+  it('a leading U+FEFF on an added line after line 1 is kept', async () => {
+    const f = join(root, 'patch_bom_line2.txt');
+    await writeFile(f, '\uFEFF\nb\n');
+    // The blank context line is written bare, without its leading space.
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n\n-b\n+\uFEFFc\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\n\uFEFFc\n');
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');
