@@ -235,15 +235,19 @@ async function processEntry(
           ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
             ? ctx.crlf
             : undefined;
-        if (!(eol?.matcher ?? matcher).testBuffer(bytes)) return undefined;
         const before = bytes.toString('utf-8');
+        // A leading BOM is an encoding mark, not text: search_text strips it, and
+        // left in, ^ misses line 1. It goes back on before the write below.
+        const bom = before.charCodeAt(0) === 0xfeff;
+        if (!(eol?.matcher ?? matcher).testBuffer(bom ? bytes.subarray(3) : bytes))
+          return undefined;
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
         const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
-          before,
+          bom ? before.slice(1) : before,
           eol?.replacement ?? replacement,
           signal,
           limits,
@@ -253,15 +257,17 @@ async function processEntry(
           if (more) ctx.cut = true;
           return undefined;
         }
+        // The mark goes back on, so the file keeps its BOM and the check sees final bytes.
+        const patched = bom ? before.charAt(0) + content : content;
         // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
-        if (Buffer.byteLength(content, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+        if (Buffer.byteLength(patched, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
         // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
         ctx.remaining -= matchCount;
         if (more) ctx.cut = true;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;
-        return { content, result: matchCount, write: true, before };
+        return { content: patched, result: matchCount, write: true, before };
       },
     );
     if (done === undefined) return undefined;
