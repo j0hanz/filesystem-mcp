@@ -54,7 +54,13 @@ export async function confirm(
   const identities = sealed?.identities ?? [];
   // A sealed path stays pending even when the tool no longer requires it, so
   // a directory emptied while its prompt was open still honors skip.
-  const pending = items
+  // Verdicts are keyed by path, so two items for one path are one question.
+  const byPath = new Map<string, ConfirmItem>();
+  for (const item of items) {
+    const kept = byPath.get(item.path);
+    if (kept === undefined || (!kept.required && item.required)) byPath.set(item.path, item);
+  }
+  const pending = [...byPath.values()]
     .filter((item) => item.required || sealed?.paths.includes(item.path))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   if (pending.length === 0) return { verdict: () => 'proceed' };

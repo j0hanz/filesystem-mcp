@@ -307,23 +307,24 @@ async function handleCreate(
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
   // append never destroys, and overwrite: true is that word given up front,
-  // so neither asks. Two spellings of one file ask one question: the answers
-  // are keyed by path, so a second prompt would be answered or skipped
-  // without ever being read.
-  const confirmItems = new Map<
-    string,
-    { path: string; identity: NonNullable<CreatePlan['identity']>; required: true; message: string }
-  >();
-  for (const plan of plans.values()) {
-    if (plan.kind !== 'pending' || plan.identity === undefined) continue;
-    confirmItems.set(plan.validPath, {
-      path: plan.validPath,
-      identity: plan.identity,
-      required: true,
-      message: `"${plan.validPath}" already exists. Overwrite it?`,
-    });
-  }
-  const confirmed = await confirm(ctx, 'create', 'overwrite', [...confirmItems.values()]);
+  // so neither asks.
+  const confirmed = await confirm(
+    ctx,
+    'create',
+    'overwrite',
+    [...plans.values()].flatMap((plan) =>
+      plan.kind !== 'pending' || plan.identity === undefined
+        ? []
+        : [
+            {
+              path: plan.validPath,
+              identity: plan.identity,
+              required: true,
+              message: `"${plan.validPath}" already exists. Overwrite it?`,
+            },
+          ],
+    ),
+  );
   if (isInputRequiredResult(confirmed)) return confirmed;
 
   // Phase 2 (mutation): execute every planned write.
