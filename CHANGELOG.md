@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **search_text**: a UTF-8 byte-order mark no longer hides line 1 from `^` patterns or shifts its column numbers.
+- **replace_text**: a UTF-8 byte-order mark no longer hides line 1 from `^` patterns; the mark stays in the file, matching `search_text`.
 - **patch**: a patch that changes nothing no longer rewrites the file or records an undo entry.
 - **diff**: the "Diff not computed" error now says a retry can help, since a busy server produces it too.
 - **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
