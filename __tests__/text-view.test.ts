@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { prefilterBytes, viewText } from '../src/core/text-view.ts';
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 
 describe('Text view', () => {
   it('shows an LF file as written', () => {

@@ -17,7 +17,7 @@ export interface TextView {
   restore(text: string): string;
 }
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 
 export function viewText(disk: string): TextView {
   const bom = disk.charCodeAt(0) === 0xfeff;
