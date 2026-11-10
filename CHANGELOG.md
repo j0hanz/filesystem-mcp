@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Path guard**: dynamically discover Windows system directory roots from environment variables rather than assuming drive C.
 - **Create tool validation**: validate against duplicate directory paths and file/directory name collisions before executing batch creation.
 - **Concurrency lock queue**: isolate exclusive task callbacks from resolution payloads so callers receive zero arguments.
+- **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` and `\z` to anchor to the whole file.
 
 ## [2.19.3] - 2026-11-07
 

@@ -1234,6 +1234,62 @@ describe('replace_text body', () => {
     });
   });
 
+  it('regex anchors match at every line, like search_text', async () => {
+    const file = await writeTestFile(root, 'anchors/a.txt', '');
+    const cases: {
+      searchPattern: string;
+      replacement?: string;
+      extra?: Partial<ReplaceArgs>;
+      before: string;
+      after: string;
+      matches: number;
+    }[] = [
+      { searchPattern: '^foo', before: 'foo\nfoo\nfoo\n', after: 'X\nX\nX\n', matches: 3 },
+      { searchPattern: 'foo$', before: 'foo\nfoo\nfoo\n', after: 'X\nX\nX\n', matches: 3 },
+      {
+        searchPattern: '^foo',
+        extra: { wholeWord: true },
+        before: 'foo bar\nfoo\n',
+        after: 'X bar\nX\n',
+        matches: 2,
+      },
+      {
+        searchPattern: 'foo$',
+        extra: { wholeWord: true },
+        before: 'bar foo\nfoo\n',
+        after: 'bar X\nX\n',
+        matches: 2,
+      },
+      // \A still anchors to the whole file, not to a line.
+      { searchPattern: '\\Afoo', before: 'foo\nfoo\n', after: 'X\nfoo\n', matches: 1 },
+      // CRLF: ^ matches after \n; $ needs the (\r?) to also see the \r.
+      { searchPattern: '^foo', before: 'foo\r\nfoo\r\n', after: 'X\r\nX\r\n', matches: 2 },
+      {
+        searchPattern: 'foo(\\r?)$',
+        replacement: 'X$1',
+        before: 'foo\r\nfoo\r\n',
+        after: 'X\r\nX\r\n',
+        matches: 2,
+      },
+      // A pattern spanning lines still matches across the newline.
+      { searchPattern: 'one\\ntwo', before: 'one\ntwo\n', after: 'X\n', matches: 1 },
+    ];
+    for (const c of cases) {
+      await writeFile(file, c.before);
+      const result = await replace({
+        path: file,
+        searchPattern: c.searchPattern,
+        replacement: c.replacement ?? 'X',
+        isRegex: true,
+        caseSensitive: true,
+        ...c.extra,
+      });
+      assert.notStrictEqual(result.isError, true, c.before);
+      assert.strictEqual(await readFile(file, 'utf-8'), c.after, c.before);
+      assert.strictEqual(result.structured.totalMatches, c.matches, c.before);
+    }
+  });
+
   it('explains a zero-match result in the text (#55)', async () => {
     const dir = join(root, 'zero_hint');
     await writeTestFile(dir, 'a.ts', 'const TOKEN1 = 1;\nconst token2 = 2;\n');

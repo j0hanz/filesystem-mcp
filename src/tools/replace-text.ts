@@ -64,7 +64,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
+      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\A and \\z for the whole file; in CRLF files write (\\r?)$), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
     ),
   replacement: z
     .string()

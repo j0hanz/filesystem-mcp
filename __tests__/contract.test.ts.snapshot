@@ -549,7 +549,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, lookaround and backreferences are not supported. Cannot be empty or whitespace-only."
+            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\\\A and \\\\z for the whole file; in CRLF files write (\\\\r?)$), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only."
           },
           "replacement": {
             "type": "string",
