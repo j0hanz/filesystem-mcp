@@ -320,11 +320,12 @@ const UNSAFE_ESCAPE_RE = /\\(?![dwbBSt]|[^a-zA-Z0-9])/u;
 /** False only when no match of the regex `source` can hold a line break. */
 function regexCrossesLines(source: string): boolean {
   return (
-    /[\n\r]/u.test(source) ||
+    // A raw control char (\n, \r, or a range start like [<U+0001>-~]), or a range from
+    // \t or \b (backspace in a class): the only range starts low enough to span U+000A.
+    // eslint-disable-next-line no-control-regex -- a control character is exactly what is looked for
+    /[\u0000-\u001f]|\\[tb]-/u.test(source) ||
     source.includes('[^') ||
     source.includes('[:') ||
-    // A bracket range can span U+000A ([\t-~]); judged crossing rather than parsed.
-    (source.includes('[') && source.includes('-')) ||
     INLINE_FLAGS_RE.test(source) ||
     UNSAFE_ESCAPE_RE.test(source)
   );

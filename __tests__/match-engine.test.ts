@@ -44,6 +44,8 @@ describe('MatchEngine', () => {
     'a|b',
     '\\S+',
     'a\\tb',
+    '[a-z]+',
+    '[A-Za-z0-9_-]+',
   ])
     it(`${p} cannot cross a line`, () => assert.equal(crosses(p), false));
 
@@ -67,6 +69,9 @@ describe('MatchEngine', () => {
     '[\\t-~]+',
     'a[\\t-\\-]b',
     `[${String.fromCharCode(1)}-~]+`,
+    '[\\b-~]',
+    // A known conservative false positive: a tab then `-x`, outside any class.
+    '\\t-x',
   ])
     it(`${JSON.stringify(p)} may cross a line`, () => assert.equal(crosses(p), true));
 
