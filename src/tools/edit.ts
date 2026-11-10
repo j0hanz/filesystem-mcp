@@ -17,7 +17,8 @@ import {
   nonBlankString,
   RequiredPath,
 } from '../core/schema.ts';
-import { MIB, toCrlf, usesCrlf } from '../core/util.ts';
+import type { TextView } from '../core/text-view.ts';
+import { MIB } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -531,8 +532,15 @@ function ambiguousEditError(
   );
 }
 
+/** `text` as the view shows it, but keeping a leading U+FEFF that `accept` would take for the BOM. */
+function asTyped(view: TextView, text: string): string {
+  const bare = view.accept(text);
+  return view.bom && text.startsWith('\uFEFF') ? '\uFEFF' + bare : bare;
+}
+
 async function applyEdits(
   content: string,
+  view: TextView,
   edits: z.infer<typeof EditSpecSchema>[],
   ignoreWhitespace: boolean,
   signal: AbortSignal | undefined,
@@ -541,7 +549,6 @@ async function applyEdits(
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
-  const crlf = usesCrlf(content);
 
   for (const [index, edit] of edits.entries()) {
     if (await tick()) signal?.throwIfAborted();
@@ -553,9 +560,21 @@ async function applyEdits(
         `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
       );
     }
-    const oldText = crlf ? toCrlf(edit.oldText) : edit.oldText;
-    const newText = crlf ? toCrlf(edit.newText) : edit.newText;
-    const found = await findEditMatches(newContent, oldText, ignoreWhitespace, tick, signal);
+    // A leading U+FEFF is matched as typed first. Only when that misses, and the
+    // stripped form matches at the start of the file, is it the copied file BOM.
+    const typed = asTyped(view, edit.oldText);
+    const bare = view.accept(edit.oldText);
+    let oldText = typed;
+    let newText = asTyped(view, edit.newText);
+    let found = await findEditMatches(newContent, typed, ignoreWhitespace, tick, signal);
+    if (found.count === 0 && bare !== typed) {
+      const stripped = await findEditMatches(newContent, bare, ignoreWhitespace, tick, signal);
+      if (stripped.first?.startIndex === 0) {
+        found = stripped;
+        oldText = bare;
+        newText = view.accept(edit.newText);
+      }
+    }
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
@@ -599,8 +618,8 @@ async function editOnce(
       transport: ctx.transport,
       tool: 'edit',
     },
-    async (content) => {
-      const result = await applyEdits(content, edits, options.ignoreWhitespace, ctx.signal);
+    async (content, view) => {
+      const result = await applyEdits(content, view, edits, options.ignoreWhitespace, ctx.signal);
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
         throw new FsError(
           ErrorCode.INVALID_INPUT,

@@ -268,6 +268,22 @@ describe('replace_text body', () => {
     assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
   });
 
+  it('regex mode on an all-CRLF file past the RE2 input cap fails that file with TOO_LARGE', async () => {
+    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES) + '\r\nFIND\r\n';
+    const big = await writeTestFile(root, 'regex_cap/crlf.txt', body);
+    const result = await replace({
+      path: big,
+      searchPattern: 'FIND',
+      replacement: 'FOUND',
+      isRegex: true,
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = result.rows[0]?.error;
+    assert.strictEqual(failure?.code, 'TOO_LARGE');
+    assert.match(failure?.message ?? '', /File too large for a regex replace/);
+    assert.strictEqual(await readFile(big, 'utf-8'), body, 'file must be untouched');
+  });
+
   it('transforms a hard-linked file once per run, dry run and live alike', async (t) => {
     const a = await writeTestFile(root, 'hardlink_once/a.txt', 'x\n');
     const b = join(dirname(a), 'b.txt');
@@ -348,15 +364,15 @@ describe('replace_text body', () => {
     );
     assert.strictEqual(await readFile(grow, 'utf-8'), 'one\r\ntwo\r\nhalf\r\n');
 
-    // Mixed endings have no one ending to convert to: nothing matches, file untouched.
+    // Mixed endings are matched as written: LF text does not span the CRLF.
     const mixed = await writeTestFile(root, 'rt-crlf/mixed/mixed.txt', 'mixed\r\nlf\n');
     await call({ path: mixed, searchPattern: 'mixed\nlf', replacement: 'x', caseSensitive: true });
     assert.strictEqual(await readFile(mixed, 'utf-8'), 'mixed\r\nlf\n');
 
-    // isRegex is taken as written: \n does not match \r\n.
+    // An all-CRLF file is matched as LF, so a regex \n spans its lines.
     const regex = await writeTestFile(root, 'rt-crlf/regex/regex.txt', 'one\r\ntwo\r\n');
     await call({ path: regex, searchPattern: 'one\\ntwo', replacement: 'x', isRegex: true });
-    assert.strictEqual(await readFile(regex, 'utf-8'), 'one\r\ntwo\r\n');
+    assert.strictEqual(await readFile(regex, 'utf-8'), 'x\r\n');
 
     // One directory run picks the ending per file.
     const crlfFile = await writeTestFile(root, 'rt-crlf/dir/crlf.txt', 'p\r\nq\r\n');
@@ -367,6 +383,68 @@ describe('replace_text body', () => {
     );
     assert.strictEqual(await readFile(crlfFile, 'utf-8'), 'r\r\ns\r\n');
     assert.strictEqual(await readFile(lfFile, 'utf-8'), 'r\ns\n');
+  });
+
+  describe('through the Text view', () => {
+    const cases: {
+      name: string;
+      file: string;
+      args: Partial<ReplaceArgs> & { searchPattern: string; replacement: string };
+      after: string;
+      matches: number;
+    }[] = [
+      {
+        name: 'a regex $ matches before CRLF',
+        file: 'foo\r\nbar\r\n',
+        args: { searchPattern: 'foo$', isRegex: true, replacement: 'X' },
+        after: 'X\r\nbar\r\n',
+        matches: 1,
+      },
+      {
+        name: 'a literal typed with CRLF matches an all-CRLF file',
+        file: 'a\r\nb\r\n',
+        args: { searchPattern: 'a\r\nb', replacement: 'x' },
+        after: 'x\r\n',
+        matches: 1,
+      },
+      {
+        name: 'a literal typed with LF matches an all-CRLF file',
+        file: 'a\r\nb\r\n',
+        args: { searchPattern: 'a\nb', replacement: 'x\ny' },
+        after: 'x\r\ny\r\n',
+        matches: 1,
+      },
+      {
+        name: 'a mixed-ending file is matched as written',
+        file: 'a\r\nb\nc\n',
+        args: { searchPattern: 'b\nc', replacement: 'x' },
+        after: 'a\r\nx\n',
+        matches: 1,
+      },
+      {
+        name: 'a regex \\r does not match an all-CRLF file',
+        file: 'a\r\nb\r\n',
+        args: { searchPattern: 'a\\r\\n', isRegex: true, replacement: 'x' },
+        after: 'a\r\nb\r\n',
+        matches: 0,
+      },
+      {
+        name: 'line 1 of a BOM CRLF file matches ^ and keeps both',
+        file: '\uFEFFa\r\nb\r\n',
+        args: { searchPattern: '^a$', isRegex: true, replacement: 'x' },
+        after: '\uFEFFx\r\nb\r\n',
+        matches: 1,
+      },
+    ];
+    for (const c of cases) {
+      it(c.name, async () => {
+        const file = await writeTestFile(root, 'rt-view/f.txt', c.file);
+        const result = await replace({ path: file, ...c.args });
+        assert.notStrictEqual(result.isError, true);
+        assert.strictEqual(result.structured.totalMatches, c.matches);
+        assert.strictEqual(await readFile(file, 'utf-8'), c.after);
+      });
+    }
   });
 
   it("honors the allowed root's .gitignore below it", async () => {

@@ -32,6 +32,31 @@ describe('Rewrite', () => {
     await cleanupTestRoot(root);
   });
 
+  it('a transform sees view text and the file keeps its BOM and CRLF', async () => {
+    await writeFile(path, '\uFEFFone\r\ntwo\r\n');
+    let seen = '';
+    const done = await rewriteFile({ fs, path, dryRun: false, tool: 'edit' }, (content, view) => {
+      seen = content;
+      assert.deepEqual([view.bom, view.crlf], [true, true]);
+      return { content: content.replace('two', 'two\nthree'), result: 1, write: true };
+    });
+    assert.equal(seen, 'one\ntwo\n');
+    assert.equal(await readFile(path, 'utf8'), '\uFEFFone\r\ntwo\r\nthree\r\n');
+    assert.equal(done.before, '\uFEFFone\r\ntwo\r\n');
+    assert.equal(done.after, '\uFEFFone\r\ntwo\r\nthree\r\n');
+  });
+
+  it('a dry run reports the on-disk text it would write', async () => {
+    await writeFile(path, 'one\r\n');
+    const done = await rewriteFile({ fs, path, dryRun: true, tool: 'edit' }, (content) => ({
+      content: content + 'two\n',
+      result: 1,
+      write: true,
+    }));
+    assert.equal(done.after, 'one\r\ntwo\r\n');
+    assert.equal(await readFile(path, 'utf8'), 'one\r\n');
+  });
+
   it('a write queued behind another writer stops waiting when cancelled and never runs', async () => {
     let release = (): void => undefined;
     const holder = fs.lockForWrite(
@@ -305,6 +330,16 @@ describe('Rewrite', () => {
       });
     });
     assert.equal(ran, false);
+  });
+
+  it('rewriteEntry restores through the view its transform opened', async () => {
+    await writeFile(path, '\uFEFFa\r\n');
+    const done = await rewriteEntry({ fs, path, dryRun: false }, (_bytes, _stats, open) => {
+      assert.equal(open().text, 'a\n');
+      return Promise.resolve({ content: 'b\n', result: 1, write: true });
+    });
+    assert.equal(await readFile(path, 'utf8'), '\uFEFFb\r\n');
+    assert.equal(done instanceof ScanSkip ? undefined : done?.before, '\uFEFFa\r\n');
   });
 
   it('rewriteEntry writes nothing when the transform declines', async () => {

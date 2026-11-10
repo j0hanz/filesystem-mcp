@@ -11,6 +11,7 @@ import { countLines } from '../core/read.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { clipLine } from '../core/search.ts';
+import type { TextView } from '../core/text-view.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -88,8 +89,8 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       transport: ctx.transport,
       tool: 'patch',
     },
-    (content) => {
-      const result = patchContent(args, content);
+    (content, view: TextView) => {
+      const result = patchContent({ ...args, diff: view.accept(args.diff) }, content, view.bom);
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };
     },
@@ -215,6 +216,7 @@ function mismatchDetail(
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
   content: string,
+  bom = false,
 ): { patched: string; linesAdded: number; linesRemoved: number } {
   // patch is single-file only: a multi-file unified diff (parsePatch length > 1)
   // is rejected. Multi-file application needs per-file PathGuard-resolved loaders
@@ -234,6 +236,25 @@ function patchContent(
       'patch accepts a single-file unified diff with at least one hunk; received an empty patch',
       args.path,
     );
+  }
+  const firstHunk = parsedPatch.hunks[0];
+  if (bom && firstHunk && firstHunk.oldStart <= 1) {
+    // The view hides the file's BOM; a diff copied from the raw file carries it on
+    // line 1. Only the first old-side and first new-side lines are line 1, and
+    // a context line is both, so each hunk line is stripped at most once.
+    let oldLine = 1;
+    let newLine = 1;
+    for (const [i, line] of firstHunk.lines.entries()) {
+      if (oldLine > 1 && newLine > 1) break;
+      // jsdiff reads a bare empty line as context.
+      const mark = line === '' ? ' ' : line.charAt(0);
+      if (mark !== ' ' && mark !== '-' && mark !== '+') continue;
+      if ((mark !== '+' && oldLine === 1) || (mark !== '-' && newLine === 1)) {
+        if (line.charAt(1) === '\uFEFF') firstHunk.lines[i] = mark + line.slice(2);
+      }
+      if (mark !== '+') oldLine++;
+      if (mark !== '-') newLine++;
+    }
   }
   const fileLines = countLines(content);
   const diffLines = parsedPatch.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);

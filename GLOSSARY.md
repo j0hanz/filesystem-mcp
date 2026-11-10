@@ -52,6 +52,17 @@ by one rule shared by every tool that scans.
 _Avoid_: walk (the raw traversal, which relocation and undo also use), search
 (one tool's use of a scan), sweep
 
+## Text
+
+**Text view**:
+The text of a file as a tool judges it: a leading byte-order mark is hidden,
+and a file whose every line ends in CRLF is shown with LF endings; a file
+with mixed endings is shown as written. A write through the view puts both
+back, so the file keeps its mark and its endings. A text search and every
+Rewrite read through one view; what a Rewrite reports as before and after is
+the text on disk, not the view.
+_Avoid_: normalised text, decoded content, prepared text
+
 ## Matching
 
 **Match plan**:
@@ -59,8 +70,10 @@ What a text search or a replacement settles about its needle before any text
 is read: which engine judges it — a native literal pass or the regex engine —
 under the flags, and the per-text bails that hand judgment to the regex
 engine (a fold character in the text; U+FFFD or a lone surrogate in the
-needle). Search and replace ask one module for their plans, so a preview
-judges exactly what its replacement will touch.
+needle). Search and replace ask one module for their plans and their
+matches, over the same Text view, so a preview judges exactly what its
+replacement will touch. A match may span a line break in both; a search
+reports it on the line where it starts.
 _Avoid_: matcher selection, dispatch, engine choice, fast path
 
 ## Writes

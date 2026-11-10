@@ -4,6 +4,7 @@ import { withAbort } from './concurrency.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
+import { type TextView, viewText } from './text-view.ts';
 
 /**
  * The Rewrite: a call that replaces a text file's content with a transform of
@@ -23,11 +24,10 @@ export interface RewriteRequest {
 
 /** `write: false` reports without writing (an edit that applied nothing). */
 export interface Change<T> {
+  /** The new content as view text; `apply` restores the file's BOM and endings. */
   readonly content: string;
   readonly result: T;
   readonly write: boolean;
-  /** The decoded current content, when the transform already decoded the bytes. */
-  readonly before?: string;
 }
 
 type WrittenFileReport = WrittenFileMeta & {
@@ -50,34 +50,41 @@ export interface Rewritten<T> {
 /** A file the client named (edit, patch): readNamedText's refusals fail the call. */
 export function rewriteFile<T>(
   request: RewriteRequest & { readonly tool: string },
-  transform: (content: string) => Change<T> | Promise<Change<T>>,
+  transform: (content: string, view: TextView) => Change<T> | Promise<Change<T>>,
 ): Promise<Rewritten<T>> {
   return locked(request, async () => {
     const { validPath, content, stats } = await readNamedText(request.fs, request.path, {
       signal: request.signal,
       tool: request.tool,
     });
-    return apply(request, validPath, content, stats, await transform(content));
+    const view = viewText(content);
+    return apply(request, validPath, view, stats, await transform(view.text, view));
   });
 }
 
 /**
  * A walked file (replace_text): a non-text verdict comes back untransformed;
  * a transform that returns undefined writes nothing. The transform gets the
- * bytes and the read's stat, so it can rule a file out before anything is decoded.
+ * bytes and the read's stat, so it can rule a file out before anything is decoded;
+ * `open` decodes and views them once, and the Rewrite restores through that view.
  */
 export function rewriteEntry<T>(
   request: RewriteRequest,
-  transform: (bytes: Buffer, stats: Stats) => Promise<Change<T> | undefined>,
+  transform: (
+    bytes: Buffer,
+    stats: Stats,
+    /** Decodes and views the bytes once; the Rewrite restores through the same view. */
+    open: () => TextView,
+  ) => Promise<Change<T> | undefined>,
 ): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
     const verdict = await readText(request.fs, request.path, request.signal);
     if (verdict.kind !== 'text') return skipOf(verdict);
-    const change = await transform(verdict.bytes, verdict.stats);
+    let view: TextView | undefined;
+    const open = (): TextView => (view ??= viewText(verdict.bytes.toString('utf8')));
+    const change = await transform(verdict.bytes, verdict.stats, open);
     if (change === undefined) return undefined;
-    // A changed file up to the text cap: decode it once, not once per side.
-    const before = change.before ?? verdict.bytes.toString('utf8');
-    return apply(request, request.path, before, verdict.stats, change);
+    return apply(request, request.path, open(), verdict.stats, change);
   });
 }
 
@@ -123,24 +130,24 @@ function lockedWrite<R>(request: RewriteRequest, body: () => Promise<R>): Promis
 async function apply<T>(
   request: RewriteRequest,
   validPath: string,
-  before: string,
+  view: TextView,
   stats: Stats,
   change: Change<T>,
 ): Promise<Rewritten<T>> {
   const { fs, dryRun, signal, transport } = request;
+  const after = view.restore(change.content);
   const written = !dryRun && change.write;
   if (dryRun && change.write) fs.assertNoReadOnlyHardLink(validPath, stats);
   let modified = stats.mtime.toISOString();
   if (written) {
-    await fs.writeFile(request.path, change.content, { signal });
+    await fs.writeFile(request.path, after, { signal });
     const writtenAt = new Date();
     modified = modifiedAfterWrite(await statAfterWrite(fs, validPath, signal), writtenAt);
   }
-  const after = change.content;
   return {
     kind: 'text',
     validPath,
-    before,
+    before: view.disk,
     after,
     result: change.result,
     written,

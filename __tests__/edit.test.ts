@@ -358,7 +358,7 @@ describe('edit body', () => {
       ignoreWhitespace: true,
     });
     assert.notStrictEqual(result.isError, true, result.text);
-    assert.strictEqual(await readFile(file, 'utf-8'), '\ufeff # header\n # inserted\npass\n');
+    assert.strictEqual(await readFile(file, 'utf-8'), '\ufeff# header\n# inserted\npass\n');
   });
 
   it('with ignoreWhitespace keeps the file indentation of a flattened oldText in a CRLF file', async () => {
@@ -472,6 +472,50 @@ describe('edit body', () => {
     });
     assert.strictEqual(mixedResult.isError, true);
     assert.strictEqual(await readFile(mixedFile, 'utf-8'), 'mixed\r\nlf\n');
+  });
+
+  it('oldText typed with CRLF matches an all-CRLF file', async () => {
+    const file = await writeTestFile(root, 'crlf/typed.txt', 'a\r\nb\r\nc\r\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'a\r\nb', newText: 'x' }] });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'x\r\nc\r\n');
+  });
+
+  it('a lone CR elsewhere in the file survives an edit', async () => {
+    const file = await writeTestFile(root, 'crlf/lone-cr.txt', 'a\rb\r\nc\r\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'c', newText: 'd' }] });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'a\rb\r\nd\r\n');
+  });
+
+  it('oldText on line 1 of a BOM file matches and the mark stays', async () => {
+    const file = await writeTestFile(root, 'bom/line1.txt', '\uFEFFa\nb\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'a\nb', newText: 'x' }] });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFx\n');
+  });
+
+  it('a U+FEFF inside a BOM file matches as typed, and newText keeps its own', async () => {
+    const file = await writeTestFile(root, 'bom/inner.txt', '\uFEFFfirst\n\uFEFFtarget\n');
+    const result = await edit({
+      path: file,
+      edits: [{ oldText: '\uFEFFtarget', newText: 'done' }],
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFfirst\ndone\n');
+
+    const kept = await edit({ path: file, edits: [{ oldText: 'done', newText: '\uFEFFdone' }] });
+    assert.notStrictEqual(kept.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFfirst\n\uFEFFdone\n');
+  });
+
+  it('a BOM-led oldText that matches only deeper in a BOM file is unmatched', async () => {
+    const before = '\uFEFFa\nb\nc\nd\nx\n';
+    const file = await writeTestFile(root, 'bom/deep.txt', before);
+    const result = await edit({ path: file, edits: [{ oldText: '\uFEFFx', newText: '\uFEFFy' }] });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.text ?? '', /no match for oldText/);
+    assert.strictEqual(await readFile(file, 'utf-8'), before);
   });
 
   it("dryRun reports the file's own modified time", async () => {

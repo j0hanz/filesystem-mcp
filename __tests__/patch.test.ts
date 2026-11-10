@@ -137,6 +137,56 @@ describe('patch body', () => {
     });
   });
 
+  it('a CRLF diff applies to an all-CRLF file', async () => {
+    const f = join(root, 'patch_crlf_ok.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    await patch({ path: f, diff: '--- a\r\n+++ a\r\n@@ -1,2 +1,2 @@\r\n a\r\n-b\r\n+c\r\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\r\nc\r\n');
+  });
+
+  it('an LF diff applies to an all-CRLF file', async () => {
+    const f = join(root, 'patch_lf_on_crlf.txt');
+    await writeFile(f, 'a\r\nb\r\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), 'a\r\nc\r\n');
+  });
+
+  it('a diff whose first line carries the BOM applies to a BOM file', async () => {
+    const f = join(root, 'patch_bom_in_diff.txt');
+    await writeFile(f, '\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-\uFEFFa\n+\uFEFFz\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
+  });
+
+  it('a diff without the BOM applies to a BOM file', async () => {
+    const f = join(root, 'patch_bom_not_in_diff.txt');
+    await writeFile(f, '\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-a\n+z\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFFz\nb\n');
+  });
+
+  it('a raw-copied first context line loses only the BOM, not a second U+FEFF', async () => {
+    const f = join(root, 'patch_bom_twice.txt');
+    await writeFile(f, '\uFEFF\uFEFFa\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n \uFEFF\uFEFFa\n-b\n+c\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\uFEFFa\nc\n');
+  });
+
+  it('a leading U+FEFF on an added line after line 1 is kept', async () => {
+    const f = join(root, 'patch_bom_line2.txt');
+    await writeFile(f, '\uFEFF\nb\n');
+    // The blank context line is written bare, without its leading space.
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n\n-b\n+\uFEFFc\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\n\uFEFFc\n');
+  });
+
+  it('a leading U+FEFF on an added line after a spaced context line 1 is kept', async () => {
+    const f = join(root, 'patch_bom_line2_spaced.txt');
+    await writeFile(f, '\uFEFF\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n \n-b\n+\uFEFFc\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\n\uFEFFc\n');
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');
