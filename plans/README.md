@@ -1,6 +1,6 @@
 # Implementation Plans
 
-Open plans from the improve-skill audits (2026-09-25 to 2026-11-03). Finished,
+Open plans from the improve-skill audits (2026-09-25 to 2026-11-10). Finished,
 superseded and reverted plans were deleted on 2026-10-28; `git log -- plans/`
 holds them. Each executor: read the plan fully before starting, honor its STOP
 conditions, and update your row when done.
@@ -10,16 +10,22 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 
 ## Execution order & status
 
-| Plan | Title                                                   | Priority | Effort | Depends on                 | Status                                                                                                                            |
-| ---- | ------------------------------------------------------- | -------- | ------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | — (056 deleted, see notes) | PARTIAL (step 1 only, not on `main`; local branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`; steps 2-3 open) |
-| 077  | Inline single-use hop helpers                           | P2       | S      | —                          | REJECTED: never named its helpers, and `isEntryAccessible` is now called from `fs.ts`, not `list.ts`                              |
-| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —                          | REJECTED: `isPathAllowed` is gone and `makeGuard` is async; what remains is a one-line constructor call                           |
-| 079  | Single unicode fold primitive for search                | P3       | S      | —                          | REJECTED: `foldUnicodeSpelling` is gone; `matcher.ts` owns search folding, and path folding differs on purpose                    |
-| 080  | Enforce coverage floor on all runners                   | P3       | S      | —                          | TODO — commit dda3542b                                                                                                            |
-| 081  | Regex search survives lossy files                       | P1       | S      | —                          | DONE: merged to `main` in #193                                                                                                    |
-| 082  | Warn before deleting protected files                    | P2       | S      | —                          | DONE: merged to `main` in #194                                                                                                    |
-| 083  | writeFile keeps owner, flushes, handles long names      | P2       | S      | —                          | DONE: merged to `main` in #195; uses `lchown`, not the plan's `chown`                                                             |
+| Plan | Title                                                   | Priority | Effort | Depends on                 | Status                                                                                                                                                                                                                                                                                                                                                       |
+| ---- | ------------------------------------------------------- | -------- | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 061  | Suite green as root; stdio lease tests run concurrently | P3       | S      | — (056 deleted, see notes) | PARTIAL (step 1 is on `main` as `e763c778`, the root skip at `__tests__/create.test.ts:522`; steps 2-3 open, and step 2's anchor `stdio.test.ts:250` has moved, so re-read the plan against the file first)                                                                                                                                                  |
+| 077  | Inline single-use hop helpers                           | P2       | S      | —                          | REJECTED: never named its helpers, and `isEntryAccessible` is now called from `fs.ts`, not `list.ts`                                                                                                                                                                                                                                                         |
+| 078  | Dedupe PathGuard test recompute pairs                   | P2       | S      | —                          | REJECTED: `isPathAllowed` is gone and `makeGuard` is async; what remains is a one-line constructor call                                                                                                                                                                                                                                                      |
+| 079  | Single unicode fold primitive for search                | P3       | S      | —                          | REJECTED: `foldUnicodeSpelling` is gone; `matcher.ts` owns search folding, and path folding differs on purpose                                                                                                                                                                                                                                               |
+| 080  | Enforce coverage floor on all runners                   | P3       | S      | —                          | TODO — commit dda3542b                                                                                                                                                                                                                                                                                                                                       |
+| 081  | Regex search survives lossy files                       | P1       | S      | —                          | DONE: merged to `main` in #193                                                                                                                                                                                                                                                                                                                               |
+| 082  | Warn before deleting protected files                    | P2       | S      | —                          | DONE: merged to `main` in #194                                                                                                                                                                                                                                                                                                                               |
+| 083  | writeFile keeps owner, flushes, handles long names      | P2       | S      | —                          | DONE: merged to `main` in #195; uses `lchown`, not the plan's `chown`                                                                                                                                                                                                                                                                                        |
+| 084  | `replace_text` anchors match at every line              | P1       | S      | —                          | DONE: executed 2026-11-10 on branch `advisor/084-replace-text-line-anchors`, commit `b506fc38` (merged to `main` in #274); also raises the TOOL-SURFACE-002 budget 25200 to 25300 in `__tests__/tools.test.ts`, because the new description text measures 25275 (premise re-verified by the reviewer; the dated raise comment follows the file's convention) |
+| 085  | Delete guard fails closed on a realpath error           | P1       | S      | —                          | DONE: executed 2026-11-10 on branch `advisor/085-delete-guard-fails-closed`, commit `44a1fdcf` (merged to `main` in #274); test stub compares paths with `isSamePath`, not raw equality, because the guard lowercases the drive letter on Windows                                                                                                            |
+| 086  | Delete asks again when protected files appear           | P2       | S      | —                          | DONE: executed 2026-11-10 on branch `advisor/086-delete-reprompts-on-protected-warning`, commit `5ec63a87` (merged to `main` in #274); test also asserts the kept prompt carries the warning                                                                                                                                                                 |
+| 087  | Copy undo gives up before re-hashing a huge copy        | P2       | S      | —                          | DONE: executed 2026-11-10 on branch `advisor/087-copy-undo-hash-cap`, commit `0088d08c` (merged to `main` in #274); `### Changed` heading added to `[Unreleased]` before `### Fixed`                                                                                                                                                                         |
+| 088  | BOM in `search_text`, no-op `patch`, busy `diff`        | P2       | S      | — (after 084, see notes)   | DONE: executed 2026-11-10 on branch `advisor/088-text-tool-small-fixes`, commits `91847f49` (BOM), `bee7f3da` (no-op patch), `a5b4f92c` (diff message + changelog) (merged to `main` in #274); the BOM test fixture is `bom/o.cs`, not the plan's `bom/a.cs` — directory-scoped search, no behavior difference                                               |
+| 089  | `replace_text` BOM parity with `search_text`            | P2       | S      | 088 (PR #274)              | DONE: executed 2026-11-10 on branch `advisor/089-replace-text-bom-parity`, commits `eda142dc` + `c58faef0` (reviewed, in PR #275); one revision round: test BOMs written as escapes, and `charAt(0)` for the re-attach (lint)                                                                                                                                |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -32,7 +38,51 @@ abandoned)
   `a0a91de2`. So nobody has established whether load drops notifications. Step
   3's ten-run stability check and its revert rule are the only guard for step 2.
 
+- **084 to 088 are independent.** 084 and 088 both touch text matching
+  (`matcher.ts` and `search.ts`), so land 084 first to keep the diffs apart.
+  The user chose these five on 2026-11-10 from a table of 17 findings; the
+  rest are under "Found but not planned".
+- **087 sets a number the maintainer may want to change.** It stops undo for a
+  copy whose files total more than eight times the undo budget (256 MiB by
+  default). The factor is a judgment, not a measurement.
+
+- **089 requires PR #274.** It builds on 084's `m` flag and 088's search
+  strip, both in that PR. Its drift check anchors `7de7398a`, the branch
+  tip; if the PR is squash-merged that SHA becomes unreachable, and the plan
+  says to fall back to comparing the "Current state" excerpts. Execute only
+  after #274 merges. It merged with a merge commit (`336285b9`), so the anchor is an ancestor of `main` and 089 is executable.
+
 ## Findings considered and rejected
+
+From the 2026-11-10 standard audit at `d799cc5e` (four read-only agents:
+mutation path, read/search/edit path, security boundary,
+tests/perf/debt/deps/docs/direction; every cited line re-read by the advisor;
+nothing reproduced by running the server, only in-memory RE2 probes):
+
+- The grant pre-check revealing whether an out-of-root directory exists
+  (`path.ts:596-609`, `resolveGrantTargetDir`): a grant prompt names the
+  nearest existing ancestor by design, and hiding that changes when a prompt
+  is offered. `FS_ROOT_BOUNDARY` already limits it. Not planned.
+- Undo treating a hard-linked `from` as free when restoring a move
+  (`undo.ts:1397`): needs an outside `ln` between the move and the undo. LOW
+  confidence; not planned.
+- Factoring the plan, slot, confirm, execute code shared by `create.ts`,
+  `delete.ts` and `move.ts` (about 25 lines each): the three differ in dedupe
+  and nesting rules.
+- Removing the second directory walk `GitignoreManager.load` does before the
+  glob walk (`glob.ts:336-374`): `fs.glob`'s `exclude` callback is
+  synchronous, so the rules cannot load lazily without a custom walker.
+- Dependencies: `npm audit --omit=dev` reports 0 vulnerabilities; `npm
+outdated` shows only `@types/node` (held at `^24` on purpose) and a
+  `typescript-eslint` patch. The exact `@modelcontextprotocol/*` pins are
+  current.
+- Plan 080 is still accurate, with one caution: Windows skips the Linux-only
+  descriptor tests and about nine POSIX tests, so the Ubuntu floor will
+  probably not hold there. Expect its own STOP to fire, and a lower Windows
+  floor.
+- Not audited in this run: `stdio.ts`, `resources.ts` internals, the
+  `UndoPreview` dry-run world, `schema.ts`, the release, scorecard and tdqs
+  workflows, `examples/`.
 
 From the 2026-11-03 deep audit at `5ebbd489` (one advisor, no subagents; probes
 run on Windows and Node 26 only):
@@ -338,10 +388,64 @@ From the 2026-10-09 SDK 2.3.1 / adapter review at `8941498f`:
 
 ## Found but not planned (available for a later run)
 
+From the 2026-11-10 standard audit at `d799cc5e` (not selected; every line
+re-read by the advisor):
+
+- **Recursive `rm` runs without `maxRetries`.** `fs.ts:1351` (delete),
+  `:1442` (cross-device move source) and `:1487` (staging cleanup) pass only
+  `{ recursive, force }`, and Node's default is 0 retries. On Windows an
+  indexer or antivirus handle fails the `rm` part-way: half a tree deleted, or
+  a `.<hex>.tmp` staging directory left behind. Add `maxRetries: 3` and a
+  `retryDelay`. Effort S, confidence MED (not reproduced).
+- **Superscript device names are not reserved.** `RESERVED_DEVICE_NAMES`
+  (`path-utils.ts:73-100`) lacks `COM¹ COM² COM³ LPT¹ LPT² LPT³`, which Win32
+  treats as devices. On a host with that port an open can block. Effort S,
+  confidence MED.
+- **The diff worker's kill timer has no test.** `diff.ts:102-104` is the
+  backstop for a worker that never answers; the crash, exit and start-failure
+  branches (`:83-85`, `:112-115`) are untested too. The only deadline test
+  (`diff.test.ts:150-154`) uses the library's own timeout. Needs an injectable
+  worker URL. Effort S.
+- **Root-only ownership tests never run in CI.** `core-fs.test.ts:770-785`
+  skip unless uid is 0, and no runner is root, so the `lchown` property from
+  plan 083 is checked only through a fake. One `sudo` step on the Ubuntu leg.
+  Effort S.
+- **Docs still say a copy loses undo for the whole call.**
+  `docs/client-guide.md:313` ("A copy reports one reason with no path, and has
+  no id") and `GLOSSARY.md:110-111`. A copy has had its own per-path capture
+  since `d715802d` (`fs.ts:1381-1382`); `undo.test.ts:507-510` expects the
+  `<path>: reason` form. Effort S.
+- **Moving a link into its own target is refused.** `fs.ts:570` compares the
+  Landing (the link's target) against the destination, but a move renames the
+  Entry (the link). Undo hits the same check through `fs.rename`
+  (`undo.ts:783`). Effort S, confidence MED (read, not run).
+- **Write-lock keys are not canonical.** `lockForWrite` (`fs.ts:410-413`) keys
+  on the validated path, which keeps missing segments as typed, so two
+  concurrent `create` calls for case variants of one missing file both pass
+  the `'clear'` re-check (`fs.ts:874-883`) on Windows and macOS. Hard-link
+  twins have different keys too. Effort M, risk MED (touches every lock
+  caller).
+- **The rate limiter keys on the full address.** `http-policy.ts:406`; an
+  IPv6 client rotating inside its /64 gets a fresh budget per request, and at
+  10,000 buckets the oldest is evicted even while active (`:418-421`). Key
+  IPv6 by /64 and refuse new keys when full. Effort S, low impact (the API key
+  is out of brute-force reach either way).
+- **`delete` rebuilds a `Problem` through an `FsError`.** `delete.ts:233-240`
+  then `batch.ts` turns it back; the `'Unknown delete failure'` fallback at
+  `:247-253` looks unreachable; the doc comment at `fs.ts:221-222` sits above
+  the wrong method. About 15 lines. Effort S.
+- **Direction: undo for cross-device moves.** `fs.ts:1005` abandons the
+  capture ("not undoable yet", as ADR-008 says). `planCopyUndo` /
+  `recordCopyUndo` and `snapshotTree` now supply the pieces. Needs an ADR-008
+  amendment. Effort M to L; spike first.
+- **Direction: diffstat in the overwrite prompt** (already listed below, now
+  cheaper). `create.ts:323` still asks a blind yes or no; the worker-backed
+  `twoFilesPatch` removes the cost objection.
+
 Found while reviewing plan 083 on 2026-11-03:
 
 - **`writeFile`'s `fsChmod(tempPath, mode)` follows a symlink.** `chmod(2)` does
-  (`fs.ts:774`), and it predates 083. With a root server writing
+  (`fs.ts:1147`, was `:774`), and it predates 083. With a root server writing
   in a directory another user controls, swapping a symlink in at the temp path
   applies the target file's mode to whatever the link names. Not reproduced.
   Doing the chown and chmod on an open handle (`fchown`, `fchmod`) would close
@@ -353,20 +457,12 @@ Found while reviewing plan 083 on 2026-11-03:
 
 From the 2026-11-03 deep audit at `5ebbd489` (not selected):
 
-- **`--allow-cwd-walk` has no tests.** `findProjectRoot`
-  (`path-discovery.ts:107`) widens the root, and `__tests__/` never names it
-  (71% line coverage on Windows). Pin the marker search, the ceiling, and the
-  case where a `package.json` in home resolves to home, which is refused and
-  leaves no root from the walk. Effort S.
-- **HTTP keep-alive contradicts its own comment.** `http.ts:46-48` says the
-  timeout must exceed any proxy's idle timeout, and sets 5 s. Common proxies
-  idle for 60 s or more. No failure has been reported. Effort S, confidence MED.
+- Closed since (checked 2026-11-10): the `--walk-cwd` tests exist
+  (`__tests__/path-discovery.test.ts`), the HTTP keep-alive is 65 s
+  (`http.ts:47-50`), and copies are undoable (`d715802d`).
 - **Direction: settle issue #153.** The reporter called newline-on-append
   "niche". Closing with a docs line is cheapest; a newline flag costs one schema
   field.
-- **Direction: make copies undoable.** `fs.ts:998` abandons the capture, and
-  `copy` with `overwrite: true` skips the prompt too, so nothing protects the
-  destination. Effort M; merged-tree snapshots are the cost.
 - **Direction: mention undo in the `replace_text` timeout hint.**
   `replace-text.ts:558` warns about re-runs but omits undo, though a partial run
   should still get an id. Effort S; check that first.
@@ -386,11 +482,9 @@ recursive: true, ignoreIfNotExists: true }`: if `d` is removed while the
   (36 ms, synchronous) in `store.ts:243-247`, then `MAX_ENTRY_BYTES` refuses
   it and `cursor.ts:124-130` drops the error. Pre-check with
   `jsonBytesOver`. Effort S, low leverage.
-- **Registry Docker entry mounts `:ro` without `--read-only`**
-  (`server.json` OCI package, `-v {host_dir}:/workspace:ro`). The write
-  tools are advertised and every call fails with EROFS; the docs pair `:ro`
-  with `--read-only` (`docs/configuration.md:115-116`). Add the flag, or
-  drop `:ro`. Effort S; changes what registry Docker users get.
+- Closed since (checked 2026-11-10): the registry Docker entry passes
+  `--read-only` (`server.json:112`), and the MCPB manifest sets `FS_ALLOWLIST`
+  (`mcpb/manifest.json:32`).
 - **Agent docs do not name the plan directories.** `AGENTS.md` /
   `CONTRIBUTING.md` never mention `plans/README.md` (index, rejected and
   backlog lists) or `docs/plan/<date>-<topic>/` (run maps, audit findings
@@ -399,9 +493,6 @@ recursive: true, ignoreIfNotExists: true }`: if `d` is removed while the
   only `stdio`; README sells Streamable HTTP. An OCI entry with `--port`,
   `FS_API_KEY` (`isSecret`) and `FS_ALLOWED_HOSTS`. Registry validation
   rules unchecked. S–M.
-- **Direction: MCPB `--allow`.** The documented fix for "Sensitive file blocked"
-  is `--allow '.env.example'`; `mcpb/manifest.json` sets `FS_DENYLIST` but not
-  `FS_ALLOWLIST`. S.
 - **Direction: all-or-nothing `replace_text`.** Scan and plan within the
   deadline, then write without one, so a timeout never leaves a partial
   refactor. Supersedes plan 066's text line. M; spike first.
@@ -454,9 +545,6 @@ From the 2026-09-28 deep audit at `4d751c94` (not selected):
   read** (`path-completer.ts:133-137` filters entries by `isSensitive` on
   the requested path only). Name-only leak; `resources/read` still
   refuses. Effort S, low value.
-- **`CONTRIBUTING.md` lacks single-test filtering and Windows notes**
-  (`CONTRIBUTING.md:26-31`; the filter syntax lives only in `AGENTS.md`).
-  Effort S.
 
 Deferred while executing 018–040 (2026-09-26):
 
@@ -465,12 +553,9 @@ Deferred while executing 018–040 (2026-09-26):
   512 KiB, while the single-path call works. A correct fix accounts for
   returned bytes while streaming. Skipping the pre-estimate is unsafe:
   ranged reads are capped only per file (10 MiB).
-- **Grant refusal hard-codes `C:` for Windows system dirs** (plan 032). A
-  Windows install on another drive is not covered; derive the list from
-  `%SystemRoot%` / `%ProgramFiles%` / `%ProgramData%`.
-- **No direct test pins `atomicWriteFile` keeping a 0600 mode** (plan 034
-  assumed one existed; the only 0600 test covers `appendFile`). One
-  POSIX-only test in `core-fs.test.ts` would close it.
+- Closed since (checked 2026-11-10): the Windows system directories come from
+  the environment (`path-discovery.ts:62-70`), and a 0600 write-mode test
+  exists (`__tests__/rewrite.test.ts:241-243`).
 
 From the 2026-09-26 full audit at `8c2a82cd` (not selected; effort M).
 **Four of the five became plans on 2026-09-28** — directory move/copy
