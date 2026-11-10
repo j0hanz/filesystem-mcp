@@ -229,29 +229,34 @@ const codePointLength = (text: string): number =>
  * consumed text ends in a character `backUpOver` (a `$`-anchored pattern)
  * matches, the next search starts on that character instead, so it can lead the
  * next match. A resume point never moves back to or before the current search start.
+ *
+ * `skipTo`, read after each yield, may give a UTF-16 offset to resume from
+ * instead, never before the match's end; past the text's end, the walk stops.
  */
 function* execMatches(
   regex: Regex,
   text: string,
   keepLast = false,
   backUpOver?: RegExp,
+  skipTo?: () => number | undefined,
 ): Generator<RegexMatch, undefined> {
   regex.lastIndex = 0;
   // Cursor into `text`, carried forward across matches: RE2 reports them in
   // ascending order, so the walk is O(text) in total rather than per match.
   let cursorCp = 0;
   let cursorU16 = 0;
+  const advance = (): void => {
+    const isPair =
+      (text.charCodeAt(cursorU16) & 0xfc00) === 0xd800 &&
+      (text.charCodeAt(cursorU16 + 1) & 0xfc00) === 0xdc00;
+    cursorU16 += isPair ? 2 : 1;
+    cursorCp++;
+  };
   // Code-point offset the current search started from.
   let from = 0;
   let match: RE2ExecArray | null;
   while ((match = regex.exec(text)) !== null) {
-    while (cursorCp < match.index && cursorU16 < text.length) {
-      const isPair =
-        (text.charCodeAt(cursorU16) & 0xfc00) === 0xd800 &&
-        (text.charCodeAt(cursorU16 + 1) & 0xfc00) === 0xdc00;
-      cursorU16 += isPair ? 2 : 1;
-      cursorCp++;
-    }
+    while (cursorCp < match.index && cursorU16 < text.length) advance();
     const matched = match[0] ?? '';
     const start = cursorU16;
     yield {
@@ -269,6 +274,12 @@ function* execMatches(
     // Backing up onto the search start would find the same match again.
     if (keepLast && backUpOver && consumed !== '' && backUpOver.test(consumed) && next - 1 > from) {
       next -= 1;
+    }
+    const skip = skipTo?.();
+    if (skip !== undefined) {
+      if (skip > text.length) return;
+      while (cursorU16 < skip) advance();
+      if (cursorCp > next) next = cursorCp;
     }
     regex.lastIndex = next;
     from = next;
@@ -375,18 +386,30 @@ export function createMatchEngine(
       multiline: crossesLines || wholeWord,
     }));
 
-  /** RE2's matches in `input`, which starts at `offset` in the whole text. */
-  function* regexMatches(input: string, offset: number): Generator<TextMatch, undefined> {
+  /** RE2's matches in `input`, which starts at `offset` in the whole text. `skipTo` is in whole-text offsets. */
+  function* regexMatches(
+    input: string,
+    offset: number,
+    skipTo?: () => number | undefined,
+  ): Generator<TextMatch, undefined> {
     const re = compiled();
+    // Into scanned offsets: wholeWord's TEXT_START shifts them by one, but it resumes a
+    // char early so the boundary before the target can lead the next match.
+    const skip =
+      skipTo &&
+      (() => {
+        const at = skipTo();
+        return at === undefined ? undefined : at - offset;
+      });
     if (!wholeWord) {
-      for (const found of execMatches(re, input)) {
+      for (const found of execMatches(re, input, false, undefined, skip)) {
         yield { ...found, start: found.start + offset, end: found.end + offset };
       }
       return;
     }
     // wholeWord's lead and trail groups are boundary characters, trimmed from the match.
     // The scanned text starts with TEXT_START, so offsets shift back by one.
-    for (const found of execMatches(re, TEXT_START + input, true, ENDS_NON_WORD)) {
+    for (const found of execMatches(re, TEXT_START + input, true, ENDS_NON_WORD, skip)) {
       const lead = found.groups[0] ?? '';
       const trail = found.groups[found.groups.length - 1] ?? '';
       const start = found.start + lead.length - TEXT_START.length + offset;
@@ -450,13 +473,23 @@ export function createMatchEngine(
           path,
         );
       }
-      // Text mode ignores maxPerLine: its one RE2 input is at most 4 MiB.
       // A final newline does not start a line, so nothing matches after it.
       const end = text === '' || text.endsWith('\n') ? text.length : -1;
+      // The LF ending the line the current match starts on, the matches started there,
+      // and, once they reach maxPerLine, the next line's start for RE2 to resume from.
+      let lineEnd = -1;
+      let onLine = 0;
+      let skipTo: number | undefined;
       yield* checked(
         (function* () {
-          for (const match of regexMatches(text, 0)) {
+          for (const match of regexMatches(text, 0, () => skipTo)) {
             if (match.start === end) return;
+            if (match.start > lineEnd) {
+              lineEnd = text.indexOf('\n', match.start);
+              if (lineEnd === -1) lineEnd = text.length;
+              onLine = 0;
+            }
+            skipTo = ++onLine >= maxPerLine ? lineEnd + 1 : undefined;
             yield match;
           }
         })(),

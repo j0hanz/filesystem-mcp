@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { RE2 } from '@adguard/re2-wasm';
+
 import { ErrorCode } from '../src/core/errors.ts';
 import {
   createLfEngine,
@@ -241,6 +243,8 @@ describe('MatchEngine', () => {
     ['a case-insensitive literal', 'A', { caseSensitive: false }],
     ['a regex', 'a+?', re],
     ['a wholeWord regex', 'a', { ...re, wholeWord: true }],
+    ['a regex that can cross a line', '(?i)a', re],
+    ['a wholeWord regex that can cross a line', '(?i)a', { ...re, wholeWord: true }],
   ] as [string, string, Flags][]) {
     it(`${label} yields maxPerLine matches from a line, then goes on to the next`, async () => {
       const engine = createMatchEngine(needle, { isRegex: false, caseSensitive: true, ...flags });
@@ -254,6 +258,20 @@ describe('MatchEngine', () => {
       }
     });
   }
+
+  it('a regex that can cross a line stops running on a line once maxPerLine matches start there', async (t) => {
+    const exec = t.mock.method(RE2.prototype, 'exec');
+    const engine = createMatchEngine('(?i)a', { isRegex: true, caseSensitive: true });
+    try {
+      const starts: number[] = [];
+      const text = `${'a'.repeat(1000)}\nbab\n`;
+      for await (const m of engine.matches(text, { maxPerLine: 2 })) starts.push(m.start);
+      assert.deepEqual(starts, [0, 1, 1002]);
+      assert.ok(exec.mock.callCount() < 10, `exec ran ${String(exec.mock.callCount())} times`);
+    } finally {
+      engine.dispose();
+    }
+  });
 });
 
 const LIMITS = { maxMatches: 1000, maxBytes: 1 << 20, path: 'p' };
