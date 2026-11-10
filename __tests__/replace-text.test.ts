@@ -268,6 +268,22 @@ describe('replace_text body', () => {
     assert.ok((await readFile(big, 'utf-8')).endsWith('FOUND\n'));
   });
 
+  it('regex mode on an all-CRLF file past the RE2 input cap fails that file with TOO_LARGE', async () => {
+    const body = 'x'.repeat(RE2_MAX_INPUT_BYTES) + '\r\nFIND\r\n';
+    const big = await writeTestFile(root, 'regex_cap/crlf.txt', body);
+    const result = await replace({
+      path: big,
+      searchPattern: 'FIND',
+      replacement: 'FOUND',
+      isRegex: true,
+    });
+    assert.strictEqual(result.isError, true);
+    const failure = result.rows[0]?.error;
+    assert.strictEqual(failure?.code, 'TOO_LARGE');
+    assert.match(failure?.message ?? '', /File too large for a regex replace/);
+    assert.strictEqual(await readFile(big, 'utf-8'), body, 'file must be untouched');
+  });
+
   it('transforms a hard-linked file once per run, dry run and live alike', async (t) => {
     const a = await writeTestFile(root, 'hardlink_once/a.txt', 'x\n');
     const b = join(dirname(a), 'b.txt');
