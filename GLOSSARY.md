@@ -70,10 +70,12 @@ What a text search or a replacement settles about its needle before any text
 is read: which engine judges it — a native literal pass or the regex engine —
 under the flags, and the per-text bails that hand judgment to the regex
 engine (a fold character in the text; U+FFFD or a lone surrogate in the
-needle). Search and replace ask one module for their plans and their
-matches, over the same Text view, so a preview judges exactly what its
-replacement will touch. A match may span a line break in both; a search
-reports it on the line where it starts.
+needle). Search and replace ask one module for their plans, their byte-level
+prefiltering, their matches, and their replacements, directly over the Text
+view, so a preview judges exactly what its replacement will touch. The engine
+adapts a literal needle and its replacement for an all-CRLF view internally,
+and enforces output size limits on restored content. A match may span a line
+break in both; a search reports it on the line where it starts.
 _Avoid_: matcher selection, dispatch, engine choice, fast path
 
 ## Writes
