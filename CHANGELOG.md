@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Undo**: a copy whose files total more than eight times the undo budget (256 MiB by default) no longer gets an undo id; before, every copied byte was read a second time to hash it. The copy itself is unaffected.
+
 ### Fixed
 
 - **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
