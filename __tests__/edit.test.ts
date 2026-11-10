@@ -509,6 +509,16 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFfirst\n\uFEFFdone\n');
   });
 
+  it('a marked all-CRLF file matches oldText typed with the mark and CRLF', async () => {
+    const file = await writeTestFile(root, 'bom/crlf.txt', '﻿a\r\nb\r\n');
+    const result = await edit({
+      path: file,
+      edits: [{ oldText: '﻿a\r\nb', newText: '﻿x\r\nb' }],
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '﻿x\r\nb\r\n');
+  });
+
   it('a BOM-led oldText that matches only deeper in a BOM file is unmatched', async () => {
     const before = '\uFEFFa\nb\nc\nd\nx\n';
     const file = await writeTestFile(root, 'bom/deep.txt', before);
