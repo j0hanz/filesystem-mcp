@@ -28,8 +28,6 @@ export interface Change<T> {
   readonly content: string;
   readonly result: T;
   readonly write: boolean;
-  /** The decoded current content, when the transform already decoded the bytes. */
-  readonly before?: string;
 }
 
 type WrittenFileReport = WrittenFileMeta & {
@@ -67,29 +65,26 @@ export function rewriteFile<T>(
 /**
  * A walked file (replace_text): a non-text verdict comes back untransformed;
  * a transform that returns undefined writes nothing. The transform gets the
- * bytes and the read's stat, so it can rule a file out before anything is decoded.
+ * bytes and the read's stat, so it can rule a file out before anything is decoded;
+ * `open` decodes and views them once, and the Rewrite restores through that view.
  */
 export function rewriteEntry<T>(
   request: RewriteRequest,
-  transform: (bytes: Buffer, stats: Stats) => Promise<Change<T> | undefined>,
+  transform: (
+    bytes: Buffer,
+    stats: Stats,
+    /** Decodes and views the bytes once; the Rewrite restores through the same view. */
+    open: () => TextView,
+  ) => Promise<Change<T> | undefined>,
 ): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
     const verdict = await readText(request.fs, request.path, request.signal);
     if (verdict.kind !== 'text') return skipOf(verdict);
-    const change = await transform(verdict.bytes, verdict.stats);
+    let view: TextView | undefined;
+    const open = (): TextView => (view ??= viewText(verdict.bytes.toString('utf8')));
+    const change = await transform(verdict.bytes, verdict.stats, open);
     if (change === undefined) return undefined;
-    // A changed file up to the text cap: decode it once, not once per side.
-    const before = change.before ?? verdict.bytes.toString('utf8');
-    // Task 3 gives this a real view; until then it is the identity.
-    const view: TextView = {
-      disk: before,
-      text: before,
-      bom: false,
-      crlf: false,
-      accept: (t) => t,
-      restore: (t) => t,
-    };
-    return apply(request, request.path, view, verdict.stats, change);
+    return apply(request, request.path, open(), verdict.stats, change);
   });
 }
 

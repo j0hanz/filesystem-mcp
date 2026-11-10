@@ -43,13 +43,12 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
+import { prefilterBytes } from '../core/text-view.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
   PARALLEL_CONCURRENCY,
-  toCrlf,
-  usesCrlf,
 } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
@@ -64,7 +63,7 @@ const SearchAndReplaceInputSchema = z.strictObject({
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\A and \\z for the whole file; in CRLF files write (\\r?)$), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
+      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\A and \\z for the whole file; all-CRLF files match as LF: write \\n, not \\r\\n), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
     ),
   replacement: z
     .string()
@@ -193,8 +192,8 @@ interface ReplaceContext {
   remaining: number;
   /** A file had a match left unreplaced because the cap ran out. */
   cut: boolean;
-  /** Literal search whose LF text is CRLF-converted for an all-CRLF file. Present only when that changes the text. */
-  crlf?: { matcher: ReplacementMatcher; replacement: string };
+  /** Literal search typed with CRLF, as an all-CRLF file's view shows it (LF). Present only when that changes the text. */
+  lf?: { matcher: ReplacementMatcher; replacement: string };
   /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
   linked: Set<string>;
 }
@@ -222,7 +221,7 @@ async function processEntry(
     // lost; a dry run never writes and skips the lock.
     const done = await rewriteEntry(
       { fs: ctx.fs, path: entryPath, dryRun, signal, transport: ctx.transport },
-      async (bytes, stats) => {
+      async (bytes, stats, open) => {
         // Hard links share one inode, so a write through one name is seen by every
         // other name: a second name would transform the same bytes again.
         if (stats.nlink > 1) {
@@ -230,25 +229,19 @@ async function processEntry(
           if (ctx.linked.has(id)) return undefined;
           ctx.linked.add(id);
         }
-        // Same rule as edit: an all-CRLF file gets its LF literal text converted.
-        const eol =
-          ctx.crlf && bytes.includes('\r\n') && usesCrlf(bytes.toString('utf-8'))
-            ? ctx.crlf
-            : undefined;
-        const before = bytes.toString('utf-8');
-        // A leading BOM is an encoding mark, not text: search_text strips it, and
-        // left in, ^ misses line 1. It goes back on before the write below.
-        const bom = before.charCodeAt(0) === 0xfeff;
-        if (!(eol?.matcher ?? matcher).testBuffer(bom ? bytes.subarray(3) : bytes))
-          return undefined;
+        // The prefilter tests raw bytes, so it runs only where bytes and view text agree.
+        const probe = prefilterBytes(bytes);
+        if (probe !== undefined && !matcher.testBuffer(probe)) return undefined;
+        const view = open();
+        const pair = view.crlf && ctx.lf ? ctx.lf : { matcher, replacement };
         const limits: ReplaceLimits = {
           maxMatches: ctx.remaining,
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount, more } = await (eol?.matcher ?? matcher).replace(
-          bom ? before.slice(1) : before,
-          eol?.replacement ?? replacement,
+        const { content, matchCount, more } = await pair.matcher.replace(
+          view.text,
+          pair.replacement,
           signal,
           limits,
         );
@@ -257,17 +250,16 @@ async function processEntry(
           if (more) ctx.cut = true;
           return undefined;
         }
-        // The mark goes back on, so the file keeps its BOM and the check sees final bytes.
-        const patched = bom ? before.charAt(0) + content : content;
         // Multi-byte growth is only visible in UTF-8 bytes; the unit-count bails cannot see it.
-        if (Buffer.byteLength(patched, 'utf8') > limits.maxBytes) throw outputTooLarge(limits);
+        if (Buffer.byteLength(view.restore(content), 'utf8') > limits.maxBytes)
+          throw outputTooLarge(limits);
         // Spent before the write: a failed write still uses its share, so the cap is never exceeded.
         ctx.remaining -= matchCount;
         if (more) ctx.cut = true;
         // The write is the Rewrite's next step: from here a failure is the
         // caller's edit not landing.
         write.started = true;
-        return { content: patched, result: matchCount, write: true, before };
+        return { content, result: matchCount, write: true };
       },
     );
     if (done === undefined) return undefined;
@@ -318,14 +310,18 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
   };
 }
 
-/** Literal text only: a regex and its $-template are taken as written (use \r?\n). Reuses `matcher` when only the replacement changes. */
-function createCrlfVariant(
+/**
+ * Literal text only: a regex and its $-template are taken as written. An all-CRLF
+ * file is shown with LF endings, so a literal typed with CRLF is matched as LF.
+ * Reuses `matcher` when only the replacement changes.
+ */
+function createLfVariant(
   args: SearchAndReplaceArgs,
   matcher: ReplacementMatcher,
-): ReplaceContext['crlf'] {
+): ReplaceContext['lf'] {
   if (args.isRegex) return undefined;
-  const pattern = toCrlf(args.searchPattern);
-  const replacement = toCrlf(args.replacement);
+  const pattern = args.searchPattern.replaceAll('\r\n', '\n');
+  const replacement = args.replacement.replaceAll('\r\n', '\n');
   if (pattern === args.searchPattern && replacement === args.replacement) return undefined;
   return {
     matcher:
@@ -400,9 +396,9 @@ async function handleSearchAndReplace(
   // never reclaims on its own. Nothing past the scan touches it, so free it the
   // moment the scan is done — success, failure, or abort alike.
   const matcher = createReplacementMatcher(args);
-  let crlf: ReplaceContext['crlf'];
+  let lf: ReplaceContext['lf'];
   try {
-    crlf = createCrlfVariant(args, matcher);
+    lf = createLfVariant(args, matcher);
   } catch (error) {
     matcher.dispose();
     throw error;
@@ -437,7 +433,7 @@ async function handleSearchAndReplace(
     maxBytes: getMaxTextFileSize(),
     remaining: explicitCap ?? Infinity,
     cut: false,
-    ...(crlf ? { crlf } : {}),
+    ...(lf ? { lf } : {}),
     linked: new Set(),
   };
   let outcome: ScanOutcome<ScannedOutcome>;
@@ -488,7 +484,7 @@ async function handleSearchAndReplace(
     );
   } finally {
     matcher.dispose();
-    if (crlf && crlf.matcher !== matcher) crlf.matcher.dispose();
+    if (lf && lf.matcher !== matcher) lf.matcher.dispose();
   }
   ctx.onProgress({ current: outcome.scanned });
 

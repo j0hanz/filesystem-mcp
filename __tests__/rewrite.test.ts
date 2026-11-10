@@ -332,6 +332,16 @@ describe('Rewrite', () => {
     assert.equal(ran, false);
   });
 
+  it('rewriteEntry restores through the view its transform opened', async () => {
+    await writeFile(path, '\uFEFFa\r\n');
+    const done = await rewriteEntry({ fs, path, dryRun: false }, (_bytes, _stats, open) => {
+      assert.equal(open().text, 'a\n');
+      return Promise.resolve({ content: 'b\n', result: 1, write: true });
+    });
+    assert.equal(await readFile(path, 'utf8'), '\uFEFFb\r\n');
+    assert.equal(done instanceof ScanSkip ? undefined : done?.before, '\uFEFFa\r\n');
+  });
+
   it('rewriteEntry writes nothing when the transform declines', async () => {
     const done = await rewriteEntry({ fs, path, dryRun: false }, () => Promise.resolve(undefined));
     assert.equal(done, undefined);
