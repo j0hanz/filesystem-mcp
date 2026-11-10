@@ -5,6 +5,7 @@ import {
   createYielder,
   execMatches,
   freeRegex,
+  INLINE_FLAGS_RE,
   isRe2Abort,
   type LineHit,
   type LiteralMatcher,
@@ -73,8 +74,6 @@ interface SearchResult {
 }
 
 const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
-/** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
-const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
 
 /**
  * Find non-overlapping occurrences of a global regex in a single line, reporting
@@ -371,6 +370,7 @@ export async function searchContent(
 function canPrefilter(source: string, content: string, decodedBytes: number): boolean {
   if (decodedBytes > RE2_MAX_INPUT_BYTES) return false;
   if (BUFFER_ANCHOR_RE.test(source)) return false;
+  // Inline flags can undo the `m` the prefilter relies on.
   if (INLINE_FLAGS_RE.test(source)) return false;
   if (source.includes('$') && content.includes('\r')) return false;
   return true;

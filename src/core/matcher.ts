@@ -311,6 +311,166 @@ export function planMatch(
   const source = flags.wholeWord ? `([^${WORD_CLASS}])(?:${pattern})([^${WORD_CLASS}]|$)` : pattern;
   return { literal, source };
 }
+
+/** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can change what `.`, `^` and `$` match. */
+export const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
+// A backslash escape other than these may name a line break (\n, \s, \W, \x0a, \012, ...).
+const UNSAFE_ESCAPE_RE = /\\(?![dwbBSt]|[^a-zA-Z0-9])/u;
+
+/** False only when no match of the regex `source` can hold a line break. */
+function regexCrossesLines(source: string): boolean {
+  return (
+    /[\n\r]/u.test(source) ||
+    source.includes('[^') ||
+    source.includes('[:') ||
+    INLINE_FLAGS_RE.test(source) ||
+    UNSAFE_ESCAPE_RE.test(source)
+  );
+}
+
+export interface TextMatch {
+  /** UTF-16 offsets into the text given to `matches`. */
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+  readonly groups: (string | undefined)[];
+  readonly named: Record<string, string> | undefined;
+}
+
+export interface MatchEngine {
+  /** Whether the needle may match a line break. */
+  readonly crossesLines: boolean;
+  /** False only when these bytes cannot hold a match. Give it `prefilterBytes`' result. */
+  mayMatch(bytes: Buffer): boolean;
+  /**
+   * Every match in view text, left to right, never overlapping. Yields to the
+   * event loop and throws the signal's reason on abort. Throws TOO_LARGE by
+   * the 4 MiB rule; `path` labels that error.
+   */
+  matches(
+    text: string,
+    options?: { signal?: AbortSignal; path?: string },
+  ): AsyncGenerator<TextMatch, void>;
+  /** Releases every compiled pattern. Idempotent. */
+  dispose(): void;
+}
+
+const LINE_TOO_LONG =
+  'A line in this file is too long for a regex search. Regex mode is used for isRegex or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern.';
+
+/** Whether `text` is over RE2's input bound; a UTF-16 unit is at most 3 UTF-8 bytes, so most texts skip the measure. */
+const overRe2Bound = (text: string): boolean =>
+  text.length * 3 > RE2_MAX_INPUT_BYTES && Buffer.byteLength(text, 'utf8') > RE2_MAX_INPUT_BYTES;
+
+export function createMatchEngine(
+  needle: string,
+  flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
+): MatchEngine {
+  const plan = planMatch(needle, flags);
+  const wholeWord = Boolean(flags.wholeWord);
+  const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
+  // planMatch only gives a case-insensitive literal plan for an ASCII needle.
+  const folded = flags.caseSensitive ? needle : needle.toLowerCase();
+  let regex: Regex | undefined;
+
+  /** RE2's matches in `input`, which starts at `offset` in the whole text. */
+  function* regexMatches(input: string, offset: number): Generator<TextMatch, undefined> {
+    regex ??= compileRegex(plan.source, {
+      caseSensitive: flags.caseSensitive,
+      multiline: crossesLines,
+    });
+    if (!wholeWord) {
+      for (const found of execMatches(regex, input)) {
+        yield { ...found, start: found.start + offset, end: found.end + offset };
+      }
+      return;
+    }
+    // wholeWord's lead and trail groups are boundary characters, trimmed from the match.
+    // The scanned text starts with TEXT_START, so offsets shift back by one.
+    for (const found of execMatches(regex, TEXT_START + input, true, ENDS_NON_WORD)) {
+      const lead = found.groups[0] ?? '';
+      const trail = found.groups[found.groups.length - 1] ?? '';
+      const start = found.start + lead.length - TEXT_START.length + offset;
+      yield {
+        start,
+        end: found.end - trail.length - TEXT_START.length + offset,
+        text: found.text.slice(lead.length, found.text.length - trail.length),
+        groups: found.groups.slice(1, -1),
+        named: found.named,
+      };
+    }
+  }
+
+  /** Native indexOf over the whole text; foldAsciiCase keeps every UTF-16 offset. */
+  function* literalMatches(text: string): Generator<TextMatch, undefined> {
+    const haystack = flags.caseSensitive ? text : foldAsciiCase(text);
+    for (let at = haystack.indexOf(folded); at !== -1;) {
+      const end = at + folded.length;
+      yield { start: at, end, text: text.slice(at, end), groups: [], named: undefined };
+      at = haystack.indexOf(folded, end > at ? end : end + 1);
+    }
+  }
+
+  async function* matches(
+    text: string,
+    options: { signal?: AbortSignal; path?: string } = {},
+  ): AsyncGenerator<TextMatch, void> {
+    const { signal, path } = options;
+    const tick = createYielder(signal);
+    let cursor = 0;
+    // Awaiting mid-walk is safe with the shared regex: execMatches re-writes
+    // lastIndex from its own match before every exec.
+    async function* checked(found: Iterable<TextMatch>): AsyncGenerator<TextMatch, void> {
+      for (const match of found) {
+        if (await tick()) signal?.throwIfAborted();
+        // The resume point never precedes the previous match end; guard against it.
+        if (match.start < cursor) continue;
+        cursor = match.end;
+        yield match;
+      }
+    }
+
+    if (plan.literal && !wholeWord && !plan.literal.needsRe2(text)) {
+      yield* checked(literalMatches(text));
+      return;
+    }
+    if (crossesLines) {
+      if (overRe2Bound(text)) {
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          `File too large for a pattern that can match across lines (${String(Buffer.byteLength(text, 'utf8'))} > ${String(RE2_MAX_INPUT_BYTES)} bytes). Use a pattern that stays on one line, or pass caseSensitive: true with a literal searchPattern.`,
+          path,
+        );
+      }
+      yield* checked(regexMatches(text, 0));
+      return;
+    }
+    const lines = text.split('\n');
+    // A final newline splits into a phantom empty last element, which is not a line.
+    if (text.endsWith('\n') || text === '') lines.pop();
+    let offset = 0;
+    for (const raw of lines) {
+      // Yield between lines too: millions of short lines never yield per-match.
+      if (await tick()) signal?.throwIfAborted();
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      if (overRe2Bound(line)) throw new FsError(ErrorCode.TOO_LARGE, LINE_TOO_LONG, path);
+      yield* checked(regexMatches(line, offset));
+      offset += raw.length + 1;
+    }
+  }
+
+  return {
+    crossesLines,
+    mayMatch(bytes) {
+      return plan.literal ? plan.literal.needsRe2(bytes) || plan.literal.mayMatch(bytes) : true;
+    },
+    matches,
+    dispose() {
+      freeRegex(regex);
+      regex = undefined;
+    },
+  };
+}
 export interface ReplacementMatcher {
   /**
    * Yields periodically and throws on abort: a partial splice must never be written.
