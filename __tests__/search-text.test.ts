@@ -249,6 +249,31 @@ describe('search_text body', () => {
     assert.strictEqual(structured.totalMatches, 1);
   });
 
+  it('ignores a UTF-8 BOM when matching and counting columns on line 1', async () => {
+    await writeTestFile(root, 'bom/o.cs', '﻿using A;\nusing B;\n');
+
+    const regex = await search({
+      path: join(root, 'bom'),
+      searchPattern: '^using',
+      isRegex: true,
+    });
+    assert.deepStrictEqual(
+      regex.structured.matches.map((match) => match.line),
+      [1, 2],
+    );
+
+    const literal = await search({
+      path: join(root, 'bom'),
+      searchPattern: 'using',
+      caseSensitive: true,
+    });
+    assert.strictEqual(
+      literal.structured.matches[0]?.column,
+      literal.structured.matches[1]?.column,
+    );
+    assert.ok(!literal.structured.matches[0]?.content.startsWith('﻿'));
+  });
+
   it('replays a stable snapshot after the file is removed', async () => {
     const file = await writeTestFile(root, 'search_pages.txt', 'NEEDLE bravo\nNEEDLE charlie\n');
     const args = { path: file, searchPattern: 'NEEDLE', maxResults: 1 };
