@@ -134,3 +134,13 @@ internalizing several responsibilities previously scattered across callers:
    surface: `engine.mayMatch(bytes)` to pre-screen raw files,
    `engine.matches(view, onMatch)` to scan hits, and
    `engine.replace(view, replacement, options)` to perform atomic rewrites.
+
+## Addendum: `accept` keeps a typed U+FEFF (2026-11-10)
+
+`TextView.accept` took a leading U+FEFF in client text for the file's mark
+without knowing where the text would land, so `edit` restored it and `patch`
+read `view.bom` to strip it again on line 1. `accept` now converts line
+endings only, and `TextView.unmark` removes the mark. `edit` calls `unmark`
+when the unmarked `oldText` matches at index 0; `patch` calls it on hunk lines
+that map to file line 1. Neither reads `view.bom`. `patch` drops a leading
+U+FEFF from the diff text itself for every file.
