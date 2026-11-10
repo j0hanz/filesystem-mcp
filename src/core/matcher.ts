@@ -55,6 +55,8 @@ export interface LiteralMatcher {
   needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
   mayMatch(buffer: Buffer): boolean;
+  /** True when the needle holds no CR or LF, so a CRLF view cannot hide a match from `mayMatch`. */
+  readonly lineBreakFree: boolean;
   matchLine(line: string): LineHit | undefined;
 }
 /** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
@@ -107,9 +109,11 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
   if (needle.includes('\uFFFD') || Buffer.from(needle, 'utf8').toString('utf8') !== needle) {
     return undefined;
   }
+  const lineBreakFree = !/[\r\n]/u.test(needle);
   if (caseSensitive) {
     const bytes = Buffer.from(needle, 'utf8');
     return {
+      lineBreakFree,
       needsRe2: () => false,
       mayMatch: (buffer) => buffer.includes(bytes),
       matchLine: (line) => countOccurrences(line, needle),
@@ -123,6 +127,7 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     ...(lower.includes('s') ? [LONG_S] : []),
   ];
   return {
+    lineBreakFree,
     needsRe2: (input) => folds.some((fold) => input.includes(fold)),
     // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle

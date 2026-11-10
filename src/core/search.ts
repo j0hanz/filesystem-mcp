@@ -186,8 +186,8 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   }
 
   const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
-  // No prefilter bytes (a CR in the file) means it may match: the view decides below.
-  const probe = literal ? prefilterBytes(buffer) : undefined;
+  // No prefilter bytes (a CR a needle could span) means it may match: the view decides below.
+  const probe = literal ? prefilterBytes(buffer, literal.lineBreakFree) : undefined;
   if (literal && probe && !literal.mayMatch(probe)) return { matches: [] };
   // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
   const content = viewText(buffer.toString('utf-8')).text;
