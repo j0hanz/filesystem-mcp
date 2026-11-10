@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -50,6 +50,17 @@ describe('patch body', () => {
     assert.ok(result.structured.resourceUri, 'a real write links the file');
     assert.ok(result.resources?.some((block) => block.type === 'resource_link'));
     assert.strictEqual(await readFile(f, 'utf-8'), 'X\nb\nc\n');
+  });
+
+  it('writes nothing when the patch changes nothing', async () => {
+    const file = join(root, 'f.txt');
+    await writeFile(file, 'a\nb\n');
+    const before = (await stat(file)).mtimeMs;
+    await sleep(20);
+    const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n a\n b\n';
+    await patch({ path: file, diff });
+    assert.strictEqual((await stat(file)).mtimeMs, before);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'a\nb\n');
   });
 
   it('refuses a diff whose context does not match', async () => {
