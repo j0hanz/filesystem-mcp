@@ -438,7 +438,16 @@ export function createMatchEngine(
         );
       }
       // Text mode ignores maxPerLine: its one RE2 input is at most 4 MiB.
-      yield* checked(regexMatches(text, 0));
+      // A final newline does not start a line, so nothing matches after it.
+      const end = text === '' || text.endsWith('\n') ? text.length : -1;
+      yield* checked(
+        (function* () {
+          for (const match of regexMatches(text, 0)) {
+            if (match.start === end) return;
+            yield match;
+          }
+        })(),
+      );
       return;
     }
     // One whole-text test rules out most texts far faster than a call per line. With `m`,

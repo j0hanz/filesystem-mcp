@@ -95,6 +95,18 @@ describe('MatchEngine', () => {
     assert.deepEqual(await spans('^', '', re), []);
   });
 
+  it('a pattern that can cross a line matches nothing after the final newline', async () => {
+    assert.deepEqual(await spans('^\\s*$', 'a\n\nb\n', re), [[2, 2]]);
+    assert.deepEqual(await spans('(?m)^', 'a\nb\n', re), [
+      [0, 0],
+      [2, 2],
+    ]);
+  });
+
+  it('a pattern that can cross a line matches nothing in an empty text', async () => {
+    assert.deepEqual(await spans('^\\s*', '', re), []);
+  });
+
   it('$ matches before a CR a mixed-ending file kept', async () => {
     assert.deepEqual(await spans('foo$', 'foo\r\nbar\n', re), [[0, 3]]);
   });
@@ -237,6 +249,12 @@ describe('replaceMatches', () => {
     assert.equal(await rep('^', '', 'x', re), '');
   });
 
+  it('a pattern that can cross a line adds nothing after the final newline or to an empty text', async () => {
+    assert.equal(await rep('^\\s*$', 'a\n\nb\n', 'X', re), 'a\nX\nb\n');
+    assert.equal(await rep('(?m)^', 'a\nb\n', 'X', re), 'Xa\nXb\n');
+    assert.equal(await rep('^\\s*', '', 'X', re), '');
+  });
+
   it('expands $1 and $& for a regex only', async () => {
     assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
     assert.equal(await rep('ab', 'ab', '$&', {}), '$&');
@@ -279,6 +297,9 @@ describe('a search previews its replacement', () => {
     { needle: 'a\\s+b', flags: re, text: 'a\nb\na b\n', lines: [1, 3], count: 2 },
     { needle: 'K', flags: { caseSensitive: false }, text: 'k\nK\nK\n', lines: [1, 2, 3], count: 3 },
     { needle: 'a\nb', flags: {}, text: 'a\nb\na\nb', lines: [1, 3], count: 2 },
+    { needle: '^\\s*$', flags: re, text: 'a\n\nb\n', lines: [2], count: 1 },
+    { needle: '(?m)^', flags: re, text: 'a\nb\n', lines: [1, 2], count: 2 },
+    { needle: '^\\s*', flags: re, text: '', lines: [], count: 0 },
   ];
   for (const c of cases) {
     it(`${JSON.stringify(c.needle)} in ${JSON.stringify(c.text)}`, async () => {

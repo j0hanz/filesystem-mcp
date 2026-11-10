@@ -483,6 +483,15 @@ describe('search_text body', () => {
     assert.equal(structured.matches[0]?.content, 'foo');
   });
 
+  it('a pattern that can cross a line reports no line past the final newline', async () => {
+    const file = await writeTestFile(root, 'blank.txt', 'a\n\nb\n');
+    const { structured } = await search({ path: file, searchPattern: '^\\s*$', isRegex: true });
+    assert.deepStrictEqual(
+      structured.matches.map((m) => m.line),
+      [2],
+    );
+  });
+
   it('a mixed-ending file still matches $ before CRLF', async () => {
     const file = await writeTestFile(root, 'mixed.txt', 'foo\r\nbar\n');
     const { structured } = await search({ path: file, searchPattern: 'foo$', isRegex: true });
