@@ -152,8 +152,8 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
     return new ScanSkip({ kind: 'binary', utf16: false });
   }
 
-  // The prefilter tests raw bytes, so it runs only where bytes and view text agree.
-  const probe = prefilterBytes(buffer);
+  // A CR in the bytes (a view drops it) can hide a match only from a needle holding a line break.
+  const probe = prefilterBytes(buffer, scanCtx.engine.lineBreakFree);
   if (probe !== undefined && !scanCtx.engine.mayMatch(probe)) return { matches: [] };
   // The Text view drops the BOM and, for an all-CRLF file, the CRs, so ^ and $ see lines.
   const view = viewText(buffer.toString('utf-8'));

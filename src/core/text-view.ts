@@ -43,9 +43,13 @@ export function viewText(disk: string): TextView {
   };
 }
 
-/** The bytes a byte-level prefilter may test, or undefined when it must not run. */
-export function prefilterBytes(bytes: Buffer): Buffer | undefined {
-  if (bytes.includes(13)) return undefined;
+/**
+ * The bytes a byte-level prefilter may test, or undefined when it must not run.
+ * A CR hides a match only from a needle that holds a line break, so `crSafe`
+ * (a needle with no CR or LF) lets bytes holding a CR through.
+ */
+export function prefilterBytes(bytes: Buffer, crSafe = false): Buffer | undefined {
+  if (!crSafe && bytes.includes(13)) return undefined;
   const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   return bom ? bytes.subarray(3) : bytes;
 }

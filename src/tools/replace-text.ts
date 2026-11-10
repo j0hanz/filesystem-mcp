@@ -233,8 +233,8 @@ async function processEntry(
           if (ctx.linked.has(id)) return undefined;
           ctx.linked.add(id);
         }
-        // The prefilter tests raw bytes, so it runs only where bytes and view text agree.
-        const probe = prefilterBytes(bytes);
+        // A CR in the bytes (a view drops it) can hide a match only from a needle holding a line break.
+        const probe = prefilterBytes(bytes, engine.lineBreakFree);
         if (probe !== undefined && !engine.mayMatch(probe)) return undefined;
         const view = open();
         const pair = view.crlf && ctx.lf ? ctx.lf : { engine, replacement };

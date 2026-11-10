@@ -239,14 +239,22 @@ function patchContent(
   }
   const firstHunk = parsedPatch.hunks[0];
   if (bom && firstHunk && firstHunk.oldStart <= 1) {
-    // The view hides the file's BOM; a diff copied from the raw file carries it on line 1.
-    const strip = (marks: string): void => {
-      const i = firstHunk.lines.findIndex((l) => l !== '' && marks.includes(l.charAt(0)));
-      const line = firstHunk.lines[i];
-      if (line?.charAt(1) === '\uFEFF') firstHunk.lines[i] = line.charAt(0) + line.slice(2);
-    };
-    strip(' -');
-    strip(' +');
+    // The view hides the file's BOM; a diff copied from the raw file carries it on
+    // line 1. Only the first old-side and first new-side lines are line 1, and
+    // a context line is both, so each hunk line is stripped at most once.
+    let oldLine = 1;
+    let newLine = 1;
+    for (const [i, line] of firstHunk.lines.entries()) {
+      if (oldLine > 1 && newLine > 1) break;
+      // jsdiff reads a bare empty line as context.
+      const mark = line === '' ? ' ' : line.charAt(0);
+      if (mark !== ' ' && mark !== '-' && mark !== '+') continue;
+      if ((mark !== '+' && oldLine === 1) || (mark !== '-' && newLine === 1)) {
+        if (line.charAt(1) === '\uFEFF') firstHunk.lines[i] = mark + line.slice(2);
+      }
+      if (mark !== '+') oldLine++;
+      if (mark !== '-') newLine++;
+    }
   }
   const fileLines = countLines(content);
   const diffLines = parsedPatch.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);

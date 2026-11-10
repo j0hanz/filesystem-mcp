@@ -50,6 +50,8 @@ interface LiteralMatcher {
   needsRe2(input: Buffer | string): boolean;
   /** False only when the raw bytes cannot hold a match. */
   mayMatch(buffer: Buffer): boolean;
+  /** True when the needle holds no CR or LF, so a CRLF view cannot hide a match from `mayMatch`. */
+  readonly lineBreakFree: boolean;
 }
 /** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
 const KELVIN_SIGN = '\u212A'; // folds onto k
@@ -89,9 +91,11 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
   if (needle.includes('\uFFFD') || Buffer.from(needle, 'utf8').toString('utf8') !== needle) {
     return undefined;
   }
+  const lineBreakFree = !/[\r\n]/u.test(needle);
   if (caseSensitive) {
     const bytes = Buffer.from(needle, 'utf8');
     return {
+      lineBreakFree,
       needsRe2: () => false,
       mayMatch: (buffer) => buffer.includes(bytes),
     };
@@ -104,6 +108,7 @@ function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMa
     ...(lower.includes('s') ? [LONG_S] : []),
   ];
   return {
+    lineBreakFree,
     needsRe2: (input) => folds.some((fold) => input.includes(fold)),
     // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
     // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
@@ -325,6 +330,8 @@ export interface MatchEngine {
   readonly crossesLines: boolean;
   /** Compiles a regex plan now, so an invalid pattern throws before any text is read. No-op for a literal. */
   compile(): void;
+  /** Pass to `prefilterBytes` as `crSafe`: a CR in the bytes cannot hide a match from `mayMatch`. */
+  readonly lineBreakFree: boolean;
   /** False only when these bytes cannot hold a match. Give it `prefilterBytes`' result. */
   mayMatch(bytes: Buffer): boolean;
   /**
@@ -487,6 +494,8 @@ export function createMatchEngine(
 
   return {
     crossesLines,
+    // A regex's mayMatch is always true, so a CR cannot hide anything from it either.
+    lineBreakFree: plan.literal?.lineBreakFree ?? true,
     compile() {
       if (!plan.literal) compiled();
     },
