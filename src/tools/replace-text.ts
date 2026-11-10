@@ -19,11 +19,7 @@ import {
   zeroMatchHint,
 } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
-import {
-  createMatchEngine,
-  type MatchEngine,
-  type ReplaceLimits,
-} from '../core/matcher.ts';
+import { createMatchEngine, type MatchEngine, type ReplaceLimits } from '../core/matcher.ts';
 import { IS_WINDOWS } from '../core/path-utils.ts';
 import type { ResultPaths } from '../core/path.ts';
 import type { Rewritten } from '../core/rewrite.ts';
@@ -232,11 +228,11 @@ async function processEntry(
           maxBytes: ctx.maxBytes,
           path: entryPath,
         };
-        const { content, matchCount, more } = await engine.replace(
-          view,
-          replacement,
-          { expand, ...(signal ? { signal } : {}), limits },
-        );
+        const { content, matchCount, more } = await engine.replace(view, replacement, {
+          expand,
+          ...(signal ? { signal } : {}),
+          limits,
+        });
         // An exhausted budget leaves matches unreplaced with nothing to replace, so the cut is marked here.
         if (matchCount === 0) {
           if (more) ctx.cut = true;

@@ -31,12 +31,15 @@
 ### Task 1: Internalize Byte Prefiltering and LF Variant in `MatchEngine.matches`
 
 **Files:**
+
 - Modify: `src/core/matcher.ts:335-375`
 - Test: `__tests__/match-engine.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TextView` and `prefilterBytes` from `src/core/text-view.ts`
 - Produces:
+
   ```typescript
   export interface MatchEngine {
     readonly crossesLines: boolean;
@@ -58,7 +61,10 @@ Add tests exercising `engine.mayMatch(buffer)` directly with raw bytes (with/wit
 ```typescript
 it('engine.mayMatch accepts raw buffer and applies prefilterBytes internally', () => {
   const engine = createMatchEngine('needle', { isRegex: false, caseSensitive: true });
-  const withBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('needle in haystack')]);
+  const withBom = Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from('needle in haystack'),
+  ]);
   assert.equal(engine.mayMatch(withBom), true);
   assert.equal(engine.mayMatch(Buffer.from('other text')), false);
   engine.dispose();
@@ -120,12 +126,15 @@ git commit -m "refactor(matcher): deepen MatchEngine with byte prefiltering and 
 ### Task 2: Implement First-Class `replace` on `MatchEngine` and Remove `replaceMatches`
 
 **Files:**
+
 - Modify: `src/core/matcher.ts:550-650`
 - Test: `__tests__/match-engine.test.ts`, `__tests__/matcher.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TextView` from `src/core/text-view.ts`
 - Produces:
+
   ```typescript
   export interface MatchEngine {
     // ... Task 1 methods ...
@@ -144,6 +153,7 @@ git commit -m "refactor(matcher): deepen MatchEngine with byte prefiltering and 
 - [ ] **Step 1: Write failing tests in `__tests__/match-engine.test.ts`**
 
 Add tests verifying `engine.replace`:
+
 1. Adapts `\r\n` replacement to `\n` on `view.crlf === true` for literal needle.
 2. Uses the internalized LF engine on `view.crlf === true`.
 3. Throws `outputTooLarge` if `Buffer.byteLength(view.restore(content), 'utf8') > limits.maxBytes`.
@@ -163,7 +173,8 @@ it('engine.replace throws outputTooLarge when restored disk text exceeds maxByte
   const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
   const view = viewText('aaa\r\n');
   await assert.rejects(
-    () => engine.replace(view, 'xxx', { limits: { maxMatches: 10, maxBytes: 5, path: 'test.txt' } }),
+    () =>
+      engine.replace(view, 'xxx', { limits: { maxMatches: 10, maxBytes: 5, path: 'test.txt' } }),
     (err: unknown) => err instanceof FsError && err.code === ErrorCode.TOO_LARGE,
   );
   engine.dispose();
@@ -208,10 +219,12 @@ git commit -m "feat(matcher): add replace method to MatchEngine and remove repla
 ### Task 3: Refactor `searchContent` to Use the Deepened `MatchEngine` Seam
 
 **Files:**
+
 - Modify: `src/core/search.ts:60-260`
 - Test: `__tests__/search-text.test.ts`, `__tests__/search.test.ts`
 
 **Interfaces:**
+
 - Consumes: `engine.mayMatch(bytes)`, `engine.matches(view, options)` from `MatchEngine`
 - Produces: Cleaned `searchContent` with no dual-engine management
 
@@ -261,10 +274,12 @@ git commit -m "refactor(search): drive search_text through deepened MatchEngine 
 ### Task 4: Refactor `replace_text` to Use the Deepened `MatchEngine` Seam
 
 **Files:**
+
 - Modify: `src/tools/replace-text.ts:40-300`
 - Test: `__tests__/replace-text.test.ts`
 
 **Interfaces:**
+
 - Consumes: `engine.mayMatch(bytes)`, `engine.replace(view, replacement, options)` from `MatchEngine`
 - Produces: Cleaned `replace_text` with no `createLfVariant` or manual byte-size checks
 
@@ -301,10 +316,12 @@ git commit -m "refactor(replace_text): drive replace_text through deepened Match
 ### Task 5: Full Verification, Documentation, and Contract Check
 
 **Files:**
+
 - Modify: `docs/adr/013-one-text-view-and-one-matching-engine.md` (add addendum/status note)
 - Test: Full repository check
 
 **Interfaces:**
+
 - Consumes: All updated modules
 - Produces: Clean `npm run check` and up-to-date ADR record
 

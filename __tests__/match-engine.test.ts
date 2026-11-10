@@ -4,11 +4,7 @@ import { describe, it } from 'node:test';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, FsError } from '../src/core/errors.ts';
-import {
-  createLfEngine,
-  createMatchEngine,
-  type TextMatch,
-} from '../src/core/matcher.ts';
+import { createMatchEngine, type TextMatch } from '../src/core/matcher.ts';
 import { viewText } from '../src/core/text-view.ts';
 import { fsErrorMatcher } from './helpers.ts';
 
@@ -207,24 +203,12 @@ describe('MatchEngine', () => {
     assert.equal((await spans('needle', text)).length, 1);
   });
 
-  it('createLfEngine matches a literal typed with CRLF in LF view text, and skips a regex', async () => {
-    const flags = { isRegex: false, caseSensitive: true };
-    assert.equal(createLfEngine('one', flags), undefined);
-    assert.equal(createLfEngine('one\r\ntwo', { ...flags, isRegex: true }), undefined);
-    const lf = createLfEngine('one\r\ntwo', flags);
-    assert.ok(lf);
-    try {
-      const found: number[] = [];
-      for await (const m of lf.matches('one\ntwo\n')) found.push(m.start);
-      assert.deepEqual(found, [0]);
-    } finally {
-      lf.dispose();
-    }
-  });
-
   it('engine.mayMatch accepts raw buffer and applies prefilterBytes internally', () => {
     const engine = createMatchEngine('needle', { isRegex: false, caseSensitive: true });
-    const withBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('needle in haystack')]);
+    const withBom = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('needle in haystack'),
+    ]);
     assert.equal(engine.mayMatch(withBom), true);
     assert.equal(engine.mayMatch(Buffer.from('other text')), false);
     engine.dispose();
@@ -255,7 +239,8 @@ describe('MatchEngine', () => {
     const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
     const view = viewText('aaa\r\n');
     await assert.rejects(
-      () => engine.replace(view, 'xxx', { limits: { maxMatches: 10, maxBytes: 5, path: 'test.txt' } }),
+      () =>
+        engine.replace(view, 'xxx', { limits: { maxMatches: 10, maxBytes: 5, path: 'test.txt' } }),
       (err: unknown) => err instanceof FsError && err.code === ErrorCode.TOO_LARGE,
     );
     engine.dispose();
@@ -399,7 +384,10 @@ describe('replaceMatches', () => {
     const engine = createMatchEngine('a', { isRegex: false, caseSensitive: true });
     try {
       await assert.rejects(
-        engine.replace(viewText('aa'), 'xxxx', { expand: false, limits: { ...LIMITS, maxBytes: 4 } }),
+        engine.replace(viewText('aa'), 'xxxx', {
+          expand: false,
+          limits: { ...LIMITS, maxBytes: 4 },
+        }),
         fsErrorMatcher(ErrorCode.TOO_LARGE),
       );
     } finally {

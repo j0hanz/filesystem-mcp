@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { isFsError } from '../src/core/errors.ts';
-import {
-  createMatchEngine,
-  planMatch,
-  type ReplaceLimits,
-} from '../src/core/matcher.ts';
+import { createMatchEngine, planMatch, type ReplaceLimits } from '../src/core/matcher.ts';
 import { viewText } from '../src/core/text-view.ts';
 
 // planMatch is the single Match plan entry (GLOSSARY.md): what a search or a

@@ -392,7 +392,7 @@ export interface ReplaceLimits {
 const OUTPUT_TOO_LARGE_SUGGESTION =
   "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
 
-export function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
+function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
   return new FsError(
     ErrorCode.TOO_LARGE,
     `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
@@ -663,11 +663,7 @@ export function createMatchEngine(
       return plan.literal.needsRe2(probe) || plan.literal.mayMatch(probe);
     },
     matches,
-    async replace(
-      view,
-      replacement,
-      options = {},
-    ) {
+    async replace(view, replacement, options = {}) {
       const tv = typeof view === 'string' ? viewText(view) : view;
       const effectiveReplacement =
         tv.crlf && !flags.isRegex ? replacement.replaceAll('\r\n', '\n') : replacement;
@@ -685,7 +681,7 @@ export function createMatchEngine(
           ...(signal ? { signal } : {}),
           ...(limits ? { path: limits.path } : {}),
         })) {
-          if (limits && matchCount === limits.maxMatches) {
+          if (matchCount === limits?.maxMatches) {
             more = true;
             break;
           }
@@ -718,38 +714,8 @@ export function createMatchEngine(
   };
 }
 
-/**
- * An all-CRLF file is viewed with LF endings, so a literal typed with CRLF is
- * matched there as LF. Undefined for a regex, taken as written, or a needle
- * without CRLF. The caller disposes the engine.
- */
-export function createLfEngine(
-  needle: string,
-  flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
-): MatchEngine | undefined {
-  if (flags.isRegex || !needle.includes('\r\n')) return undefined;
-  return createMatchEngine(needle.replaceAll('\r\n', '\n'), flags);
-}
 // Matches a consumed text that ends in a non-word char: its last char may lead the next match.
 const ENDS_NON_WORD = new RegExp(`[^${WORD_CLASS}]$`, 'u');
 // wholeWord scans behind this non-word char instead of a `^` lead: an empty lead
 // cannot be backed up onto, so a match right after one at text start was missed (#158).
 const TEXT_START = '\n';
-
-/**
- * Splice every match the engine finds in `text`, so a replacement touches
- * exactly what a search reports.
- */
-export async function replaceMatches(
-  engine: MatchEngine,
-  text: string,
-  replacement: string,
-  options: {
-    /** True only for isRegex: $1, $&, $<name> are expanded. */
-    expand: boolean;
-    signal?: AbortSignal;
-    limits: ReplaceLimits;
-  },
-): Promise<{ content: string; matchCount: number; more: boolean }> {
-  return engine.replace(viewText(text), replacement, options);
-}
