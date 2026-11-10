@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **search_text**: a UTF-8 byte-order mark no longer hides line 1 from `^` patterns or shifts its column numbers.
+- **patch**: a patch that changes nothing no longer rewrites the file or records an undo entry.
+- **diff**: the "Diff not computed" error now says a retry can help, since a busy server produces it too.
 - **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
 - **Windows device paths**: block CONIN$, CONOUT$, COM0, and LPT0 device names to prevent console input hangs.
 - **Path guard**: dynamically discover Windows system directory roots from environment variables rather than assuming drive C.

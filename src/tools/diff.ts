@@ -62,7 +62,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     if (diffText === undefined) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
-        `Diff not computed: the files differ in too many lines to diff within ${String(DIFF_TIMEOUT_MS)} ms. Compare smaller sections with read + startLine/endLine.`,
+        `Diff not computed: the files differ in too many lines to diff within ${String(DIFF_TIMEOUT_MS)} ms, or the server was busy with other diffs. Retry once; if it fails again, compare smaller sections with read + startLine/endLine.`,
         args.a,
       );
     }
