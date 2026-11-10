@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Concurrency lock queue**: isolate exclusive task callbacks from resolution payloads so callers receive zero arguments.
 - **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` and `\z` to anchor to the whole file.
 - **Path guard**: a delete, move or copy source that exists but cannot be resolved is now refused with "Cannot access path" instead of skipping the root, denylist and read-only checks.
+- **delete**: a recursive delete asks once more, with the protected-files warning, when such a file appears in the folder while the first prompt is open.
 
 ## [2.19.3] - 2026-11-07
 

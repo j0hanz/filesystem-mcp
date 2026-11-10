@@ -218,6 +218,7 @@ async function handleDelete(
       identity: plan.firstStats ? identityOf(plan.firstStats.stats) : UNKNOWN_IDENTITY,
       required: plan.pending,
       message: deletePrompt(plan),
+      warned: plan.holdsProtected,
     })),
   );
   if (isInputRequiredResult(confirmed)) return confirmed;
