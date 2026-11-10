@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **search_text**: a regex that can match across lines skips a walked file over 4 MiB (counted in `skippedTooLarge`) and refuses a named one. Patterns that stay on one line still search files of any size.
 - **search_text**: `\A` and `(?-m)^` now match only at the start of the file, not at the start of every line.
 - **replace_text**: a regex `\r` no longer matches in an all-CRLF file, which both tools now see with LF endings; write `\n` instead. The file keeps its CRLF endings on write. In a mixed-ending file, a regex sees each `\r\n` as `\n` too, so `$` matches before it; a lone `\r` stays visible.
+- **replace_text**: a regex replace of `\r\n` with `\n`, used to normalise line endings, now matches nothing; normalise endings by other means.
 - **edit** and **patch**: a leading UTF-8 byte-order mark is hidden from `oldText` and from diffs, and kept on write. An all-CRLF file is matched as LF, so `oldText` and hunks may use either ending.
 
 ### Fixed

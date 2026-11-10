@@ -517,7 +517,29 @@ export function createMatchEngine(
             }
             const start = back(match.start);
             const stop = back(match.end);
-            yield { ...match, start, end: stop, text: text.slice(start, stop) };
+            const original = text.slice(start, stop);
+            const crlfOnly = !/(?<!\r)\n/u.test(original);
+            // A group is text from `seen`, so it gets back the CRs its span had in `text`.
+            const restore = (group: string): string => {
+              if (crlfOnly) return group.replaceAll('\n', '\r\n');
+              // shortcut: a group repeated in its match maps to its first occurrence, whose CRs may differ.
+              const at = match.text.indexOf(group);
+              if (at === -1) return group;
+              return text.slice(back(match.start + at), back(match.start + at + group.length));
+            };
+            yield {
+              start,
+              end: stop,
+              text: original,
+              groups: match.groups.map((group) =>
+                group === undefined ? undefined : restore(group),
+              ),
+              named:
+                match.named &&
+                Object.fromEntries(
+                  Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
+                ),
+            };
           }
         })(),
       );

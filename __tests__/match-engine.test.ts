@@ -326,6 +326,14 @@ describe('replaceMatches', () => {
     assert.equal(await rep('\\n\\z', 'a\n', '\nX', re), 'a\nX');
   });
 
+  it('a group over a mixed-ending CRLF keeps its CR', async () => {
+    const text = 'foo\r\nbar\nfoo\r\n';
+    assert.equal(await rep('(?i)(o\\nb)', text, '[$1]', re), 'fo[o\r\nb]ar\nfoo\r\n');
+    assert.equal(await rep('(?i)(?P<x>o\\nb)', text, '[$<x>]', re), 'fo[o\r\nb]ar\nfoo\r\n');
+    // The match holds a CRLF and a bare LF: each group keeps exactly its own CRs.
+    assert.equal(await rep('(?i)(a\\nb)(\\nc)', 'a\r\nb\nc\n', '[$1|$2]', re), '[a\r\nb|\nc]\n');
+  });
+
   it('expands $1 and $& for a regex only', async () => {
     assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
     assert.equal(await rep('ab', 'ab', '$&', {}), '$&');
