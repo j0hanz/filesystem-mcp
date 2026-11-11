@@ -546,6 +546,33 @@ describe('read body', () => {
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
   });
 
+  it('a range that starts past the end of the file says so', async () => {
+    const file = join(root, 'short.txt');
+    await writeFile(file, 'a\nb\n');
+
+    const past = await read({ path: file, startLine: 10, endLine: 12 }, { guard });
+    assert.match(past.text ?? '', /^\/\/ no lines at or after line 10$/m);
+
+    const numbered = await read({ path: file, startLine: 10, lineNumbers: true }, { guard });
+    assert.match(numbered.text ?? '', /^\/\/ no lines at or after line 10$/m);
+  });
+
+  it('a range of blank lines, and head or tail of an empty file, get no such note', async () => {
+    const blanks = join(root, 'blanks.txt');
+    await writeFile(blanks, 'a\n\n\n');
+    const inRange = await read({ path: blanks, startLine: 2, endLine: 3 }, { guard });
+    assert.doesNotMatch(inRange.text ?? '', /no lines at or after/);
+
+    const empty = join(root, 'empty.txt');
+    await writeFile(empty, '');
+    for (const args of [{ head: 3 }, { tail: 3 }]) {
+      const result = await read({ path: empty, ...args }, { guard });
+      assert.doesNotMatch(result.text ?? '', /no lines at or after/);
+    }
+    const fromOne = await read({ path: empty, startLine: 1 }, { guard });
+    assert.match(fromOne.text ?? '', /^\/\/ no lines at or after line 1$/m);
+  });
+
   it('keeps grant advice for a grantable outside path', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'fs-mcp-outside-'));
     try {

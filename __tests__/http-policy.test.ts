@@ -825,6 +825,43 @@ describe('keyless bind rate limiting', () => {
       }
     });
   });
+
+  const KEYLESS_WARNING =
+    '[warning] [HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and --root-boundary to fence grants.';
+
+  it('warns once at startup when HTTP runs without an API key', async (t) => {
+    const dir = await createTestRoot();
+    const lines: string[] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    const httpServer = await startHttpServer(0, { cliAllowedDirs: [dir] }, {});
+    try {
+      assert.strictEqual(lines.filter((line) => line === KEYLESS_WARNING).length, 1);
+    } finally {
+      await httpServer[Symbol.asyncDispose]();
+      await cleanupTestRoot(dir);
+    }
+  });
+
+  it('does not warn about a missing key when one is set', async (t) => {
+    const dir = await createTestRoot();
+    const lines: string[] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    const httpServer = await startHttpServer(
+      0,
+      { cliAllowedDirs: [dir] },
+      { apiKey: 'example-test-key-0123456789' },
+    );
+    try {
+      assert.ok(!lines.some((line) => line.includes('No API key set')));
+    } finally {
+      await httpServer[Symbol.asyncDispose]();
+      await cleanupTestRoot(dir);
+    }
+  });
 });
 
 describe('CORS reflection agrees with the SDK Origin gate', () => {

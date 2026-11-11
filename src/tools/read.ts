@@ -390,6 +390,8 @@ function readTrailer(v: PerPathReadValue): string[] {
         ? `// truncated: showing last ${String(v.linesRead)} lines`
         : `// more lines above: showing last ${String(v.linesRead)} lines`,
     );
+  } else if (v.startLine !== undefined && v.linesRead === 0) {
+    lines.push(`// no lines at or after line ${String(v.startLine)}`);
   }
   if (v.contentHash !== undefined) {
     const slice = v.head !== undefined || v.tail !== undefined || v.startLine !== undefined;

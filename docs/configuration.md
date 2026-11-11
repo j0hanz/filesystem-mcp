@@ -310,6 +310,10 @@ Code:
 The server enforces these safety rules:
 
 - It listens on `127.0.0.1` unless you set `--http-host`.
+- Without an API key, every user and process on the machine can call it and
+  approve its own access grants. On a shared machine set `FS_API_KEY`, and
+  `--root-boundary` to limit what a grant can add. The server logs a warning
+  when it starts without a key.
 - Listening on any other address requires an API key of at least 16
   characters (`FS_API_KEY`). Clients send it as
   `Authorization: Bearer <key>`.
