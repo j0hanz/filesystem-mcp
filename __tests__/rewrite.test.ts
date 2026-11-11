@@ -61,6 +61,25 @@ describe('Rewrite', () => {
     assert.equal(await readFile(path, 'utf8'), 'hello\n');
   });
 
+  it('the growth refusal counts the bytes after CRLF endings are restored', async () => {
+    await writeFile(path, 'a\r\n');
+    // 800,000 bytes as the LF view, 1,200,000 once every LF is CRLF again: over a 1 MiB limit.
+    const viewText = 'a\n'.repeat(400_000);
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      for (const dryRun of [false, true]) {
+        await assert.rejects(
+          rewriteFile({ fs, path, dryRun, tool: 'edit' }, () => ({
+            content: viewText,
+            result: 1,
+            write: true,
+          })),
+          (error: unknown) => (error as { code?: unknown }).code === ErrorCode.TOO_LARGE,
+        );
+      }
+    });
+    assert.equal(await readFile(path, 'utf8'), 'a\r\n');
+  });
+
   it('a dry run reports the on-disk text it would write', async () => {
     await writeFile(path, 'one\r\n');
     const done = await rewriteFile({ fs, path, dryRun: true, tool: 'edit' }, (content) => ({
