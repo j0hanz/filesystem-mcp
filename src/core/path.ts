@@ -642,11 +642,16 @@ export class PathGuard {
       const previous = this.grantedDirectories;
       const previousAccess = this.accessGrants;
       const dir = normalizePath(targetDir);
-      this.grantedDirectories = [...previous, dir];
+      // A client re-lists its roots on every roots/list_changed: a directory
+      // already granted adds no entry, or the list grows without bound.
+      const same = (granted: string): boolean => isSamePath(granted, dir);
+      this.grantedDirectories = previous.some(same) ? previous : [...previous, dir];
       this.accessGrants =
         kind === 'access'
-          ? [...previousAccess, dir]
-          : previousAccess.filter((grant) => !isSamePath(grant, dir));
+          ? previousAccess.some(same)
+            ? previousAccess
+            : [...previousAccess, dir]
+          : previousAccess.filter((grant) => !same(grant));
       const rollBack = (): void => {
         this.grantedDirectories = previous;
         this.accessGrants = previousAccess;
