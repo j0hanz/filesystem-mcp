@@ -312,13 +312,10 @@ describe('HTTP watcher fan-out (multi-subscriber)', () => {
   });
 });
 
-// Recursive directory watch (#13): one client subscribes to a DIRECTORY URI.
-// Pre-fix, `attach` called `watch(path, cb)` with no options, so child changes
-// were not reported. With `{ recursive: true }` for directories, creating a
-// child file must notify the subscriber. Note: this creates a DIRECT child,
-// which a non-recursive directory watch also catches; nested-grandchild
-// coverage depends on platform recursive support (macOS/Windows only — see the
-// `attach` ponytail comment), so it is not asserted here to stay green on Linux.
+// Directory watch (#13): one client subscribes to a DIRECTORY URI and creating
+// a child file must notify it. The child is a DIRECT child on purpose: macOS
+// and Windows watch the tree, Linux watches the directory alone (see `attach`),
+// so only a direct child is reported everywhere.
 describe('HTTP recursive directory watch', () => {
   let tmpDir: string;
   let http: HttpTestContext;

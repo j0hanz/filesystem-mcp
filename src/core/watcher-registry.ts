@@ -192,9 +192,12 @@ export function createWatcherRegistry() {
 
   const attach = (uri: string, resolvedPath: string): boolean => {
     try {
-      // Directories: one recursive watch (children included). `{ recursive:
-      // true }` is honored on macOS, Windows, and — since Node 20.13 —
-      // Linux; `engines.node` is >=24, so all three are covered.
+      // Directories: one recursive watch on macOS and Windows, where the
+      // kernel provides it. Not on Linux: Node's recursive watch there walks
+      // the whole tree synchronously and arms one inotify watch per directory,
+      // so one subscription to a large root would block the event loop and
+      // could use up the user's inotify watches. A Linux directory watch
+      // reports its direct children only.
       //
       // Files: watch the PARENT directory and filter by name. A watch on
       // the file itself binds to its inode on Linux/macOS, and every atomic
@@ -209,7 +212,7 @@ export function createWatcherRegistry() {
       // exhaustion, path-race).
       const isDirectory = statSync(resolvedPath).isDirectory();
       const watcher = isDirectory
-        ? watch(resolvedPath, { recursive: true }, () => {
+        ? watch(resolvedPath, { recursive: process.platform !== 'linux' }, () => {
             notifyAll(uri);
           })
         : watch(dirname(resolvedPath), (_event, filename) => {
@@ -322,10 +325,13 @@ export function createWatcherRegistry() {
 
       addCallback(uri, notify);
       if (!attach(uri, resolved)) {
-        // fs.watch threw (inotify exhaustion, or a race deleted the path): roll
-        // back so no dangling callback is left believing a watcher exists. No
-        // lease was taken yet, so `release` drops the entry outright.
-        release(uri);
+        // fs.watch threw (inotify exhaustion, or a race deleted the path): take
+        // back the callback this call added. Not `release`: leases whose
+        // watcher errored still hold their counts (see `dropWatcher`), and a
+        // release here would end one of theirs.
+        const callbacks = activeCallbacks.get(uri);
+        callbacks?.delete(notify);
+        if (callbacks?.size === 0) activeCallbacks.delete(uri);
         return fail({ ok: false, reason: 'attach-failed' });
       }
       retain(uri);

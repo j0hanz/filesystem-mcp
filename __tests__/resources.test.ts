@@ -7,7 +7,9 @@ import {
 import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -569,6 +571,86 @@ describe('MCP Resources', () => {
       assert.strictEqual(notifications[0], testUri);
 
       registry.destroy();
+    });
+
+    it(
+      'WatcherRegistry - on Linux a directory watch reports direct children only',
+      { skip: process.platform !== 'linux' },
+      async () => {
+        const registry = createWatcherRegistry();
+        try {
+          const dir = join(tmpDir, 'shallow-watch');
+          await mkdir(join(dir, 'sub'), { recursive: true });
+          const notifications: string[] = [];
+          const result = await registry.acquire(pathGuard, buildFileResourceUri(dir), (uri) => {
+            notifications.push(uri);
+          });
+          assert.strictEqual(result.ok, true);
+
+          // A change two levels down is not reported.
+          await writeFile(join(dir, 'sub', 'deep.txt'), 'deep');
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          assert.strictEqual(notifications.length, 0, 'no notification for a nested change');
+
+          // A direct child is.
+          await writeFile(join(dir, 'child.txt'), 'child');
+          await waitFor(() => notifications.length > 0, 1000);
+        } finally {
+          registry.destroy();
+        }
+      },
+    );
+
+    it('WatcherRegistry - a failed attach leaves other leases alone', async (t) => {
+      const registry = createWatcherRegistry();
+      const testFile = await writeTestFile(tmpDir, 'attach_fail_test.txt', 'initial');
+      const testUri = buildFileResourceUri(testFile);
+
+      const made: fs.FSWatcher[] = [];
+      const originalWatch = fs.watch;
+      t.mock.method(fs, 'watch', (...args: Parameters<typeof originalWatch>) => {
+        const watcher = originalWatch(...args);
+        made.push(watcher);
+        return watcher;
+      });
+      syncBuiltinESMExports();
+
+      try {
+        const a = await registry.acquire(pathGuard, testUri, () => {});
+        const b = await registry.acquire(pathGuard, testUri, () => {});
+        assert.strictEqual(a.ok, true);
+        assert.strictEqual(b.ok, true);
+        assert.strictEqual(made.length, 1);
+        assert.ok(made[0]);
+
+        made[0].emit('error', new Error('boom'));
+        assert.strictEqual(registry.hasWatcher(testUri), false);
+
+        t.mock.method(fs, 'watch', () => {
+          throw new Error('ENOSPC');
+        });
+        syncBuiltinESMExports();
+
+        const c = await registry.acquire(pathGuard, testUri, () => {});
+        assert.deepStrictEqual(c, { ok: false, reason: 'attach-failed' });
+
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+
+        registry.release(testUri);
+
+        const d = await registry.acquire(pathGuard, testUri, () => {});
+        assert.strictEqual(d.ok, true);
+        assert.strictEqual(registry.hasWatcher(testUri), true);
+
+        registry.release(testUri);
+
+        assert.strictEqual(registry.hasWatcher(testUri), true);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        registry.destroy();
+      }
     });
 
     it(
