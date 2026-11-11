@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFile, writeFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
+import type { Worker } from 'node:worker_threads';
 
 import { createTwoFilesPatch, parsePatch } from 'diff';
 
-import { type GeneratedPatch, twoFilesPatch, unifiedPatch } from '../src/core/diff.ts';
+import {
+  type GeneratedPatch,
+  patchInWorker,
+  twoFilesPatch,
+  unifiedPatch,
+} from '../src/core/diff.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import { DIFF } from '../src/tools/diff.ts';
@@ -205,6 +212,53 @@ describe('core/diff', () => {
     );
     assert.strictEqual(out.filter((p) => p !== undefined).length, PARALLEL_CONCURRENCY);
     assert.strictEqual(out.filter((p) => p === undefined).length, overflow);
+  });
+
+  const request = (timeout: number) => ({
+    oldName: 'f',
+    newName: 'f',
+    before: 'a\n',
+    after: 'b\n',
+    oldHeader: '',
+    newHeader: '',
+    options: { timeout },
+  });
+
+  /** A worker that takes the request and never answers. */
+  class SilentWorker extends EventEmitter {
+    terminated = false;
+    postMessage(): void {}
+    ref(): void {}
+    unref(): void {}
+    terminate(): Promise<number> {
+      this.terminated = true;
+      return Promise.resolve(0);
+    }
+  }
+  const asWorker = (worker: SilentWorker): Worker => worker as unknown as Worker;
+
+  it('a worker that never answers is killed after the deadline plus grace', async () => {
+    const worker = new SilentWorker();
+    const started = performance.now();
+    const patch = await patchInWorker(request(50), () => asWorker(worker));
+    assert.strictEqual(patch, undefined);
+    assert.strictEqual(worker.terminated, true);
+    assert.ok(performance.now() - started >= 500, 'waits for the deadline and the grace');
+  });
+
+  it('a worker that exits mid-diff yields no patch and is terminated', async () => {
+    const worker = new SilentWorker();
+    const pending = patchInWorker(request(5000), () => asWorker(worker));
+    worker.emit('exit', 1);
+    assert.strictEqual(await pending, undefined);
+    assert.strictEqual(worker.terminated, true);
+  });
+
+  it('a worker that cannot start yields no patch', async () => {
+    const patch = await patchInWorker(request(5000), () => {
+      throw new Error('no worker');
+    });
+    assert.strictEqual(patch, undefined);
   });
 });
 

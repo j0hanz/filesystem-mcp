@@ -72,6 +72,10 @@ jobs:
         # without a recorded reason.
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' && matrix.node == '' }}
         run: npm run test:coverage
+      - name: Root-only ownership tests
+        # Two core-fs tests need uid 0 and skip everywhere else; run just those as root.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' && matrix.node == '' }}
+        run: sudo env "PATH=$PATH" node --test --test-timeout=60000 --test-name-pattern="keeps the owner of a file another user owns|keepOwner does not follow a symlink" __tests__/core-fs.test.ts
 
   release-paths:
     name: Release build paths

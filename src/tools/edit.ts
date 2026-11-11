@@ -566,9 +566,11 @@ async function applyEdits(
       if (stripped.first?.startIndex === 0) {
         found = stripped;
         oldText = bare;
-        newText = view.unmark(newText);
       }
     }
+    // Text placed at the start of a marked file: a leading U+FEFF in it is the
+    // file's mark, which the write restores, not a second one (GLOSSARY, Text view).
+    if (found.first?.startIndex === 0) newText = view.unmark(newText);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.

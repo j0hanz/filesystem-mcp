@@ -74,6 +74,26 @@ describe('Resource subscriptions round-trip', () => {
     assert.strictEqual(received, undefined, 'Should not receive notification after unsubscribe');
   });
 
+  it('an unsubscribe sent before its subscribe settles leaves no subscription', async () => {
+    const filePath = await writeTestFile(tmpDir, 'race.txt', 'initial');
+    const uri = buildFileResourceUri(filePath);
+
+    const sub = pair.client.subscribeResource({ uri });
+    const unsub = pair.client.unsubscribeResource({ uri });
+    await Promise.all([sub, unsub]);
+
+    const notifications: string[] = [];
+    pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
+      const u = (n.params as { uri: string }).uri;
+      if (u === uri) notifications.push(u);
+    });
+
+    await writeFile(filePath, 'updated');
+    await waitFor(() => notifications.length > 0, 300);
+
+    assert.strictEqual(notifications.length, 0);
+  });
+
   it('waitForResourceUpdate counts an update that lands before its trigger settles', async () => {
     const filePath = await writeTestFile(tmpDir, 'early.txt', 'initial');
     const uri = buildFileResourceUri(filePath);

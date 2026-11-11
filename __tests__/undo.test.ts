@@ -3697,10 +3697,10 @@ describe('undo tool over the wire', () => {
       await mkdir(real);
       if (!(await trySymlink(real, alias, () => t.skip('no symlink privilege')))) return;
       const content = 'x'.repeat(4000);
+      await writeFile(join(real, 'f.txt'), content);
       const created = await call(pair.client, 'create', {
         files: [
-          { path: join(real, 'f.txt'), content, overwrite: true },
-          { path: join(alias, 'f.txt'), content, overwrite: true },
+          { path: join(alias, 'f.txt'), content: 'replacement', overwrite: true },
           { path: kept, content: 'kept', overwrite: true },
         ],
       });
@@ -3709,7 +3709,7 @@ describe('undo tool over the wire', () => {
 
       const undone = await call(pair.client, 'undo', { id: meta.undo });
       assert.notStrictEqual(undone.isError, true);
-      assert.strictEqual(await readFile(join(real, 'f.txt'), 'utf8'), content);
+      assert.strictEqual(await readFile(join(real, 'f.txt'), 'utf8'), 'replacement');
       await assert.rejects(lstat(kept));
     } finally {
       await pair.close();

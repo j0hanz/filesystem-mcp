@@ -72,8 +72,14 @@ function overInlineLimit(before: string, after: string): boolean {
   return false;
 }
 
-/** Runs one structuredPatch in a worker; `undefined` on its deadline, a crash, or the kill timer. */
-function patchInWorker(request: DiffWorkerRequest): Promise<StructuredPatch | undefined> {
+/**
+ * Runs one structuredPatch in a worker; `undefined` on its deadline, a crash, or the kill timer.
+ * `spawn` exists for tests, which pass a worker that never answers.
+ */
+export function patchInWorker(
+  request: DiffWorkerRequest,
+  spawn: () => Worker = getDiffWorker,
+): Promise<StructuredPatch | undefined> {
   return new Promise((resolve) => {
     let worker: Worker | undefined;
     let settled = false;
@@ -103,7 +109,7 @@ function patchInWorker(request: DiffWorkerRequest): Promise<StructuredPatch | un
       finish(undefined, true);
     }, request.options.timeout + WORKER_KILL_GRACE_MS);
     try {
-      worker = getDiffWorker();
+      worker = spawn();
       worker.ref();
       worker.on('message', onMessage);
       worker.on('error', onAbortOrCrash);

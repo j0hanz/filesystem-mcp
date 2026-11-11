@@ -58,9 +58,14 @@ describe('Client roots seeding (legacy era)', () => {
 
   it('TC-ROOTS-002: re-seeding is idempotent', async () => {
     // Every root already granted or refused: nothing new to add.
-    const granted = await seedRootsFromClient(serverCtx);
-    assert.equal(granted, 1); // applyGrant is a dedup no-op but still reports true
-    const dirs = serverCtx.pathGuard.getAllowedDirectories();
-    assert.equal(dirs.length, 1);
+    const grants = (): number =>
+      (serverCtx.pathGuard as unknown as { grantedDirectories: string[] }).grantedDirectories
+        .length;
+    const before = grants();
+    for (let round = 0; round < 3; round++) {
+      assert.equal(await seedRootsFromClient(serverCtx), 1);
+    }
+    assert.equal(grants(), before, 'a repeated grant adds no entry');
+    assert.equal(serverCtx.pathGuard.getAllowedDirectories().length, 1);
   });
 });

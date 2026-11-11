@@ -310,7 +310,7 @@ the same data is available as JSON, in one of two places:
   `undoUnavailable` reads `<path>: <reason>` for each path it could not, with the
   paths joined by `; `, up to 20 of them. `<path>` is the file name, or the full
   path when another path in the call has the same name. A move names its
-  destination. A copy reports one reason with no path, and has no id.
+  destination. A copy names its destination too, and can carry an id.
 
 So read `result.structuredContent ?? result._meta` (Python:
 `result.structured_content or result.meta`). On 2026-07-28 connections
@@ -570,7 +570,9 @@ if (client.getProtocolEra() === 'modern') {
   contents.
 - The file must exist when you subscribe. One that is deleted later stays
   watched, and a new file at the same path is reported.
-- A folder URI watches the whole tree below it, and the notification still
+- On macOS and Windows, a folder URI watches the whole tree below it; on
+  Linux, it watches the folder's direct children only (avoiding inotify
+  exhaustion and event loop blocks on large trees). The notification still
   names the folder, not the file that changed. Diff a `find_files` and `stat`
   snapshot to find out what changed, as the
   [hooks](../examples/clients/hooks/) example does.

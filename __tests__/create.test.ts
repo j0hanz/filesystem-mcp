@@ -422,6 +422,65 @@ describe('create body', () => {
     }
   });
 
+  it('two entries that land on one file through a linked folder: the second is refused', async (t) => {
+    const own = await createTestRoot();
+    try {
+      const file = join(own, 'alias-over.txt');
+      await writeTestFile(own, 'alias-over.txt', 'old\n');
+      const alias = join(own, 'create-alias');
+      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
+      const result = await create(
+        {
+          files: [
+            { path: file, content: 'A\n', overwrite: true },
+            { path: join(alias, 'alias-over.txt'), content: 'B\n', overwrite: true },
+          ],
+        },
+        {
+          fs: new GuardedFileSystem(await makeGuard([own])),
+        },
+      );
+
+      assert.strictEqual(result.structured.files.length, 1);
+      const failuresA = result.structured.failures ?? [];
+      assert.strictEqual(failuresA.length, 1);
+      assert.strictEqual(failuresA[0]?.error.code, ErrorCode.INVALID_INPUT);
+      assert.match(failuresA[0]?.error.message ?? '', /another entry in this batch/);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'A\n');
+    } finally {
+      await cleanupTestRoot(own);
+    }
+  });
+
+  it('two entries for one new file through a linked folder: the second is refused', async (t) => {
+    const own = await createTestRoot();
+    try {
+      const file = join(own, 'new.txt');
+      const alias = join(own, 'create-alias');
+      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
+      const result = await create(
+        {
+          files: [
+            { path: file, content: 'A\n' },
+            { path: join(alias, 'new.txt'), content: 'B\n' },
+          ],
+        },
+        {
+          fs: new GuardedFileSystem(await makeGuard([own])),
+        },
+      );
+
+      assert.strictEqual(result.structured.files.length, 1);
+      const failuresA = result.structured.failures ?? [];
+      assert.strictEqual(failuresA.length, 1);
+      assert.strictEqual(failuresA[0]?.error.code, ErrorCode.INVALID_INPUT);
+      assert.match(failuresA[0]?.error.message ?? '', /another entry in this batch/);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'A\n');
+    } finally {
+      await cleanupTestRoot(own);
+    }
+  });
+
   it('replaces the file once the overwrite is approved', async () => {
     const existing = await writeTestFile(root, 'create_ow_existing.txt', 'old\n');
     const result = await create(
@@ -597,10 +656,10 @@ describe('create body', () => {
       assert.strictEqual(result.structured.files.length, 1, JSON.stringify(result.structured));
       const failures = result.structured.failures ?? [];
       assert.strictEqual(failures.length, 1);
-      assert.strictEqual(failures[0]?.error.code, 'CANCELLED');
-      assert.match(failures[0]?.error.message ?? '', /appeared after overwrite/);
+      assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
+      assert.match(failures[0]?.error.message ?? '', /another entry in this batch already writes/);
       const contents = await readFile(file, 'utf-8');
-      assert.ok(contents === 'first' || contents === 'second');
+      assert.strictEqual(contents, 'first');
     } finally {
       await cleanupTestRoot(own);
     }

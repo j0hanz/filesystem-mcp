@@ -186,6 +186,12 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   // could release only once — on the shared modern registry that orphan lease
   // pinned a watcher until process shutdown.
   const inflight = new Map<string, Promise<boolean | undefined>>();
+  // URIs whose in-flight subscribe was unsubscribed before it settled: the
+  // lease it is about to take is given back instead of kept.
+  const cancelled = new Set<string>();
+  // Active subscription callback controllers, to disable notifications once unsubscribed
+  // even if another subscriber's lease keeps the underlying watcher alive.
+  const activeCallbacks = new Map<string, { disable: () => void }>();
 
   return {
     name: 'filesystem-mcp-file',
@@ -272,19 +278,39 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       if (leasedUris.has(uri)) {
         if (registry.hasWatcher(uri)) return undefined;
         leasedUris.delete(uri);
+        activeCallbacks.get(uri)?.disable();
+        activeCallbacks.delete(uri);
         registry.release(uri);
       }
       // A subscribe for this URI is mid-acquire: share its outcome instead of
       // taking a second lease the lease set cannot represent.
       const pending = inflight.get(uri);
-      if (pending) return pending;
+      if (pending) {
+        // A fresh subscribe outranks an unsubscribe that came before it.
+        cancelled.delete(uri);
+        return pending;
+      }
+
+      let active = true;
+      const disable = () => {
+        active = false;
+      };
+      const guardedNotify = (notifiedUri: string): void => {
+        if (active) notify(notifiedUri);
+      };
 
       const acquire = async (): Promise<boolean | undefined> => {
-        const result = await registry.acquire(options.pathGuard, uri, notify, {
+        const result = await registry.acquire(options.pathGuard, uri, guardedNotify, {
           markSubscribe: true,
         });
         if (result.ok) {
+          if (cancelled.delete(uri)) {
+            disable();
+            registry.release(uri);
+            return undefined;
+          }
           leasedUris.add(uri);
+          activeCallbacks.set(uri, { disable });
           return undefined;
         }
 
@@ -310,14 +336,24 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
         return false;
       };
 
-      const promise = acquire().finally(() => inflight.delete(uri));
+      const promise = acquire().finally(() => {
+        inflight.delete(uri);
+        cancelled.delete(uri);
+      });
       inflight.set(uri, promise);
       return promise;
     },
 
     unsubscribe(uri) {
+      // Mid-subscribe: no lease exists yet, so mark it for release on arrival.
+      if (inflight.has(uri) && !leasedUris.has(uri)) {
+        cancelled.add(uri);
+        return;
+      }
       // Only release a lease this connection actually took.
       if (!leasedUris.delete(uri)) return;
+      activeCallbacks.get(uri)?.disable();
+      activeCallbacks.delete(uri);
       registry.release(uri);
     },
 
@@ -326,6 +362,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       // the shared (modern) registry nothing else would ever end these leases.
       for (const uri of leasedUris) registry.release(uri);
       leasedUris.clear();
+      for (const entry of activeCallbacks.values()) entry.disable();
+      activeCallbacks.clear();
       if (ownsRegistry) registry.destroy();
     },
   };

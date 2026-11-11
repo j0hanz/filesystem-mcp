@@ -144,3 +144,15 @@ endings only, and `TextView.unmark` removes the mark. `edit` calls `unmark`
 when the unmarked `oldText` matches at index 0; `patch` calls it on hunk lines
 that map to file line 1. Neither reads `view.bom`. `patch` drops a leading
 U+FEFF from the diff text itself for every file.
+
+## Addendum: a regex sees a mixed-ending text's CRLF as LF (2026-11-11)
+
+The Decision says a file with mixed endings "is shown as written". That
+holds for the Text view. The matching engine adds one rule on top: before a
+regex judges a mixed-ending text, each CRLF is shown to it as LF, because
+RE2's `$` cannot see past a CR, and a matched span and its groups get their
+CRs back afterwards (`createMatchEngine` in
+[`matcher.ts`](../../src/core/matcher.ts)). A lone CR stays visible. So in
+such a file the regex `\r\n` matches nothing, and the regex `a\nb` matches
+`a\r\nb` while the literal needle `a\nb` does not. This was recorded only in
+`CHANGELOG.md` until now.

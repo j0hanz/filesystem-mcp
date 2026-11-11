@@ -13,7 +13,7 @@ on:
           - minor
           - major
       custom_version:
-        description: 'Custom version (overrides bump, e.g. 2.0.0-beta.1)'
+        description: 'Custom version (overrides bump, e.g. 2.20.0). MAJOR.MINOR.PATCH only.'
         required: false
         type: string
 
@@ -112,6 +112,13 @@ jobs:
               minor) NEW="$MAJOR.$((MINOR + 1)).0" ;;
               patch) NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
             esac
+          fi
+          # Nothing downstream handles a prerelease: npm would need a dist-tag,
+          # Docker tags every release `latest`, and this job has already pushed
+          # to main by the time either runs. Refuse before anything is written.
+          if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$NEW' is not MAJOR.MINOR.PATCH. Prerelease and build suffixes are not supported by this workflow."
+            exit 1
           fi
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "### Version: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"

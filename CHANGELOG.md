@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: a regex `\r` no longer matches in an all-CRLF file, which both tools now see with LF endings; write `\n` instead. The file keeps its CRLF endings on write. In a mixed-ending file, a regex sees each `\r\n` as `\n` too, so `$` matches before it; a lone `\r` stays visible.
 - **replace_text**: a regex replace of `\r\n` with `\n`, used to normalise line endings, now matches nothing; normalise endings by other means.
 - **edit** and **patch**: a leading UTF-8 byte-order mark is hidden from `oldText` and from diffs, and kept on write. An all-CRLF file is matched as LF, so `oldText` and hunks may use either ending.
+- **Resource subscriptions**: on Linux, a subscription to a directory now reports changes to its direct children only; before, it walked and watched the whole tree, which could block the server and use up the user's inotify watches on a large folder. macOS and Windows still report the whole tree.
 
 ### Fixed
 
@@ -38,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: `^` and `$` follow the lines `search_text` reports, so nothing is matched after the final newline or in an empty file.
 - **replace_text**: `\z` and `(?-m)$` no longer match after a file's final newline, since a final newline does not start a line. To append at the end of such a file, match `\n\z`.
 - **replace_text**: `$` now matches at every line end in a CRLF file.
+- **create**: two entries that reach one file through a linked folder no longer both report success while one content is lost; the first is written and the later entry fails with "another entry in this batch already writes".
+- **delete** and **move**: a recursive removal now retries an entry another process holds for a moment (an indexer or antivirus on Windows); before, it could stop part-way through the tree.
+- **replace_text**: `$<name>` for a named group that took no part in a match (the other side of an alternation) now expands to nothing, as `$1` does; before, the text `$<name>` was written into the file.
+- **replace_text**: in a file with mixed line endings, a replacement that reads a capture group holding a line break is now refused when that group's line ending cannot be told (the same text sits in the match with both endings); before, the first ending in the match was written.
+- **edit**: `newText` that begins with U+FEFF and replaces text at the very start of a file with a byte-order mark no longer leaves two marks in the file; `patch` already behaved this way.
+- **delete**: one symbolic link named twice in different letter case (on Windows and macOS) is now deleted once and reported once; before, the second name reported a not-found failure.
+- **Resource subscriptions**: an unsubscribe that arrives while its subscribe is still validating the path now takes effect; before, the subscription stayed live. A watcher that fails to start no longer ends another subscriber's lease.
 
 ## [2.19.3] - 2026-11-07
 

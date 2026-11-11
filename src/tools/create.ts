@@ -10,7 +10,12 @@ import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
-import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
+import {
+  isEquivalentPath,
+  isPathInsideDirectory,
+  normalizePath,
+  unicodeMatchKey,
+} from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize } from '../core/util.ts';
@@ -297,6 +302,36 @@ async function handleCreate(
     ctx.signal,
   );
   const plans = new Map(planned.map(({ index, value }) => [index, value.plan]));
+
+  // Two entries that land on one file (through a linked folder, say) race as
+  // two spellings do: the last write wins and both report success. The schema
+  // compares spellings only, so the Landings settle it here. A `pending` twin
+  // stays: the Confirmation asks once for both. Two appends both land.
+  const firstByLanding = new Map<string, CreatePlan>();
+  for (const index of [...plans.keys()].sort((a, b) => a - b)) {
+    const plan = plans.get(index);
+    if (!plan) continue;
+    const key = unicodeMatchKey(plan.validPath);
+    const first = firstByLanding.get(key);
+    if (first === undefined) {
+      firstByLanding.set(key, plan);
+      continue;
+    }
+    if (plan.kind === 'pending' || (plan.kind === 'append' && first.kind === 'append')) continue;
+    slots[index] = {
+      status: 'failure',
+      path: plan.inputPath,
+      error: toCreateFailure(
+        plan.inputPath,
+        new FsError(
+          ErrorCode.INVALID_INPUT,
+          `create cancelled: another entry in this batch already writes "${first.inputPath}"`,
+          plan.inputPath,
+        ),
+      ).error,
+    };
+    plans.delete(index);
+  }
 
   // Round 1 returns input_required while an overwrite needs approval (R14).
   // append never destroys, and overwrite: true is that word given up front,
