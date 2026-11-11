@@ -322,10 +322,13 @@ export function createWatcherRegistry() {
 
       addCallback(uri, notify);
       if (!attach(uri, resolved)) {
-        // fs.watch threw (inotify exhaustion, or a race deleted the path): roll
-        // back so no dangling callback is left believing a watcher exists. No
-        // lease was taken yet, so `release` drops the entry outright.
-        release(uri);
+        // fs.watch threw (inotify exhaustion, or a race deleted the path): take
+        // back the callback this call added. Not `release`: leases whose
+        // watcher errored still hold their counts (see `dropWatcher`), and a
+        // release here would end one of theirs.
+        const callbacks = activeCallbacks.get(uri);
+        callbacks?.delete(notify);
+        if (callbacks?.size === 0) activeCallbacks.delete(uri);
         return fail({ ok: false, reason: 'attach-failed' });
       }
       retain(uri);
