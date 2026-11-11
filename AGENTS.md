@@ -11,6 +11,7 @@ npm run fix          # format and lint-fix, then run the full check
 npm run check:static # static checks only, no tests
 npm test             # Node test runner; pass native flags after --
 npm run test:coverage # tests + src coverage floor (CI enforces it on ubuntu)
+npm run tdqs         # score tool definitions on tdqs.dev into tdqs-report.md; needs TDQS_API_KEY, spends 1 of 30 daily calls
 ```
 
 Tests run on Node's built-in test runner; `npm test --

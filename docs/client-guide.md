@@ -310,7 +310,7 @@ the same data is available as JSON, in one of two places:
   `undoUnavailable` reads `<path>: <reason>` for each path it could not, with the
   paths joined by `; `, up to 20 of them. `<path>` is the file name, or the full
   path when another path in the call has the same name. A move names its
-  destination. A copy reports one reason with no path, and has no id.
+  destination. A copy names its destination too, and can carry an id.
 
 So read `result.structuredContent ?? result._meta` (Python:
 `result.structured_content or result.meta`). On 2026-07-28 connections
