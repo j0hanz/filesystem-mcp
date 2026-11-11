@@ -85,10 +85,7 @@ describe('create body', () => {
       assert.strictEqual(Buffer.byteLength(over, 'utf8'), 1048578);
       const overPath = join(root, 'bytes-cap-over.txt');
       const issues = await schemaIssues(create({ files: [{ path: overPath, content: over }] }));
-      assert.ok(
-        issues.includes('Content exceeds maximum allowed text file size'),
-        issues.join('; '),
-      );
+      assert.ok(issues.includes('Content is over the text file size limit'), issues.join('; '));
       await assert.rejects(stat(overPath), { code: 'ENOENT' });
 
       // Exactly at the limit in bytes is accepted.
@@ -117,7 +114,7 @@ describe('create body', () => {
         }),
       );
       assert.deepStrictEqual(issues, [
-        'combined content is 1048584 bytes; one create call carries at most 1048576 (FS_MAX_FILE_SIZE). Split the batch.',
+        'combined content is 1048584 bytes; the limit per call is 1048576 (FS_MAX_FILE_SIZE). Split the batch.',
       ]);
     });
   });

@@ -150,9 +150,7 @@ describe('Write-path and root guards (issue #200)', () => {
             `home must not become a root: ${JSON.stringify(guard.getRoots())}`,
           );
           assert.ok(
-            warns.some((m) =>
-              m.includes('Skipped adding unsafe current working directory to allowed list'),
-            ),
+            warns.some((m) => m.includes('Skipped unsafe current working directory as a root')),
             warns.join('\n'),
           );
         } finally {

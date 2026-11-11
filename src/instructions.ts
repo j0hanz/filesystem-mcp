@@ -42,8 +42,8 @@ export const INSTRUCTIONS_URI = 'internal://instructions';
  * against each other and cost the client the same sentence three times.
  */
 export const INSTRUCTIONS_SUMMARY =
-  'Navigation guide for filesystem-mcp tools and constraints. ' +
-  'Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths.';
+  'How to use the filesystem-mcp tools and their limits. ' +
+  'Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.';
 
 export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
   return {
@@ -51,7 +51,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'Guidelines:',
       '```',
       `root_access: ${LIST_ROOTS.name} lists configured or accepted roots; every other tool is scoped to them.`,
-      'modern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.',
+      'modern_root_grants: Modern clients do not send workspace roots. Call a tool with a concrete path and approve the grant if the client asks (elicitation).',
       `path_resolution: Confirm a path with ${LIST.name} or ${FIND_FILES.name} before acting on it.`,
       '```',
     ].join('\n'),
@@ -59,28 +59,28 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'Tools Overview:',
       buildToolsOverview(readOnly),
       '',
-      'Full schemas, descriptions, and annotations are in `tools/list`.',
+      'Full tool schemas are in `tools/list`.',
     ].join('\n'),
     constraints: [
       'Constraints:',
       '```',
-      `allowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call ${LIST_ROOTS.name} to read the current set.`,
-      'legacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.',
-      'sensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.',
-      `enforced_limits: max file size ${formatByteSize(getMaxTextFileSize(), true)} (also the combined content cap of one create call), stdio responses up to ${formatByteSize(MAX_OUTBOUND_RESULT_BYTES)} once JSON-encoded (HTTP has no such limit), file search cap ${MAX_SEARCH_RESULTS} results, content search scans up to ${MAX_SEARCH_RESULTS} matches, paged by maxResults (default ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
-      'ephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.',
-      'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
+      `allowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd. Accepted modern grants add to them. Call ${LIST_ROOTS.name} to see the current set.`,
+      'legacy_roots: Legacy clients can also add roots through the deprecated roots/list flow.',
+      'sensitive_paths: Sensitive files are denied by default: .env, *.pem, SSH private keys (*id_rsa*, *id_ed25519*), .netrc, .git-credentials.',
+      `enforced_limits: max file size ${formatByteSize(getMaxTextFileSize(), true)} (also the total content cap of one create call), stdio responses up to ${formatByteSize(MAX_OUTBOUND_RESULT_BYTES)} once JSON-encoded (HTTP has no such limit), file search returns up to ${MAX_SEARCH_RESULTS} results, content search scans up to ${MAX_SEARCH_RESULTS} matches, paged by maxResults (default ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
+      'ephemeral_results: When a result has a resource_link or a resourceUri (in structuredContent or _meta), call resources/read right away. Cached results expire after about 60 seconds, on eviction, or on restart.',
+      'pagination: nextCursor appears in the result text and in _meta, and its snapshot expires on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor). If a cursor is rejected, start again without one. resourceUri appears on the first page only.',
       '```',
     ].join('\n'),
     error_recovery: [
       'Error Recovery:',
       '```',
-      `ACCESS_DENIED: Run ${LIST_ROOTS.name}; configure a missing startup root or retry a concrete path and approve the grant.`,
-      `NOT_FOUND: Run ${LIST.name} or ${FIND_FILES.name} to verify the path.`,
-      `TOO_LARGE: Over the file size limit, use ${READ.name} with head/tail or startLine/endLine. Over the stdio message limit, request a smaller slice or page, or connect over HTTP; media and binary files need HTTP.`,
-      'TIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.',
+      `ACCESS_DENIED: Run ${LIST_ROOTS.name}. Add the missing startup root, or retry with a concrete path and approve the grant.`,
+      `NOT_FOUND: Run ${LIST.name} or ${FIND_FILES.name} to check the path.`,
+      `TOO_LARGE: Over the file size limit, use ${READ.name} with head/tail or startLine/endLine. Over the stdio message limit, ask for a smaller slice or page, or connect over HTTP. Media and binary files need HTTP.`,
+      'TIMEOUT: Narrow the path or pattern, or lower maxDepth. maxResults only sets the page size.',
       'INVALID_INPUT: Re-read the tool schema in tools/list.',
-      `BINARY_FILE: Text tools refuse binary files; ${READ.name} returns one whole with binary: true.`,
+      `BINARY_FILE: Text tools refuse binary files. ${READ.name} returns the whole file with binary: true.`,
       '```',
     ].join('\n'),
   };

@@ -169,7 +169,7 @@ export function compileRegex(
     if (isRe2Abort(error)) throw re2AbortError(undefined, error);
     if (!(error instanceof SyntaxError)) throw error;
     throw new SyntaxError(
-      `${error.message} — lookahead, lookbehind, and backreferences are not supported.`,
+      `${error.message}. Lookahead, lookbehind, and backreferences are not supported.`,
       { cause: error },
     );
   }
@@ -377,7 +377,7 @@ export interface MatchEngine {
 }
 
 const LINE_TOO_LONG =
-  'A line in this file is too long for the regex engine. It is used for isRegex, wholeWord, or a case-insensitive search for non-ASCII text (or a file holding U+212A or U+017F); pass caseSensitive: true with a literal searchPattern and no wholeWord.';
+  'A line in this file is too long for the regex engine. The engine runs for isRegex, wholeWord, and case-insensitive non-ASCII searches, or files holding U+212A or U+017F. Pass caseSensitive: true with a literal searchPattern and no wholeWord.';
 
 /** Whether `text` is over RE2's input bound; a UTF-16 unit is at most 3 UTF-8 bytes, so most texts skip the measure. */
 const overRe2Bound = (text: string): boolean =>
@@ -392,12 +392,12 @@ export interface ReplaceLimits {
 }
 
 const OUTPUT_TOO_LARGE_SUGGESTION =
-  "Narrow searchPattern or shorten the replacement; $` and $' insert the whole text before/after each match.";
+  "Narrow searchPattern or shorten the replacement. $` and $' insert all text before or after each match.";
 
 function outputTooLarge(limits: ReplaceLimits, cause?: unknown): FsError {
   return new FsError(
     ErrorCode.TOO_LARGE,
-    `Replacement result exceeds the size limit (more than ${String(limits.maxBytes)} bytes)`,
+    `Replacement result is over ${String(limits.maxBytes)} bytes`,
     limits.path,
     cause,
     OUTPUT_TOO_LARGE_SUGGESTION,

@@ -378,7 +378,7 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
     name: 'filesystem-mcp-result',
     title: 'Cached Tool Result',
     description:
-      'Ephemeral cached tool output. Listed via resources/list; entries expire after the cache TTL.',
+      'Cached tool output, listed in resources/list. Entries expire after the cache TTL.',
     mimeType: 'application/json',
     uriTemplate: 'filesystem-mcp://result/{id}',
     annotations: { audience: ['assistant'], priority: 0.3 },
@@ -424,7 +424,7 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
         if (isFsError(err) && err.code === ErrorCode.NOT_FOUND) {
           throw new ResourceNotFoundError(
             uri.toString(),
-            'Cached result not found or expired. Re-run the tool to regenerate.',
+            'Cached result not found or expired. Run the tool again.',
           );
         }
         throw err;
@@ -584,7 +584,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
           if (resourceContracts.some((contract) => owns(contract, uri))) {
             throw new ProtocolError(
               ProtocolErrorCode.InvalidParams,
-              `Resource ${uri} does not support subscriptions; only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
+              `Resource ${uri} does not support subscriptions. Only ${FILESYSTEM_FILE_URI_TEMPLATE} does. Read it again for the current contents.`,
             );
           }
           throw new ResourceNotFoundError(uri, `Resource not found: ${uri}`);
@@ -595,7 +595,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
           // actionable cause.
           throw new ProtocolError(
             ProtocolErrorCode.InternalError,
-            `Subscription rejected: no watcher attached (watcher limit ${MAX_WATCHERS} reached, or fs.watch failed to start).`,
+            `Subscription rejected: the watcher limit of ${MAX_WATCHERS} was reached, or fs.watch failed to start.`,
           );
         }
         return {};

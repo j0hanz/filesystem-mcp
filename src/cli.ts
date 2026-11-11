@@ -254,7 +254,7 @@ export async function parseArgs(): Promise<{
       validateCliPath(raw);
       if (raw.trim() !== raw) {
         throw new CliExitError(
-          `Read-only directory paths must not have leading or trailing whitespace: ${raw}`,
+          `Read-only directory path has leading or trailing whitespace: ${raw}`,
         );
       }
     }

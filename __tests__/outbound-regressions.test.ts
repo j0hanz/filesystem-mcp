@@ -201,10 +201,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
       new RegExp(`\\(at least ${String(4 * Math.ceil((8 * MIB) / 3))} bytes`),
     );
     // Under it on disk, over it once escaped: measured as encoded.
-    await assertResourceTooLarge(
-      buildFileResourceUri(quotedResourceFile),
-      /\(\d+ bytes once JSON-encoded/,
-    );
+    await assertResourceTooLarge(buildFileResourceUri(quotedResourceFile), /\(\d+ bytes as JSON/);
     const result = await harness.client.readResource(
       { uri: buildFileResourceUri(recoveryFile) },
       { timeout: 5000 },
@@ -368,7 +365,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.strictEqual(result.isError, true);
     const text = firstTextBlock(result).text ?? '';
     assert.match(text, /TOO_LARGE.*stdio/);
-    assert.match(text, /\nNothing was written\. Preview fewer files or a smaller file/);
+    assert.match(text, /\nNothing was written\. Preview fewer or smaller files/);
     // The remedy replaces TOO_LARGE's default advice; a dry run has no head/tail.
     assert.doesNotMatch(text, /head\/tail/);
     assert.ok((await readFile(dryRunFile, 'utf8')).startsWith('NEEDLE'));
@@ -401,7 +398,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     );
     assert.strictEqual(image.isError, true);
     const imageText = firstTextBlock(image).text ?? '';
-    assert.match(imageText, /^TOO_LARGE: .*stdio message limit\)\.\nThis media file is too large/);
+    assert.match(imageText, /^TOO_LARGE: .*stdio limit\)\.\nThis media file is too large/);
     assert.doesNotMatch(imageText, /head\/tail/);
     await assertRecovery();
 
@@ -420,7 +417,7 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     );
     assert.strictEqual(result.isError, true);
     const text = firstTextBlock(result).text ?? '';
-    assert.match(text, /^TOO_LARGE: .*stdio message limit\)\.\nThis binary file is too large/);
+    assert.match(text, /^TOO_LARGE: .*stdio limit\)\.\nThis binary file is too large/);
     assert.doesNotMatch(text, /head, tail/);
     await assertRecovery();
   });

@@ -631,7 +631,7 @@ describe('Stdio subscription lease lifecycle', () => {
         rejection.error.message.includes('watcher slots remain (cap 1)'),
         rejection.error.message,
       );
-      assert.ok(rejection.error.message.includes('Reduce the resourceSubscriptions list'));
+      assert.ok(rejection.error.message.includes('Shorten the resourceSubscriptions list'));
 
       await harness.send({
         jsonrpc: '2.0',

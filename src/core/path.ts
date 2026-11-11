@@ -706,7 +706,7 @@ export class PathGuard {
     if (!IS_WINDOWS && isWindowsDrivePath(requestedPath)) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        `Windows-style path received on a POSIX host (${process.platform}). Use a POSIX path, such as one under an allowed root.`,
+        `Windows-style path received on a POSIX host (${process.platform}). Use a POSIX path under an allowed root.`,
         requestedPath,
         undefined,
         'Run list_roots to see the allowed directories.',
@@ -755,7 +755,7 @@ export class PathGuard {
       if (isUncOrDevicePath(normalizedRequested)) {
         this.throwRemoteDenied(
           requestedPath,
-          `${accessDeniedHint} Network and device paths are never granted; configure the share as a root.`,
+          `${accessDeniedHint} Network and device paths are never granted. Configure the share as a root.`,
         );
       }
       // Grant advice only where precheckAccess would offer one; if the check
@@ -992,7 +992,7 @@ export class PathGuard {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
       existing.length === 0
-        ? `Relative path exists under none of the ${String(roots.length)} roots, so it names no one file. Pass an absolute path under one of: ${roots.join(', ')}.`
+        ? `Relative path exists under none of the ${String(roots.length)} roots. Pass an absolute path under one of: ${roots.join(', ')}.`
         : `Relative path exists under more than one root: ${existing.join(', ')}. Pass the absolute path you mean.`,
       requested,
     );
@@ -1090,7 +1090,7 @@ export class PathGuard {
     const ro = this.readOnlySpellings.find((dir) => isPathInsideDirectory(dir, normalized));
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
-      `Read-only root: ${path} is inside ${ro ?? 'a read-only root'} (--read-only-root / FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension). Writes, moves, and deletes are refused there.`,
+      `Read-only root: ${path} is inside ${ro ?? 'a read-only root'}. Writes, moves, and deletes are refused there. Set by --read-only-root, FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension.`,
       path,
     );
   }
@@ -1101,7 +1101,7 @@ export class PathGuard {
     if (this.isSensitive(checkPath)) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        'Sensitive file blocked by the server denylist. To unblock one built-in secret-file pattern, restart the server with --allow <pattern> (or FS_ALLOWLIST), or in the Claude Desktop extension add it to the Unblocked secret files setting. Outside the extension, --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns the whole built-in list off. Paths blocked with --deny, FS_DENYLIST, or the Extra blocked files setting stay blocked.',
+        'Sensitive file blocked by the server denylist. To unblock one built-in pattern, restart with --allow <pattern> (or FS_ALLOWLIST), or add it to the Unblocked secret files setting in the Claude Desktop extension. Outside the extension, --allow-sensitive (or FS_ALLOW_SENSITIVE=1) turns off the whole built-in list. Paths blocked by --deny, FS_DENYLIST, or the Extra blocked files setting stay blocked.',
         requestedPath,
       );
     }
@@ -1308,7 +1308,7 @@ export class PathGuard {
     if (matches.length > 1) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        `Ambiguous Unicode path component "${name}": ${String(matches.length)} entries in ${realDir} match it (${matches.map(escapeNonAscii).join(', ')}). Pass the exact name, using \\u escapes for the characters shown that way.`,
+        `Ambiguous Unicode path component "${name}": ${String(matches.length)} entries in ${realDir} match it (${matches.map(escapeNonAscii).join(', ')}). Pass the exact name, with \\u escapes where shown.`,
         requestedPath,
       );
     }
@@ -1557,7 +1557,7 @@ export class PathGuard {
         if (inside !== undefined) {
           throw new FsError(
             ErrorCode.ACCESS_DENIED,
-            `Read-only root inside: ${realTarget} contains ${inside} (--read-only-root / FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension). Deletes and moves of a parent directory are refused there.`,
+            `Read-only root inside: ${realTarget} contains ${inside}. Deletes and moves of a parent directory are refused there. Set by --read-only-root, FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension.`,
             requestedPath,
           );
         }
@@ -1642,7 +1642,7 @@ export class PathGuard {
         cwd = await findProjectRoot(cwd, walkCeiling);
       }
       if (isUnsafeCwdPath(cwd)) {
-        Logger.warn(`Skipped adding unsafe current working directory to allowed list: ${cwd}`);
+        Logger.warn(`Skipped unsafe current working directory as a root: ${cwd}`);
       } else {
         allowCwdDirs.push(cwd);
       }

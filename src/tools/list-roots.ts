@@ -16,10 +16,12 @@ export const LIST_ROOTS = defineTool<typeof RootsInputSchema, RootsOutput>({
   name: 'list_roots',
   title: 'Workspace Roots',
   description:
-    'List the workspace directory roots this server can access, including session-granted roots. ' +
-    'Use when starting a session or checking accessible directory boundaries. ' +
-    'Returns { roots, readOnlyDirs } as absolute paths. Mutating operations under readOnlyDirs are refused with ACCESS_DENIED. ' +
-    'Other tools prompt for approval when accessing paths outside these roots.',
+    'List roots this server can access and its read-only directories. ' +
+    'Use for allowed paths or after ACCESS_DENIED. ' +
+    'Do not use it to browse; use `list`, `find_files`, or `stat` instead. ' +
+    'Accepted grants add roots; call again after one. ' +
+    'Outside paths prompt a grant only on elicitation clients, never for home, system paths, or anything outside FS_ROOT_BOUNDARY. ' +
+    'Returns absolute { roots, readOnlyDirs (writes, moves, deletes refused), hint? when roots is empty }.',
   input: RootsInputSchema,
   readOnlyHint: true,
   run: (_args, ctx) => {

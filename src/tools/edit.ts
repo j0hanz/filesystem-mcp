@@ -29,7 +29,7 @@ const EditSpecSchema = z.strictObject({
   oldText: nonBlankString('oldText')
     .max(MAX_OLD_TEXT_CHARS, { message: 'oldText too long (max 1,048,576 chars)' })
     .describe(
-      'Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.',
+      'Exact text to find. It must match exactly once, so include 3-5 lines of context. Several matches fail and list up to 5 line numbers.',
     )
     .meta({ examples: ['const x = 1;', 'function oldName('] }),
   newText: z
@@ -47,33 +47,39 @@ const MAX_EDITS_PER_FILE = 100;
 
 const EditFileInputSchema = z
   .strictObject({
-    path: RequiredPath.optional().describe('Single file path; mutually exclusive with files'),
+    path: RequiredPath.optional().describe(
+      'One file to edit; give edits with it. Not allowed with files',
+    ),
     edits: z
       .array(EditSpecSchema)
       .min(1)
       .max(MAX_EDITS_PER_FILE)
       .optional()
-      .describe('Replacements applied to path (required with path); not allowed with files'),
+      .describe(
+        'Replacements for path, applied in order; each oldText is matched against the text the earlier edits left. Required with path',
+      ),
     files: z
       .array(
         z.strictObject({
-          path: RequiredPath,
+          path: RequiredPath.describe('File to edit; each file appears once'),
           edits: z
             .array(EditSpecSchema)
             .min(1)
             .max(MAX_EDITS_PER_FILE)
-            .describe('Replacements to apply to this specific file'),
+            .describe(
+              'Replacements for this file, applied in order; each oldText is matched against the text the earlier edits left',
+            ),
         }),
       )
       .min(1)
       .max(MAX_MULTI_FILES)
       .optional()
-      .describe('Per-file entries (batch mode)'),
+      .describe('Batch mode: one entry per file, each with its own edits'),
     dryRun: defaultFalseBoolean(
-      'Preview diffs without writing to disk (default: false = apply edits)',
+      'Write nothing; return a unified diff per file. An unmatched oldText is reported instead of failing; an ambiguous one still fails',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Ignore leading/trailing whitespace differences when matching oldText; newText is re-indented to the match and replaces its inner blank lines',
+      'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match',
     ),
   })
   .superRefine((value, ctx) => {
@@ -551,7 +557,7 @@ async function applyEdits(
     if (!edit.oldText.isWellFormed()) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        `edits[${String(index)}]: oldText holds an unpaired surrogate, which would split a character in the file.`,
+        `edits[${String(index)}]: oldText has an unpaired surrogate, which would split a character in the file.`,
       );
     }
     // A leading U+FEFF is matched as typed first. Only when that misses, and the
@@ -678,7 +684,7 @@ function formatEditSummary(
   // structuredContent for the one message that can apply.
   const [only] = results;
   if (results.length === 1 && only && 'error' in only) {
-    return `edit: ${only.path} FAILED — ${only.error.message}${tag}`;
+    return `edit: ${only.path} FAILED: ${only.error.message}${tag}`;
   }
   const tokens = results.map((r) => {
     if ('error' in r) return `${basename(r.path)} FAILED`;
@@ -715,11 +721,13 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
   name: 'edit',
   title: 'Edit Files',
   description:
-    'Edit text files in place by replacing exact oldText with newText. ' +
-    'Use when changing specific unique snippets in one or more files. ' +
-    'Unmatched or ambiguous text fails and leaves the file untouched. One failed file does not stop the others. ' +
-    'Applied edits are permanent until undone. Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. ' +
-    'Use replace_text for every match of a pattern, patch when you already hold a unified diff, and create for new files.',
+    'Replace exact, unique text snippets in up to 5 existing text files. Use when you know the exact text to change. ' +
+    'Do not use it for every match of a pattern; use `replace_text` instead. ' +
+    'To apply a unified diff, use `patch`; for a new file or a whole rewrite, use `create`. ' +
+    'Each file is all or nothing: an unmatched or ambiguous oldText writes nothing to that file, and other files still run; dryRun reports unmatched text instead of failing. ' +
+    'Missing, binary, non-UTF-8, and over-size-cap (default 10 MiB) files fail. ' +
+    'Returns one summary line per file (+added -removed, NO MATCH, or FAILED); a dry run appends unified diffs. ' +
+    'With undo enabled, live runs add an undo id for `undo`, valid 30 minutes.',
   input: EditFileInputSchema,
   readOnlyHint: false,
   deadline: true,

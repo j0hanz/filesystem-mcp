@@ -59,10 +59,10 @@ const rangeField = (description: string, count = false) => {
 };
 
 const readRangeFields = {
-  head: rangeField('Return first N lines', true),
-  tail: rangeField('Return last N lines', true),
-  startLine: rangeField('Start line (1-indexed)'),
-  endLine: rangeField('End line (1-indexed); requires startLine'),
+  head: rangeField('First N lines. Not with tail or startLine/endLine.', true),
+  tail: rangeField('Last N lines. Not with head, startLine/endLine, or lineNumbers.', true),
+  startLine: rangeField('First line, 1-based. Without endLine, reads to the end.'),
+  endLine: rangeField('Last line, inclusive. Requires startLine.'),
 };
 
 /** A slice read: only a full read returns media or a binary resource. */
@@ -71,13 +71,13 @@ const hasLineRange = (args: ReadRange): boolean =>
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean(
-    'Include SHA-256 of the returned content (the slice for head, tail or a line range)',
+    'Include SHA-256 of the returned content (the slice for a partial read).',
   ),
   binary: defaultFalseBoolean(
-    'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
+    'Return a non-image, non-audio binary file as a base64 resource. Whole reads only. Without it, such a file fails with BINARY_FILE.',
   ),
   lineNumbers: defaultFalseBoolean(
-    'Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.',
+    'Prefix each line with its number and a tab. Not with tail. Leave the prefix out of edit text.',
   ),
   ...readRangeFields,
 }).superRefine((value, ctx) => {
@@ -222,7 +222,7 @@ function budgetSkip(path: string, maxTotalSize: number, suggestion?: string): Fs
   // undefined falls back to the TOO_LARGE default via the constructor's default param.
   return new FsError(
     ErrorCode.TOO_LARGE,
-    `Skipped: this file alone would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it on its own with path instead of paths.`,
+    `Skipped: this file would push the batch past maxTotalSize (${String(maxTotalSize)} bytes). Read it alone with path, not paths.`,
     path,
     undefined,
     suggestion,
@@ -489,8 +489,8 @@ async function readOnePath(
     throw new FsError(
       ErrorCode.BINARY_FILE,
       isRangeRead
-        ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
-        : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,
+        ? `${BINARY_FILE_MESSAGE} It has no lines. Read it whole with binary: true to get a base64 embedded resource.`
+        : `${BINARY_FILE_MESSAGE} Pass binary: true to get a base64 embedded resource.`,
       filePath,
       error,
     );
@@ -514,10 +514,16 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   name: 'read',
   title: 'Read File',
   description:
-    'Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. ' +
-    'Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. ' +
-    'Images and audio return as media. Returns file text or slice, or per-path results for batches. ' +
-    'Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.',
+    'Read one file or up to 1000, whole or as a line slice. ' +
+    'Use when you know the path. ' +
+    'Do not use it to check size or existence; use `stat` instead. ' +
+    'To locate content, use `search_text`, `find_files`, or `list`. ' +
+    'Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. ' +
+    'Past the size limit, a whole read fails with TOO_LARGE; a single-path head or range is truncated. ' +
+    'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
+    'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +
+    'Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. ' +
+    'Full reads add totalLines; a tail gets no continuation.',
   input: ReadFileInputSchema,
   // Claude Code spills a text result over 50,000 characters to a file, which
   // may sit outside the roots where this server's own tools cannot read it.
@@ -702,10 +708,10 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   oversizeRemedy: (result) => {
     const types = new Set(result.resources?.map((b) => b.type));
     if (types.has('image') || types.has('audio')) {
-      return 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.';
+      return 'This media file is too large for the stdio transport. Connect over HTTP, or use a smaller file.';
     }
     if (types.has('resource')) {
-      return 'This binary file is too large to return over the stdio transport; connect over HTTP.';
+      return 'This binary file is too large for the stdio transport. Connect over HTTP.';
     }
     return 'Read a slice with head, tail, or startLine/endLine.';
   },

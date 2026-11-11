@@ -743,7 +743,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await fs.rm(link);
     assert.strictEqual(
       cap.unavailableReason(),
-      'dir-link: could not type a link whose target is gone',
+      'dir-link: could not tell the type of a link whose target is gone',
     );
   });
 

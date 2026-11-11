@@ -105,7 +105,7 @@ describe('Message limit', () => {
     assert.strictEqual(error.code, ErrorCode.TOO_LARGE);
     assert.strictEqual(
       error.message,
-      'read result too large to return (123 bytes once JSON-encoded, over the 10223616-byte stdio message limit).',
+      'read result is too large (123 bytes as JSON, over the 10223616-byte stdio limit).',
     );
     assert.strictEqual(error.problem.suggestion, 'R');
   });
@@ -114,10 +114,10 @@ describe('Message limit', () => {
     const error = refuseResourceRead(5, true);
     assert.ok(ProtocolError.isInstance(error));
     assert.strictEqual(error.code, ProtocolErrorCode.InvalidParams);
-    assert.match(error.message, /^Resource result too large to return \(at least 5 bytes/);
+    assert.match(error.message, /^Resource result is too large \(at least 5 bytes/);
     assert.deepStrictEqual(error.data, {
       code: 'TOO_LARGE',
-      suggestion: 'Read smaller slices/pages with tools, or connect over HTTP.',
+      suggestion: 'Read smaller ranges or pages with tools, or connect over HTTP.',
     });
     assert.doesNotMatch(refuseResourceRead(5).message, /at least/);
   });

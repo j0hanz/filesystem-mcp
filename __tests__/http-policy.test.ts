@@ -827,7 +827,7 @@ describe('keyless bind rate limiting', () => {
   });
 
   const KEYLESS_WARNING =
-    '[warning] [HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and --root-boundary to fence grants.';
+    '[warning] [HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and use --root-boundary to limit grants.';
 
   it('warns once at startup when HTTP runs without an API key', async (t) => {
     const dir = await createTestRoot();

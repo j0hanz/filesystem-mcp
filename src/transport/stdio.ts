@@ -272,7 +272,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       // the operator can do about it. The connection is already closing.
       if (message.includes('ReadBuffer exceeded maximum size')) {
         Logger.error(
-          `[Stdio] an inbound message exceeded ${String(getMaxInboundMessageBytes())} bytes (3 × FS_MAX_FILE_SIZE + 1 MiB); the connection is closed. Split the write into smaller calls or raise FS_MAX_FILE_SIZE.`,
+          `[Stdio] An inbound message exceeded ${String(getMaxInboundMessageBytes())} bytes (3 × FS_MAX_FILE_SIZE + 1 MiB), so the connection is closed. Split the write into smaller calls or raise FS_MAX_FILE_SIZE.`,
         );
       }
       Logger.error('[Stdio] serve error:', message);
@@ -299,7 +299,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
   const deliver = wire.onmessage;
   if (!deliver) {
     throw new Error(
-      'serveStdio did not install a synchronous onmessage handler; the subscriptions/listen watcher gate cannot attach. This is an SDK contract change, not a configuration error.',
+      'serveStdio did not install a synchronous onmessage handler, so the subscriptions/listen watcher gate cannot attach. This is an SDK change, not a configuration error.',
     );
   }
   let gated = Promise.resolve();

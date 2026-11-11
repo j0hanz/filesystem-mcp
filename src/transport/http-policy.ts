@@ -124,7 +124,7 @@ export function assertHttpBindingPolicy(host: string, apiKey: string | undefined
     if (apiKey !== undefined && !isSecureApiKey(apiKey)) {
       throw new FsError(
         ErrorCode.PERMISSION_DENIED,
-        'The configured API key (--api-key / FS_API_KEY) is insecure (minimum 16 characters).',
+        'The API key (--api-key / FS_API_KEY) is insecure: it needs at least 16 characters.',
       );
     }
     return;
@@ -132,7 +132,7 @@ export function assertHttpBindingPolicy(host: string, apiKey: string | undefined
   if (isSecureApiKey(apiKey)) return;
   throw new FsError(
     ErrorCode.PERMISSION_DENIED,
-    `Refusing to bind HTTP server to non-loopback host '${host}' without a secure API key (set --api-key or FS_API_KEY, minimum 16 characters).`,
+    `Refusing to bind HTTP server to non-loopback host '${host}' without an API key of at least 16 characters. Set --api-key or FS_API_KEY.`,
   );
 }
 
@@ -170,7 +170,7 @@ export function resolveTrustProxySetting(value: string | undefined): string | un
   if (!Number.isNaN(Number(trimmed)) || /^(true|false)$/i.test(trimmed)) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      `FS_TRUST_PROXY no longer accepts a hop count or true/false ('${trimmed}'): a hop count trusts X-Forwarded-For from any client that connects. Set it to your proxy's address instead, for example FS_TRUST_PROXY=loopback or FS_TRUST_PROXY=10.0.0.5. Unset it if no proxy sits in front.`,
+      `FS_TRUST_PROXY no longer accepts a hop count or true/false ('${trimmed}'), because a hop count trusts X-Forwarded-For from any client. Set it to the proxy address, such as FS_TRUST_PROXY=loopback or FS_TRUST_PROXY=10.0.0.5. Unset it if there is no proxy.`,
     );
   }
   return trimmed;
@@ -196,7 +196,7 @@ export function assertHttpHostPolicy(
   if (allowedHosts.length > 0) return;
   throw new FsError(
     ErrorCode.PERMISSION_DENIED,
-    `Refusing to bind wildcard host '${host}' without FS_ALLOWED_HOSTS. Set it to the public hostname(s) clients send, or set FS_ALLOW_UNRESTRICTED_HOSTS=true to accept the risk.`,
+    `Refusing to bind wildcard host '${host}' without FS_ALLOWED_HOSTS. Set it to the hostnames clients send, or set FS_ALLOW_UNRESTRICTED_HOSTS=true to accept the risk.`,
   );
 }
 
@@ -227,7 +227,7 @@ export function protectedResourceUrl(
     // RFC 8707 §2: a resource indicator must not carry a fragment.
     if (parsed) return resourceUrlFromServerUrl(parsed);
     Logger.warn(
-      `[HTTP] Ignoring unparseable FS_PUBLIC_URL: ${configured}. Deriving the resource identifier from the Host header instead.`,
+      `[HTTP] FS_PUBLIC_URL is not a valid URL: ${configured}. Using the Host header instead.`,
     );
   }
   // With no Host validator mounted (FS_ALLOW_UNRESTRICTED_HOSTS=1)

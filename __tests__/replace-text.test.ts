@@ -485,7 +485,7 @@ describe('replace_text body', () => {
       }),
       (error: unknown) =>
         error instanceof SyntaxError &&
-        error.message.endsWith('lookahead, lookbehind, and backreferences are not supported.'),
+        error.message.endsWith('. Lookahead, lookbehind, and backreferences are not supported.'),
     );
   });
 
@@ -548,11 +548,8 @@ describe('replace_text body', () => {
           assert.strictEqual(refused.isError, true, `dryRun=${String(dryRun)}`);
           const failure = refused.rows[0]?.error;
           assert.strictEqual(failure?.code, 'TOO_LARGE');
-          assert.strictEqual(
-            failure?.message,
-            'Replacement result exceeds the size limit (more than 1048576 bytes)',
-          );
-          assert.match(refused.text ?? '', /prefix\.txt: TOO_LARGE Replacement result exceeds/);
+          assert.strictEqual(failure?.message, 'Replacement result is over 1048576 bytes');
+          assert.match(refused.text ?? '', /prefix\.txt: TOO_LARGE Replacement result is over/);
           assert.strictEqual(await readFile(file, 'utf-8'), original, 'file must be untouched');
         }
       });
@@ -1475,7 +1472,7 @@ describe('replace_text body', () => {
     const regexLine =
       '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
     const globLine =
-      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.";
+      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern matches file names; put the text to find in searchPattern.";
     const text = async (args: Partial<ReplaceArgs> & { searchPattern: string }) =>
       (await replace({ path: dir, replacement: 'X', dryRun: true, ...args })).text ?? '';
 
@@ -1576,7 +1573,7 @@ describe('replace_text body', () => {
       const result = await replace({ path: dir, searchPattern: 'foo', replacement: 'foobar' });
       assert.strictEqual(result.structured.stoppedReason, 'maxMatches');
       assert.match(result.text ?? '', /already rewritten/u);
-      assert.match(result.text ?? '', /applies it to them again/u);
+      assert.match(result.text ?? '', /applies the replacement to them again/u);
     });
 
     it('warns after maxFiles', async () => {
@@ -1590,7 +1587,7 @@ describe('replace_text body', () => {
       });
       assert.strictEqual(result.structured.stoppedReason, 'maxFiles');
       assert.match(result.text ?? '', /already rewritten/u);
-      assert.match(result.text ?? '', /applies it to them again/u);
+      assert.match(result.text ?? '', /applies the replacement to them again/u);
     });
 
     it('does not warn on a dry run', async () => {

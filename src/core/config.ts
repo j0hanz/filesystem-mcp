@@ -14,7 +14,7 @@
  * module is the one place either can import without a cycle.
  */
 export const NO_POSITIONAL_ROOTS_GUIDANCE =
-  'No positional directories specified. Configure roots with directory arguments, FS_ALLOWED_DIRS, or --allow-cwd. Modern clients with elicitation can also call a tool with a concrete path and approve the requested grant.';
+  'No root directories given. Pass directory arguments, set FS_ALLOWED_DIRS, or use --allow-cwd. A client with elicitation can also call a tool with a concrete path and approve the requested grant.';
 
 export interface CliOverrides {
   /** `--log-level` */

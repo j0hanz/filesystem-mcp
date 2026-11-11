@@ -110,7 +110,7 @@ export class ProgressSession {
       .catch((error: unknown) => {
         // A sink failure must never fail the tool call it is reporting on.
         Logger.warn(
-          `${toolName}: progressNotification failed: ${formatUnknownErrorMessage(error)}`,
+          `${toolName}: progress notification failed: ${formatUnknownErrorMessage(error)}`,
         );
       })
       .finally(() => {

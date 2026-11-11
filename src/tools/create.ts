@@ -32,24 +32,24 @@ import { defineTool, type ToolCtx } from './define.ts';
 const EPOCH = new Date(0);
 
 const CreateFileItemSchema = z.strictObject({
-  path: RequiredPath.describe('Absolute path where the file will be created'),
+  path: RequiredPath.describe('Absolute file path inside a writable root; one entry per file.'),
   content: z
     .string()
     .refine((val) => Buffer.byteLength(val, 'utf8') <= getMaxTextFileSize(), {
-      message: 'Content exceeds maximum allowed text file size',
+      message: 'Content is over the text file size limit',
     })
-    .describe('Text content to write, verbatim.'),
+    .describe('Full text to write, verbatim, as UTF-8.'),
   append: z
     .boolean()
     .optional()
     .describe(
-      'Append the content verbatim, adding no newline; creates the file if it does not exist',
+      'Add content to the end, adding no newline; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.',
     ),
   overwrite: z
     .boolean()
     .optional()
     .describe(
-      'Replace an existing file without asking the user; without it an existing file prompts for confirmation. A client that cannot show a prompt fails with INVALID_INPUT and a workaround instead.',
+      'Replace an existing file without asking. Without it, a client that cannot show the prompt fails the whole call with INVALID_INPUT.',
     ),
 });
 
@@ -67,7 +67,7 @@ const CreateInputSchema = z
       .max(100)
       .optional()
       .describe(
-        'List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit',
+        'Files to write. Give files, directories, or both. Combined content per call is at most FS_MAX_FILE_SIZE (default 10 MiB).',
       ),
     directories: z
       .array(RequiredPath)
@@ -75,7 +75,7 @@ const CreateInputSchema = z
       .max(100)
       .optional()
       .describe(
-        'Empty directories to create, like mkdir -p; one that already exists is left as it is',
+        'Empty directories, created recursively; an existing directory succeeds; a path also listed in files is rejected.',
       ),
   })
   .superRefine((value, ctx) => {
@@ -144,7 +144,7 @@ const CreateInputSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['files'],
-        message: `combined content is ${String(total)} bytes; one create call carries at most ${String(limit)} (FS_MAX_FILE_SIZE). Split the batch.`,
+        message: `combined content is ${String(total)} bytes; the limit per call is ${String(limit)} (FS_MAX_FILE_SIZE). Split the batch.`,
         input: value,
       });
     }
@@ -169,10 +169,14 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   name: 'create',
   title: 'Create Files',
   description:
-    'Write whole text files (create, overwrite, or append) or make empty directories. ' +
-    'Use when creating new files, replacing full contents, or creating folders. ' +
-    'Missing parent directories are created automatically. ' +
-    'Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.',
+    'Write whole text files (new, overwrite, or append) and create empty directories, with missing parents. ' +
+    'Use when you have full content or need folders. ' +
+    'Do not use it for partial edits; use `edit`, `replace_text`, or `patch` instead, and `move` to copy or rename. ' +
+    'Whole-file writes are atomic (temp file, then rename); appends are not. ' +
+    'An existing file is replaced only with overwrite: true or after one user confirmation for the batch; nothing is written before the answer. ' +
+    'Declined entries fail with CANCELLED; skipped ones land in skipped. ' +
+    'Entries fail alone; the call errors only when all fail. ' +
+    'Returns files (path, size, lineCount, mimeType, kind, resourceUri, created, modified), directories, failures, skipped, and an undo id for `undo` (30 min), or undoUnavailable.',
   input: CreateInputSchema,
   readOnlyHint: false,
   mapPaths: (args, fn) => ({
@@ -453,7 +457,7 @@ async function createOne(
     } catch (error) {
       ctx.log(
         'warning',
-        `create append: result metadata degraded for ${validPath}: ${formatUnknownErrorMessage(error)}`,
+        `create append: could not read result metadata for ${validPath}: ${formatUnknownErrorMessage(error)}`,
         'create',
       );
       // A POSIX mode-0222 file appends fine but cannot be opened 'r';

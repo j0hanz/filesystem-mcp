@@ -523,7 +523,7 @@ export async function snapshotTree(
             .catch(() => undefined)
         : false;
       if (isDir === undefined) {
-        capture.abandon('could not type a link whose target is gone');
+        capture.abandon('could not tell the type of a link whose target is gone');
         return;
       }
       capture.push({
@@ -687,7 +687,7 @@ async function assertTreeKeepsPolicy(
   if (!keeps) {
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
-      'Undo refused: the directory contains entries whose protection would change when moved back',
+      'Undo refused: moving the directory back would change the protection of entries in it',
       to,
       cause,
     );
@@ -1431,7 +1431,7 @@ export async function restoreEntry(
                 record,
                 order,
                 record.from,
-                'Not restored: the moved entry, its old path or a folder either needs was modified since this undo step was recorded',
+                'Not restored: the moved entry, its old path or a parent folder changed since this undo step was recorded',
               );
             }
           });

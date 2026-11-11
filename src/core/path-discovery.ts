@@ -35,14 +35,14 @@ export async function resolveConfiguredDirs(
       if (s.isDirectory()) {
         result.push(opts.resolveReal ? normalizePath(await realpath(normalized)) : normalized);
       } else {
-        Logger.warn(`Path configured in ${envVar} is not a directory: ${rawPath}`);
+        Logger.warn(`Path in ${envVar} is not a directory: ${rawPath}`);
       }
     } catch (error) {
       if (opts.allowMissing) {
         result.push(normalized);
       } else {
         Logger.warn(
-          `Path configured in ${envVar} is invalid or does not exist: ${rawPath} (${formatUnknownErrorMessage(error)})`,
+          `Path in ${envVar} does not exist or is invalid: ${rawPath} (${formatUnknownErrorMessage(error)})`,
         );
       }
     }

@@ -18,8 +18,10 @@ import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
 const MoveItemSchema = z.strictObject({
-  source: RequiredPath.describe('Path of the file or directory to move or copy'),
-  destination: RequiredPath.describe('Destination path'),
+  source: RequiredPath.describe('Existing file, directory, or symlink'),
+  destination: RequiredPath.describe(
+    'Full target path including the new name, not a parent folder',
+  ),
 });
 
 interface MoveItemResult {
@@ -28,11 +30,15 @@ interface MoveItemResult {
 }
 
 const MoveInputSchema = z.strictObject({
-  moves: z.array(MoveItemSchema).min(1).max(100).describe('Operations to perform (max 100)'),
-  copy: defaultFalseBoolean('Copy instead of move; sources are left in place'),
-  overwrite: defaultFalseBoolean(
-    'Copy mode only: overwrite existing destinations without confirmation',
-  ),
+  moves: z
+    .array(MoveItemSchema)
+    .min(1)
+    .max(100)
+    .describe(
+      'Pairs run independently, with no rollback; a declined overwrite still cancels them all',
+    ),
+  copy: defaultFalseBoolean('Copy and leave sources in place instead of moving'),
+  overwrite: defaultFalseBoolean('Copy only: replace existing destinations without confirmation'),
 });
 
 interface MoveFailureItem {
@@ -175,7 +181,7 @@ async function runTransfers(
           candidate.plan.request,
           new FsError(
             ErrorCode.INVALID_INPUT,
-            `${VERB[op]} cancelled: another entry in this batch already targets destination "${candidate.plan.request.destination}"`,
+            `${VERB[op]} cancelled: another entry in this batch already targets "${candidate.plan.request.destination}"`,
             candidate.plan.request.destination,
           ),
         ).error,
@@ -225,7 +231,7 @@ async function runTransfers(
           item.plan.request,
           new FsError(
             ErrorCode.INVALID_INPUT,
-            `${VERB[op]} cancelled: "${item.plan.request.source}" or "${item.plan.request.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+            `${VERB[op]} cancelled: "${item.plan.request.source}" or "${item.plan.request.destination}" overlaps another entry's source or destination in this batch. Run dependent moves one at a time.`,
             item.plan.request.source,
           ),
         ).error,
@@ -387,12 +393,13 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
   name: 'move',
   title: 'Move or Copy Files',
   description:
-    'Move, rename, or copy files and directories, like mv or cp -r. ' +
-    'Use when renaming paths, moving files between directories, or copying trees (copy: true). ' +
-    'Each moves entry is { source, destination }; destination is the full target path, not a directory to move into. ' +
-    'copy: true leaves sources in place. overwrite applies only to copies; moving onto an existing file requires confirmation. ' +
-    'Returns { moves: [{ from, to }], failures?, skipped? } and an undo id for undo; one failed pair does not roll back completed transfers. ' +
-    'Use delete to remove paths.',
+    'Move, rename, or copy files and directories inside the roots. ' +
+    'Use when you need to rename, relocate, or duplicate (copy: true). ' +
+    'Do not use to change contents (`edit`, `patch`) or remove paths (`delete`). ' +
+    'Missing parents are created. An existing destination asks to confirm; declining cancels the call, skipping drops that pair. Only copies can bypass the prompt (overwrite: true). ' +
+    'A directory move never merges into a non-empty directory; a copy merges. ' +
+    'Pairs that share a destination or overlap another pair fail; run dependent moves separately. ' +
+    'Returns summary lines naming each pair and failure, and { moves: [{ from, to }], failures?, skipped?, undo id for `undo` (30 minutes) or undoUnavailable }; an error only if every pair failed.',
   input: MoveInputSchema,
   readOnlyHint: false,
   progress: (args) => {

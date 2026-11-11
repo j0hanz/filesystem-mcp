@@ -122,7 +122,7 @@ function configuredRequestStateKey(): Uint8Array | undefined {
     const bytes = Buffer.from(env, 'utf8');
     if (bytes.length >= 32) return bytes;
     Logger.warn(
-      `FS_REQUEST_STATE_KEY is ${String(bytes.length)} bytes; 32 are required. Falling back to a random per-boot key — in-flight input_required rounds will not survive a restart.`,
+      `FS_REQUEST_STATE_KEY is ${String(bytes.length)} bytes; 32 are required. Using a random key instead, so pending input_required rounds will not survive a restart.`,
     );
   }
   return undefined;
@@ -427,7 +427,7 @@ export function describeRefusal(
   key: string,
 ): string {
   if (ctx.droppedInputResponseKeys?.includes(key)) {
-    return 'answered in a shape this server cannot read (a wrapped result instead of the bare elicitation result), twice';
+    return 'answered twice in a shape this server cannot read: a wrapped result, not the bare elicitation result';
   }
   const view = inputResponse(ctx.inputResponses, key);
   if (view.kind !== 'elicit') return 'not answered';

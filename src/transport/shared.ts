@@ -113,7 +113,7 @@ export async function prepareListenWatchers(
   if (newUris.length > available) {
     return {
       ok: false,
-      message: `subscriptions/listen names ${newUris.length} not-yet-watched URIs but only ${available} watcher slots remain (cap ${MAX_WATCHERS}). Reduce the resourceSubscriptions list.`,
+      message: `subscriptions/listen asks for ${newUris.length} new URIs, but only ${available} watcher slots remain (cap ${MAX_WATCHERS}). Shorten the resourceSubscriptions list.`,
     };
   }
   const acquired: string[] = [];

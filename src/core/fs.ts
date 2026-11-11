@@ -355,7 +355,7 @@ export class GuardedFileSystem {
     if (!keeps) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
-        `${TRANSFER_VERB[op]} refused: the directory contains protected entries matching the sensitive-file policy; move or copy individual files instead`,
+        `${TRANSFER_VERB[op]} refused: the directory has protected entries under the sensitive-file policy. Move or copy files one at a time.`,
         requestedFrom,
       );
     }
@@ -932,7 +932,7 @@ export class GuardedFileSystem {
     if (!(await this.hasChildrenUnchecked(destination).catch(() => false))) return;
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      `A move cannot merge directories: destination "${requested}" is a non-empty directory. Choose a new destination name, or use copy: true to merge and keep the source.`,
+      `A move cannot merge directories: destination "${requested}" is not empty. Pick a new destination name, or use copy: true to merge and keep the source.`,
       requested,
     );
   }
@@ -1088,7 +1088,7 @@ export class GuardedFileSystem {
       // than swallowing it.
       if (!isNotFoundErrno(error)) {
         Logger.warn(
-          `atomicWriteFile: cannot read the existing mode of ${validPath}; the write will use the default mode: ${formatUnknownErrorMessage(error)}`,
+          `atomicWriteFile: cannot read the mode of ${validPath}, so the write uses the default mode:${formatUnknownErrorMessage(error)}`,
         );
         own.abandon('could not read the old content');
       }

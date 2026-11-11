@@ -81,7 +81,7 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.TIMEOUT]: 'Reduce scope, depth, or maxResults.',
   [ErrorCode.INVALID_PATTERN]: 'Check syntax and escape special characters.',
   [ErrorCode.BINARY_FILE]:
-    'Text tools refuse binary files; read returns one whole with binary: true.',
+    'Text tools do not accept binary files. read returns the whole file with binary: true.',
   [ErrorCode.PERMISSION_DENIED]: 'Check OS file permissions.',
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',
 };

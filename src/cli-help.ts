@@ -28,11 +28,11 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--read-only-root <dir>',
-    desc: 'Refuse writes, moves, and deletes under this directory; repeatable, any directory including a subtree of a writable root (env: FS_READ_ONLY_DIRS)',
+    desc: 'Refuse writes, moves, and deletes under this directory, even inside a writable root; repeatable (env: FS_READ_ONLY_DIRS)',
   },
   {
     flags: '--read-only-roots <dir...>',
-    desc: 'Like --read-only-root for every argument after it; must come last. For hosts that pass a folder list as arguments',
+    desc: 'Like --read-only-root for every argument after it; must come last. For hosts that pass folders as arguments',
   },
   { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
@@ -135,16 +135,16 @@ const ENV_HELP: HelpRow[] = [
   },
   {
     flags: 'FS_ALLOW_UNRESTRICTED_HOSTS',
-    desc: 'Bind a wildcard host with no Host validation, accepts the risk ("true" or "1" enables this)',
+    desc: 'Bind a wildcard host without Host validation and accept the risk ("true" or "1" enables this)',
   },
   { flags: 'FS_PUBLIC_URL', desc: 'Resource identifier URL for RFC 9728 discovery' },
   {
     flags: 'FS_RATE_LIMIT_RPM',
-    desc: 'Per-client-IP requests/min (default 120 authenticated, 6000 keyless loopback; 1–100000)',
+    desc: 'Requests per minute per client IP (default 120 with an API key, 6000 keyless loopback; 1-100000)',
   },
   {
     flags: 'FS_MAX_WATCHERS',
-    desc: 'Max concurrent file watchers (default 256, 1–4096)',
+    desc: 'Max concurrent file watchers (default 256, 1-4096)',
   },
   {
     flags: 'FS_MAX_UNDO_BYTES',

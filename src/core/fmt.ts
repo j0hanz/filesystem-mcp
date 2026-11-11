@@ -103,7 +103,7 @@ export function truncateProgressPattern(pattern: string): string {
   return pattern.length <= 40 ? pattern : `${pattern.slice(0, 40)}…`;
 }
 
-const NARROW = 'That total is a floor, not the count. Narrow path or pattern for the rest.';
+const NARROW = 'The total is a lower bound. Narrow path or pattern to see the rest.';
 
 /**
  * `maxResults` names the engine's own cap, and is also the name of the
@@ -227,7 +227,7 @@ export function zeroMatchHint(p: {
   if (p.filesScanned === 0) {
     return p.pattern === undefined
       ? '// no files were searched: nothing under path passed the hidden/ignored/maxDepth filters.'
-      : `// no files were searched: nothing under path matched pattern '${p.pattern}' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.`;
+      : `// no files were searched: nothing under path matched pattern '${p.pattern}' after the hidden/ignored/maxDepth filters. pattern matches file names; put the text to find in searchPattern.`;
   }
   if (!p.isRegex && REGEX_META.test(p.searchPattern)) {
     return '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
