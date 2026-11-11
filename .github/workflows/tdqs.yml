@@ -1,9 +1,11 @@
 # Scores the advertised tool definitions on tdqs.dev (the rubric Glama uses).
-# Kept apart from ci.yml, which must stay secret-free. The secret never meets
-# PR code: `definitions` builds and runs the PR with no secret and hands the
-# tools/list JSON on as data; `score` holds the key and runs only the pinned
-# tdqs CLI on that JSON. A hosted score spends one of the account's 30 daily
-# calls, so `score` runs only when tools/list differs from the base branch.
+# Kept apart from ci.yml, which must stay secret-free. `definitions` builds and
+# runs the PR with no secret and hands the tools/list JSON on as data; `score`
+# holds the key and runs only the pinned tdqs CLI on that JSON. A fork PR gets
+# no key. A branch in this repository can edit this file, so the key lives in
+# the `tdqs` environment, whose required reviewer approves each `score` run.
+# A hosted score spends one of the account's 30 daily calls, so `score` runs
+# only when tools/list differs from the base branch.
 name: TDQS
 
 on:
@@ -88,9 +90,10 @@ jobs:
     if: ${{ needs.definitions.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: tdqs
     permissions: {}
     env:
-      # Empty on fork PRs, which receive no secrets; the score step skips then.
+      # Empty on fork PRs, and until the `tdqs` environment holds the key; the score step skips then.
       TDQS_API_KEY: ${{ secrets.TDQS_API_KEY }}
       # Passed through env, never interpolated into the script: it is PR-built data.
       TOOLS_JSON: ${{ needs.definitions.outputs.tools }}
