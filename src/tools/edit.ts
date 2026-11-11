@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
+import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
@@ -633,8 +633,11 @@ async function editOnce(
     editResult.appliedEdits > 0
       ? await unifiedPatch(basename(done.validPath), done.before, done.after)
       : undefined;
-  if (patch !== undefined) Object.assign(editResult, diffStatsFromPatch(patch));
-  if (options.dryRun && patch !== undefined) editResult.diff = patch;
+  if (patch !== undefined) {
+    editResult.linesAdded = patch.linesAdded;
+    editResult.linesRemoved = patch.linesRemoved;
+  }
+  if (options.dryRun && patch !== undefined) editResult.diff = patch.text;
   if (done.written) {
     ctx.log(
       'info',

@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { DIFF_TIMEOUT_MS, diffStatsFromPatch, twoFilesPatch } from '../core/diff.ts';
+import { DIFF_TIMEOUT_MS, twoFilesPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { readNamedText } from '../core/scan.ts';
 import { PositiveInt, RequiredPath } from '../core/schema.ts';
@@ -47,7 +47,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
       ]);
 
     // Synchronous Myers diff; `timeout` is the only thing that can stop it.
-    const diffText = await twoFilesPatch(
+    const generated = await twoFilesPatch(
       basename(validA),
       basename(validB),
       contentA,
@@ -59,7 +59,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
         timeout: DIFF_TIMEOUT_MS,
       },
     );
-    if (diffText === undefined) {
+    if (generated === undefined) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
         `Diff not computed: the files differ in too many lines to diff within ${String(DIFF_TIMEOUT_MS)} ms, or the server was busy with other diffs. Retry once; if it fails again, compare smaller sections with read + startLine/endLine.`,
@@ -67,13 +67,16 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
       );
     }
 
-    const { linesAdded, linesRemoved } = diffStatsFromPatch(diffText);
-
     // The text block is the one copy of the diff; a model reads that, and a
     // structured duplicate or a store entry would only ship the same bytes again.
     return {
-      structured: { a: validA, b: validB, linesAdded, linesRemoved },
-      text: diffText,
+      structured: {
+        a: validA,
+        b: validB,
+        linesAdded: generated.linesAdded,
+        linesRemoved: generated.linesRemoved,
+      },
+      text: generated.text,
     };
   },
 });

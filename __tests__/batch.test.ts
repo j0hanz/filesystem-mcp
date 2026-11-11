@@ -96,6 +96,28 @@ describe('executeBatchSlots', () => {
     assert.deepStrictEqual(res, { results: [], summary: { total: 0, succeeded: 0, failed: 0 } });
     assert.strictEqual(called, false);
   });
+
+  it('preserves a thrown Problem verbatim', async () => {
+    const problem = Problem.accessDenied('Access denied', {
+      path: 'a.txt',
+      suggestion: 'Ask for access',
+    });
+    const slots: BatchSlot<string>[] = [
+      {
+        status: 'pending',
+        path: 'a.txt',
+        run: async () => {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Batch intentionally preserves non-Error Problem
+          throw problem;
+        },
+      },
+    ];
+    const ctx = { onProgress: () => undefined } as unknown as ToolCtx;
+    const result = await executeBatchSlots(slots, ctx);
+    const entry = result.results[0];
+    assert.ok(entry && 'error' in entry);
+    assert.strictEqual(entry.error, problem);
+  });
 });
 
 describe('runOverPaths', () => {

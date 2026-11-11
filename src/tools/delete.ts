@@ -6,13 +6,7 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import {
-  DELETE_ERRNOS,
-  DELETE_ERRNOS_NO_CONFIRM,
-  ErrorCode,
-  FsError,
-  Problem,
-} from '../core/errors.ts';
+import { DELETE_ERRNOS, DELETE_ERRNOS_NO_CONFIRM, ErrorCode, Problem } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import {
   type DeletePlan,
@@ -97,17 +91,14 @@ async function executePlan(
   plan: DeletePlan,
   ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
   confirmed: Confirmed,
-): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
+): Promise<{ deleted: string } | { skipped: true; path: string }> {
   const verdict = confirmed.verdict(plan.validPath);
   if (verdict === 'skipped') return { skipped: true as const, path: plan.validPath };
   if (verdict !== 'proceed') {
-    const message = cancelMessage('delete', plan.validPath, verdict);
-    return {
-      failure: {
-        path: plan.validPath,
-        error: Problem.cancelled(message, { path: plan.validPath }),
-      },
-    };
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Batch catches and preserves non-Error Problem
+    throw Problem.cancelled(cancelMessage('delete', plan.validPath, verdict), {
+      path: plan.validPath,
+    });
   }
   try {
     const res = await ctx.fs.executeDelete(plan, { signal: ctx.signal });
@@ -115,12 +106,8 @@ async function executePlan(
     return res;
   } catch (error) {
     const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
-    return {
-      failure: {
-        path: plan.validPath,
-        error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.validPath, rows),
-      },
-    };
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Batch catches and preserves non-Error Problem
+    throw Problem.fromUnknown(error, ErrorCode.UNKNOWN, plan.validPath, rows);
   }
 }
 
@@ -213,15 +200,6 @@ async function handleDelete(
       run: async (c) => {
         const r = await executePlan(plan, c, confirmed);
         if ('skipped' in r) return { deleted: false };
-        if ('failure' in r) {
-          throw new FsError(
-            r.failure.error.code,
-            r.failure.error.message,
-            r.failure.path,
-            undefined,
-            r.failure.error.suggestion,
-          );
-        }
         return { deleted: true };
       },
     };
