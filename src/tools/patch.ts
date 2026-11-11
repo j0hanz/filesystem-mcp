@@ -25,13 +25,17 @@ const MAX_PATCH_LINE_PRODUCT = 10_000_000;
 const MAX_DIFF_CHARS = MIB;
 
 const PatchInputSchema = z.strictObject({
-  path: RequiredPath.describe('File to apply the diff to'),
+  path: RequiredPath.describe('Existing text file to patch. Overrides the ---/+++ names in diff.'),
   diff: z
     .string()
     .min(1)
     .max(MAX_DIFF_CHARS, { message: 'diff too long (max 1,048,576 chars)' })
-    .describe('Single-file unified diff to apply (as produced by the diff tool or edit dry-run)'),
-  dryRun: defaultFalseBoolean('Preview the diff without writing (default: false)'),
+    .describe(
+      'Single-file unified diff, at least one @@ hunk, hunks in file order. Multi-file diffs are rejected; a leading BOM is ignored.',
+    ),
+  dryRun: defaultFalseBoolean(
+    'Check every hunk and return the resulting diff; write nothing. Counts come from the recomputed diff unless it times out.',
+  ),
 });
 
 type PatchOutput = Omit<WrittenFileMeta, 'resourceLink'> & {
@@ -63,12 +67,14 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
   name: 'patch',
   title: 'Patch',
   description:
-    'Apply a single-file unified diff to an existing text file, like git apply. ' +
-    'Use when applying diffs produced by diff tools or git. ' +
-    'path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. ' +
-    'The file is written only when every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. ' +
-    'Returns path, linesAdded, linesRemoved, and an undo id. dryRun adds the preview diff and writes nothing. ' +
-    'Use edit when you know the exact text to swap, and replace_text for every match of a pattern.',
+    'Apply a single-file unified diff to one existing UTF-8 text file. ' +
+    'Use when you hold a unified diff. ' +
+    'Do not use it for one exact snippet; use `edit` instead. For pattern matches use `replace_text`; for new files, `create`. ' +
+    'All or nothing: if any hunk mismatches its context, nothing is written; INVALID_INPUT usually names it. ' +
+    'Header line numbers may be off. ' +
+    'A diff of context lines only writes nothing and records no undo. ' +
+    'File lines x diff lines over 10,000,000 fails with TOO_LARGE. ' +
+    'Returns path, linesAdded, linesRemoved, size, lineCount, mimeType, kind, modified, resourceUri when linkable, and an undo id for `undo` (30 minutes) or undoUnavailable; dryRun adds the resulting diff.',
   input: PatchInputSchema,
   readOnlyHint: false,
   progress: (args) => ({
@@ -235,7 +241,7 @@ function patchContent(
   if (!parsedPatch || parsedPatch.hunks.length === 0) {
     throw new FsError(
       ErrorCode.INVALID_INPUT,
-      'patch accepts a single-file unified diff with at least one hunk; received an empty patch',
+      'patch needs a single-file unified diff with at least one hunk; the diff is empty',
       args.path,
     );
   }

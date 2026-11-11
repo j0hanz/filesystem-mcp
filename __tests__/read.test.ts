@@ -83,7 +83,9 @@ describe('read body', () => {
       () => read({ path: traversal }, { guard }),
       (err) => {
         const issues = issuesOf(err);
-        return issues.length === 1 && (issues[0]?.message ?? '').includes('Directory traversal');
+        return (
+          issues.length === 1 && (issues[0]?.message ?? '').includes('cannot contain ".." segments')
+        );
       },
       'a .. segment is one schema issue',
     );
@@ -154,7 +156,7 @@ describe('read body', () => {
 
     const ranged = await read({ path: file, head: 1 }, { guard });
     assert.strictEqual(ranged.isError, true);
-    assert.match(ranged.text ?? '', /no lines; read it whole with binary: true/);
+    assert.match(ranged.text ?? '', /no lines\. Read it whole with binary: true/);
   });
 
   it('with binary returns a PDF or zip as an embedded resource', async () => {

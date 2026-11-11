@@ -130,7 +130,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     if (!isRe2Abort(error)) throw error;
     if (scanCtx.named) throw re2AbortError(entryPath, error);
     Logger.warn(
-      `Regex engine ran out of memory on ${entryPath}; regex search may keep failing until the server restarts.`,
+      `Regex engine ran out of memory on ${entryPath}. Regex search may fail until the server restarts.`,
     );
     // Only a named file's refusal reads the size, and that branch threw above.
     return new ScanSkip({ kind: 'tooLarge', size: 0 });

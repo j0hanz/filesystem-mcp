@@ -423,7 +423,7 @@ describe('Real HTTP Server integration', () => {
     assert.strictEqual(body.id, 1);
     assert.strictEqual(body.error?.code, ProtocolErrorCode.InvalidParams);
     assert.ok(body.error?.message?.includes('watcher slots'));
-    assert.ok(body.error?.message?.includes('Reduce the resourceSubscriptions list'));
+    assert.ok(body.error?.message?.includes('Shorten the resourceSubscriptions list'));
   });
 
   async function requestWithHost(

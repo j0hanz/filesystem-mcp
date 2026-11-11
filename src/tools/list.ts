@@ -288,27 +288,31 @@ function ignoredNote(ignored: ExcludedDirs | undefined): string[] {
 }
 
 const ListInputSchema = z.strictObject({
-  path: OptionalPath.describe('Directory to list (default: the only root)'),
+  path: OptionalPath.describe(
+    'Directory to list (default: the only root; required with several roots)',
+  ),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
     .default(DEFAULT_LIST_DEPTH)
     .describe(
-      `Max directory depth to traverse (default: ${String(DEFAULT_LIST_DEPTH)} = top-level only; increase to recurse deeper)`,
+      'Levels to walk; 1 = direct children. Directories at the limit are shown, not expanded.',
     ),
   maxEntries: PositiveInt.max(MAX_LIST_ENTRIES)
     .default(DEFAULT_TREE_ENTRIES)
-    .describe(
-      `Page size (default: ${String(DEFAULT_TREE_ENTRIES)}). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.`,
-    ),
+    .describe('Entries per page; changing it keeps a cursor valid'),
   includeHidden: IncludeHidden,
-  includeIgnored: IncludeIgnored,
+  includeIgnored: IncludeIgnored.describe(
+    'Include .gitignore matches and build and tool folders (node_modules, .git, dist, build, out, tmp, coverage)',
+  ),
   includeSizes: defaultFalseBoolean(
-    'Show file sizes in the tree and a totals line of counts and bytes',
+    'Show file sizes and a totals line in the tree (stats every file, slower on big trees)',
   ),
   sortBy: z
     .enum(['name', 'size'])
     .optional()
     .default('name')
-    .describe('Order within each directory: name (default) or size (largest first)'),
+    .describe(
+      'Order within each directory, after directories (size: largest file first; sizes appear only with includeSizes)',
+    ),
   cursor: CursorSchema,
 });
 
@@ -350,13 +354,14 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   name: 'list',
   title: 'List',
   description:
-    'List directory contents as a tree of names, like ls or tree. ' +
-    'Use when exploring directory structure or checking folder contents. ' +
-    'Skips hidden and ignored files (.git, node_modules) by default. ' +
-    'Directories sort before files within each folder. ' +
-    'Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. ' +
-    'Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. ' +
-    'Use find_files to find files by name, stat for metadata, and read for contents.',
+    'List a directory inside the roots as a name tree, walking up to maxDepth levels. Use when you need to see what a folder holds. ' +
+    'Do not use it to find files by name or glob; use `find_files` instead, `read` or `search_text` for contents, `stat` for one path. ' +
+    'Skips hidden entries, .gitignore matches, and build and tool folders unless includeHidden or includeIgnored is set, naming the ignore-rule folders it hid. ' +
+    'Folders at maxDepth are shown, but their contents are not listed or counted. ' +
+    'At most 20,000 entries are kept. ' +
+    'A timeout returns a partial result with stoppedReason. ' +
+    'Errors: NOT_DIRECTORY for a file, ACCESS_DENIED outside the roots. ' +
+    'Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor and resourceUri (about 60 s).',
   input: ListInputSchema,
   readOnlyHint: true,
   deadline: true,

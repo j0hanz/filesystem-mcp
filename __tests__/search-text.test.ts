@@ -666,7 +666,7 @@ describe('search_text body', () => {
     const regexLine =
       '// searchPattern was matched as literal text but looks like a regex; pass isRegex=true to match it as one.';
     const globLine =
-      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern is a file-name glob; the text to find goes in searchPattern.";
+      "// no files were searched: nothing under path matched pattern '**/*.py' after the hidden/ignored/maxDepth filters. pattern matches file names; put the text to find in searchPattern.";
     const text = async (args: SearchArgs) => (await search({ path: dir, ...args })).text;
 
     assert.strictEqual(
@@ -760,7 +760,7 @@ describe('search_text body', () => {
     );
     await assert.rejects(
       search({ path: file, searchPattern: 'café' }),
-      fsErrorMatcher(ErrorCode.TOO_LARGE, /pass caseSensitive: true/),
+      fsErrorMatcher(ErrorCode.TOO_LARGE, /Pass caseSensitive: true/),
     );
     const { structured } = await search({ path: file, searchPattern: 'café', caseSensitive: true });
     assert.strictEqual(structured.totalMatches, 1);

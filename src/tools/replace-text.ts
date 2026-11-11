@@ -47,51 +47,51 @@ import { defineTool, type ToolCtx } from './define.ts';
 
 const SearchAndReplaceInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE root when there is only one; scope it deliberately, and pair a wide scope with dryRun=true first',
+    'File or directory to rewrite. A named file ignores pattern, hidden, and gitignore filters, and fails if binary or too large. Omitted, it targets the ENTIRE single root (required with several roots); try a wide scope with dryRun=true first',
   ),
   pattern: SafeGlobPattern.optional().describe(
-    'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
+    'Glob limiting which files under a directory path are rewritten (e.g. **/*.ts). Without /, it matches file names at any depth. Ignored when path names a file',
   ),
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\A and \\z for the whole file; all-CRLF files match as LF: write \\n, not \\r\\n), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only.',
+      'Literal text or RE2 regex to find; can span lines. With isRegex=true, ^ and $ match per line (\\A and \\z for the whole file); no lookaround or backreferences. All-CRLF files match as LF: write \\n.',
     ),
   replacement: z
     .string()
     .max(10000)
-    .describe(
-      'Replacement text. When isRegex=true, supports capture groups ($1, $2, etc.). Use an empty string to delete matches.',
-    )
+    .describe('Replacement text. An empty string deletes matches.')
     .meta({ examples: ['$1_renamed', '', 'TODO: fix'] }),
-  isRegex: defaultFalseBoolean('Treat searchPattern as an RE2 regex (default: literal text match)'),
+  isRegex: defaultFalseBoolean(
+    'Treat searchPattern as an RE2 regex and expand $1, $<name>, and $& in replacement (default: literal text match)',
+  ),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
   caseSensitive: z
     .boolean()
     .default(true)
-    .describe(
-      'Match case exactly (default: true). Pass false to ignore case. Unlike search_text, this defaults to true.',
-    ),
-  wholeWord: defaultFalseBoolean('Match whole words only (word boundary anchoring)'),
+    .describe('Match case exactly. Unlike search_text, defaults to true.'),
+  wholeWord: defaultFalseBoolean('Match whole words only'),
   dryRun: defaultFalseBoolean(
-    'Preview replacements without writing to disk (default: false). Pair with returnDiff=true to inspect the unified diff first.',
+    'Preview without writing. Always returns the diff, never an undo id.',
   ),
-  returnDiff: defaultFalseBoolean('Include a unified diff of all changes in the response'),
+  returnDiff: defaultFalseBoolean('Include the unified diff in a live run. Cut at 20 KB.'),
   maxMatches: z
     .uint32()
     .min(1)
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe(
-      `Maximum matches across all files before stopping (default: ${String(DEFAULT_SEARCH_RESULTS)}). In live runs, reaching it stops the scan early and leaves files rewritten up to that point changed.`,
+      `Maximum matches replaced across all files (default: ${String(DEFAULT_SEARCH_RESULTS)}). Setting it makes the scan sequential and exact.`,
     ),
   maxFiles: z
     .uint32()
     .min(1)
     .max(MAX_SEARCH_RESULTS)
     .optional()
-    .describe('Maximum number of files to process'),
+    .describe(
+      'Stops after this many files scanned, counting files with no match; reports stoppedReason=maxFiles (default: no limit)',
+    ),
   maxDepth: MaxDepth,
 });
 
@@ -486,12 +486,13 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
   name: 'replace_text',
   title: 'Search and Replace',
   description:
-    'Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. ' +
-    'Use when updating every occurrence across a project. ' +
-    'Patterns can span multiple lines, and regex replacements support $1 capture groups. ' +
-    'In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. ' +
-    'Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. ' +
-    'Use edit for a single unique snippet, and patch when you already hold a unified diff.',
+    'Replace every match of literal text or an RE2 regex in one file or across a directory tree. ' +
+    'Use when the same change must land at every occurrence. ' +
+    'Do not use it for one unique snippet; use `edit` instead, `patch` for a unified diff, or `search_text` to only find matches. ' +
+    'A live run rewrites each file as the scan reaches it; one failed file does not stop the others. ' +
+    'Reaching maxMatches (default 100), maxFiles, or the deadline stops the run; files already rewritten stay changed. ' +
+    'Returns changed paths, failures, skip counts, stoppedReason, and an undo id (live runs, when undo is enabled) for `undo`, valid 30 minutes. ' +
+    'isError is set when every file failed or the request is invalid (bad regex, path outside roots).',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
   deadline: true,
@@ -533,7 +534,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       const total = structured.summary.succeeded;
       lines.push(
         `// ${String(total)} file(s) were already rewritten and stay changed: ${changedPathList(structured.results, total)}. ` +
-          'Re-running applies it to them again if the replacement still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
+          'A re-run applies the replacement to them again if it still matches searchPattern. Use dryRun first, or set path to a file not yet rewritten.',
       );
     } else if (stop === 'maxMatches' || stop === 'maxFiles') {
       lines.push(`// Raise ${stop} to reach them.`);

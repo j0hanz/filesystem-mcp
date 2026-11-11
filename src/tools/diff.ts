@@ -9,11 +9,11 @@ import { PositiveInt, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
 const DiffInputSchema = z.strictObject({
-  a: RequiredPath.describe('First file to compare'),
-  b: RequiredPath.describe('Second file to compare'),
+  a: RequiredPath.describe('Original file; its lines are the - side'),
+  b: RequiredPath.describe('Changed file; its lines are the + side'),
   context: PositiveInt.max(50)
     .default(3)
-    .describe('Number of context lines surrounding each change (default: 3)'),
+    .describe('Unchanged lines shown around each hunk; output size only'),
 });
 
 interface DiffOutput {
@@ -27,11 +27,14 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
   name: 'diff',
   title: 'Diff',
   description:
-    'Compare two text files and return a unified diff from a to b, like diff -u. ' +
-    'Use when reviewing changes between two files. ' +
-    'The diff has ---/+++ headers and @@ hunks; - lines are from a and + lines from b. context changes only the surrounding lines. ' +
-    'Metadata includes resolved a and b paths, linesAdded, and linesRemoved; identical files return no hunks. ' +
-    'Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.',
+    'Compare two text files and return a unified diff from a to b. Use when you need line differences between two files on disk. ' +
+    'Do not use it to find text across files; use `search_text` instead. ' +
+    'To preview your own pending change, use the dryRun option of the write tools. ' +
+    'Neither file is changed. Binary and non-UTF-8 files fail. ' +
+    'A file over the size limit fails with TOO_LARGE. So does a diff not done within 1 s, or a full diff queue; retry once, then `read` matching line ranges. ' +
+    'a is the - side and b the + side; swap them to reverse the diff. ' +
+    'context only sets how many unchanged lines surround each hunk, not what counts as a change. ' +
+    'Returns ---/+++ headers (basenames) and @@ hunks; identical files give headers only.',
   input: DiffInputSchema,
   readOnlyHint: true,
   progress: (args) => ({
@@ -62,7 +65,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     if (generated === undefined) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
-        `Diff not computed: the files differ in too many lines to diff within ${String(DIFF_TIMEOUT_MS)} ms, or the server was busy with other diffs. Retry once; if it fails again, compare smaller sections with read + startLine/endLine.`,
+        `Diff not computed: the files differ too much to diff within ${String(DIFF_TIMEOUT_MS)} ms, or the server is busy with other diffs. Retry once. If it fails again, compare smaller sections with read and startLine/endLine.`,
         args.a,
       );
     }

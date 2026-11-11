@@ -274,7 +274,7 @@ export async function startHttpServer(
   assertHttpBindingPolicy(httpHost, apiKey);
   if (apiKey === undefined) {
     Logger.warn(
-      '[HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and --root-boundary to fence grants.',
+      '[HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and use --root-boundary to limit grants.',
     );
   }
   const allowedHosts = resolveAllowedHosts(httpHost, process.env['FS_ALLOWED_HOSTS']);

@@ -33,7 +33,7 @@ export function registerPrompts(deps: PromptRegistrarDeps): void {
             .string()
             .min(1, { message: 'Topic required' })
             .describe(
-              `Section key to filter instructions (one of: ${topics.join(', ')}); omit to return all instructions.`,
+              `Section to return (one of: ${topics.join(', ')}). Omit for all instructions.`,
             ),
           (value) => topics.filter((t) => t.startsWith(value.toLowerCase())),
         ).optional(),

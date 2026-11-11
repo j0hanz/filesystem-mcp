@@ -34,12 +34,10 @@ const DeleteInputSchema = z.strictObject({
     .array(RequiredPath)
     .min(1)
     .max(1000)
-    .describe('Paths to delete (max 1000); accepts files, directories, or symlinks'),
-  recursive: defaultFalseBoolean(
-    'Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT.',
-  ),
+    .describe('Exact paths (no globs): files, directories, or symlinks. Duplicates collapse'),
+  recursive: defaultFalseBoolean('Required for a non-empty directory, else INVALID_INPUT.'),
   ignoreIfNotExists: defaultFalseBoolean(
-    'Silently succeed if a path does not exist instead of returning an error',
+    'True: a missing path returns deleted: true instead of failing NOT_FOUND',
   ),
 });
 
@@ -117,7 +115,7 @@ function deletePrompt(plan: DeletePlan): string {
   if (plan.itemType !== 'directory') return `Delete "${plan.validPath}"?`;
   const question = `Delete "${plan.validPath}" and all its contents?`;
   return plan.holdsProtected
-    ? `${question} It holds files protected by the sensitive-file policy, which listings hide, so this delete cannot be undone.`
+    ? `${question} It holds protected files that listings hide, so this delete cannot be undone.`
     : question;
 }
 
@@ -182,7 +180,7 @@ async function handleDelete(
         status: 'failure',
         path: plan.validPath,
         error: Problem.invalidInput(
-          'Delete refused: this path contains, or is inside, another path in the batch. Delete the outer one alone.',
+          'Delete refused: this path contains or is inside another path in the batch. Delete the outer one alone.',
           { path: plan.validPath },
         ),
       };
@@ -233,15 +231,15 @@ async function handleDelete(
 
 export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
   name: 'delete',
-  title: 'Delete File',
+  title: 'Delete Paths',
   description:
-    'Delete files, directories, or symlinks, like rm or rm -r. ' +
-    'Use when permanently removing paths. Paths are exact (globs are not expanded). ' +
-    'While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. ' +
-    'Paths nested inside each other are refused, so delete the outer one alone. ' +
-    'One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. ' +
-    'Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. ' +
-    'Use move to relocate a path instead.',
+    'Delete files, directories, and symlinks. Use when a path should no longer exist. ' +
+    'Do not use it to rename or relocate; use `move` instead, and `undo` to restore. ' +
+    'A symlink is removed, never its target. ' +
+    'A non-empty directory needs `recursive: true`, else that path fails INVALID_INPUT, and user confirmation; nothing is deleted until all are answered, and a client that cannot prompt fails the whole call INVALID_INPUT. ' +
+    'Deleting a folder that holds protected files cannot be undone. ' +
+    'Otherwise each path fails alone (ACCESS_DENIED: root, read-only, outside; CANCELLED: refused or changed; INVALID_INPUT: nested pair). ' +
+    'Returns per-path { deleted } or { error } (a skipped prompt gives deleted: false), a summary, and an undo id valid 30 minutes, or undoUnavailable with the reason.',
   input: DeleteInputSchema,
   readOnlyHint: false,
   progress: (args) => ({
@@ -269,7 +267,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
       const only = structured.results[0];
       return {
         structured,
-        text: `delete: ${only?.path ?? ''} FAILED — ${only && 'error' in only ? only.error.message : 'unknown error'}`,
+        text: `delete: ${only?.path ?? ''} FAILED: ${only && 'error' in only ? only.error.message : 'unknown error'}`,
         isError,
       };
     }

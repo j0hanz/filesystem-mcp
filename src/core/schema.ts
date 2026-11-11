@@ -60,7 +60,7 @@ export const RequiredPath = z
   .max(MAX_PATH_LENGTH, { message: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
   .superRefine(
     refineSafeText('Path', (val) =>
-      hasTraversalSegment(val) ? 'Directory traversal sequences ("..") are forbidden' : undefined,
+      hasTraversalSegment(val) ? 'Path cannot contain ".." segments' : undefined,
     ),
   )
   .describe('File or directory path inside an allowed workspace root.');
@@ -75,7 +75,7 @@ export const SafeGlobPattern = z
     refineSafeText('Pattern', (val) =>
       isSafeGlobSyntax(val)
         ? undefined
-        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * runs and extglob groups together per path segment; no |, * or nested group inside *(…) or +(…))`,
+        : `Invalid glob or unsafe path. Absolute paths and .. are not allowed. Limits: ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * runs and extglob groups combined per path segment. No |, * or nested group inside *(…) or +(…).`,
     ),
   )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')
@@ -145,7 +145,7 @@ export const MaxDepth = z
   .min(0)
   .max(MAX_SEARCH_DEPTH)
   .optional()
-  .describe('Max directory depth to scan; 0 = base directory only, omit for unlimited');
+  .describe('Max directory depth. 0 scans only the base directory. Omit for no limit.');
 
 const DEFAULT_MAX_BATCH = 1000;
 
@@ -239,8 +239,8 @@ const base64urlCursor = z.string().regex(/^[A-Za-z0-9_-]+$/);
 export const CursorSchema = base64urlCursor
   .optional()
   .describe(
-    'Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot ' +
-      'taken on the first call; it expires after ~60s — re-request without a cursor if rejected.',
+    'Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot ' +
+      'taken on the first call. It expires after ~60s; if rejected, retry without a cursor.',
   );
 
 /**
@@ -284,7 +284,7 @@ export function withSplitArgsRecovery<T extends z.ZodType>(schema: T): z.ZodPrep
       code: 'custom',
       message:
         `arguments must be a JSON object, but arrived as a ${String(text.length)}-character ` +
-        'string split into indexed keys (the client serialized the payload); send the arguments as an object',
+        'string split into indexed keys. The client serialized the payload. Send the arguments as an object.',
       input: value,
     });
     return z.NEVER;

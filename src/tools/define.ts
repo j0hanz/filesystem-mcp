@@ -492,8 +492,8 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     const remedy =
       this.def.oversizeRemedy?.(result) ??
       (dryRun
-        ? 'Nothing was written. Preview fewer files or a smaller file per call, or connect over HTTP.'
-        : 'Reduce the requested output or connect over HTTP.');
+        ? 'Nothing was written. Preview fewer or smaller files per call, or connect over HTTP.'
+        : 'Request less output or connect over HTTP.');
     // The remedy stands in for TOO_LARGE's default head/tail advice, which
     // fits neither media nor a dry run.
     throw refuseToolResult(this.def.name, encodedBytes, remedy);

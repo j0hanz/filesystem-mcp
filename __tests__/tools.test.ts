@@ -960,7 +960,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // src/tools/edit.ts — reword that description and this count must move with
     // it.
     assert.strictEqual(
-      editInput.split('Exact literal text to locate').length - 1,
+      editInput.split('Exact text to find. It must match exactly once').length - 1,
       2,
       "EditSpec's oldText description must be inlined at both use sites",
     );
@@ -1076,8 +1076,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // cap and timeout truncation; measured 25176 / 11735.
     // Raised 2026-11-10 to 25300 full (read-only unchanged): replace_text says
     // ^ and $ in a regex match at every line; measured 25275.
-    const BUDGET_CHARS = 25_300;
-    const BUDGET_CHARS_READ_ONLY = 11_750;
+    // Raised 2026-11-11 to 29200 full and 13950 read-only: tdqs.dev v1.2
+    // rewrite gives every tool "Use when" / "Do not use" routing, failure and
+    // undo behavior, and a Returns sentence (no outputSchema), scored 4.8;
+    // measured 29180 / 13916.
+    const BUDGET_CHARS = 29_200;
+    const BUDGET_CHARS_READ_ONLY = 13_950;
 
     const full = await createTestClientPair([tmpDir]);
     try {

@@ -14,18 +14,25 @@ const UndoInputSchema = z.strictObject({
   // No `.refine`, no regex: the SDK answers a failed refine with a plain
   // `Input validation error` that carries no repo error code (see define.ts).
   // The cross-field rule is checked in `run`.
-  id: z.string().min(1).max(16).optional().describe('The undo id from a tool result'),
+  id: z
+    .string()
+    .min(1)
+    .max(16)
+    .optional()
+    .describe(
+      'Undo id from a mutating tool result. Required over HTTP, where all clients share the journal.',
+    ),
   steps: z
     .number()
     .int()
     .min(1)
     .max(20)
     .optional()
-    .describe('Revert the last N calls (not over HTTP)'),
+    .describe(
+      'Revert the newest N calls, newest first. Not with id; rejected over HTTP. Omit both to revert the newest call.',
+    ),
   dryRun: defaultFalseBoolean(
-    'Preview which calls would restore, changing nothing. ' +
-      'A preview of the whole history assumes each call is reverted after the newer ones, ' +
-      'so a file changed since can still show as restored; previewing one id shows that call alone.',
+    'Preview without changing anything. With no id or steps, previews every journaled call and lists their ids.',
   ),
 });
 
@@ -98,10 +105,13 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
   name: 'undo',
   title: 'Undo',
   description:
-    'Revert earlier mutating tool calls by undo id or steps (last N calls), not both. ' +
-    'Use when rolling back recent file changes. ' +
-    'Restores a file only if unchanged since the target call; modified files are skipped with explanation. ' +
-    'Over HTTP, reverting requires an undo id (call with dryRun to list them). Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.',
+    'Revert create, edit, replace_text, patch, move, or delete calls by undo id or the newest N calls. Use when a change made by this server must be reverted. ' +
+    'Do not use for outside changes or expired ids; rewrite those with `edit` or `create`. ' +
+    'Preview with dryRun, which lists ids. ' +
+    'A path changed since that call is skipped while the rest revert; it stays under its id for a retry. ' +
+    'The in-memory journal keeps up to 64 calls for 30 minutes, fewer when FS_MAX_UNDO_BYTES fills. No redo. Unknown ids fail NOT_FOUND. ' +
+    'Returns steps[] of {id, tool, results[]}, each path restored or with an error code. ' +
+    'A long list is cut (failures kept), marked truncated with totalResults. Errors only if every path fails.',
   input: UndoInputSchema,
   readOnlyHint: false,
   noUndo: true,

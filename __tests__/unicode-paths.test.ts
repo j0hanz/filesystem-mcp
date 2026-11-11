@@ -630,7 +630,7 @@ describe('Unicode-equivalent path lookup (#101)', () => {
           },
         });
         assert.match(firstTextBlock(move).text ?? '', /1 failed/u);
-        assert.match(JSON.stringify(move), /already targets destination/u);
+        assert.match(JSON.stringify(move), /already targets/u);
         assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'y.txt']);
         assert.strictEqual(await readFile(join(root, ASCII_NAME), 'utf8'), 'x');
         assert.strictEqual(await readFile(join(root, 'y.txt'), 'utf8'), 'y');

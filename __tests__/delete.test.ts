@@ -706,7 +706,7 @@ describe('delete body', () => {
     const error = result.structured.results[0]?.error;
     assert.strictEqual(error?.code, 'CANCELLED');
     assert.match(error?.message ?? '', /declined by the user/);
-    assert.match(result.text ?? '', /FAILED — Delete cancelled/);
+    assert.match(result.text ?? '', /FAILED: Delete cancelled/);
     await access(join(dir, 'sub', 'f.txt'));
   });
 

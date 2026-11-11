@@ -96,7 +96,7 @@ describe('MCP Resources', () => {
       assert.match(errorRecovery, /INVALID_INPUT:/);
       assert.match(
         errorRecovery,
-        /TIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page\./,
+        /TIMEOUT: Narrow the path or pattern, or lower maxDepth\. maxResults only sets the page size\./,
       );
     });
 
@@ -205,7 +205,7 @@ describe('MCP Resources', () => {
       assert.match(text, /TOO_LARGE: Over the file size limit, use read/);
       assert.match(
         text,
-        /Over the stdio message limit, .*connect over HTTP; media and binary files need HTTP\./,
+        /Over the stdio message limit, .*connect over HTTP\. Media and binary files need HTTP\./,
       );
     });
 

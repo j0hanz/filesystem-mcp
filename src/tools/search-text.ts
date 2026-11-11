@@ -33,21 +33,21 @@ type SearchContentPageMetadata = SearchResultValue['summary'] & {
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
+    'File or directory to search (default: the only root). A named file is searched alone: pattern, maxDepth, and hidden/ignored filtering do not apply. Result paths are relative to the root, not to path.',
   ),
   pattern: SafeGlobPattern.optional().describe(
-    'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
+    'Glob limiting which files are searched: *.ts matches names at any depth, src/**/*.ts matches paths relative to path. Default: all files.',
   ),
   searchPattern: nonBlankString('searchPattern')
     .max(10000)
     .describe(
-      'Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only.',
+      'Text to find, literal unless isRegex is true. RE2 has no lookahead, lookbehind, or backreferences.',
     ),
-  isRegex: defaultFalseBoolean('Treat searchPattern as a regex (default: literal text match)'),
+  isRegex: defaultFalseBoolean('Treat searchPattern as an RE2 regex'),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
   caseSensitive: defaultFalseBoolean(
-    'Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.',
+    'Match case exactly. replace_text matches case by default, so pass true to preview what it will replace.',
   ),
   maxResults: z
     .uint32()
@@ -55,15 +55,13 @@ const GrepInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .default(DEFAULT_SEARCH_CONTENT_RESULTS)
-    .describe('Maximum number of matching lines to return per page'),
+    .describe('Matching lines per page; context lines do not count. Later pages come via cursor.'),
   context: z
     .uint32()
     .max(10)
     .optional()
     .default(0)
-    .describe(
-      'Lines of context to return either side of each match, like grep -C (default: 0, max: 10)',
-    ),
+    .describe('Lines shown before and after each match, like grep -C.'),
   maxDepth: MaxDepth,
   cursor: CursorSchema,
 });
@@ -194,10 +192,13 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
   description:
-    'Search file contents for text or an RE2 regex, like grep. ' +
-    'searchPattern is case-insensitive by default; a regex can match across a line break, and the hit is reported on the line where the match starts; pattern filters files by glob (e.g. **/*.ts). ' +
-    'Returns numbered matching lines grouped by file, and a nextCursor for paging. ' +
-    'Use read for full context; find_files to find by name.',
+    'Search file contents under the roots for literal text or an RE2 regex. Use when you need the files and lines that contain some text. ' +
+    'Do not use it to find files by name; use `find_files` instead. ' +
+    'A regex may span lines; the hit is on its first line. ' +
+    'Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
+    'Lines over 1000 chars are clipped around the match. ' +
+    'Stops early at 10000 matching lines or the timeout, setting stoppedReason. ' +
+    'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires after about 60 s), and resourceUri for a multi-page or stopped first page.',
   input: GrepInputSchema,
   readOnlyHint: true,
   deadline: true,

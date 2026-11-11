@@ -154,7 +154,7 @@ export function canLinkFile(transport: Transport, file: LinkCandidate): boolean 
 export function refuseToolResult(toolName: string, bytes: number, remedy: string): FsError {
   return new FsError(
     ErrorCode.TOO_LARGE,
-    `${toolName} result too large to return (${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit).`,
+    `${toolName} result is too large (${String(bytes)} bytes as JSON, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio limit).`,
     undefined,
     undefined,
     remedy,
@@ -166,10 +166,10 @@ export function refuseToolResult(toolName: string, bytes: number, remedy: string
  * `atLeast` when `bytes` is a lower bound known before the result was encoded.
  */
 export function refuseResourceRead(bytes: number, atLeast = false): ProtocolError {
-  const suggestion = 'Read smaller slices/pages with tools, or connect over HTTP.';
+  const suggestion = 'Read smaller ranges or pages with tools, or connect over HTTP.';
   return new ProtocolError(
     ProtocolErrorCode.InvalidParams,
-    `Resource result too large to return (${atLeast ? 'at least ' : ''}${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${suggestion}`,
+    `Resource result is too large (${atLeast ? 'at least ' : ''}${String(bytes)} bytes as JSON, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio limit). ${suggestion}`,
     { code: ErrorCode.TOO_LARGE, suggestion },
   );
 }

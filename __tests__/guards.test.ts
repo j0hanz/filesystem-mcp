@@ -86,7 +86,7 @@ describe('Data-loss guards', () => {
       assert.strictEqual(await readFile(d, 'utf-8'), 'one');
       assert.strictEqual(await exists(s1), true, 's1 still exists');
       assert.strictEqual(await exists(s2), true, 's2 still exists');
-      assert.match(JSON.stringify(result._meta), /already targets destination/);
+      assert.match(JSON.stringify(result._meta), /already targets/);
     } finally {
       await h.close();
     }
@@ -111,7 +111,7 @@ describe('Data-loss guards', () => {
       assert.strictEqual(await readFile(d, 'utf-8'), 'one');
       assert.strictEqual(await exists(s1), false, 's1 moved away');
       assert.strictEqual(await readFile(s2, 'utf-8'), 'two', 's2 untouched');
-      assert.match(JSON.stringify(result._meta), /already targets destination/);
+      assert.match(JSON.stringify(result._meta), /already targets/);
     } finally {
       await h.close();
     }
@@ -317,7 +317,7 @@ describe('Data-loss guards', () => {
         arguments: { paths: [parent, child], recursive: true },
       });
       assert.strictEqual(res.isError, true, firstTextBlock(res).text);
-      assert.match(JSON.stringify(res.structuredContent ?? res._meta), /inside, another path/);
+      assert.match(JSON.stringify(res.structuredContent ?? res._meta), /inside another path/);
       assert.strictEqual(await exists(child), true);
     } finally {
       await h.close();

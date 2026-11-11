@@ -28,22 +28,28 @@ import { defineTool } from './define.ts';
 // ---------------------------------------------------------------------------
 
 const SearchFilesInputSchema = z.strictObject({
-  path: OptionalPath.describe('Base directory to search under (default: the only root)'),
-  pattern: SafeGlobPattern.describe('Glob pattern to match file paths (e.g. **/*.ts, src/**/*.js)'),
+  path: OptionalPath.describe(
+    'Existing directory to search under. Required with several roots. Patterns with / match from here.',
+  ),
+  pattern: SafeGlobPattern.describe(
+    'Glob. Without / it matches file names at any depth (*.ts). With / it matches paths relative to path (src/**/*.ts).',
+  ),
   maxResults: z
     .uint32()
     .min(1)
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .default(DEFAULT_SEARCH_RESULTS)
-    .describe('Maximum number of matching files to return per page'),
+    .describe('Files per page; totalMatches counts all kept matches.'),
   includeIgnored: IncludeIgnored,
   includeHidden: IncludeHidden,
   sortBy: z
     .enum(['name', 'path'])
     .optional()
     .default('path')
-    .describe('Sort order: path = full path (default), name = basename only'),
+    .describe(
+      'name: by file name across folders, ties by path. Sorts the first 10,000 kept matches before paging.',
+    ),
   maxDepth: MaxDepth,
   cursor: CursorSchema,
 });
@@ -92,12 +98,14 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files by name or glob pattern, like find. ' +
-    'Use when locating files by name or pattern anywhere in the workspace. ' +
-    'A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). ' +
-    'maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. ' +
-    'Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. ' +
-    'Use list to browse directory trees, and search_text to search file contents.',
+    'Find files whose name or path matches a glob under a directory. ' +
+    'Use when you know a name or path pattern but not the location. ' +
+    'Do not use it for file contents; use `search_text` instead. To browse a folder, use `list`. ' +
+    'Matches files, never directories. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
+    'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
+    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). ' +
+    'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
+    'Paths are relative to root when unambiguous, otherwise absolute.',
   input: SearchFilesInputSchema,
   readOnlyHint: true,
   deadline: true,

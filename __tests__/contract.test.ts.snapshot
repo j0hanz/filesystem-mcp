@@ -13,17 +13,17 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
       "listChanged": true
     }
   },
-  "instructions": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
+  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
   "tools": [
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files (create, overwrite, or append) or make empty directories. Use when creating new files, replacing full contents, or creating folders. Missing parent directories are created automatically. Returns created paths and an undo id. Use edit or patch to modify parts of an existing file.",
+      "description": "Write whole text files (new, overwrite, or append) and create empty directories, with missing parents. Use when you have full content or need folders. Do not use it for partial edits; use \`edit\`, \`replace_text\`, or \`patch\` instead, and \`move\` to copy or rename. Whole-file writes are atomic (temp file, then rename); appends are not. An existing file is replaced only with overwrite: true or after one user confirmation for the batch; nothing is written before the answer. Declined entries fail with CANCELLED; skipped ones land in skipped. Entries fail alone; the call errors only when all fail. Returns files (path, size, lineCount, mimeType, kind, resourceUri, created, modified), directories, failures, skipped, and an undo id for \`undo\` (30 min), or undoUnavailable.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "files": {
-            "description": "List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit",
+            "description": "Files to write. Give files, directories, or both. Combined content per call is at most FS_MAX_FILE_SIZE (default 10 MiB).",
             "minItems": 1,
             "maxItems": 100,
             "type": "array",
@@ -34,18 +34,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "Absolute path where the file will be created"
+                  "description": "Absolute file path inside a writable root; one entry per file."
                 },
                 "content": {
                   "type": "string",
-                  "description": "Text content to write, verbatim."
+                  "description": "Full text to write, verbatim, as UTF-8."
                 },
                 "append": {
-                  "description": "Append the content verbatim, adding no newline; creates the file if it does not exist",
+                  "description": "Add content to the end, adding no newline; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.",
                   "type": "boolean"
                 },
                 "overwrite": {
-                  "description": "Replace an existing file without asking the user; without it an existing file prompts for confirmation. A client that cannot show a prompt fails with INVALID_INPUT and a workaround instead.",
+                  "description": "Replace an existing file without asking. Without it, a client that cannot show the prompt fails the whole call with INVALID_INPUT.",
                   "type": "boolean"
                 }
               },
@@ -57,7 +57,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             }
           },
           "directories": {
-            "description": "Empty directories to create, like mkdir -p; one that already exists is left as it is",
+            "description": "Empty directories, created recursively; an existing directory succeeds; a path also listed in files is rejected.",
             "minItems": 1,
             "maxItems": 100,
             "type": "array",
@@ -80,8 +80,8 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     },
     {
       "name": "delete",
-      "title": "Delete File",
-      "description": "Delete files, directories, or symlinks, like rm or rm -r. Use when permanently removing paths. Paths are exact (globs are not expanded). While any confirmation is pending, nothing is deleted; on a retry, a path left declined or unanswered reports CANCELLED and the others run. Paths nested inside each other are refused, so delete the outer one alone. One failed path does not stop the others. Paths in read-only directories fail with ACCESS_DENIED. Returns { path, deleted } per path and an undo id; deleting a directory that holds sensitive files cannot be undone. Use move to relocate a path instead.",
+      "title": "Delete Paths",
+      "description": "Delete files, directories, and symlinks. Use when a path should no longer exist. Do not use it to rename or relocate; use \`move\` instead, and \`undo\` to restore. A symlink is removed, never its target. A non-empty directory needs \`recursive: true\`, else that path fails INVALID_INPUT, and user confirmation; nothing is deleted until all are answered, and a client that cannot prompt fails the whole call INVALID_INPUT. Deleting a folder that holds protected files cannot be undone. Otherwise each path fails alone (ACCESS_DENIED: root, read-only, outside; CANCELLED: refused or changed; INVALID_INPUT: nested pair). Returns per-path { deleted } or { error } (a skipped prompt gives deleted: false), a summary, and an undo id valid 30 minutes, or undoUnavailable with the reason.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -95,16 +95,16 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               "maxLength": 4096,
               "description": "File or directory path inside an allowed workspace root."
             },
-            "description": "Paths to delete (max 1000); accepts files, directories, or symlinks"
+            "description": "Exact paths (no globs): files, directories, or symlinks. Duplicates collapse"
           },
           "recursive": {
             "default": false,
-            "description": "Delete directory contents recursively (required for non-empty directories). A recursive delete of a non-empty directory asks the user to confirm; a client that cannot show a prompt fails with INVALID_INPUT.",
+            "description": "Required for a non-empty directory, else INVALID_INPUT.",
             "type": "boolean"
           },
           "ignoreIfNotExists": {
             "default": false,
-            "description": "Silently succeed if a path does not exist instead of returning an error",
+            "description": "True: a missing path returns deleted: true instead of failing NOT_FOUND",
             "type": "boolean"
           }
         },
@@ -123,7 +123,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. The diff has ---/+++ headers and @@ hunks; - lines are from a and + lines from b. context changes only the surrounding lines. Metadata includes resolved a and b paths, linesAdded, and linesRemoved; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
+      "description": "Compare two text files and return a unified diff from a to b. Use when you need line differences between two files on disk. Do not use it to find text across files; use \`search_text\` instead. To preview your own pending change, use the dryRun option of the write tools. Neither file is changed. Binary and non-UTF-8 files fail. A file over the size limit fails with TOO_LARGE. So does a diff not done within 1 s, or a full diff queue; retry once, then \`read\` matching line ranges. a is the - side and b the + side; swap them to reverse the diff. context only sets how many unchanged lines surround each hunk, not what counts as a change. Returns ---/+++ headers (basenames) and @@ hunks; identical files give headers only.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -131,17 +131,17 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 4096,
-            "description": "First file to compare"
+            "description": "Original file; its lines are the - side"
           },
           "b": {
             "type": "string",
             "minLength": 1,
             "maxLength": 4096,
-            "description": "Second file to compare"
+            "description": "Changed file; its lines are the + side"
           },
           "context": {
             "default": 3,
-            "description": "Number of context lines surrounding each change (default: 3)",
+            "description": "Unchanged lines shown around each hunk; output size only",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 50
@@ -162,18 +162,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "edit",
       "title": "Edit Files",
-      "description": "Edit text files in place by replacing exact oldText with newText. Use when changing specific unique snippets in one or more files. Unmatched or ambiguous text fails and leaves the file untouched. One failed file does not stop the others. Applied edits are permanent until undone. Returns an edit summary with added and removed line counts, plus an undo id; dryRun previews the unified diff. Use replace_text for every match of a pattern, patch when you already hold a unified diff, and create for new files.",
+      "description": "Replace exact, unique text snippets in up to 5 existing text files. Use when you know the exact text to change. Do not use it for every match of a pattern; use \`replace_text\` instead. To apply a unified diff, use \`patch\`; for a new file or a whole rewrite, use \`create\`. Each file is all or nothing: an unmatched or ambiguous oldText writes nothing to that file, and other files still run; dryRun reports unmatched text instead of failing. Missing, binary, non-UTF-8, and over-size-cap (default 10 MiB) files fail. Returns one summary line per file (+added -removed, NO MATCH, or FAILED); a dry run appends unified diffs. With undo enabled, live runs add an undo id for \`undo\`, valid 30 minutes.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "Single file path; mutually exclusive with files",
+            "description": "One file to edit; give edits with it. Not allowed with files",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "edits": {
-            "description": "Replacements applied to path (required with path); not allowed with files",
+            "description": "Replacements for path, applied in order; each oldText is matched against the text the earlier edits left. Required with path",
             "minItems": 1,
             "maxItems": 100,
             "type": "array",
@@ -184,7 +184,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 1048576,
-                  "description": "Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.",
+                  "description": "Exact text to find. It must match exactly once, so include 3-5 lines of context. Several matches fail and list up to 5 line numbers.",
                   "examples": [
                     "const x = 1;",
                     "function oldName("
@@ -208,7 +208,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             }
           },
           "files": {
-            "description": "Per-file entries (batch mode)",
+            "description": "Batch mode: one entry per file, each with its own edits",
             "minItems": 1,
             "maxItems": 5,
             "type": "array",
@@ -219,7 +219,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "File or directory path inside an allowed workspace root."
+                  "description": "File to edit; each file appears once"
                 },
                 "edits": {
                   "minItems": 1,
@@ -232,7 +232,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 1048576,
-                        "description": "Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.",
+                        "description": "Exact text to find. It must match exactly once, so include 3-5 lines of context. Several matches fail and list up to 5 line numbers.",
                         "examples": [
                           "const x = 1;",
                           "function oldName("
@@ -254,7 +254,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                     ],
                     "additionalProperties": false
                   },
-                  "description": "Replacements to apply to this specific file"
+                  "description": "Replacements for this file, applied in order; each oldText is matched against the text the earlier edits left"
                 }
               },
               "required": [
@@ -266,12 +266,12 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "dryRun": {
             "default": false,
-            "description": "Preview diffs without writing to disk (default: false = apply edits)",
+            "description": "Write nothing; return a unified diff per file. An unmatched oldText is reported instead of failing; an ambiguous one still fails",
             "type": "boolean"
           },
           "ignoreWhitespace": {
             "default": false,
-            "description": "Ignore leading/trailing whitespace differences when matching oldText; newText is re-indented to the match and replaces its inner blank lines",
+            "description": "Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match",
             "type": "boolean"
           }
         },
@@ -287,26 +287,26 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List a directory inside the roots as a name tree, walking up to maxDepth levels. Use when you need to see what a folder holds. Do not use it to find files by name or glob; use \`find_files\` instead, \`read\` or \`search_text\` for contents, \`stat\` for one path. Skips hidden entries, .gitignore matches, and build and tool folders unless includeHidden or includeIgnored is set, naming the ignore-rule folders it hid. Folders at maxDepth are shown, but their contents are not listed or counted. At most 20,000 entries are kept. A timeout returns a partial result with stoppedReason. Errors: NOT_DIRECTORY for a file, ACCESS_DENIED outside the roots. Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor and resourceUri (about 60 s).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "Directory to list (default: the only root)",
+            "description": "Directory to list (default: the only root; required with several roots)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "maxDepth": {
             "default": 1,
-            "description": "Max directory depth to traverse (default: 1 = top-level only; increase to recurse deeper)",
+            "description": "Levels to walk; 1 = direct children. Directories at the limit are shown, not expanded.",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 50
           },
           "maxEntries": {
             "default": 1000,
-            "description": "Page size (default: 1000). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.",
+            "description": "Entries per page; changing it keeps a cursor valid",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 20000
@@ -318,17 +318,17 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "includeIgnored": {
             "default": false,
-            "description": "Include ignored items (node_modules, .git, etc).",
+            "description": "Include .gitignore matches and build and tool folders (node_modules, .git, dist, build, out, tmp, coverage)",
             "type": "boolean"
           },
           "includeSizes": {
             "default": false,
-            "description": "Show file sizes in the tree and a totals line of counts and bytes",
+            "description": "Show file sizes and a totals line in the tree (stats every file, slower on big trees)",
             "type": "boolean"
           },
           "sortBy": {
             "default": "name",
-            "description": "Order within each directory: name (default) or size (largest first)",
+            "description": "Order within each directory, after directories (size: largest file first; sizes appear only with includeSizes)",
             "type": "string",
             "enum": [
               "name",
@@ -336,7 +336,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -352,7 +352,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "move",
       "title": "Move or Copy Files",
-      "description": "Move, rename, or copy files and directories, like mv or cp -r. Use when renaming paths, moving files between directories, or copying trees (copy: true). Each moves entry is { source, destination }; destination is the full target path, not a directory to move into. copy: true leaves sources in place. overwrite applies only to copies; moving onto an existing file requires confirmation. Returns { moves: [{ from, to }], failures?, skipped? } and an undo id for undo; one failed pair does not roll back completed transfers. Use delete to remove paths.",
+      "description": "Move, rename, or copy files and directories inside the roots. Use when you need to rename, relocate, or duplicate (copy: true). Do not use to change contents (\`edit\`, \`patch\`) or remove paths (\`delete\`). Missing parents are created. An existing destination asks to confirm; declining cancels the call, skipping drops that pair. Only copies can bypass the prompt (overwrite: true). A directory move never merges into a non-empty directory; a copy merges. Pairs that share a destination or overlap another pair fail; run dependent moves separately. Returns summary lines naming each pair and failure, and { moves: [{ from, to }], failures?, skipped?, undo id for \`undo\` (30 minutes) or undoUnavailable }; an error only if every pair failed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -367,13 +367,13 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "Path of the file or directory to move or copy"
+                  "description": "Existing file, directory, or symlink"
                 },
                 "destination": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "Destination path"
+                  "description": "Full target path including the new name, not a parent folder"
                 }
               },
               "required": [
@@ -382,16 +382,16 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               ],
               "additionalProperties": false
             },
-            "description": "Operations to perform (max 100)"
+            "description": "Pairs run independently, with no rollback; a declined overwrite still cancels them all"
           },
           "copy": {
             "default": false,
-            "description": "Copy instead of move; sources are left in place",
+            "description": "Copy and leave sources in place instead of moving",
             "type": "boolean"
           },
           "overwrite": {
             "default": false,
-            "description": "Copy mode only: overwrite existing destinations without confirmation",
+            "description": "Copy only: replace existing destinations without confirmation",
             "type": "boolean"
           }
         },
@@ -410,7 +410,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "patch",
       "title": "Patch",
-      "description": "Apply a single-file unified diff to an existing text file, like git apply. Use when applying diffs produced by diff tools or git. path selects the target; the ---/+++ names in diff are ignored. Empty or multi-file diffs fail with INVALID_INPUT. The file is written only when every hunk applies in order with exact context; mismatched hunks fail and leave the file untouched. Returns path, linesAdded, linesRemoved, and an undo id. dryRun adds the preview diff and writes nothing. Use edit when you know the exact text to swap, and replace_text for every match of a pattern.",
+      "description": "Apply a single-file unified diff to one existing UTF-8 text file. Use when you hold a unified diff. Do not use it for one exact snippet; use \`edit\` instead. For pattern matches use \`replace_text\`; for new files, \`create\`. All or nothing: if any hunk mismatches its context, nothing is written; INVALID_INPUT usually names it. Header line numbers may be off. A diff of context lines only writes nothing and records no undo. File lines x diff lines over 10,000,000 fails with TOO_LARGE. Returns path, linesAdded, linesRemoved, size, lineCount, mimeType, kind, modified, resourceUri when linkable, and an undo id for \`undo\` (30 minutes) or undoUnavailable; dryRun adds the resulting diff.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -418,17 +418,17 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 4096,
-            "description": "File to apply the diff to"
+            "description": "Existing text file to patch. Overrides the ---/+++ names in diff."
           },
           "diff": {
             "type": "string",
             "minLength": 1,
             "maxLength": 1048576,
-            "description": "Single-file unified diff to apply (as produced by the diff tool or edit dry-run)"
+            "description": "Single-file unified diff, at least one @@ hunk, hunks in file order. Multi-file diffs are rejected; a leading BOM is ignored."
           },
           "dryRun": {
             "default": false,
-            "description": "Preview the diff without writing (default: false)",
+            "description": "Check every hunk and return the resulting diff; write nothing. Counts come from the recomputed diff unless it times out.",
             "type": "boolean"
           }
         },
@@ -448,45 +448,45 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
+      "description": "Read one file or up to 1000, whole or as a line slice. Use when you know the path. Do not use it to check size or existence; use \`stat\` instead. To locate content, use \`search_text\`, \`find_files\`, or \`list\`. Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. Past the size limit, a whole read fails with TOO_LARGE; a single-path head or range is truncated. A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. Full reads add totalLines; a tail gets no continuation.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "includeHash": {
             "default": false,
-            "description": "Include SHA-256 of the returned content (the slice for head, tail or a line range)",
+            "description": "Include SHA-256 of the returned content (the slice for a partial read).",
             "type": "boolean"
           },
           "binary": {
             "default": false,
-            "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
+            "description": "Return a non-image, non-audio binary file as a base64 resource. Whole reads only. Without it, such a file fails with BINARY_FILE.",
             "type": "boolean"
           },
           "lineNumbers": {
             "default": false,
-            "description": "Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.",
+            "description": "Prefix each line with its number and a tab. Not with tail. Leave the prefix out of edit text.",
             "type": "boolean"
           },
           "head": {
-            "description": "Return first N lines",
+            "description": "First N lines. Not with tail or startLine/endLine.",
             "type": "integer",
             "minimum": 1,
             "maximum": 100000
           },
           "tail": {
-            "description": "Return last N lines",
+            "description": "Last N lines. Not with head, startLine/endLine, or lineNumbers.",
             "type": "integer",
             "minimum": 1,
             "maximum": 100000
           },
           "startLine": {
-            "description": "Start line (1-indexed)",
+            "description": "First line, 1-based. Without endLine, reads to the end.",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
           },
           "endLine": {
-            "description": "End line (1-indexed); requires startLine",
+            "description": "Last line, inclusive. Requires startLine.",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
@@ -524,18 +524,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "replace_text",
       "title": "Search and Replace",
-      "description": "Replace every match of text or an RE2 regex across a file or directory tree, like sed -i. Use when updating every occurrence across a project. Patterns can span multiple lines, and regex replacements support $1 capture groups. In live runs, files are modified in place as they are scanned; reaching maxMatches stops the run early and leaves already-rewritten files changed, which only undo can revert. Returns match counts, modified files, and an undo id. Use dryRun with returnDiff to preview changes safely. Use edit for a single unique snippet, and patch when you already hold a unified diff.",
+      "description": "Replace every match of literal text or an RE2 regex in one file or across a directory tree. Use when the same change must land at every occurrence. Do not use it for one unique snippet; use \`edit\` instead, \`patch\` for a unified diff, or \`search_text\` to only find matches. A live run rewrites each file as the scan reaches it; one failed file does not stop the others. Reaching maxMatches (default 100), maxFiles, or the deadline stops the run; files already rewritten stay changed. Returns changed paths, failures, skip counts, stoppedReason, and an undo id (live runs, when undo is enabled) for \`undo\`, valid 30 minutes. isError is set when every file failed or the request is invalid (bad regex, path outside roots).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to rewrite, or directory to rewrite under. Omitting it targets the ENTIRE root when there is only one; scope it deliberately, and pair a wide scope with dryRun=true first",
+            "description": "File or directory to rewrite. A named file ignores pattern, hidden, and gitignore filters, and fails if binary or too large. Omitted, it targets the ENTIRE single root (required with several roots); try a wide scope with dryRun=true first",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "pattern": {
-            "description": "Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files",
+            "description": "Glob limiting which files under a directory path are rewritten (e.g. **/*.ts). Without /, it matches file names at any depth. Ignored when path names a file",
             "type": "string",
             "minLength": 1,
             "maxLength": 1000,
@@ -549,12 +549,12 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Literal text or RE2 regex to search for. Can span multiple lines. When isRegex=true, ^ and $ match at every line (use \\\\A and \\\\z for the whole file; all-CRLF files match as LF: write \\\\n, not \\\\r\\\\n), and lookaround and backreferences are not supported. Cannot be empty or whitespace-only."
+            "description": "Literal text or RE2 regex to find; can span lines. With isRegex=true, ^ and $ match per line (\\\\A and \\\\z for the whole file); no lookaround or backreferences. All-CRLF files match as LF: write \\\\n."
           },
           "replacement": {
             "type": "string",
             "maxLength": 10000,
-            "description": "Replacement text. When isRegex=true, supports capture groups ($1, $2, etc.). Use an empty string to delete matches.",
+            "description": "Replacement text. An empty string deletes matches.",
             "examples": [
               "$1_renamed",
               "",
@@ -563,7 +563,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "isRegex": {
             "default": false,
-            "description": "Treat searchPattern as an RE2 regex (default: literal text match)",
+            "description": "Treat searchPattern as an RE2 regex and expand $1, $<name>, and $& in replacement (default: literal text match)",
             "type": "boolean"
           },
           "includeHidden": {
@@ -578,38 +578,38 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "caseSensitive": {
             "default": true,
-            "description": "Match case exactly (default: true). Pass false to ignore case. Unlike search_text, this defaults to true.",
+            "description": "Match case exactly. Unlike search_text, defaults to true.",
             "type": "boolean"
           },
           "wholeWord": {
             "default": false,
-            "description": "Match whole words only (word boundary anchoring)",
+            "description": "Match whole words only",
             "type": "boolean"
           },
           "dryRun": {
             "default": false,
-            "description": "Preview replacements without writing to disk (default: false). Pair with returnDiff=true to inspect the unified diff first.",
+            "description": "Preview without writing. Always returns the diff, never an undo id.",
             "type": "boolean"
           },
           "returnDiff": {
             "default": false,
-            "description": "Include a unified diff of all changes in the response",
+            "description": "Include the unified diff in a live run. Cut at 20 KB.",
             "type": "boolean"
           },
           "maxMatches": {
-            "description": "Maximum matches across all files before stopping (default: 100). In live runs, reaching it stops the scan early and leaves files rewritten up to that point changed.",
+            "description": "Maximum matches replaced across all files (default: 100). Setting it makes the scan sequential and exact.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
           },
           "maxFiles": {
-            "description": "Maximum number of files to process",
+            "description": "Stops after this many files scanned, counting files with no match; reports stoppedReason=maxFiles (default: no limit)",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
           },
           "maxDepth": {
-            "description": "Max directory depth to scan; 0 = base directory only, omit for unlimited",
+            "description": "Max directory depth. 0 scans only the base directory. Omit for no limit.",
             "type": "integer",
             "minimum": 0,
             "maximum": 100
@@ -631,7 +631,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the workspace directory roots this server can access, including session-granted roots. Use when starting a session or checking accessible directory boundaries. Returns { roots, readOnlyDirs } as absolute paths. Mutating operations under readOnlyDirs are refused with ACCESS_DENIED. Other tools prompt for approval when accessing paths outside these roots.",
+      "description": "List roots this server can access and its read-only directories. Use for allowed paths or after ACCESS_DENIED. Do not use it to browse; use \`list\`, \`find_files\`, or \`stat\` instead. Accepted grants add roots; call again after one. Outside paths prompt a grant only on elicitation clients, never for home, system paths, or anything outside FS_ROOT_BOUNDARY. Returns absolute { roots, readOnlyDirs (writes, moves, deletes refused), hint? when roots is empty }.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -646,18 +646,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for text or an RE2 regex, like grep. searchPattern is case-insensitive by default; a regex can match across a line break, and the hit is reported on the line where the match starts; pattern filters files by glob (e.g. **/*.ts). Returns numbered matching lines grouped by file, and a nextCursor for paging. Use read for full context; find_files to find by name.",
+      "description": "Search file contents under the roots for literal text or an RE2 regex. Use when you need the files and lines that contain some text. Do not use it to find files by name; use \`find_files\` instead. A regex may span lines; the hit is on its first line. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. Lines over 1000 chars are clipped around the match. Stops early at 10000 matching lines or the timeout, setting stoppedReason. Returns root, \`file:line: text\` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires after about 60 s), and resourceUri for a multi-page or stopped first page.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
+            "description": "File or directory to search (default: the only root). A named file is searched alone: pattern, maxDepth, and hidden/ignored filtering do not apply. Result paths are relative to the root, not to path.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "pattern": {
-            "description": "Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files",
+            "description": "Glob limiting which files are searched: *.ts matches names at any depth, src/**/*.ts matches paths relative to path. Default: all files.",
             "type": "string",
             "minLength": 1,
             "maxLength": 1000,
@@ -671,11 +671,11 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only."
+            "description": "Text to find, literal unless isRegex is true. RE2 has no lookahead, lookbehind, or backreferences."
           },
           "isRegex": {
             "default": false,
-            "description": "Treat searchPattern as a regex (default: literal text match)",
+            "description": "Treat searchPattern as an RE2 regex",
             "type": "boolean"
           },
           "includeHidden": {
@@ -690,31 +690,31 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "caseSensitive": {
             "default": false,
-            "description": "Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.",
+            "description": "Match case exactly. replace_text matches case by default, so pass true to preview what it will replace.",
             "type": "boolean"
           },
           "maxResults": {
             "default": 500,
-            "description": "Maximum number of matching lines to return per page",
+            "description": "Matching lines per page; context lines do not count. Later pages come via cursor.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
           },
           "context": {
             "default": 0,
-            "description": "Lines of context to return either side of each match, like grep -C (default: 0, max: 10)",
+            "description": "Lines shown before and after each match, like grep -C.",
             "type": "integer",
             "minimum": 0,
             "maximum": 10
           },
           "maxDepth": {
-            "description": "Max directory depth to scan; 0 = base directory only, omit for unlimited",
+            "description": "Max directory depth. 0 scans only the base directory. Omit for no limit.",
             "type": "integer",
             "minimum": 0,
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -733,12 +733,12 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. Use list to browse directory trees, and search_text to search file contents.",
+      "description": "Find files whose name or path matches a glob under a directory. Use when you know a name or path pattern but not the location. Do not use it for file contents; use \`search_text\` instead. To browse a folder, use \`list\`. Matches files, never directories. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). Paths are relative to root when unambiguous, otherwise absolute.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "Base directory to search under (default: the only root)",
+            "description": "Existing directory to search under. Required with several roots. Patterns with / match from here.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -747,7 +747,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 1000,
-            "description": "Glob pattern to match file paths (e.g. **/*.ts, src/**/*.js)",
+            "description": "Glob. Without / it matches file names at any depth (*.ts). With / it matches paths relative to path (src/**/*.ts).",
             "examples": [
               "**/*.ts",
               "src/**/*.js",
@@ -756,7 +756,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "maxResults": {
             "default": 100,
-            "description": "Maximum number of matching files to return per page",
+            "description": "Files per page; totalMatches counts all kept matches.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
@@ -773,7 +773,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "sortBy": {
             "default": "path",
-            "description": "Sort order: path = full path (default), name = basename only",
+            "description": "name: by file name across folders, ties by path. Sorts the first 10,000 kept matches before paging.",
             "type": "string",
             "enum": [
               "name",
@@ -781,13 +781,13 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             ]
           },
           "maxDepth": {
-            "description": "Max directory depth to scan; 0 = base directory only, omit for unlimited",
+            "description": "Max directory depth. 0 scans only the base directory. Omit for no limit.",
             "type": "integer",
             "minimum": 0,
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -806,7 +806,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks include symlinkTarget when available. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType; entryCount is omitted if counting fails. Use read to view contents, and list to browse directories.",
+      "description": "Get metadata for files or directories. Use when you need to check existence, size, or read cost. Do not use for contents; use \`read\` instead, \`list\` for directory entries, or \`find_files\` to find by name. Pass \`path\` or \`paths\` (up to 1000), never both. Paths settle independently (missing gives NOT_FOUND); the call errors only if all fail. Symlinks report their own metadata, not the target's. \`path\` gives one result; \`paths\` gives one per path, in input order. Returns per-path values or errors ({ code, message }), plus summary { total, succeeded, failed }. Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), mimeType, symlinkTarget.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -840,25 +840,25 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "undo",
       "title": "Undo",
-      "description": "Revert earlier mutating tool calls by undo id or steps (last N calls), not both. Use when rolling back recent file changes. Restores a file only if unchanged since the target call; modified files are skipped with explanation. Over HTTP, reverting requires an undo id (call with dryRun to list them). Returns lists of restored and skipped paths. Use dryRun to inspect history without reverting.",
+      "description": "Revert create, edit, replace_text, patch, move, or delete calls by undo id or the newest N calls. Use when a change made by this server must be reverted. Do not use for outside changes or expired ids; rewrite those with \`edit\` or \`create\`. Preview with dryRun, which lists ids. A path changed since that call is skipped while the rest revert; it stays under its id for a retry. The in-memory journal keeps up to 64 calls for 30 minutes, fewer when FS_MAX_UNDO_BYTES fills. No redo. Unknown ids fail NOT_FOUND. Returns steps[] of {id, tool, results[]}, each path restored or with an error code. A long list is cut (failures kept), marked truncated with totalResults. Errors only if every path fails.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "id": {
-            "description": "The undo id from a tool result",
+            "description": "Undo id from a mutating tool result. Required over HTTP, where all clients share the journal.",
             "type": "string",
             "minLength": 1,
             "maxLength": 16
           },
           "steps": {
-            "description": "Revert the last N calls (not over HTTP)",
+            "description": "Revert the newest N calls, newest first. Not with id; rejected over HTTP. Omit both to revert the newest call.",
             "type": "integer",
             "minimum": 1,
             "maximum": 20
           },
           "dryRun": {
             "default": false,
-            "description": "Preview which calls would restore, changing nothing. A preview of the whole history assumes each call is reverted after the newer ones, so a file changed since can still show as restored; previewing one id shows that call alone.",
+            "description": "Preview without changing anything. With no id or steps, previews every journaled call and lists their ids.",
             "type": "boolean"
           }
         },
@@ -876,11 +876,11 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "get-help",
       "title": "Get Help",
-      "description": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths.",
+      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
       "arguments": [
         {
           "name": "topic",
-          "description": "Section key to filter instructions (one of: guidelines, tools_overview, constraints, error_recovery); omit to return all instructions.",
+          "description": "Section to return (one of: guidelines, tools_overview, constraints, error_recovery). Omit for all instructions.",
           "required": false
         }
       ]
@@ -891,7 +891,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
       "name": "filesystem-mcp-result",
       "title": "Cached Tool Result",
       "uriTemplate": "filesystem-mcp://result/{id}",
-      "description": "Ephemeral cached tool output. Listed via resources/list; entries expire after the cache TTL.",
+      "description": "Cached tool output, listed in resources/list. Entries expire after the cache TTL.",
       "mimeType": "application/json",
       "annotations": {
         "audience": [
@@ -914,13 +914,13 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     }
   ],
   "help": {
-    "description": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths.",
+    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
     "messages": [
       {
         "role": "user",
         "content": {
           "type": "text",
-          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\nWrite: create, delete, edit, move, patch, replace_text, undo\\n\`\`\`\\n\\nFull schemas, descriptions, and annotations are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call list_roots to read the current set.\\nlegacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.\\nenforced_limits: max file size 10 MiB (also the combined content cap of one create call), stdio responses up to 9.8 MiB once JSON-encoded (HTTP has no such limit), file search cap 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.\\npagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots; configure a missing startup root or retry a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to verify the path.\\nTOO_LARGE: Over the file size limit, use read with head/tail or startLine/endLine. Over the stdio message limit, request a smaller slice or page, or connect over HTTP; media and binary files need HTTP.\\nTIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\nBINARY_FILE: Text tools refuse binary files; read returns one whole with binary: true.\\n\`\`\`\\n",
+          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not send workspace roots. Call a tool with a concrete path and approve the grant if the client asks (elicitation).\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\nWrite: create, delete, edit, move, patch, replace_text, undo\\n\`\`\`\\n\\nFull tool schemas are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd. Accepted modern grants add to them. Call list_roots to see the current set.\\nlegacy_roots: Legacy clients can also add roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive files are denied by default: .env, *.pem, SSH private keys (*id_rsa*, *id_ed25519*), .netrc, .git-credentials.\\nenforced_limits: max file size 10 MiB (also the total content cap of one create call), stdio responses up to 9.8 MiB once JSON-encoded (HTTP has no such limit), file search returns up to 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result has a resource_link or a resourceUri (in structuredContent or _meta), call resources/read right away. Cached results expire after about 60 seconds, on eviction, or on restart.\\npagination: nextCursor appears in the result text and in _meta, and its snapshot expires on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor). If a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots. Add the missing startup root, or retry with a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to check the path.\\nTOO_LARGE: Over the file size limit, use read with head/tail or startLine/endLine. Over the stdio message limit, ask for a smaller slice or page, or connect over HTTP. Media and binary files need HTTP.\\nTIMEOUT: Narrow the path or pattern, or lower maxDepth. maxResults only sets the page size.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\nBINARY_FILE: Text tools refuse binary files. read returns the whole file with binary: true.\\n\`\`\`\\n",
           "annotations": {
             "audience": [
               "assistant"
@@ -949,12 +949,12 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "listChanged": true
     }
   },
-  "instructions": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
+  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
   "tools": [
     {
       "name": "diff",
       "title": "Diff",
-      "description": "Compare two text files and return a unified diff from a to b, like diff -u. Use when reviewing changes between two files. The diff has ---/+++ headers and @@ hunks; - lines are from a and + lines from b. context changes only the surrounding lines. Metadata includes resolved a and b paths, linesAdded, and linesRemoved; identical files return no hunks. Rejects binary and non-UTF-8 files; files too different give TOO_LARGE. Use read to inspect full files or slices first.",
+      "description": "Compare two text files and return a unified diff from a to b. Use when you need line differences between two files on disk. Do not use it to find text across files; use \`search_text\` instead. To preview your own pending change, use the dryRun option of the write tools. Neither file is changed. Binary and non-UTF-8 files fail. A file over the size limit fails with TOO_LARGE. So does a diff not done within 1 s, or a full diff queue; retry once, then \`read\` matching line ranges. a is the - side and b the + side; swap them to reverse the diff. context only sets how many unchanged lines surround each hunk, not what counts as a change. Returns ---/+++ headers (basenames) and @@ hunks; identical files give headers only.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -962,17 +962,17 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 4096,
-            "description": "First file to compare"
+            "description": "Original file; its lines are the - side"
           },
           "b": {
             "type": "string",
             "minLength": 1,
             "maxLength": 4096,
-            "description": "Second file to compare"
+            "description": "Changed file; its lines are the + side"
           },
           "context": {
             "default": 3,
-            "description": "Number of context lines surrounding each change (default: 3)",
+            "description": "Unchanged lines shown around each hunk; output size only",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 50
@@ -993,26 +993,26 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List directory contents as a tree of names, like ls or tree. Use when exploring directory structure or checking folder contents. Skips hidden and ignored files (.git, node_modules) by default. Directories sort before files within each folder. Totals count the whole walk, not just the page, and only entries the depth reaches, unless a timeout cuts the walk short. Returns tree text, entries[] (name, relativePath, type, size when shown), nextCursor when more remain, and resourceUri for the whole listing when the first page is cut short; that listing is capped at 20,000 entries. Use find_files to find files by name, stat for metadata, and read for contents.",
+      "description": "List a directory inside the roots as a name tree, walking up to maxDepth levels. Use when you need to see what a folder holds. Do not use it to find files by name or glob; use \`find_files\` instead, \`read\` or \`search_text\` for contents, \`stat\` for one path. Skips hidden entries, .gitignore matches, and build and tool folders unless includeHidden or includeIgnored is set, naming the ignore-rule folders it hid. Folders at maxDepth are shown, but their contents are not listed or counted. At most 20,000 entries are kept. A timeout returns a partial result with stoppedReason. Errors: NOT_DIRECTORY for a file, ACCESS_DENIED outside the roots. Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor and resourceUri (about 60 s).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "Directory to list (default: the only root)",
+            "description": "Directory to list (default: the only root; required with several roots)",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "maxDepth": {
             "default": 1,
-            "description": "Max directory depth to traverse (default: 1 = top-level only; increase to recurse deeper)",
+            "description": "Levels to walk; 1 = direct children. Directories at the limit are shown, not expanded.",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 50
           },
           "maxEntries": {
             "default": 1000,
-            "description": "Page size (default: 1000). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.",
+            "description": "Entries per page; changing it keeps a cursor valid",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 20000
@@ -1024,17 +1024,17 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           },
           "includeIgnored": {
             "default": false,
-            "description": "Include ignored items (node_modules, .git, etc).",
+            "description": "Include .gitignore matches and build and tool folders (node_modules, .git, dist, build, out, tmp, coverage)",
             "type": "boolean"
           },
           "includeSizes": {
             "default": false,
-            "description": "Show file sizes in the tree and a totals line of counts and bytes",
+            "description": "Show file sizes and a totals line in the tree (stats every file, slower on big trees)",
             "type": "boolean"
           },
           "sortBy": {
             "default": "name",
-            "description": "Order within each directory: name (default) or size (largest first)",
+            "description": "Order within each directory, after directories (size: largest file first; sizes appear only with includeSizes)",
             "type": "string",
             "enum": [
               "name",
@@ -1042,7 +1042,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1058,45 +1058,45 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole file or a slice via head, tail, or 1-based startLine/endLine. Use when inspecting file contents. Pass binary: true to read binary files as base64 resources. Images and audio return as media. Returns file text or slice, or per-path results for batches. Use stat for size and token estimates before reading, search_text to find text, and list to browse folders.",
+      "description": "Read one file or up to 1000, whole or as a line slice. Use when you know the path. Do not use it to check size or existence; use \`stat\` instead. To locate content, use \`search_text\`, \`find_files\`, or \`list\`. Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. Past the size limit, a whole read fails with TOO_LARGE; a single-path head or range is truncated. A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. Full reads add totalLines; a tail gets no continuation.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "includeHash": {
             "default": false,
-            "description": "Include SHA-256 of the returned content (the slice for head, tail or a line range)",
+            "description": "Include SHA-256 of the returned content (the slice for a partial read).",
             "type": "boolean"
           },
           "binary": {
             "default": false,
-            "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
+            "description": "Return a non-image, non-audio binary file as a base64 resource. Whole reads only. Without it, such a file fails with BINARY_FILE.",
             "type": "boolean"
           },
           "lineNumbers": {
             "default": false,
-            "description": "Prefix each line with its number and a tab, like cat -n. Not with tail. Leave the prefix out of edit text.",
+            "description": "Prefix each line with its number and a tab. Not with tail. Leave the prefix out of edit text.",
             "type": "boolean"
           },
           "head": {
-            "description": "Return first N lines",
+            "description": "First N lines. Not with tail or startLine/endLine.",
             "type": "integer",
             "minimum": 1,
             "maximum": 100000
           },
           "tail": {
-            "description": "Return last N lines",
+            "description": "Last N lines. Not with head, startLine/endLine, or lineNumbers.",
             "type": "integer",
             "minimum": 1,
             "maximum": 100000
           },
           "startLine": {
-            "description": "Start line (1-indexed)",
+            "description": "First line, 1-based. Without endLine, reads to the end.",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
           },
           "endLine": {
-            "description": "End line (1-indexed); requires startLine",
+            "description": "Last line, inclusive. Requires startLine.",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
@@ -1134,7 +1134,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list_roots",
       "title": "Workspace Roots",
-      "description": "List the workspace directory roots this server can access, including session-granted roots. Use when starting a session or checking accessible directory boundaries. Returns { roots, readOnlyDirs } as absolute paths. Mutating operations under readOnlyDirs are refused with ACCESS_DENIED. Other tools prompt for approval when accessing paths outside these roots.",
+      "description": "List roots this server can access and its read-only directories. Use for allowed paths or after ACCESS_DENIED. Do not use it to browse; use \`list\`, \`find_files\`, or \`stat\` instead. Accepted grants add roots; call again after one. Outside paths prompt a grant only on elicitation clients, never for home, system paths, or anything outside FS_ROOT_BOUNDARY. Returns absolute { roots, readOnlyDirs (writes, moves, deletes refused), hint? when roots is empty }.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -1149,18 +1149,18 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for text or an RE2 regex, like grep. searchPattern is case-insensitive by default; a regex can match across a line break, and the hit is reported on the line where the match starts; pattern filters files by glob (e.g. **/*.ts). Returns numbered matching lines grouped by file, and a nextCursor for paging. Use read for full context; find_files to find by name.",
+      "description": "Search file contents under the roots for literal text or an RE2 regex. Use when you need the files and lines that contain some text. Do not use it to find files by name; use \`find_files\` instead. A regex may span lines; the hit is on its first line. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. Lines over 1000 chars are clipped around the match. Stops early at 10000 matching lines or the timeout, setting stoppedReason. Returns root, \`file:line: text\` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires after about 60 s), and resourceUri for a multi-page or stopped first page.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "File to search, or directory to search under (default: the only root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.",
+            "description": "File or directory to search (default: the only root). A named file is searched alone: pattern, maxDepth, and hidden/ignored filtering do not apply. Result paths are relative to the root, not to path.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           },
           "pattern": {
-            "description": "Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files",
+            "description": "Glob limiting which files are searched: *.ts matches names at any depth, src/**/*.ts matches paths relative to path. Default: all files.",
             "type": "string",
             "minLength": 1,
             "maxLength": 1000,
@@ -1174,11 +1174,11 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 10000,
-            "description": "Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only."
+            "description": "Text to find, literal unless isRegex is true. RE2 has no lookahead, lookbehind, or backreferences."
           },
           "isRegex": {
             "default": false,
-            "description": "Treat searchPattern as a regex (default: literal text match)",
+            "description": "Treat searchPattern as an RE2 regex",
             "type": "boolean"
           },
           "includeHidden": {
@@ -1193,31 +1193,31 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           },
           "caseSensitive": {
             "default": false,
-            "description": "Enable case-sensitive matching (default: case-insensitive). Replacements match case by default, so matches found here can go unreplaced there.",
+            "description": "Match case exactly. replace_text matches case by default, so pass true to preview what it will replace.",
             "type": "boolean"
           },
           "maxResults": {
             "default": 500,
-            "description": "Maximum number of matching lines to return per page",
+            "description": "Matching lines per page; context lines do not count. Later pages come via cursor.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
           },
           "context": {
             "default": 0,
-            "description": "Lines of context to return either side of each match, like grep -C (default: 0, max: 10)",
+            "description": "Lines shown before and after each match, like grep -C.",
             "type": "integer",
             "minimum": 0,
             "maximum": 10
           },
           "maxDepth": {
-            "description": "Max directory depth to scan; 0 = base directory only, omit for unlimited",
+            "description": "Max directory depth. 0 scans only the base directory. Omit for no limit.",
             "type": "integer",
             "minimum": 0,
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1236,12 +1236,12 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern, like find. Use when locating files by name or pattern anywhere in the workspace. A pattern without / matches names at any depth (*.ts); a pattern with / matches paths relative to path (src/**/*.ts). maxDepth is relative to path: 0 searches only that directory; omit it for unlimited depth. Hidden and ignored files are skipped by default. Returns { root, results: [{ path }], totalMatches, filesScanned, nextCursor?, stoppedReason? }. Result paths are relative to root when safe, absolute otherwise. stoppedReason reports maxResults or timeout truncation. Use list to browse directory trees, and search_text to search file contents.",
+      "description": "Find files whose name or path matches a glob under a directory. Use when you know a name or path pattern but not the location. Do not use it for file contents; use \`search_text\` instead. To browse a folder, use \`list\`. Matches files, never directories. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). Paths are relative to root when unambiguous, otherwise absolute.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
-            "description": "Base directory to search under (default: the only root)",
+            "description": "Existing directory to search under. Required with several roots. Patterns with / match from here.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
@@ -1250,7 +1250,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "type": "string",
             "minLength": 1,
             "maxLength": 1000,
-            "description": "Glob pattern to match file paths (e.g. **/*.ts, src/**/*.js)",
+            "description": "Glob. Without / it matches file names at any depth (*.ts). With / it matches paths relative to path (src/**/*.ts).",
             "examples": [
               "**/*.ts",
               "src/**/*.js",
@@ -1259,7 +1259,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           },
           "maxResults": {
             "default": 100,
-            "description": "Maximum number of matching files to return per page",
+            "description": "Files per page; totalMatches counts all kept matches.",
             "type": "integer",
             "minimum": 1,
             "maximum": 10000
@@ -1276,7 +1276,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           },
           "sortBy": {
             "default": "path",
-            "description": "Sort order: path = full path (default), name = basename only",
+            "description": "name: by file name across folders, ties by path. Sorts the first 10,000 kept matches before paging.",
             "type": "string",
             "enum": [
               "name",
@@ -1284,13 +1284,13 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             ]
           },
           "maxDepth": {
-            "description": "Max directory depth to scan; 0 = base directory only, omit for unlimited",
+            "description": "Max directory depth. 0 scans only the base directory. Omit for no limit.",
             "type": "integer",
             "minimum": 0,
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1309,7 +1309,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading file contents, like ls -ld. Use when checking file existence, size, type, or timestamps. Missing paths get their own NOT_FOUND entry, so batches succeed even if some paths are missing. Symlinks include symlinkTarget when available. Returns type, size/entryCount, tokenEstimate, timestamps, permissions, and mimeType; entryCount is omitted if counting fails. Use read to view contents, and list to browse directories.",
+      "description": "Get metadata for files or directories. Use when you need to check existence, size, or read cost. Do not use for contents; use \`read\` instead, \`list\` for directory entries, or \`find_files\` to find by name. Pass \`path\` or \`paths\` (up to 1000), never both. Paths settle independently (missing gives NOT_FOUND); the call errors only if all fail. Symlinks report their own metadata, not the target's. \`path\` gives one result; \`paths\` gives one per path, in input order. Returns per-path values or errors ({ code, message }), plus summary { total, succeeded, failed }. Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), mimeType, symlinkTarget.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1345,11 +1345,11 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "get-help",
       "title": "Get Help",
-      "description": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths.",
+      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
       "arguments": [
         {
           "name": "topic",
-          "description": "Section key to filter instructions (one of: guidelines, tools_overview, constraints, error_recovery); omit to return all instructions.",
+          "description": "Section to return (one of: guidelines, tools_overview, constraints, error_recovery). Omit for all instructions.",
           "required": false
         }
       ]
@@ -1360,7 +1360,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "name": "filesystem-mcp-result",
       "title": "Cached Tool Result",
       "uriTemplate": "filesystem-mcp://result/{id}",
-      "description": "Ephemeral cached tool output. Listed via resources/list; entries expire after the cache TTL.",
+      "description": "Cached tool output, listed in resources/list. Entries expire after the cache TTL.",
       "mimeType": "application/json",
       "annotations": {
         "audience": [
@@ -1383,13 +1383,13 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     }
   ],
   "help": {
-    "description": "Navigation guide for filesystem-mcp tools and constraints. Use list_roots to inspect configured or accepted roots, then list/find_files -> stat -> read. Never guess paths.",
+    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
     "messages": [
       {
         "role": "user",
         "content": {
           "type": "text",
-          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\n\`\`\`\\n\\nFull schemas, descriptions, and annotations are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd; accepted modern grants are additive. Call list_roots to read the current set.\\nlegacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive file paths (.env, *.pem, SSH private keys such as *id_rsa* and *id_ed25519*, .netrc, .git-credentials) are denied by default.\\nenforced_limits: max file size 10 MiB (also the combined content cap of one create call), stdio responses up to 9.8 MiB once JSON-encoded (HTTP has no such limit), file search cap 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.\\npagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor); if a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots; configure a missing startup root or retry a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to verify the path.\\nTOO_LARGE: Over the file size limit, use read with head/tail or startLine/endLine. Over the stdio message limit, request a smaller slice or page, or connect over HTTP; media and binary files need HTTP.\\nTIMEOUT: Narrow path or pattern, or lower maxDepth; maxResults only sizes a page.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\nBINARY_FILE: Text tools refuse binary files; read returns one whole with binary: true.\\n\`\`\`\\n",
+          "text": "\\nGuidelines:\\n\`\`\`\\nroot_access: list_roots lists configured or accepted roots; every other tool is scoped to them.\\nmodern_root_grants: Modern clients do not send workspace roots. Call a tool with a concrete path and approve the grant if the client asks (elicitation).\\npath_resolution: Confirm a path with list or find_files before acting on it.\\n\`\`\`\\n\\nTools Overview:\\n\`\`\`\\nNavigate: list_roots, list, find_files\\nInspect: stat, search_text\\nRead: read\\n\`\`\`\\n\\nFull tool schemas are in \`tools/list\`.\\n\\nConstraints:\\n\`\`\`\\nallowed_roots: Startup roots come from CLI paths, FS_ALLOWED_DIRS, or --allow-cwd. Accepted modern grants add to them. Call list_roots to see the current set.\\nlegacy_roots: Legacy clients can also add roots through the deprecated roots/list flow.\\nsensitive_paths: Sensitive files are denied by default: .env, *.pem, SSH private keys (*id_rsa*, *id_ed25519*), .netrc, .git-credentials.\\nenforced_limits: max file size 10 MiB (also the total content cap of one create call), stdio responses up to 9.8 MiB once JSON-encoded (HTTP has no such limit), file search returns up to 10000 results, content search scans up to 10000 matches, paged by maxResults (default 500).\\nephemeral_results: When a result has a resource_link or a resourceUri (in structuredContent or _meta), call resources/read right away. Cached results expire after about 60 seconds, on eviction, or on restart.\\npagination: nextCursor appears in the result text and in _meta, and its snapshot expires on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor). If a cursor is rejected, start again without one. resourceUri appears on the first page only.\\n\`\`\`\\n\\nError Recovery:\\n\`\`\`\\nACCESS_DENIED: Run list_roots. Add the missing startup root, or retry with a concrete path and approve the grant.\\nNOT_FOUND: Run list or find_files to check the path.\\nTOO_LARGE: Over the file size limit, use read with head/tail or startLine/endLine. Over the stdio message limit, ask for a smaller slice or page, or connect over HTTP. Media and binary files need HTTP.\\nTIMEOUT: Narrow the path or pattern, or lower maxDepth. maxResults only sets the page size.\\nINVALID_INPUT: Re-read the tool schema in tools/list.\\nBINARY_FILE: Text tools refuse binary files. read returns the whole file with binary: true.\\n\`\`\`\\n",
           "annotations": {
             "audience": [
               "assistant"
