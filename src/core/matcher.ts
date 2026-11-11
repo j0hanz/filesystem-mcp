@@ -335,6 +335,8 @@ export interface TextMatch {
   readonly text: string;
   readonly groups: (string | undefined)[];
   readonly named: Record<string, string> | undefined;
+  /** A group's text recurs in the match with different line endings, so its CRs are a guess. */
+  readonly ambiguousGroups?: true;
 }
 
 export interface MatchEngine {
@@ -602,26 +604,44 @@ export function createMatchEngine(
             const stop = back(match.end);
             const original = text.slice(start, stop);
             const crlfOnly = !/(?<!\r)\n/u.test(original);
+            const state = { ambiguous: false };
             // A group is text from `seen`, so it gets back the CRs its span had in `text`.
+            // re2-wasm gives no group offsets, so the span is found by the group's text.
             const restore = (group: string): string => {
               if (crlfOnly) return group.replaceAll('\n', '\r\n');
-              // shortcut: a group repeated in its match maps to its first occurrence, whose CRs may differ.
-              const at = match.text.indexOf(group);
-              if (at === -1) return group;
-              return text.slice(back(match.start + at), back(match.start + at + group.length));
+              // No line break in the group: no CR was hidden inside it.
+              if (!group.includes('\n')) return group;
+              const spans = new Set<string>();
+              for (
+                let at = match.text.indexOf(group);
+                at !== -1;
+                at = match.text.indexOf(group, at + 1)
+              ) {
+                spans.add(
+                  text.slice(back(match.start + at), back(match.start + at + group.length)),
+                );
+              }
+              // The same text sits in the match with different endings: which one the group
+              // held cannot be told. `replace` refuses to expand it.
+              if (spans.size > 1) state.ambiguous = true;
+              const [first] = spans;
+              return first ?? group;
             };
+            const groups = match.groups.map((group) =>
+              group === undefined ? undefined : restore(group),
+            );
+            const named =
+              match.named &&
+              Object.fromEntries(
+                Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
+              );
             yield {
               start,
               end: stop,
               text: original,
-              groups: match.groups.map((group) =>
-                group === undefined ? undefined : restore(group),
-              ),
-              named:
-                match.named &&
-                Object.fromEntries(
-                  Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
-                ),
+              groups,
+              named,
+              ...(state.ambiguous ? { ambiguousGroups: true as const } : {}),
             };
           }
         })(),
@@ -682,6 +702,12 @@ export function createMatchEngine(
       const expand = Boolean(options.expand);
       const signal = options.signal;
       const limits = options.limits;
+      // `$1`, `$12` or `$<name>` in the replacement: it reads a capture group.
+      const readsGroups =
+        expand &&
+        Array.from(effectiveReplacement.matchAll(DOLLAR_TOKEN)).some((token) =>
+          /^(?:\d|<)/.test(token[1] ?? ''),
+        );
       let matchCount = 0;
       let more = false;
       let updated = '';
@@ -696,6 +722,15 @@ export function createMatchEngine(
             break;
           }
           matchCount++;
+          if (readsGroups && m.ambiguousGroups) {
+            throw new FsError(
+              ErrorCode.INVALID_INPUT,
+              'A capture group holds a line break whose line ending cannot be told apart in this mixed-ending file.',
+              limits?.path,
+              undefined,
+              'Nothing was written. Normalise the file to one line ending first, or write the line break in the replacement instead of capturing it.',
+            );
+          }
           updated +=
             text.slice(cursor, m.start) +
             (expand

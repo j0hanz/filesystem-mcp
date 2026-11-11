@@ -391,6 +391,20 @@ describe('replaceMatches', () => {
     assert.equal(await rep('(?i)(a\\nb)(\\nc)', 'a\r\nb\nc\n', '[$1|$2]', re), '[a\r\nb|\nc]\n');
   });
 
+  it('a group whose text recurs in its match with another ending is refused', async () => {
+    // The group is the bare LF, but the first LF in the match is the CRLF.
+    await assert.rejects(rep('x\\n(\\n)', 'x\r\n\n', 'y$1', re), (error: unknown) =>
+      /line ending/i.test((error as Error).message),
+    );
+    await assert.rejects(rep('x\\n(\\n)', 'x\n\r\n', '$1', re), (error: unknown) =>
+      /line ending/i.test((error as Error).message),
+    );
+    // No group token in the replacement: nothing to place, so it proceeds.
+    assert.equal(await rep('x\\n(\\n)', 'x\r\n\n', 'y', re), 'y');
+    // The text recurs, but every occurrence has the same ending: not ambiguous.
+    assert.equal(await rep('a(\\n)(\\n)', 'a\n\nb\r\nc', '[$1$2]', re), '[\n\n]b\r\nc');
+  });
+
   it('expands $1 and $& for a regex only', async () => {
     assert.equal(await rep('(a)(b)', 'ab', '$2$1-$&', re), 'ba-ab');
     assert.equal(await rep('ab', 'ab', '$&', {}), '$&');
