@@ -573,6 +573,34 @@ describe('MCP Resources', () => {
       registry.destroy();
     });
 
+    it(
+      'WatcherRegistry - on Linux a directory watch reports direct children only',
+      { skip: process.platform !== 'linux' },
+      async () => {
+        const registry = createWatcherRegistry();
+        try {
+          const dir = join(tmpDir, 'shallow-watch');
+          await mkdir(join(dir, 'sub'), { recursive: true });
+          const notifications: string[] = [];
+          const result = await registry.acquire(pathGuard, buildFileResourceUri(dir), (uri) => {
+            notifications.push(uri);
+          });
+          assert.strictEqual(result.ok, true);
+
+          // A change two levels down is not reported.
+          await writeFile(join(dir, 'sub', 'deep.txt'), 'deep');
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          assert.strictEqual(notifications.length, 0, 'no notification for a nested change');
+
+          // A direct child is.
+          await writeFile(join(dir, 'child.txt'), 'child');
+          await waitFor(() => notifications.length > 0, 1000);
+        } finally {
+          registry.destroy();
+        }
+      },
+    );
+
     it('WatcherRegistry - a failed attach leaves other leases alone', async (t) => {
       const registry = createWatcherRegistry();
       const testFile = await writeTestFile(tmpDir, 'attach_fail_test.txt', 'initial');
