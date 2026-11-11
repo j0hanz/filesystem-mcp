@@ -186,6 +186,9 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   // could release only once — on the shared modern registry that orphan lease
   // pinned a watcher until process shutdown.
   const inflight = new Map<string, Promise<boolean | undefined>>();
+  // URIs whose in-flight subscribe was unsubscribed before it settled: the
+  // lease it is about to take is given back instead of kept.
+  const cancelled = new Set<string>();
 
   return {
     name: 'filesystem-mcp-file',
@@ -277,13 +280,21 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       // A subscribe for this URI is mid-acquire: share its outcome instead of
       // taking a second lease the lease set cannot represent.
       const pending = inflight.get(uri);
-      if (pending) return pending;
+      if (pending) {
+        // A fresh subscribe outranks an unsubscribe that came before it.
+        cancelled.delete(uri);
+        return pending;
+      }
 
       const acquire = async (): Promise<boolean | undefined> => {
         const result = await registry.acquire(options.pathGuard, uri, notify, {
           markSubscribe: true,
         });
         if (result.ok) {
+          if (cancelled.delete(uri)) {
+            registry.release(uri);
+            return undefined;
+          }
           leasedUris.add(uri);
           return undefined;
         }
@@ -310,12 +321,20 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
         return false;
       };
 
-      const promise = acquire().finally(() => inflight.delete(uri));
+      const promise = acquire().finally(() => {
+        inflight.delete(uri);
+        cancelled.delete(uri);
+      });
       inflight.set(uri, promise);
       return promise;
     },
 
     unsubscribe(uri) {
+      // Mid-subscribe: no lease exists yet, so mark it for release on arrival.
+      if (inflight.has(uri) && !leasedUris.has(uri)) {
+        cancelled.add(uri);
+        return;
+      }
       // Only release a lease this connection actually took.
       if (!leasedUris.delete(uri)) return;
       registry.release(uri);
