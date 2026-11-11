@@ -77,7 +77,9 @@ prefiltering, their matches, and their replacements, directly over the Text
 view, so a preview judges exactly what its replacement will touch. The engine
 adapts a literal needle and its replacement for an all-CRLF view internally,
 and enforces output size limits on restored content. A match may span a line
-break in both; a search reports it on the line where it starts.
+break in both; a search reports it on the line where it starts. In a text with
+mixed endings a regex sees each CRLF as LF, so `$` matches before it and
+`\r\n` matches nothing; a literal needle sees that text as written.
 _Avoid_: matcher selection, dispatch, engine choice, fast path
 
 ## Writes
@@ -126,8 +128,10 @@ mutation until the result is returned; abandoned, with a reason, when undo
 becomes impossible or not worth the budget. A capture that is unavailable
 records nothing further, and the mutation still runs. Each path a call changes
 has its own capture, so abandoning one costs only that path's undo; a copy
-abandons the whole call. A path's capture reports only once that path has, or
-may have, changed; an exit before that reports nothing.
+has one capture for its destination, abandoned when the copy fails part-way
+or its files total more than eight times the undo budget. A path's capture
+reports only once that path has, or may have, changed; an exit before that
+reports nothing.
 _Avoid_: undo session, transaction, undo buffer
 
 ## Approval
