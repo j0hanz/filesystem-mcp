@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: `\z` and `(?-m)$` no longer match after a file's final newline, since a final newline does not start a line. To append at the end of such a file, match `\n\z`.
 - **replace_text**: `$` now matches at every line end in a CRLF file.
 - **create**: two entries that reach one file through a linked folder no longer both report success while one content is lost; the first is written and the later entry fails with "another entry in this batch already writes".
+- **delete** and **move**: a recursive removal now retries an entry another process holds for a moment (an indexer or antivirus on Windows); before, it could stop part-way through the tree.
 
 ## [2.19.3] - 2026-11-07
 

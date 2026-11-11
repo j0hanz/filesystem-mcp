@@ -114,6 +114,11 @@ const TRANSFER_COPY_OPTIONS = {
   force: true,
 } as const;
 
+// A recursive rm meets files an indexer or antivirus holds for a moment
+// (EBUSY, EPERM on Windows). Node retries those only when asked; without it
+// the removal stops part-way through the tree.
+const RM_RETRY = { maxRetries: 3, retryDelay: 100 } as const;
+
 /**
  * A Transfer settled by `planTransfer`, before any change and before any
  * Confirmation. Plain data: a Confirmation ends the call, so the next round
@@ -1348,7 +1353,7 @@ export class GuardedFileSystem {
       // where nothing is gone, and no undo id is offered for a delete that never ran.
       signal?.throwIfAborted();
       own.changed();
-      await fsRm(validPath, options);
+      await fsRm(validPath, { ...options, ...RM_RETRY });
     });
   }
 
@@ -1439,7 +1444,7 @@ export class GuardedFileSystem {
       // Re-check containment, as the guarded rm did: an ancestor swapped for an
       // out-of-root link during the copy must not steer the removal outside.
       await this.#guard('delete', validSource);
-      await this.#rawRm(validSource, { recursive: true, force: true });
+      await this.#rawRm(validSource, { recursive: true, force: true, ...RM_RETRY });
     } catch (copyOrRemoveError: unknown) {
       rethrowIfAborted(copyOrRemoveError);
       if (copied) {
@@ -1484,11 +1489,13 @@ export class GuardedFileSystem {
       // move onto itself, and do nothing.
       await fsRename(staged, validDest);
     } finally {
-      await fsRm(stagingDir, { recursive: true, force: true }).catch((cleanupError: unknown) => {
-        Logger.warn(
-          `Failed to remove staging directory ${stagingDir} after a cross-device move: ${formatUnknownErrorMessage(cleanupError)}`,
-        );
-      });
+      await fsRm(stagingDir, { recursive: true, force: true, ...RM_RETRY }).catch(
+        (cleanupError: unknown) => {
+          Logger.warn(
+            `Failed to remove staging directory ${stagingDir} after a cross-device move: ${formatUnknownErrorMessage(cleanupError)}`,
+          );
+        },
+      );
     }
   }
 
