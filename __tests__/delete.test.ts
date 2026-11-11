@@ -749,6 +749,23 @@ describe('delete body', () => {
     assert.strictEqual(result.structured.summary.succeeded, 2);
   });
 
+  it(
+    'one link named in two letter cases is deleted once and reported once',
+    { skip: !IS_CASE_INSENSITIVE_FS },
+    async (t) => {
+      const target = await writeTestFile(root, 'case-link-target.txt', 'x\n');
+      const link = join(root, 'case-link');
+      if (!(await trySymlink(target, link, () => t.skip('symlinks not permitted'), 'file'))) return;
+
+      const result = await del({ paths: [link, join(root, 'CASE-LINK')] });
+
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(result.structured.summary.failed, 0);
+      assert.strictEqual(result.structured.results.length, 1);
+      await assert.rejects(lstat(link));
+    },
+  );
+
   it('preserves custom suggestion when execution delete fails', async () => {
     const file = await writeTestFile(root, 'suggest-test.txt', 'hello');
 

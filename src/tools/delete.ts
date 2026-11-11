@@ -12,6 +12,7 @@ import {
   type DeletePlan,
   type GuardedFileSystem,
   identityOf,
+  sameIdentity,
   UNKNOWN_IDENTITY,
 } from '../core/fs.ts';
 import { canElicit } from '../core/input-required.ts';
@@ -140,10 +141,24 @@ async function handleDelete(
 
   let plans: { plan: DeletePlan; index: number }[] = [];
   const seenTargets = new Set<string>();
+  // A link keeps the letter case it was typed in, so one link named twice
+  // plans twice where the filesystem folds case. Collapse those only when both
+  // plans saw one Entry: two names that fold alike can be two entries.
+  const sawSameEntry = (plan: DeletePlan): boolean => {
+    const stats = plan.firstStats?.stats;
+    if (stats === undefined) return false;
+    const folded = normalizeCaseForComparison(plan.validPath);
+    return plans.some(
+      ({ plan: earlier }) =>
+        earlier.firstStats !== undefined &&
+        normalizeCaseForComparison(earlier.validPath) === folded &&
+        sameIdentity(identityOf(earlier.firstStats.stats), identityOf(stats)),
+    );
+  };
 
   for (const { index, value: r } of planned) {
     const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
-    if (seenTargets.has(target)) {
+    if (seenTargets.has(target) || (r.status !== 'noop' && sawSameEntry(r.plan))) {
       slots[index] = { status: 'omitted' };
       continue;
     }
