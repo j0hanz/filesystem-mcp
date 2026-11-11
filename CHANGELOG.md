@@ -5,9 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.20.0] - 2026-11-11
+
+One Text view and one matching engine for `search_text`, `replace_text`,
+`edit` and `patch`, one confirmation path for `create`, `delete` and `move`,
+four path-guard and confirmation fixes, and tool descriptions rewritten in
+plain words. Before upgrading, read Changed if you use regexes in
+`search_text` or `replace_text` (anchors, `\r`, cross-line matches), match the
+text of a declined confirmation, or subscribe to a directory on Linux.
+
+### Security
+
+- **Confirmation**: when one file is named in two spellings in a batch and is replaced between the two checks, the server now asks again; before, the approval given for one spelling could let the other write or delete an entry the user never saw.
+- **Path guard**: a delete, move or copy source that exists but cannot be resolved is now refused with "Cannot access path" instead of skipping the root, denylist and read-only checks.
+- **Path guard**: Windows system folders are found from environment variables on any drive; before, the guard assumed drive `C:`.
+- **delete**: a recursive delete asks once more, with the protected-files warning, when such a file appears in the folder while the first prompt is open.
+
+### Added
+
+- **HTTP**: the server logs a warning when it starts without an API key, since any local user or process can then call it and approve its own access grants.
+- **read**: a line range that starts past the end of the file now says `// no lines at or after line N` instead of returning nothing.
 
 ### Changed
+
+- **Tool descriptions**: every tool description and parameter description is rewritten in plain words and says when to pick the tool and what it returns. No tool, input field or schema changed.
+- **edit**, **patch**, **replace_text**: a change that would grow a file past the file-size limit (`FS_MAX_FILE_SIZE`) is refused with `TOO_LARGE` and nothing is written; before, the file was written and the read tools then refused it.
+- **create**: a directory entry nested under a file entry in the same call is refused before anything is written.
 
 - **create**, **delete**, **move**: a refused or dismissed confirmation now reports `<Tool> cancelled: approval for "<path>" was declined by the user` in every tool; before, each tool worded it differently and `delete` did not name the path.
 - **Undo**: a copy whose files total more than eight times the undo budget (256 MiB by default) no longer gets an undo id; before, every copied byte was read a second time to hash it. The copy itself is unaffected.
@@ -28,12 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **diff**: the "Diff not computed" error now says a retry can help, since a busy server produces it too.
 - **HTTP graceful shutdown**: close idle keep-alive connections immediately so server disposal finishes within the process shutdown budget.
 - **Windows device paths**: block CONIN$, CONOUT$, COM0, and LPT0 device names to prevent console input hangs.
-- **Path guard**: dynamically discover Windows system directory roots from environment variables rather than assuming drive C.
 - **Create tool validation**: validate against duplicate directory paths and file/directory name collisions before executing batch creation.
 - **Concurrency lock queue**: isolate exclusive task callbacks from resolution payloads so callers receive zero arguments.
 - **replace_text**: `^` and `$` in a regex now match at every line, as `search_text` previews them; before, they matched only the start and end of the file. Use `\A` to anchor to the start of the file; `\z` anchors to its end only when the file has no final newline.
-- **Path guard**: a delete, move or copy source that exists but cannot be resolved is now refused with "Cannot access path" instead of skipping the root, denylist and read-only checks.
-- **delete**: a recursive delete asks once more, with the protected-files warning, when such a file appears in the folder while the first prompt is open.
 - **search_text**: a literal typed with `\r\n` now matches an all-CRLF file, as it already did in `replace_text`.
 - **replace_text**: a regex that stays on one line now works on files over 4 MiB.
 - **replace_text**: `^` and `$` follow the lines `search_text` reports, so nothing is matched after the final newline or in an empty file.
@@ -46,6 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **edit**: `newText` that begins with U+FEFF and replaces text at the very start of a file with a byte-order mark no longer leaves two marks in the file; `patch` already behaved this way.
 - **delete**: one symbolic link named twice in different letter case (on Windows and macOS) is now deleted once and reported once; before, the second name reported a not-found failure.
 - **Resource subscriptions**: an unsubscribe that arrives while its subscribe is still validating the path now takes effect; before, the subscription stayed live. A watcher that fails to start no longer ends another subscriber's lease.
+- **Resource subscriptions**: a cancelled subscription no longer leaves its notification callback active, and a change to a file named in a different letter case (on Windows and macOS) now notifies its subscribers.
+- **replace_text**: an escaped parenthesis or a parenthesis inside a character class no longer declares a capture name, and a mixed-ending match no longer refuses a replacement whose groups are unambiguous.
+- **create**: a `~` path is expanded before duplicates are checked, and two entries naming one file in different spellings ask one overwrite question.
+- **CLI**: an empty `FS_API_KEY` now counts as unset, as an empty `FS_PORT` already did; before, a loopback HTTP server refused to start with an insecure-key error.
+- **Access grants**: granting one directory twice keeps a single grant entry.
+- **find_files**: `sortBy: "name"` breaks ties between equal basenames by path, so the order is stable.
+- **--allow-cwd**: the project-root search ignores a boundary that does not enclose the working directory and stops at the home folder only when the working directory is inside it.
+- **No roots**: the error now points to `list_roots` instead of a tool that does not exist.
 
 ## [2.19.3] - 2026-11-07
 
