@@ -570,7 +570,9 @@ if (client.getProtocolEra() === 'modern') {
   contents.
 - The file must exist when you subscribe. One that is deleted later stays
   watched, and a new file at the same path is reported.
-- A folder URI watches the whole tree below it, and the notification still
+- On macOS and Windows, a folder URI watches the whole tree below it; on
+  Linux, it watches the folder's direct children only (avoiding inotify
+  exhaustion and event loop blocks on large trees). The notification still
   names the folder, not the file that changed. Diff a `find_files` and `stat`
   snapshot to find out what changed, as the
   [hooks](../examples/clients/hooks/) example does.

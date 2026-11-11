@@ -595,6 +595,11 @@ describe('MCP Resources', () => {
           // A direct child is.
           await writeFile(join(dir, 'child.txt'), 'child');
           await waitFor(() => notifications.length > 0, 1000);
+          assert.strictEqual(
+            notifications.length > 0,
+            true,
+            'direct-child change produces notification',
+          );
         } finally {
           registry.destroy();
         }

@@ -335,8 +335,8 @@ export interface TextMatch {
   readonly text: string;
   readonly groups: (string | undefined)[];
   readonly named: Record<string, string> | undefined;
-  /** A group's text recurs in the match with different line endings, so its CRs are a guess. */
-  readonly ambiguousGroups?: true;
+  /** Groups whose line endings cannot be determined in a mixed-ending file. */
+  readonly ambiguousGroups?: ReadonlySet<string | number>;
 }
 
 export interface MatchEngine {
@@ -432,6 +432,70 @@ function expandDollarTokens(
   });
 }
 
+function readsAmbiguousGroup(
+  template: string,
+  ambiguous: ReadonlySet<string | number>,
+  groupsLength: number,
+): boolean {
+  for (const m of template.matchAll(DOLLAR_TOKEN)) {
+    const kind = m[1] ?? '';
+    const name = m[2];
+    if (name !== undefined) {
+      if (ambiguous.has(name)) return true;
+      continue;
+    }
+    const two = Number.parseInt(kind, 10);
+    if (kind.length === 2 && two >= 1 && two <= groupsLength && ambiguous.has(two)) {
+      return true;
+    }
+    const one = Number.parseInt(kind.slice(0, 1), 10);
+    if (one >= 1 && one <= groupsLength && ambiguous.has(one)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const NAMED_GROUP_PREFIX = /^\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/;
+
+/**
+ * Extract named capture group declarations from a regex source string.
+ * Ignores escaped parentheses and capture lookalikes inside character classes.
+ */
+function extractDeclaredNamedGroups(source: string): Set<string> {
+  const names = new Set<string>();
+  let inClass = false;
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (inClass) {
+      if (ch === ']') inClass = false;
+      i++;
+      continue;
+    }
+    if (ch === '[') {
+      inClass = true;
+      i++;
+      continue;
+    }
+    if (ch === '(') {
+      const rest = source.slice(i);
+      const m = NAMED_GROUP_PREFIX.exec(rest);
+      if (m?.[1]) {
+        names.add(m[1]);
+        i += m[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+  return names;
+}
+
 export function createMatchEngine(
   needle: string,
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
@@ -440,12 +504,9 @@ export function createMatchEngine(
   // The names the pattern declares. re2-wasm reports only the named groups
   // that took part in a match, so `$<name>` needs this to expand an idle one
   // to nothing, as `$1` does.
-  // shortcut: read from the source text, so an escaped `\(?<x>` counts as declared; ask the compiled regex if re2-wasm ever exposes its names.
-  const declared = new Set(
-    flags.isRegex
-      ? Array.from(plan.source.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g), (m) => m[1] ?? '')
-      : [],
-  );
+  const declared: ReadonlySet<string> = flags.isRegex
+    ? extractDeclaredNamedGroups(plan.source)
+    : new Set<string>();
   const wholeWord = Boolean(flags.wholeWord);
   const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
   const lineBreakFree = plan.literal?.lineBreakFree ?? true;
@@ -604,10 +665,10 @@ export function createMatchEngine(
             const stop = back(match.end);
             const original = text.slice(start, stop);
             const crlfOnly = !/(?<!\r)\n/u.test(original);
-            const state = { ambiguous: false };
+            const ambiguous = new Set<string | number>();
             // A group is text from `seen`, so it gets back the CRs its span had in `text`.
             // re2-wasm gives no group offsets, so the span is found by the group's text.
-            const restore = (group: string): string => {
+            const restore = (group: string, key: string | number): string => {
               if (crlfOnly) return group.replaceAll('\n', '\r\n');
               // No line break in the group: no CR was hidden inside it.
               if (!group.includes('\n')) return group;
@@ -620,20 +681,21 @@ export function createMatchEngine(
                 spans.add(
                   text.slice(back(match.start + at), back(match.start + at + group.length)),
                 );
+                if (spans.size > 1) break;
               }
               // The same text sits in the match with different endings: which one the group
-              // held cannot be told. `replace` refuses to expand it.
-              if (spans.size > 1) state.ambiguous = true;
+              // held cannot be told. `replace` refuses to expand it if referenced.
+              if (spans.size > 1) ambiguous.add(key);
               const [first] = spans;
               return first ?? group;
             };
-            const groups = match.groups.map((group) =>
-              group === undefined ? undefined : restore(group),
+            const groups = match.groups.map((group, i) =>
+              group === undefined ? undefined : restore(group, i + 1),
             );
             const named =
               match.named &&
               Object.fromEntries(
-                Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
+                Object.entries(match.named).map(([name, value]) => [name, restore(value, name)]),
               );
             yield {
               start,
@@ -641,7 +703,7 @@ export function createMatchEngine(
               text: original,
               groups,
               named,
-              ...(state.ambiguous ? { ambiguousGroups: true as const } : {}),
+              ...(ambiguous.size > 0 ? { ambiguousGroups: ambiguous } : {}),
             };
           }
         })(),
@@ -702,12 +764,6 @@ export function createMatchEngine(
       const expand = Boolean(options.expand);
       const signal = options.signal;
       const limits = options.limits;
-      // `$1`, `$12` or `$<name>` in the replacement: it reads a capture group.
-      const readsGroups =
-        expand &&
-        Array.from(effectiveReplacement.matchAll(DOLLAR_TOKEN)).some((token) =>
-          /^(?:\d|<)/.test(token[1] ?? ''),
-        );
       let matchCount = 0;
       let more = false;
       let updated = '';
@@ -722,7 +778,11 @@ export function createMatchEngine(
             break;
           }
           matchCount++;
-          if (readsGroups && m.ambiguousGroups) {
+          if (
+            expand &&
+            m.ambiguousGroups &&
+            readsAmbiguousGroup(effectiveReplacement, m.ambiguousGroups, m.groups.length)
+          ) {
             throw new FsError(
               ErrorCode.INVALID_INPUT,
               'A capture group holds a line break whose line ending cannot be told apart in this mixed-ending file.',

@@ -128,6 +128,16 @@ describe('replaceMatches', () => {
       'as a numbered group does',
     );
     assert.strictEqual(
+      (await replaceWith(String.raw`\(\?<x>|b`, regex, 'b', '[$<x>]')).content,
+      '[$<x>]',
+      'an escaped parenthesis is not treated as a declared named group',
+    );
+    assert.strictEqual(
+      (await replaceWith('[(?<x>)]|b', regex, 'b', '[$<x>]')).content,
+      '[$<x>]',
+      'a lookalike inside a character class is not treated as a declared named group',
+    );
+    assert.strictEqual(
       (await replaceWith('b', regex, 'abc', "$&$`$'")).content,
       'abacc',
       'whole match, before, and after',

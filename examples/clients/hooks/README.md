@@ -80,8 +80,9 @@ Each part maps to one piece of the MCP client API:
   `name`, `description` and `inputSchema` become an OpenAI `function` tool.
 - **Watching.** One
   `client.listen({ resourceSubscriptions: ['filesystem-mcp://file/<dir>'] })`
-  on the root directory. The server puts a recursive watch on it, so new
-  files and subdirectories are covered. Each change arrives as
+  on the root directory. On macOS and Windows, the server watches recursively,
+  so new files and subdirectories are covered; on Linux, directory subscriptions
+  report direct children only. Each change arrives as
   `notifications/resources/updated`, which names only the directory and never
   the file. Each one restarts a one-second quiet period, so a burst of saves
   is one turn.

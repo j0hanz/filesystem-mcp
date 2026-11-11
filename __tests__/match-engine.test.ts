@@ -401,6 +401,13 @@ describe('replaceMatches', () => {
     );
     // No group token in the replacement: nothing to place, so it proceeds.
     assert.equal(await rep('x\\n(\\n)', 'x\r\n\n', 'y', re), 'y');
+    // Referencing only an unambiguous group succeeds even when another group is ambiguous.
+    assert.equal(await rep('x(\\n)(y)\\n', 'x\r\ny\n', '[$2]', re), '[y]');
+    assert.equal(await rep('(?<line>\\n)\\n(?<word>z)', '\r\n\nz', '[$<word>]', re), '[z]');
+    await assert.rejects(
+      rep('(?<line>\\n)\\n(?<word>z)', '\r\n\nz', '[$<line>]', re),
+      (error: unknown) => /line ending/i.test((error as Error).message),
+    );
     // The text recurs, but every occurrence has the same ending: not ambiguous.
     assert.equal(await rep('a(\\n)(\\n)', 'a\n\nb\r\nc', '[$1$2]', re), '[\n\n]b\r\nc');
   });

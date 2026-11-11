@@ -189,6 +189,9 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   // URIs whose in-flight subscribe was unsubscribed before it settled: the
   // lease it is about to take is given back instead of kept.
   const cancelled = new Set<string>();
+  // Active subscription callback controllers, to disable notifications once unsubscribed
+  // even if another subscriber's lease keeps the underlying watcher alive.
+  const activeCallbacks = new Map<string, { disable: () => void }>();
 
   return {
     name: 'filesystem-mcp-file',
@@ -275,6 +278,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       if (leasedUris.has(uri)) {
         if (registry.hasWatcher(uri)) return undefined;
         leasedUris.delete(uri);
+        activeCallbacks.get(uri)?.disable();
+        activeCallbacks.delete(uri);
         registry.release(uri);
       }
       // A subscribe for this URI is mid-acquire: share its outcome instead of
@@ -286,16 +291,26 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
         return pending;
       }
 
+      let active = true;
+      const disable = () => {
+        active = false;
+      };
+      const guardedNotify = (notifiedUri: string): void => {
+        if (active) notify(notifiedUri);
+      };
+
       const acquire = async (): Promise<boolean | undefined> => {
-        const result = await registry.acquire(options.pathGuard, uri, notify, {
+        const result = await registry.acquire(options.pathGuard, uri, guardedNotify, {
           markSubscribe: true,
         });
         if (result.ok) {
           if (cancelled.delete(uri)) {
+            disable();
             registry.release(uri);
             return undefined;
           }
           leasedUris.add(uri);
+          activeCallbacks.set(uri, { disable });
           return undefined;
         }
 
@@ -337,6 +352,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       // Only release a lease this connection actually took.
       if (!leasedUris.delete(uri)) return;
+      activeCallbacks.get(uri)?.disable();
+      activeCallbacks.delete(uri);
       registry.release(uri);
     },
 
@@ -345,6 +362,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       // the shared (modern) registry nothing else would ever end these leases.
       for (const uri of leasedUris) registry.release(uri);
       leasedUris.clear();
+      for (const entry of activeCallbacks.values()) entry.disable();
+      activeCallbacks.clear();
       if (ownsRegistry) registry.destroy();
     },
   };
