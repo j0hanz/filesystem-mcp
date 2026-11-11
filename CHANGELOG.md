@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **delete** and **move**: a recursive removal now retries an entry another process holds for a moment (an indexer or antivirus on Windows); before, it could stop part-way through the tree.
 - **replace_text**: `$<name>` for a named group that took no part in a match (the other side of an alternation) now expands to nothing, as `$1` does; before, the text `$<name>` was written into the file.
 - **replace_text**: in a file with mixed line endings, a replacement that reads a capture group holding a line break is now refused when that group's line ending cannot be told (the same text sits in the match with both endings); before, the first ending in the match was written.
+- **edit**: `newText` that begins with U+FEFF and replaces text at the very start of a file with a byte-order mark no longer leaves two marks in the file; `patch` already behaved this way.
 
 ## [2.19.3] - 2026-11-07
 

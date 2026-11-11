@@ -509,6 +509,13 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFfirst\n\uFEFFdone\n');
   });
 
+  it('newText placed at the start of a BOM file gives up its own leading mark', async () => {
+    const file = await writeTestFile(root, 'bom/start-new.txt', '\uFEFFfoo\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'foo', newText: '\uFEFFbar' }] });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFbar\n');
+  });
+
   it('a marked all-CRLF file matches oldText typed with the mark and CRLF', async () => {
     const file = await writeTestFile(root, 'bom/crlf.txt', '\uFEFFa\r\nb\r\n');
     const result = await edit({
