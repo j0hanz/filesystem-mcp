@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: `$` now matches at every line end in a CRLF file.
 - **create**: two entries that reach one file through a linked folder no longer both report success while one content is lost; the first is written and the later entry fails with "another entry in this batch already writes".
 - **delete** and **move**: a recursive removal now retries an entry another process holds for a moment (an indexer or antivirus on Windows); before, it could stop part-way through the tree.
+- **replace_text**: `$<name>` for a named group that took no part in a match (the other side of an alternation) now expands to nothing, as `$1` does; before, the text `$<name>` was written into the file.
+- **replace_text**: in a file with mixed line endings, a replacement that reads a capture group holding a line break is now refused when that group's line ending cannot be told (the same text sits in the match with both endings); before, the first ending in the match was written.
 
 ## [2.19.3] - 2026-11-07
 

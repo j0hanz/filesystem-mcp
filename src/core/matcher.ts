@@ -335,6 +335,8 @@ export interface TextMatch {
   readonly text: string;
   readonly groups: (string | undefined)[];
   readonly named: Record<string, string> | undefined;
+  /** A group's text recurs in the match with different line endings, so its CRs are a guess. */
+  readonly ambiguousGroups?: true;
 }
 
 export interface MatchEngine {
@@ -409,6 +411,7 @@ function expandDollarTokens(
   offset: number,
   input: string,
   named: Record<string, string> | undefined,
+  declared: ReadonlySet<string>,
 ): string {
   return template.replace(DOLLAR_TOKEN, (token: string, kind: string, name?: string) => {
     if (kind === '$') return '$';
@@ -417,7 +420,7 @@ function expandDollarTokens(
     if (kind === "'") return input.slice(offset + match.length);
     if (name !== undefined) {
       if (named && Object.hasOwn(named, name)) return named[name] ?? '';
-      return token;
+      return declared.has(name) ? '' : token;
     }
     const two = Number.parseInt(kind, 10);
     if (kind.length === 2 && two >= 1 && two <= groups.length) return groups[two - 1] ?? '';
@@ -434,6 +437,15 @@ export function createMatchEngine(
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
 ): MatchEngine {
   const plan = planMatch(needle, flags);
+  // The names the pattern declares. re2-wasm reports only the named groups
+  // that took part in a match, so `$<name>` needs this to expand an idle one
+  // to nothing, as `$1` does.
+  // shortcut: read from the source text, so an escaped `\(?<x>` counts as declared; ask the compiled regex if re2-wasm ever exposes its names.
+  const declared = new Set(
+    flags.isRegex
+      ? Array.from(plan.source.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g), (m) => m[1] ?? '')
+      : [],
+  );
   const wholeWord = Boolean(flags.wholeWord);
   const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
   const lineBreakFree = plan.literal?.lineBreakFree ?? true;
@@ -592,26 +604,44 @@ export function createMatchEngine(
             const stop = back(match.end);
             const original = text.slice(start, stop);
             const crlfOnly = !/(?<!\r)\n/u.test(original);
+            const state = { ambiguous: false };
             // A group is text from `seen`, so it gets back the CRs its span had in `text`.
+            // re2-wasm gives no group offsets, so the span is found by the group's text.
             const restore = (group: string): string => {
               if (crlfOnly) return group.replaceAll('\n', '\r\n');
-              // shortcut: a group repeated in its match maps to its first occurrence, whose CRs may differ.
-              const at = match.text.indexOf(group);
-              if (at === -1) return group;
-              return text.slice(back(match.start + at), back(match.start + at + group.length));
+              // No line break in the group: no CR was hidden inside it.
+              if (!group.includes('\n')) return group;
+              const spans = new Set<string>();
+              for (
+                let at = match.text.indexOf(group);
+                at !== -1;
+                at = match.text.indexOf(group, at + 1)
+              ) {
+                spans.add(
+                  text.slice(back(match.start + at), back(match.start + at + group.length)),
+                );
+              }
+              // The same text sits in the match with different endings: which one the group
+              // held cannot be told. `replace` refuses to expand it.
+              if (spans.size > 1) state.ambiguous = true;
+              const [first] = spans;
+              return first ?? group;
             };
+            const groups = match.groups.map((group) =>
+              group === undefined ? undefined : restore(group),
+            );
+            const named =
+              match.named &&
+              Object.fromEntries(
+                Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
+              );
             yield {
               start,
               end: stop,
               text: original,
-              groups: match.groups.map((group) =>
-                group === undefined ? undefined : restore(group),
-              ),
-              named:
-                match.named &&
-                Object.fromEntries(
-                  Object.entries(match.named).map(([name, value]) => [name, restore(value)]),
-                ),
+              groups,
+              named,
+              ...(state.ambiguous ? { ambiguousGroups: true as const } : {}),
             };
           }
         })(),
@@ -672,6 +702,12 @@ export function createMatchEngine(
       const expand = Boolean(options.expand);
       const signal = options.signal;
       const limits = options.limits;
+      // `$1`, `$12` or `$<name>` in the replacement: it reads a capture group.
+      const readsGroups =
+        expand &&
+        Array.from(effectiveReplacement.matchAll(DOLLAR_TOKEN)).some((token) =>
+          /^(?:\d|<)/.test(token[1] ?? ''),
+        );
       let matchCount = 0;
       let more = false;
       let updated = '';
@@ -686,10 +722,27 @@ export function createMatchEngine(
             break;
           }
           matchCount++;
+          if (readsGroups && m.ambiguousGroups) {
+            throw new FsError(
+              ErrorCode.INVALID_INPUT,
+              'A capture group holds a line break whose line ending cannot be told apart in this mixed-ending file.',
+              limits?.path,
+              undefined,
+              'Nothing was written. Normalise the file to one line ending first, or write the line break in the replacement instead of capturing it.',
+            );
+          }
           updated +=
             text.slice(cursor, m.start) +
             (expand
-              ? expandDollarTokens(effectiveReplacement, m.text, m.groups, m.start, text, m.named)
+              ? expandDollarTokens(
+                  effectiveReplacement,
+                  m.text,
+                  m.groups,
+                  m.start,
+                  text,
+                  m.named,
+                  declared,
+                )
               : effectiveReplacement);
           if (limits && updated.length > limits.maxBytes) throw outputTooLarge(limits);
           cursor = m.end;
