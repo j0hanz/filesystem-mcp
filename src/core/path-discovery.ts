@@ -103,8 +103,8 @@ function withRealSpellings(dirs: readonly string[]): string[] {
   return all;
 }
 
-// Subtrees of home that hold credentials. Home itself and its other
-// subdirectories stay grantable: projects live there.
+// Subtrees of home that hold credentials. Home itself is refused in
+// `isUnsafeCwdPath`; its other subdirectories stay grantable: projects live there.
 const UNSAFE_HOME_SUBDIRS = [
   '.ssh',
   '.aws',
