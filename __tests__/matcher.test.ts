@@ -113,6 +113,21 @@ describe('replaceMatches', () => {
       'an absent named group renders literally',
     );
     assert.strictEqual(
+      (await replaceWith('(?<x>a)|b', regex, 'b', '[$<x>]')).content,
+      '[]',
+      'a declared named group that took no part expands to nothing',
+    );
+    assert.strictEqual(
+      (await replaceWith('(?P<x>a)|b', regex, 'b', '[$<x>]')).content,
+      '[]',
+      'the (?P<name>...) spelling too',
+    );
+    assert.strictEqual(
+      (await replaceWith('(a)|b', regex, 'b', '[$1]')).content,
+      '[]',
+      'as a numbered group does',
+    );
+    assert.strictEqual(
       (await replaceWith('b', regex, 'abc', "$&$`$'")).content,
       'abacc',
       'whole match, before, and after',

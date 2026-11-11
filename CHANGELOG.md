@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **replace_text**: `^` and `$` follow the lines `search_text` reports, so nothing is matched after the final newline or in an empty file.
 - **replace_text**: `\z` and `(?-m)$` no longer match after a file's final newline, since a final newline does not start a line. To append at the end of such a file, match `\n\z`.
 - **replace_text**: `$` now matches at every line end in a CRLF file.
+- **replace_text**: `$<name>` for a named group that took no part in a match (the other side of an alternation) now expands to nothing, as `$1` does; before, the text `$<name>` was written into the file.
 
 ## [2.19.3] - 2026-11-07
 

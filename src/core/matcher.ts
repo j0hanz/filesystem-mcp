@@ -409,6 +409,7 @@ function expandDollarTokens(
   offset: number,
   input: string,
   named: Record<string, string> | undefined,
+  declared: ReadonlySet<string>,
 ): string {
   return template.replace(DOLLAR_TOKEN, (token: string, kind: string, name?: string) => {
     if (kind === '$') return '$';
@@ -417,7 +418,7 @@ function expandDollarTokens(
     if (kind === "'") return input.slice(offset + match.length);
     if (name !== undefined) {
       if (named && Object.hasOwn(named, name)) return named[name] ?? '';
-      return token;
+      return declared.has(name) ? '' : token;
     }
     const two = Number.parseInt(kind, 10);
     if (kind.length === 2 && two >= 1 && two <= groups.length) return groups[two - 1] ?? '';
@@ -434,6 +435,15 @@ export function createMatchEngine(
   flags: { isRegex: boolean; caseSensitive: boolean; wholeWord?: boolean },
 ): MatchEngine {
   const plan = planMatch(needle, flags);
+  // The names the pattern declares. re2-wasm reports only the named groups
+  // that took part in a match, so `$<name>` needs this to expand an idle one
+  // to nothing, as `$1` does.
+  // shortcut: read from the source text, so an escaped `\(?<x>` counts as declared; ask the compiled regex if re2-wasm ever exposes its names.
+  const declared = new Set(
+    flags.isRegex
+      ? Array.from(plan.source.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g), (m) => m[1] ?? '')
+      : [],
+  );
   const wholeWord = Boolean(flags.wholeWord);
   const crossesLines = flags.isRegex ? regexCrossesLines(needle) : needle.includes('\n');
   const lineBreakFree = plan.literal?.lineBreakFree ?? true;
@@ -689,7 +699,15 @@ export function createMatchEngine(
           updated +=
             text.slice(cursor, m.start) +
             (expand
-              ? expandDollarTokens(effectiveReplacement, m.text, m.groups, m.start, text, m.named)
+              ? expandDollarTokens(
+                  effectiveReplacement,
+                  m.text,
+                  m.groups,
+                  m.start,
+                  text,
+                  m.named,
+                  declared,
+                )
               : effectiveReplacement);
           if (limits && updated.length > limits.maxBytes) throw outputTooLarge(limits);
           cursor = m.end;
