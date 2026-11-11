@@ -4,7 +4,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { createTwoFilesPatch, parsePatch } from 'diff';
 
-import { diffStatsFromPatch, twoFilesPatch, unifiedPatch } from '../src/core/diff.ts';
+import { type GeneratedPatch, twoFilesPatch, unifiedPatch } from '../src/core/diff.ts';
 import { ErrorCode, FsError } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import { DIFF } from '../src/tools/diff.ts';
@@ -26,12 +26,11 @@ const lines = (prefix: string, n: number): string =>
   Array.from({ length: n }, (_, i) => `${prefix}${String(i)}`).join('\n') + '\n';
 
 describe('core/diff', () => {
-  it('counts added and removed lines from a patch', async () => {
-    const a = 'one\ntwo\nthree\n';
-    const b = 'one\n2\nthree\nfour\n';
-    const patch = await unifiedPatch('f', a, b);
+  it('counts added and removed lines from generated hunks', async () => {
+    const patch = await unifiedPatch('f', 'one\ntwo\nthree\n', 'one\n2\nthree\nfour\n');
     assert.ok(patch);
-    assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 2, linesRemoved: 1 });
+    assert.strictEqual(patch.linesAdded, 2);
+    assert.strictEqual(patch.linesRemoved, 1);
   });
 
   it('counts content lines that start with -- or ++ (not just the file header)', async () => {
@@ -39,7 +38,16 @@ describe('core/diff', () => {
     const b = 'title: x\nbody\n++new\n';
     const patch = await unifiedPatch('f', a, b);
     assert.ok(patch);
-    assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 1, linesRemoved: 2 });
+    assert.strictEqual(patch.linesAdded, 1);
+    assert.strictEqual(patch.linesRemoved, 2);
+  });
+
+  it('returns zero counts for identical files', async () => {
+    const patch = await unifiedPatch('f', 'one\n', 'one\n');
+    assert.ok(patch);
+    assert.strictEqual(patch.linesAdded, 0);
+    assert.strictEqual(patch.linesRemoved, 0);
+    assert.ok(!patch.text.includes('\n@@'));
   });
 
   it('gives up past the deadline instead of blocking', async () => {
@@ -54,15 +62,17 @@ describe('core/diff', () => {
   ] as const) {
     it(`writes a plain ASCII name as the diff package does (${what} files)`, async () => {
       const expected = createTwoFilesPatch('f.txt', 'f.txt', a, b, 'Original', 'Modified');
-      assert.strictEqual(await unifiedPatch('f.txt', a, b), expected);
+      const patch = await unifiedPatch('f.txt', a, b);
+      assert.strictEqual(patch?.text, expected);
     });
   }
 
   it('writes a non-ASCII name as it is, with the body unchanged', async () => {
     const name = 'dir/år 日本語.txt';
     const expected = createTwoFilesPatch('f', 'f', 'one\n', 'two\n', 'Original', 'Modified');
+    const patch = await unifiedPatch(name, 'one\n', 'two\n');
     assert.strictEqual(
-      await unifiedPatch(name, 'one\n', 'two\n'),
+      patch?.text,
       expected
         .replace('Index: f', `Index: ${name}`)
         .replace('--- f', `--- ${name}`)
@@ -77,13 +87,14 @@ describe('core/diff', () => {
     it(`writes two different names as the diff package does (${what} files)`, async () => {
       const options = { context: 1, timeout: 1000 };
       const expected = createTwoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options);
-      assert.strictEqual(await twoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options), expected);
+      const patch = await twoFilesPatch('a.txt', 'b.txt', a, b, 'a', 'b', options);
+      assert.strictEqual(patch?.text, expected);
     });
   }
 
   it('keeps a lone surrogate escaped', async () => {
     const patch = await unifiedPatch('a\ud800b', 'one\n', 'two\n');
-    assert.ok(patch?.includes('--- "a\\357\\277\\275b"\t'), patch);
+    assert.ok(patch?.text.includes('--- "a\\357\\277\\275b"\t'), patch?.text);
   });
 
   for (const name of [
@@ -105,9 +116,10 @@ describe('core/diff', () => {
     it(`keeps ${JSON.stringify(name)} escaped so it cannot forge a header line`, async () => {
       const patch = await unifiedPatch(name, 'one\n', 'two\n');
       assert.ok(patch);
-      assert.ok(!patch.includes(name), 'the raw name must not reach the text');
-      assert.deepStrictEqual(diffStatsFromPatch(patch), { linesAdded: 1, linesRemoved: 1 });
-      const parsed = parsePatch(patch);
+      assert.ok(!patch.text.includes(name), 'the raw name must not reach the text');
+      assert.strictEqual(patch.linesAdded, 1);
+      assert.strictEqual(patch.linesRemoved, 1);
+      const parsed = parsePatch(patch.text);
       assert.strictEqual(parsed.length, 1);
       assert.strictEqual(parsed[0]?.oldFileName, name);
       assert.strictEqual(parsed[0]?.newFileName, name);
@@ -117,16 +129,17 @@ describe('core/diff', () => {
   it('a diff over the inline threshold returns the full patch', async () => {
     // 600 + 600 lines is over INLINE_DIFF_MAX_LINES, so it runs in the worker.
     const big = await unifiedPatch('f', lines('a', 600), lines('b', 600));
-    assert.ok(big?.startsWith('Index: f\n'), big?.slice(0, 80));
+    assert.ok(big?.text.startsWith('Index: f\n'), big?.text.slice(0, 80));
     assert.ok(big);
-    assert.deepStrictEqual(diffStatsFromPatch(big), { linesAdded: 600, linesRemoved: 600 });
+    assert.strictEqual(big.linesAdded, 600);
+    assert.strictEqual(big.linesRemoved, 600);
   });
 
   it('a worker diff writes headers exactly as an inline one', async () => {
     const name = 'a"b';
     const small = await unifiedPatch(name, 'one\n', 'two\n');
     const big = await unifiedPatch(name, lines('a', 600), lines('b', 600));
-    const header = (patch: string | undefined) => patch?.split('@@', 1)[0];
+    const header = (patch: GeneratedPatch | undefined) => patch?.text.split('@@', 1)[0];
     assert.ok(small && big);
     assert.strictEqual(header(big), header(small));
   });

@@ -140,6 +140,12 @@ function headerName(name: string): string {
   return formatPatch(patch, FILE_HEADERS_ONLY).split('\n', 1)[0]?.slice('--- '.length) ?? name;
 }
 
+export interface GeneratedPatch {
+  readonly text: string;
+  readonly linesAdded: number;
+  readonly linesRemoved: number;
+}
+
 /** `createTwoFilesPatch` with readable names; `undefined` past `options.timeout`. */
 export async function twoFilesPatch(
   oldName: string,
@@ -149,16 +155,25 @@ export async function twoFilesPatch(
   oldHeader: string,
   newHeader: string,
   options: { context?: number; timeout: number },
-): Promise<string | undefined> {
+): Promise<GeneratedPatch | undefined> {
   const patch = overInlineLimit(before, after)
     ? await queuedWorkerPatch({ oldName, newName, before, after, oldHeader, newHeader, options })
     : structuredPatch(oldName, newName, before, after, oldHeader, newHeader, options);
   if (patch === undefined) return undefined;
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  for (const hunk of patch.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) linesAdded++;
+      else if (line.startsWith('-')) linesRemoved++;
+    }
+  }
   const shownOld = headerName(oldName);
   const header =
     (oldName === newName ? `Index: ${shownOld}\n` : '') +
     `${'='.repeat(67)}\n--- ${shownOld}\t${oldHeader}\n+++ ${headerName(newName)}\t${newHeader}\n`;
-  return patch.hunks.length > 0 ? header + formatPatch(patch, OMIT_HEADERS) : header;
+  const text = patch.hunks.length > 0 ? header + formatPatch(patch, OMIT_HEADERS) : header;
+  return { text, linesAdded, linesRemoved };
 }
 
 export function unifiedPatch(
@@ -166,27 +181,8 @@ export function unifiedPatch(
   original: string,
   modified: string,
   timeoutMs = DIFF_TIMEOUT_MS,
-): Promise<string | undefined> {
+): Promise<GeneratedPatch | undefined> {
   return twoFilesPatch(label, label, original, modified, 'Original', 'Modified', {
     timeout: timeoutMs,
   });
-}
-
-/** Added/removed line counts read off a unified patch — no second diff pass. */
-export function diffStatsFromPatch(patch: string): { linesAdded: number; linesRemoved: number } {
-  let linesAdded = 0;
-  let linesRemoved = 0;
-  // The file header (---/+++) precedes the first hunk; only hunk bodies count,
-  // so a content line that itself starts with -- or ++ is never mistaken for it.
-  let inHunk = false;
-  for (const line of patch.split('\n')) {
-    if (line.startsWith('@@')) {
-      inHunk = true;
-      continue;
-    }
-    if (!inHunk) continue;
-    if (line.startsWith('+')) linesAdded++;
-    else if (line.startsWith('-')) linesRemoved++;
-  }
-  return { linesAdded, linesRemoved };
 }

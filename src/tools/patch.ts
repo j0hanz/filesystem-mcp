@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 import { applyPatch, parsePatch } from 'diff';
 
-import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
+import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { countLines } from '../core/read.ts';
@@ -102,7 +102,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   const computed = args.dryRun
     ? await unifiedPatch(basename(done.validPath), done.before, done.after)
     : undefined;
-  const { linesAdded, linesRemoved } = computed ? diffStatsFromPatch(computed) : done.result;
+  const { linesAdded, linesRemoved } = computed ?? done.result;
   // The patched file used to come back whole in the text block, so a one-line
   // hunk against a 5000-line file returned 5000 lines. Every other write tool
   // answers with a summary; the result is reachable via `resourceUri` or a
@@ -114,7 +114,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   }
 
   // The caller's own diff stands in when the Myers pass hits DIFF_TIMEOUT_MS.
-  const preview = args.dryRun ? (computed ?? args.diff) : undefined;
+  const preview = args.dryRun ? (computed?.text ?? args.diff) : undefined;
   const approximate =
     computed === undefined && args.dryRun
       ? '\n// Too many lines to diff: this is the diff as passed, and its line numbers may be off.'

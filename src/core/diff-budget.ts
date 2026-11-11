@@ -65,9 +65,9 @@ export async function patchWithinBudget(
   if (budget.folded.length >= MAX_DIFF_SIZE) return { diffTruncated: true };
   const patch = await unifiedPatch(header, done.before, done.after);
   // Read after the await: other files may have folded while this one diffed.
-  if (patch === undefined || patch.length > MAX_DIFF_SIZE - budget.folded.length) {
+  if (patch === undefined || patch.text.length > MAX_DIFF_SIZE - budget.folded.length) {
     return { diffTruncated: true };
   }
-  budget.stored.set(index, patch);
+  budget.stored.set(index, patch.text);
   return {};
 }
