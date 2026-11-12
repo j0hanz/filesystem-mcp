@@ -256,11 +256,12 @@ function patchContent(
     );
   }
   const firstHunk = parsedPatch.hunks[0];
-  const atStart = firstHunk !== undefined && firstHunk.oldStart <= 1;
-  if (firstHunk && atStart) {
+  let atStart = false;
+  if (firstHunk && firstHunk.oldStart <= 1) {
     // Only the first old-side and first new-side lines are line 1. A context or
     // removed line there is matched text (`needle`); an added line there is
     // placed text (`place`). A context line is matched, so it keeps what it typed.
+    const added: number[] = [];
     let oldLine = 1;
     let newLine = 1;
     for (const [i, line] of firstHunk.lines.entries()) {
@@ -270,10 +271,19 @@ function patchContent(
       if (mark !== ' ' && mark !== '-' && mark !== '+') continue;
       if (line !== '') {
         if (mark !== '+' && oldLine === 1) firstHunk.lines[i] = mark + needle(line.slice(1));
-        else if (mark === '+' && newLine === 1) firstHunk.lines[i] = mark + place(line.slice(1));
+        else if (mark === '+' && newLine === 1) added.push(i);
       }
       if (mark !== '+') oldLine++;
       if (mark !== '-') newLine++;
+    }
+    // jsdiff may apply hunk 1 further down; only a hunk whose old lines match
+    // from line 1 places text at the file start.
+    atStart = mismatchDetail(content, { ...firstHunk, oldStart: 1 }) === '';
+    if (atStart) {
+      for (const i of added) {
+        const line = firstHunk.lines[i] ?? '';
+        firstHunk.lines[i] = line.charAt(0) + place(line.slice(1));
+      }
     }
   }
   const fileLines = countLines(content);

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed.
+- **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed. A line 1 that matches only once its U+FEFF is removed must also match at line 1: one that would apply further down is now refused, and a typed U+FEFF on a line hunk 1 lands on below line 1 is kept.
 
 ## [2.20.0] - 2026-11-11
 

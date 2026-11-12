@@ -226,6 +226,24 @@ describe('patch body', () => {
     });
   });
 
+  it('a typed U+FEFF stays when hunk 1 lands past line 1', async () => {
+    const f = join(root, 'patch_bom_moved_hunk.txt');
+    await writeFile(f, '﻿q\n﻿a\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-﻿a\n+﻿z\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '﻿q\n﻿z\nb\n');
+  });
+
+  it('a stripped line 1 that only matches further down is refused', async () => {
+    const f = join(root, 'patch_bom_stripped_moved.txt');
+    await writeFile(f, '﻿q\na\nb\n');
+    const diff = '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-﻿a\n+z\n b\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      return true;
+    });
+    assert.strictEqual(await readFile(f, 'utf-8'), '﻿q\na\nb\n');
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');
