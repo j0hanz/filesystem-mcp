@@ -2941,6 +2941,189 @@ describe('restoreEntry', () => {
   });
 });
 
+describe('UndoJournal.restore', () => {
+  let tmpDir: string;
+  let ctx: FilesystemServerContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    ctx = await createTestServer([tmpDir]);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (tmpDir) {
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  const newFs = () => new GuardedFileSystem(ctx.pathGuard);
+  /** Run one call under a capture and journal it; returns its undo id. */
+  const journaled = async (
+    journal: UndoJournal,
+    tool: string,
+    run: (fs: GuardedFileSystem) => Promise<unknown>,
+  ): Promise<string> => {
+    const cap = journal.beginCapture();
+    await run(new GuardedFileSystem(ctx.pathGuard, cap));
+    assert.strictEqual(cap.unavailableReason(), undefined);
+    return journal.add(tool, cap.records);
+  };
+  const ids = (steps: { id: string }[]) => steps.map((s) => s.id);
+
+  it('restores by id and drops the entry', async () => {
+    const file = join(tmpDir, 'jr-by-id.txt');
+    await writeFile(file, 'before');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'after'));
+    const steps = await journal.restore({ id }, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(file, 'utf8'), 'before');
+    assert.strictEqual(journal.get(id), undefined);
+    assert.deepStrictEqual(ids(steps), [id]);
+  });
+
+  it('an unknown id fails NOT_FOUND with the listing hint', async () => {
+    await assert.rejects(
+      new UndoJournal().restore({ id: 'zzzz' }, newFs(), { dryRun: false }),
+      (e: unknown) =>
+        e instanceof FsError &&
+        e.code === ErrorCode.NOT_FOUND &&
+        e.message === 'Unknown or expired undo id "zzzz".',
+    );
+  });
+
+  it('selects newest 1 by default, newest N with steps, all on a bare dry run', async () => {
+    const journal = new UndoJournal();
+    const made: string[] = [];
+    for (const name of ['a', 'b', 'c']) {
+      const file = join(tmpDir, `jr-select-${name}.txt`);
+      await writeFile(file, 'old');
+      made.push(await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'new')));
+    }
+    const [first, second, third] = made;
+    const fs = newFs();
+    assert.deepStrictEqual(ids(await journal.restore({}, fs, { dryRun: true })), [
+      third,
+      second,
+      first,
+    ]);
+    assert.deepStrictEqual(ids(await journal.restore({ steps: 2 }, fs, { dryRun: true })), [
+      third,
+      second,
+    ]);
+    assert.deepStrictEqual(ids(await journal.restore({}, fs, { dryRun: false })), [third]);
+  });
+
+  it('an empty journal restores nothing', async () => {
+    assert.deepStrictEqual(await new UndoJournal().restore({}, newFs(), { dryRun: false }), []);
+  });
+
+  it('re-keys moves across calls', async () => {
+    const a = join(tmpDir, 'jr-rekey-a.txt');
+    const b = join(tmpDir, 'jr-rekey-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    await journaled(journal, 'move', (fs) => fs.rename(a, b));
+    await journaled(journal, 'edit', (fs) => fs.writeFile(b, 'v2'));
+    await journal.restore({}, newFs(), { dryRun: false });
+    await journal.restore({}, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+    assert.deepStrictEqual(journal.newest(Infinity), []);
+  });
+
+  it('dry run changes nothing in the journal', async () => {
+    const a = join(tmpDir, 'jr-dry-a.txt');
+    const b = join(tmpDir, 'jr-dry-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    await journaled(journal, 'move', (fs) => fs.rename(a, b));
+    await journaled(journal, 'edit', (fs) => fs.writeFile(b, 'v2'));
+    const dry = await journal.restore({}, newFs(), { dryRun: true });
+    assert.deepStrictEqual(
+      dry.flatMap((s) => s.results).map((r) => 'error' in r),
+      [false, false],
+    );
+    await journal.restore({ steps: 2 }, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+  });
+
+  it('a skipped record stays under its id for a retry', async () => {
+    const file = join(tmpDir, 'jr-skip.txt');
+    await writeFile(file, 'before');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'after'));
+    await writeFile(file, 'outside');
+    const steps = await journal.restore({ id }, newFs(), { dryRun: false });
+    assert.strictEqual(steps[0]?.results[0]?.error?.code, ErrorCode.CANCELLED);
+    assert.strictEqual(journal.get(id)?.records.length, 1);
+  });
+
+  it('abort keeps what finished', async () => {
+    const older = join(tmpDir, 'jr-abort-older.txt');
+    const x = join(tmpDir, 'jr-abort-x.txt');
+    const y = join(tmpDir, 'jr-abort-y.txt');
+    for (const f of [older, x, y]) await writeFile(f, 'old');
+    const journal = new UndoJournal();
+    const olderId = await journaled(journal, 'edit', (fs) => fs.writeFile(older, 'new'));
+    const newerId = await journaled(journal, 'edit', async (fs) => {
+      await fs.writeFile(x, 'new');
+      await fs.writeFile(y, 'new');
+    });
+    const controller = new AbortController();
+    await assert.rejects(
+      journal.restore({ steps: 2 }, newFs(), {
+        dryRun: false,
+        signal: controller.signal,
+        // Abort as the second record starts: the first has finished, the second does not run.
+        onProgress: (p) => {
+          if (p.current === 2) controller.abort();
+        },
+      }),
+      { name: 'AbortError' },
+    );
+    assert.strictEqual(journal.get(newerId)?.records.length, 1);
+    assert.strictEqual(journal.get(olderId)?.records.length, 1);
+    assert.strictEqual(await readFile(older, 'utf8'), 'new');
+  });
+
+  it('reports progress over every record of every selected entry', async () => {
+    const journal = new UndoJournal();
+    const files = ['p1', 'p2', 'p3'].map((n) => join(tmpDir, `jr-progress-${n}.txt`));
+    for (const f of files) await writeFile(f, 'old');
+    await journaled(journal, 'edit', (fs) => fs.writeFile(files[0] ?? '', 'new'));
+    await journaled(journal, 'edit', async (fs) => {
+      await fs.writeFile(files[1] ?? '', 'new');
+      await fs.writeFile(files[2] ?? '', 'new');
+    });
+    const seen: { current: number; total: number }[] = [];
+    await journal.restore({ steps: 2 }, newFs(), {
+      dryRun: false,
+      onProgress: (p) => seen.push(p),
+    });
+    assert.deepStrictEqual(seen.at(-1), { current: 3, total: 3 });
+  });
+
+  it('concurrent restores run one at a time', async () => {
+    const journal = new UndoJournal();
+    const made: string[] = [];
+    for (const name of ['b', 'c']) {
+      const file = join(tmpDir, `jr-concurrent-${name}.txt`);
+      await writeFile(file, 'old');
+      made.push(await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'new')));
+    }
+    const [b, c] = made;
+    // Selection runs inside the lock, so the second call sees c already pruned.
+    const [first, second] = await Promise.all([
+      journal.restore({}, newFs(), { dryRun: false }),
+      journal.restore({}, newFs(), { dryRun: false }),
+    ]);
+    assert.deepStrictEqual([first[0]?.id, second[0]?.id], [c, b]);
+  });
+});
+
 describe('undo id on results', () => {
   const firstTextBlock = (result: unknown): string | undefined => {
     const blocks = (result as { content?: { type: string; text?: string }[] }).content;
