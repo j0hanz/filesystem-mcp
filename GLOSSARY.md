@@ -134,6 +134,13 @@ reports only once that path has, or may have, changed; an exit before that
 reports nothing.
 _Avoid_: undo session, transaction, undo buffer
 
+**Undo journal**:
+The session's record of undoable calls, newest last, and the one place an
+undo runs: it picks the entries, previews a dry run across all of them,
+keeps moved entries traceable after a restore replaces a file, and drops
+what was restored. A cancelled undo keeps what it finished.
+_Avoid_: undo log, history, undo stack
+
 ## Approval
 
 **Confirmation**:

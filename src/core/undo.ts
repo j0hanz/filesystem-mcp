@@ -112,6 +112,16 @@ const recordWeight = (record: UndoRecord): number =>
 const weigh = (records: readonly UndoRecord[]): number =>
   records.reduce((n, r) => n + recordWeight(r), 0);
 
+/** Which entries an undo restores: one by id, the newest N, or none named (see `UndoJournal.restore`). */
+export type UndoSelection = { id: string } | { steps: number } | Record<string, never>;
+
+/** One restored entry: its id, the tool that made it, and a result per path. */
+export interface RestoreStep {
+  id: string;
+  tool: string;
+  results: UndoFileResult[];
+}
+
 export class UndoJournal {
   // Insertion order is call order; nothing ever re-inserts, so the last key is the newest call.
   readonly #byId = new Map<string, UndoEntry & { weight: number }>();
@@ -239,6 +249,76 @@ export class UndoJournal {
     this.#renameIndex = undefined;
     this.#bytes = 0;
     this.#byId.clear();
+  }
+
+  /**
+   * Undo the selected entries, newest first. An id names one entry; `steps`
+   * the newest N; with neither, a dry run takes every entry and a real run
+   * the newest one. A real run drops what it restored and keeps the rest
+   * under its id for a retry; a dry run changes nothing.
+   */
+  restore(
+    selection: UndoSelection,
+    fs: GuardedFileSystem,
+    opts: {
+      dryRun: boolean;
+      signal?: AbortSignal | undefined;
+      onProgress?: ((p: { current: number; total: number }) => void) | undefined;
+    },
+  ): Promise<RestoreStep[]> {
+    const { dryRun, signal, onProgress } = opts;
+    // ponytail: one lock per journal, so undos run one at a time; per-entry
+    // locks if undo throughput ever matters.
+    return runExclusive(this, async () => {
+      // Selected before the first await, so an entry added meanwhile is not taken.
+      let entries: UndoEntry[];
+      if ('id' in selection) {
+        const entry = this.get(selection.id);
+        if (entry === undefined) {
+          throw new FsError(
+            ErrorCode.NOT_FOUND,
+            `Unknown or expired undo id "${selection.id}".`,
+            undefined,
+            undefined,
+            'Run undo with dryRun: true and no id to list the ids.',
+          );
+        }
+        entries = [entry];
+      } else if ('steps' in selection) {
+        entries = this.newest(selection.steps);
+      } else {
+        entries = this.newest(dryRun ? Infinity : 1);
+      }
+
+      // Newest first: reverting the latest call first keeps the older checks
+      // valid (their recorded bytes are what the latest call left behind only
+      // once the later writes are gone).
+      const steps: RestoreStep[] = [];
+      // One preview across every entry: a dry run must see what reverting the
+      // newer entries would change, or its per-step preview lies.
+      const preview = dryRun ? new UndoPreview(fs, signal) : undefined;
+      const total = entries.reduce((n, entry) => n + restoreOrder(entry.records).length, 0);
+      let started = 0;
+      for (const entry of entries) {
+        signal?.throwIfAborted();
+        const outcome = await restoreEntry(entry, fs, {
+          preview,
+          signal,
+          onRewrite: (was, identity) => {
+            this.reidentify(was, identity);
+          },
+          onRecord: () => {
+            started += 1;
+            onProgress?.({ current: started, total });
+          },
+        });
+        if (!dryRun) this.replaceRecords(entry.id, outcome.remaining);
+        // A cancelled restore keeps what it finished: done records left the journal above.
+        signal?.throwIfAborted();
+        steps.push({ id: entry.id, tool: entry.tool, results: outcome.results });
+      }
+      return steps;
+    });
   }
 }
 
@@ -694,7 +774,7 @@ async function assertTreeKeepsPolicy(
   }
 }
 
-export interface RestoreOutcome {
+interface RestoreOutcome {
   results: UndoFileResult[];
   remaining: UndoRecord[];
 }
@@ -719,9 +799,7 @@ async function hashFile(
  * in reverse first, then deduplicated rmdirs deepest-first, so parallel batch
  * creates/moves empty shared parent folders before removing them.
  */
-export function restoreOrder(
-  records: readonly UndoRecord[],
-): { record: UndoRecord; order: number }[] {
+function restoreOrder(records: readonly UndoRecord[]): { record: UndoRecord; order: number }[] {
   const reversed = records.map((record, order) => ({ record, order })).reverse();
   const seenRmdir = new Set<string>();
   const rmdirs = reversed
@@ -854,6 +932,9 @@ const errnoError = (code: string, syscall: string, path: string): NodeJS.ErrnoEx
  * one undo call, so an older step's preview sees what reverting the newer ones
  * would do. Identities the preview mints follow the journal's re-keying, so a
  * move is previewed against the same identity check the real run makes.
+ *
+ * @internal Built by `UndoJournal.restore`; exported only for the emulator
+ * test that no record sequence reaches.
  */
 export class UndoPreview {
   readonly #fs: GuardedFileSystem;
@@ -1232,12 +1313,11 @@ export class UndoPreview {
  * what the call changed. A record whose target no longer matches what the
  * call wrote is skipped, not restored — a skip never fails the call.
  */
-export async function restoreEntry(
+async function restoreEntry(
   entry: UndoEntry,
   fs: GuardedFileSystem,
   opts: {
-    dryRun: boolean;
-    /** The dry run's view, shared across the entries of one undo; one is made when absent. */
+    /** A dry run's view, shared across the entries of one undo; absent for a real run. */
     preview?: UndoPreview | undefined;
     /**
      * A restore replaced the file `was` with a new inode; the owner of the
@@ -1252,9 +1332,7 @@ export async function restoreEntry(
   },
 ): Promise<RestoreOutcome> {
   const { signal } = opts;
-  const world = opts.dryRun
-    ? (opts.preview ?? new UndoPreview(fs, signal)).world()
-    : diskWorld(fs, signal, opts.onRewrite);
+  const world = opts.preview ? opts.preview.world() : diskWorld(fs, signal, opts.onRewrite);
   // Records that did not run because a directory they sit under was not restored.
   const blocked: string[] = [];
   const isBlocked = (path: string): boolean =>

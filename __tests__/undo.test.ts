@@ -21,14 +21,8 @@ import { pathLabel } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { PathCapture, UndoCapture, UndoRecord } from '../src/core/undo.ts';
-import type { UndoEntry } from '../src/core/undo.ts';
-import {
-  NOT_RECORDING,
-  plannedMkdirChain,
-  restoreEntry,
-  UndoJournal,
-  UndoPreview,
-} from '../src/core/undo.ts';
+import type { UndoEntry, UndoFileResult } from '../src/core/undo.ts';
+import { NOT_RECORDING, plannedMkdirChain, UndoJournal, UndoPreview } from '../src/core/undo.ts';
 import { sha256Hex } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import { CREATE } from '../src/tools/create.ts';
@@ -79,6 +73,31 @@ type RenameRecord = Extract<UndoRecord, { op: 'rename' }>;
 const isWrite = (r: UndoRecord | undefined): r is WriteRecord => r?.op === 'write';
 const isRemove = (r: UndoRecord | undefined): r is RemoveRecord => r?.op === 'remove';
 const isRename = (r: UndoRecord | undefined): r is RenameRecord => r?.op === 'rename';
+
+/**
+ * Undo one captured call through the journal, as the undo tool does: `entry`
+ * restores by its id when `journal` holds it, else it is journaled first.
+ * `remaining` is what the journal keeps under that id afterwards.
+ */
+const undoEntry = async (
+  entry: UndoEntry,
+  fs: GuardedFileSystem,
+  opts: { dryRun: boolean; signal?: AbortSignal },
+  // A fixed budget: FS_MAX_UNDO_BYTES in the environment must not evict the entry.
+  journal = new UndoJournal(32 * 1024 * 1024),
+): Promise<{ results: UndoFileResult[]; remaining: UndoRecord[] }> => {
+  const id = journal.get(entry.id) === entry ? entry.id : journal.add(entry.tool, entry.records);
+  const steps = await journal.restore({ id }, fs, opts);
+  return { results: steps[0]?.results ?? [], remaining: journal.get(id)?.records ?? [] };
+};
+
+/** Dry-run the captured calls, given newest first, as one undo of that many steps. */
+const previewAll = async (entries: UndoEntry[], fs: GuardedFileSystem) => {
+  const journal = new UndoJournal(32 * 1024 * 1024);
+  for (const entry of [...entries].reverse()) journal.add(entry.tool, entry.records);
+  const steps = await journal.restore({ steps: entries.length }, fs, { dryRun: true });
+  return steps.flatMap((step) => step.results);
+};
 
 describe('UndoJournal', () => {
   it('returns 4-char ids and newest(n) newest first', (t) => {
@@ -397,7 +416,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
   });
 
   const restoreCopy = (cap: UndoCapture) =>
-    restoreEntry(
+    undoEntry(
       { id: 'x', tool: 'move', createdAt: 0, records: cap.journalRecords() },
       new GuardedFileSystem(ctx.pathGuard),
       { dryRun: false },
@@ -813,8 +832,8 @@ describe('UndoCapture via GuardedFileSystem', () => {
 
     const entry = { id: 'x', tool: 'create', createdAt: 0, records };
     const plain = new GuardedFileSystem(ctx.pathGuard);
-    const preview = await restoreEntry(entry, plain, { dryRun: true });
-    const real = await restoreEntry(entry, plain, { dryRun: false });
+    const preview = await undoEntry(entry, plain, { dryRun: true });
+    const real = await undoEntry(entry, plain, { dryRun: false });
     assert.deepStrictEqual(
       preview.results.map((r) => pathLabel(r.path)),
       ['a.txt'],
@@ -1072,7 +1091,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     );
     cap.release();
 
-    const restored = await restoreEntry(
+    const restored = await undoEntry(
       { id: 'x', tool: 'move', createdAt: 0, records },
       new GuardedFileSystem(ctx.pathGuard),
       { dryRun: false },
@@ -1435,7 +1454,7 @@ describe('forMutation settles every exit', () => {
   });
 });
 
-describe('restoreEntry', () => {
+describe('restore', () => {
   let tmpDir: string;
   let ctx: FilesystemServerContext;
 
@@ -1464,14 +1483,7 @@ describe('restoreEntry', () => {
     assert.strictEqual(cap.unavailableReason(), undefined);
     return { id: 'test', tool: 'test', createdAt: Date.now(), records: cap.records };
   };
-  const dryRunAll = async (entries: UndoEntry[]) => {
-    const preview = new UndoPreview(newFs());
-    const results = [];
-    for (const entry of entries) {
-      results.push(...(await restoreEntry(entry, newFs(), { dryRun: true, preview })).results);
-    }
-    return results;
-  };
+  const dryRunAll = (entries: UndoEntry[]) => previewAll(entries, newFs());
 
   it('overwrite, then restore, gives the old bytes back', async () => {
     const file = join(tmpDir, 'restore-overwrite.txt');
@@ -1481,7 +1493,7 @@ describe('restoreEntry', () => {
       await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
       'after',
     );
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(
       await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
       'before',
@@ -1501,7 +1513,7 @@ describe('restoreEntry', () => {
     const entry = await captureOne((fs) => fs.writeFile(file, 'after'));
     assert.strictEqual(await readFile(twin, 'utf8'), 'after');
 
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
 
     assert.deepStrictEqual(outcome.remaining, []);
     assert.strictEqual(await readFile(twin, 'utf8'), 'before');
@@ -1543,7 +1555,7 @@ describe('restoreEntry', () => {
       dry.filter((r) => 'error' in r),
       [],
     );
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.deepStrictEqual(
       outcome.results.filter((r) => 'error' in r),
       [],
@@ -1559,7 +1571,7 @@ describe('restoreEntry', () => {
     const entry = await captureOne((fs) => fs.writeFile(file, 'B'));
     await rm(file);
     if (!(await trySymlink(target, file, () => t.skip('symlinks unavailable'), 'file'))) return;
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(outcome.results.filter((r) => 'error' in r).length, 1);
     assert.strictEqual(outcome.remaining.length, 1);
   });
@@ -1569,7 +1581,7 @@ describe('restoreEntry', () => {
     await writeFile(file, 'before');
     const entry = await captureOne((fs) => fs.writeFile(file, 'tool-write'));
     await writeFile(file, 'outside-write');
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(
       await import('node:fs/promises').then((m) => m.readFile(file, 'utf8')),
       'outside-write',
@@ -1585,7 +1597,7 @@ describe('restoreEntry', () => {
   });
 
   const skipMessage = async (entry: UndoEntry): Promise<string> => {
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const skipped = outcome.results.find(
       (r): r is { path: string; error: Problem } => 'error' in r,
     );
@@ -1631,7 +1643,7 @@ describe('restoreEntry', () => {
     const dir = join(tmpDir, 'restore-filled');
     const entry = await captureOne((fs) => fs.mkdir(dir, { recursive: true }));
     await writeFile(join(dir, 'new.txt'), 'x');
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const skipped = outcome.results.find(
       (r): r is { path: string; error: Problem } => 'error' in r,
     );
@@ -1663,7 +1675,7 @@ describe('restoreEntry', () => {
       ),
       false,
     );
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(await fsPromises.readFile(join(tree, 'f.txt'), 'utf8'), 'leaf');
     if (process.platform !== 'win32') {
       assert.strictEqual((await fsPromises.stat(join(tree, 'f.txt'))).mode & 0o777, 0o600);
@@ -1690,7 +1702,7 @@ describe('restoreEntry', () => {
       await fs.rm(tree, { recursive: true, force: true }); // snapshotTree path
       await fs.rmdir(empty); // GuardedFileSystem.rmdir path
     });
-    await restoreEntry(entry, newFs(), { dryRun: false });
+    await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual((await fsPromises.stat(tree)).mode & 0o777, 0o700);
     assert.strictEqual((await fsPromises.stat(join(tree, 'inner'))).mode & 0o777, 0o700);
     assert.strictEqual((await fsPromises.stat(empty)).mode & 0o777, 0o700);
@@ -1714,7 +1726,7 @@ describe('restoreEntry', () => {
     t.mock.restoreAll();
     syncBuiltinESMExports();
     await assert.rejects(lstat(gone));
-    await restoreEntry(entry, newFs(), { dryRun: false });
+    await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(await readFile(gone, 'utf8'), 'bytes');
     assert.strictEqual(await readFile(join(tree, 'kept.txt'), 'utf8'), 'kept');
   });
@@ -1724,7 +1736,7 @@ describe('restoreEntry', () => {
     await mkdir(empty);
     const entry = await captureOne((fs) => fs.rmdir(empty));
     await assert.rejects(lstat(empty));
-    await restoreEntry(entry, newFs(), { dryRun: false });
+    await undoEntry(entry, newFs(), { dryRun: false });
     assert.ok((await lstat(empty)).isDirectory());
   });
 
@@ -1747,7 +1759,7 @@ describe('restoreEntry', () => {
         { op: 'mkdir', path: dir, mode: 0o557 },
       ],
     };
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.deepStrictEqual(outcome.remaining, []);
     assert.strictEqual(await fsPromises.readFile(child, 'utf8'), 'kept');
     assert.strictEqual((await fsPromises.stat(dir)).mode & 0o700, 0o700);
@@ -1759,7 +1771,7 @@ describe('restoreEntry', () => {
       await fs.mkdir(join(tmpDir, 'created-parents', 'a'), { recursive: true });
       await fs.writeFile(file, 'fresh');
     });
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(
       await import('node:fs/promises').then((m) =>
         m.stat(file).then(
@@ -1788,7 +1800,7 @@ describe('restoreEntry', () => {
       await fs.writeFile(join(parent, 'tool-made.txt'), 'x');
     });
     await writeFile(join(parent, 'outsider.txt'), 'y');
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const fsPromises = await import('node:fs/promises');
     assert.ok((await fsPromises.stat(parent)).isDirectory());
     assert.strictEqual(
@@ -1819,7 +1831,7 @@ describe('restoreEntry', () => {
       ),
       false,
     );
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(
       await import('node:fs/promises').then((m) => m.readFile(from, 'utf8')),
       'payload',
@@ -1833,7 +1845,7 @@ describe('restoreEntry', () => {
     await writeFile(from, 'incoming');
     await writeFile(to, 'clobbered-old');
     const entry = await captureOne((fs) => fs.rename(from, to));
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const fsPromises = await import('node:fs/promises');
     assert.strictEqual(await fsPromises.readFile(to, 'utf8'), 'clobbered-old');
     assert.strictEqual(await fsPromises.readFile(from, 'utf8'), 'incoming');
@@ -1847,7 +1859,7 @@ describe('restoreEntry', () => {
       await fs.mkdir(join(tmpDir, 'dry-run-parents', 'a'), { recursive: true });
       await fs.writeFile(file, 'fresh');
     });
-    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    const dry = await undoEntry(entry, newFs(), { dryRun: true });
     const fsPromises = await import('node:fs/promises');
     assert.strictEqual(
       await fsPromises.stat(file).then(
@@ -1865,7 +1877,7 @@ describe('restoreEntry', () => {
     await writeFile(from, 'incoming');
     await writeFile(to, 'clobbered-old');
     const entry2 = await captureOne((fs) => fs.rename(from, to));
-    const dry2 = await restoreEntry(entry2, newFs(), { dryRun: true });
+    const dry2 = await undoEntry(entry2, newFs(), { dryRun: true });
     assert.strictEqual(
       await fsPromises.readFile(to, 'utf8'),
       'incoming',
@@ -1885,7 +1897,7 @@ describe('restoreEntry', () => {
     const entry = await captureOne((fs) => fs.rm(tree, { recursive: true, force: true }));
     // Drop the tree's own mkdir record so the parent is missing at restore.
     entry.records = entry.records.filter((r) => r.op !== 'mkdir');
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const failed = outcome.results.find((r) => 'error' in r);
     assert.ok(failed?.error, 'must report a failure, not throw');
     assert.ok(outcome.remaining.length > 0);
@@ -1900,12 +1912,12 @@ describe('restoreEntry', () => {
     // Occupy `from` so both records skip: the rename has nowhere to go and
     // the overwritten file is still in place at `to`.
     await writeFile(from, 'squatter');
-    const first = await restoreEntry(entry, newFs(), { dryRun: false });
+    const first = await undoEntry(entry, newFs(), { dryRun: false });
     assert.strictEqual(first.remaining.length, 2);
     await rm(from);
     // The retry must run the rename first, then write the old bytes back to
     // `to`; the reverse order leaves `to` missing until a third try.
-    const retry = await restoreEntry({ ...entry, records: first.remaining }, newFs(), {
+    const retry = await undoEntry({ ...entry, records: first.remaining }, newFs(), {
       dryRun: false,
     });
     const fsPromises = await import('node:fs/promises');
@@ -1922,7 +1934,7 @@ describe('restoreEntry', () => {
       await fs.writeFile(a, 'v2');
       await fs.rename(a, b);
     });
-    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    const dry = await undoEntry(entry, newFs(), { dryRun: true });
     assert.deepStrictEqual(
       dry.results.filter((r) => 'error' in r),
       [],
@@ -1937,16 +1949,10 @@ describe('restoreEntry', () => {
     const moved = await captureOne((fs) => fs.rename(a, b));
     const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
     journal.add('move', moved.records);
-    const onRewrite = (
-      was: Parameters<UndoJournal['reidentify']>[0],
-      identity: Parameters<UndoJournal['reidentify']>[1],
-    ) => {
-      journal.reidentify(was, identity);
-    };
     const movedInJournal = journal.newest(Infinity)[0];
     assert.ok(movedInJournal);
-    const second = await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
-    const first = await restoreEntry(movedInJournal, newFs(), { dryRun: false });
+    const second = await undoEntry(edited, newFs(), { dryRun: false }, journal);
+    const first = await undoEntry(movedInJournal, newFs(), { dryRun: false }, journal);
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual([second.remaining, first.remaining], [[], []]);
     assert.strictEqual(await fsPromises.readFile(a, 'utf8'), 'v1');
@@ -1962,16 +1968,10 @@ describe('restoreEntry', () => {
     await rm(b);
     await writeFile(b, 'outsider');
     const edited = await captureOne((fs) => fs.writeFile(b, 'v2'));
-    const onRewrite = (
-      was: Parameters<UndoJournal['reidentify']>[0],
-      identity: Parameters<UndoJournal['reidentify']>[1],
-    ) => {
-      journal.reidentify(was, identity);
-    };
-    await restoreEntry(edited, newFs(), { dryRun: false, onRewrite });
+    await undoEntry(edited, newFs(), { dryRun: false }, journal);
     const entry = journal.get(moveId);
     assert.ok(entry);
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false }, journal);
     const fsPromises = await import('node:fs/promises');
     assert.strictEqual(outcome.remaining.length, 1);
     assert.strictEqual(await fsPromises.readFile(b, 'utf8'), 'outsider');
@@ -1989,18 +1989,12 @@ describe('restoreEntry', () => {
       journal.add('move', (await captureOne((fs) => fs.rename(b, c))).records),
       journal.add('edit', (await captureOne((fs) => fs.writeFile(c, 'v2'))).records),
     ];
-    const onRewrite = (
-      was: Parameters<UndoJournal['reidentify']>[0],
-      identity: Parameters<UndoJournal['reidentify']>[1],
-    ) => {
-      journal.reidentify(was, identity);
-    };
     const remaining: number[] = [];
     for (const id of ids.reverse()) {
       const entry = journal.get(id);
       assert.ok(entry);
       remaining.push(
-        (await restoreEntry(entry, newFs(), { dryRun: false, onRewrite })).remaining.length,
+        (await undoEntry(entry, newFs(), { dryRun: false }, journal)).remaining.length,
       );
     }
     const fsPromises = await import('node:fs/promises');
@@ -2019,18 +2013,12 @@ describe('restoreEntry', () => {
       journal.add('append', (await captureOne((fs) => fs.appendFile(b, '+'))).records),
       journal.add('edit', (await captureOne((fs) => fs.writeFile(b, 'v2'))).records),
     ];
-    const onRewrite = (
-      was: Parameters<UndoJournal['reidentify']>[0],
-      identity: Parameters<UndoJournal['reidentify']>[1],
-    ) => {
-      journal.reidentify(was, identity);
-    };
     const remaining: number[] = [];
     for (const id of ids.reverse()) {
       const entry = journal.get(id);
       assert.ok(entry);
       remaining.push(
-        (await restoreEntry(entry, newFs(), { dryRun: false, onRewrite })).remaining.length,
+        (await undoEntry(entry, newFs(), { dryRun: false }, journal)).remaining.length,
       );
     }
     const fsPromises = await import('node:fs/promises');
@@ -2056,16 +2044,10 @@ describe('restoreEntry', () => {
     const journal = new UndoJournal();
     const moveId = journal.add('move', (await captureOne((fs) => fs.rename(a, b))).records);
     const delEntry = await captureOne((fs) => fs.rm(b, { recursive: true, force: true }));
-    const onRewrite = (
-      was: Parameters<UndoJournal['reidentify']>[0],
-      identity: Parameters<UndoJournal['reidentify']>[1],
-    ) => {
-      journal.reidentify(was, identity);
-    };
-    const first = await restoreEntry(delEntry, newFs(), { dryRun: false, onRewrite });
+    const first = await undoEntry(delEntry, newFs(), { dryRun: false }, journal);
     const moveEntry = journal.get(moveId);
     assert.ok(moveEntry);
-    const second = await restoreEntry(moveEntry, newFs(), { dryRun: false, onRewrite });
+    const second = await undoEntry(moveEntry, newFs(), { dryRun: false }, journal);
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual([first.remaining, second.remaining], [[], []]);
     assert.strictEqual(await fsPromises.readFile(join(a, 'f.txt'), 'utf8'), 'inside');
@@ -2186,7 +2168,7 @@ describe('restoreEntry', () => {
     const first = await captureOne((fs) => fs.rename(a, b));
     const second = await captureOne((fs) => fs.rename(b, c));
     for (const entry of [second, first, edited]) {
-      assert.deepStrictEqual((await restoreEntry(entry, newFs(), { dryRun: false })).remaining, []);
+      assert.deepStrictEqual((await undoEntry(entry, newFs(), { dryRun: false })).remaining, []);
     }
     const fsPromises = await import('node:fs/promises');
     assert.strictEqual(await fsPromises.readFile(join(a, 'f.txt'), 'utf8'), 'v1');
@@ -2240,11 +2222,7 @@ describe('restoreEntry', () => {
       const deletedFolder = await capture((fs) => fs.rm(folder, { recursive: true, force: true }));
 
       const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
-      const preview = new UndoPreview(policyFs);
-      const results = [];
-      for (const entry of [deletedFolder, deletedFile]) {
-        results.push(...(await restoreEntry(entry, policyFs, { dryRun: true, preview })).results);
-      }
+      const results = await previewAll([deletedFolder, deletedFile], policyFs);
       const refused = results.find((result) => 'error' in result);
       assert.ok(refused && 'error' in refused);
       assert.strictEqual(refused.error.code, ErrorCode.ACCESS_DENIED);
@@ -2280,11 +2258,7 @@ describe('restoreEntry', () => {
       const movedQ = await capture((fs) => fs.rename(q, p));
 
       const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
-      const preview = new UndoPreview(policyFs);
-      const results = [];
-      for (const entry of [movedQ, deletedP, movedX]) {
-        results.push(...(await restoreEntry(entry, policyFs, { dryRun: true, preview })).results);
-      }
+      const results = await previewAll([movedQ, deletedP, movedX], policyFs);
       assert.deepStrictEqual(
         results.filter((result) => 'error' in result),
         [],
@@ -2310,9 +2284,8 @@ describe('restoreEntry', () => {
       await writeFile(join(open, 'blocked.txt'), 'added after the move');
 
       const policyFs = new GuardedFileSystem(policyCtx.pathGuard);
-      const preview = new UndoPreview(policyFs);
-      for (const options of [{ dryRun: true, preview }, { dryRun: false }]) {
-        const { results } = await restoreEntry(moved, policyFs, options);
+      for (const options of [{ dryRun: true }, { dryRun: false }]) {
+        const { results } = await undoEntry(moved, policyFs, options);
         assert.deepStrictEqual(
           results.map((result) => ('error' in result ? result.error.code : 'restored')),
           ['ACCESS_DENIED'],
@@ -2326,17 +2299,17 @@ describe('restoreEntry', () => {
     }
   });
 
-  it('an aborted restore returns every unprocessed record and touches nothing', async () => {
+  it('an aborted restore keeps every unprocessed record and touches nothing', async () => {
     const file = join(tmpDir, 'abort-restore.txt');
     await writeFile(file, 'v1');
     const entry = await captureOne((fs) => fs.writeFile(file, 'v2'));
-    const outcome = await restoreEntry(entry, newFs(), {
-      dryRun: false,
-      signal: AbortSignal.abort(),
-    });
+    const journal = new UndoJournal();
+    await assert.rejects(
+      undoEntry(entry, newFs(), { dryRun: false, signal: AbortSignal.abort() }, journal),
+      { name: 'AbortError' },
+    );
     const fsPromises = await import('node:fs/promises');
-    assert.deepStrictEqual(outcome.results, []);
-    assert.strictEqual(outcome.remaining.length, entry.records.length);
+    assert.strictEqual(journal.newest(1)[0]?.records.length, entry.records.length);
     assert.strictEqual(await fsPromises.readFile(file, 'utf8'), 'v2');
   });
 
@@ -2348,7 +2321,7 @@ describe('restoreEntry', () => {
     await writeFile(join(tree, 'file.txt'), 'saved');
     const entry = await captureOne((fs) => fs.rm(tree, { recursive: true, force: true }));
     if (!(await trySymlink(elsewhere, tree, () => t.skip('symlink not permitted')))) return;
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     const fsPromises = await import('node:fs/promises');
     assert.deepStrictEqual(await fsPromises.readdir(elsewhere), []);
     assert.strictEqual(outcome.remaining.length, entry.records.length);
@@ -2367,7 +2340,7 @@ describe('restoreEntry', () => {
       await fs.rm(pfx, { recursive: true, force: true });
     });
     await writeFile(pfx, 'a file where the folder was');
-    await restoreEntry(entry, newFs(), { dryRun: false });
+    await undoEntry(entry, newFs(), { dryRun: false });
     const fsPromises = await import('node:fs/promises');
     assert.strictEqual(await fsPromises.readFile(join(pfx2, 'f.txt'), 'utf8'), 'saved');
   });
@@ -2384,7 +2357,7 @@ describe('restoreEntry', () => {
     await fsPromises.symlink(target, link, 'junction');
     const before = await fsPromises.readlink(link);
     const entry = await captureOne((fs) => fs.rm(link));
-    const outcome = await restoreEntry(entry, newFs(), { dryRun: false });
+    const outcome = await undoEntry(entry, newFs(), { dryRun: false });
     assert.deepStrictEqual(outcome.remaining, []);
     assert.strictEqual(await fsPromises.readlink(link), before);
     assert.ok((await fsPromises.stat(link)).isDirectory());
@@ -2420,13 +2393,7 @@ describe('restoreEntry', () => {
       for (const id of ids) {
         const entry = journal.get(id);
         assert.ok(entry);
-        const out = await restoreEntry(entry, newFs(), {
-          dryRun: false,
-          onRewrite: (was, identity) => {
-            journal.reidentify(was, identity);
-          },
-        });
-        journal.replaceRecords(id, out.remaining);
+        const out = await undoEntry(entry, newFs(), { dryRun: false }, journal);
         real.push(...out.results.map(outcome));
       }
       return { dry, real };
@@ -2842,7 +2809,7 @@ describe('restoreEntry', () => {
     });
     await taken;
     let finished = false;
-    const dry = restoreEntry(entry, newFs(), { dryRun: true }).then((out) => {
+    const dry = undoEntry(entry, newFs(), { dryRun: true }).then((out) => {
       finished = true;
       return out;
     });
@@ -2865,12 +2832,11 @@ describe('restoreEntry', () => {
       await fs.rename(a, b);
       await fs.rename(b, c);
     });
-    const dry = await restoreEntry(entry, newFs(), { dryRun: true });
+    const dry = await undoEntry(entry, newFs(), { dryRun: true });
     assert.deepStrictEqual(
       dry.results.filter((r) => 'error' in r),
       [],
     );
-    assert.deepStrictEqual(dry.remaining, []);
   });
 
   it('a dry run refuses a write live undo must refuse on a read-only hard link', async (t) => {
@@ -2892,10 +2858,8 @@ describe('restoreEntry', () => {
       }
       const entry = { id: 't', tool: 'test', createdAt: Date.now(), records: cap.records };
 
-      const preview = new UndoPreview(new GuardedFileSystem(server.pathGuard));
-      const dry = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+      const dry = await undoEntry(entry, new GuardedFileSystem(server.pathGuard), {
         dryRun: true,
-        preview,
       });
       assert.strictEqual(dry.results.filter((r) => !('error' in r)).length, 0);
       assert.ok(
@@ -2904,7 +2868,7 @@ describe('restoreEntry', () => {
       );
       assert.strictEqual(await readFile(file, 'utf8'), 'B'); // the dry run wrote nothing
 
-      const live = await restoreEntry(entry, new GuardedFileSystem(server.pathGuard), {
+      const live = await undoEntry(entry, new GuardedFileSystem(server.pathGuard), {
         dryRun: false,
       });
       assert.ok(live.results.some((r) => 'error' in r && r.error.code === ErrorCode.ACCESS_DENIED));
@@ -2938,6 +2902,212 @@ describe('restoreEntry', () => {
     // the unlink left one name; a missing decrement or a reseed from the
     // unchanged disk count keeps the inode and fails here.
     assert.notDeepStrictEqual(await world.identity(a), inode);
+  });
+});
+
+describe('UndoJournal.restore', () => {
+  let tmpDir: string;
+  let ctx: FilesystemServerContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    ctx = await createTestServer([tmpDir]);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (tmpDir) {
+      await cleanupTestRoot(tmpDir);
+    }
+  });
+
+  const newFs = () => new GuardedFileSystem(ctx.pathGuard);
+  /** Run one call under a capture and journal it; returns its undo id. */
+  const journaled = async (
+    journal: UndoJournal,
+    tool: string,
+    run: (fs: GuardedFileSystem) => Promise<unknown>,
+  ): Promise<string> => {
+    const cap = journal.beginCapture();
+    await run(new GuardedFileSystem(ctx.pathGuard, cap));
+    assert.strictEqual(cap.unavailableReason(), undefined);
+    return journal.add(tool, cap.records);
+  };
+  const ids = (steps: { id: string }[]) => steps.map((s) => s.id);
+
+  it('restores by id and drops the entry', async () => {
+    const file = join(tmpDir, 'jr-by-id.txt');
+    await writeFile(file, 'before');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'after'));
+    const steps = await journal.restore({ id }, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(file, 'utf8'), 'before');
+    assert.strictEqual(journal.get(id), undefined);
+    assert.deepStrictEqual(ids(steps), [id]);
+  });
+
+  it('an unknown id fails NOT_FOUND with the listing hint', async () => {
+    await assert.rejects(
+      new UndoJournal().restore({ id: 'zzzz' }, newFs(), { dryRun: false }),
+      (e: unknown) =>
+        e instanceof FsError &&
+        e.code === ErrorCode.NOT_FOUND &&
+        e.message === 'Unknown or expired undo id "zzzz".',
+    );
+  });
+
+  it('selects newest 1 by default, newest N with steps, all on a bare dry run', async () => {
+    const journal = new UndoJournal();
+    const made: string[] = [];
+    for (const name of ['a', 'b', 'c']) {
+      const file = join(tmpDir, `jr-select-${name}.txt`);
+      await writeFile(file, 'old');
+      made.push(await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'new')));
+    }
+    const [first, second, third] = made;
+    const fs = newFs();
+    assert.deepStrictEqual(ids(await journal.restore({}, fs, { dryRun: true })), [
+      third,
+      second,
+      first,
+    ]);
+    assert.deepStrictEqual(ids(await journal.restore({ steps: 2 }, fs, { dryRun: true })), [
+      third,
+      second,
+    ]);
+    assert.deepStrictEqual(ids(await journal.restore({}, fs, { dryRun: false })), [third]);
+  });
+
+  it('an empty journal restores nothing', async () => {
+    assert.deepStrictEqual(await new UndoJournal().restore({}, newFs(), { dryRun: false }), []);
+  });
+
+  it('re-keys moves across calls', async () => {
+    const a = join(tmpDir, 'jr-rekey-a.txt');
+    const b = join(tmpDir, 'jr-rekey-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    await journaled(journal, 'move', (fs) => fs.rename(a, b));
+    await journaled(journal, 'edit', (fs) => fs.writeFile(b, 'v2'));
+    await journal.restore({}, newFs(), { dryRun: false });
+    await journal.restore({}, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+    assert.deepStrictEqual(journal.newest(Infinity), []);
+  });
+
+  it('dry run changes nothing in the journal', async () => {
+    const a = join(tmpDir, 'jr-dry-a.txt');
+    const b = join(tmpDir, 'jr-dry-b.txt');
+    await writeFile(a, 'v1');
+    const journal = new UndoJournal();
+    await journaled(journal, 'move', (fs) => fs.rename(a, b));
+    await journaled(journal, 'edit', (fs) => fs.writeFile(b, 'v2'));
+    const dry = await journal.restore({}, newFs(), { dryRun: true });
+    assert.deepStrictEqual(
+      dry.flatMap((s) => s.results).map((r) => 'error' in r),
+      [false, false],
+    );
+    await journal.restore({ steps: 2 }, newFs(), { dryRun: false });
+    assert.strictEqual(await readFile(a, 'utf8'), 'v1');
+  });
+
+  it('a skipped record stays under its id for a retry', async () => {
+    const file = join(tmpDir, 'jr-skip.txt');
+    await writeFile(file, 'before');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'after'));
+    await writeFile(file, 'outside');
+    const steps = await journal.restore({ id }, newFs(), { dryRun: false });
+    const result = steps[0]?.results[0];
+    assert.ok(result && 'error' in result);
+    assert.strictEqual(result.error.code, ErrorCode.CANCELLED);
+    assert.strictEqual(journal.get(id)?.records.length, 1);
+  });
+
+  it('abort keeps what finished', async () => {
+    const older = join(tmpDir, 'jr-abort-older.txt');
+    const x = join(tmpDir, 'jr-abort-x.txt');
+    const y = join(tmpDir, 'jr-abort-y.txt');
+    for (const f of [older, x, y]) await writeFile(f, 'old');
+    const journal = new UndoJournal();
+    const olderId = await journaled(journal, 'edit', (fs) => fs.writeFile(older, 'new'));
+    const newerId = await journaled(journal, 'edit', async (fs) => {
+      await fs.writeFile(x, 'new');
+      await fs.writeFile(y, 'new');
+    });
+    const controller = new AbortController();
+    await assert.rejects(
+      journal.restore({ steps: 2 }, newFs(), {
+        dryRun: false,
+        signal: controller.signal,
+        // Abort as the second record starts: the first has finished; the second
+        // starts after the abort, fails, and stays.
+        onProgress: (p) => {
+          if (p.current === 2) controller.abort();
+        },
+      }),
+      { name: 'AbortError' },
+    );
+    assert.strictEqual(journal.get(newerId)?.records.length, 1);
+    assert.strictEqual(journal.get(olderId)?.records.length, 1);
+    // Records restore in reverse: y finished before the abort, x did not.
+    assert.strictEqual(await readFile(y, 'utf8'), 'old');
+    assert.strictEqual(await readFile(x, 'utf8'), 'new');
+    assert.strictEqual(await readFile(older, 'utf8'), 'new');
+  });
+
+  it('an entry added while a restore runs is not restored by it', async () => {
+    const done = join(tmpDir, 'jr-added-done.txt');
+    await writeFile(done, 'old');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(done, 'new'));
+    let addedId: string | undefined;
+    const steps = await journal.restore({}, newFs(), {
+      dryRun: false,
+      onProgress: () => {
+        addedId ??= journal.add('edit', [writeRecord(1)]);
+      },
+    });
+    assert.ok(addedId);
+    assert.deepStrictEqual(ids(steps), [id]);
+    assert.ok(journal.get(addedId), 'the entry added meanwhile stays in the journal');
+  });
+
+  it('reports progress over every record of every selected entry', async () => {
+    const journal = new UndoJournal();
+    const files = ['p1', 'p2', 'p3'].map((n) => join(tmpDir, `jr-progress-${n}.txt`));
+    for (const f of files) await writeFile(f, 'old');
+    await journaled(journal, 'edit', (fs) => fs.writeFile(files[0] ?? '', 'new'));
+    await journaled(journal, 'edit', async (fs) => {
+      await fs.writeFile(files[1] ?? '', 'new');
+      await fs.writeFile(files[2] ?? '', 'new');
+    });
+    const seen: { current: number; total: number }[] = [];
+    await journal.restore({ steps: 2 }, newFs(), {
+      dryRun: false,
+      onProgress: (p) => seen.push(p),
+    });
+    assert.deepStrictEqual(seen.at(-1), { current: 3, total: 3 });
+  });
+
+  it('concurrent restores run one at a time', async () => {
+    const journal = new UndoJournal();
+    const made: string[] = [];
+    for (const name of ['b', 'c']) {
+      const file = join(tmpDir, `jr-concurrent-${name}.txt`);
+      await writeFile(file, 'old');
+      made.push(await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'new')));
+    }
+    const [b, c] = made;
+    // Selection runs inside the lock, so the second call sees c already pruned.
+    const [first, second] = await Promise.all([
+      journal.restore({}, newFs(), { dryRun: false }),
+      journal.restore({}, newFs(), { dryRun: false }),
+    ]);
+    assert.deepStrictEqual([first[0]?.id, second[0]?.id], [c, b]);
   });
 });
 
