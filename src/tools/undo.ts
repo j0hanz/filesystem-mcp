@@ -1,11 +1,9 @@
 import * as z from 'zod/v4';
 
-import { runExclusive } from '../core/concurrency.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { defaultFalseBoolean } from '../core/schema.ts';
-import type { UndoEntry, UndoFileResult } from '../core/undo.ts';
-import { restoreEntry, restoreOrder, UndoPreview } from '../core/undo.ts';
+import type { RestoreStep, UndoFileResult, UndoSelection } from '../core/undo.ts';
 import { MIB } from '../core/util.ts';
 import { isTotalFailure, summarize } from './batch.ts';
 import { defineTool } from './define.ts';
@@ -37,13 +35,7 @@ const UndoInputSchema = z.strictObject({
 });
 
 interface UndoOutput {
-  steps: {
-    id: string;
-    tool: string;
-    results: UndoFileResult[];
-    truncated?: true;
-    totalResults?: number;
-  }[];
+  steps: (RestoreStep & { truncated?: true; totalResults?: number })[];
 }
 
 /**
@@ -137,85 +129,37 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
         'Over HTTP, pass the undo id from the tool result (or call undo with dryRun: true to list them).',
       );
     }
-    // ponytail: one lock per journal, so undos run one at a time; per-entry
-    // locks if undo throughput ever matters.
-    return runExclusive(journal, async () => {
-      let entries: UndoEntry[];
-      if (id !== undefined) {
-        const entry = journal.get(id);
-        if (entry === undefined) {
-          throw new FsError(
-            ErrorCode.NOT_FOUND,
-            `Unknown or expired undo id "${id}".`,
-            undefined,
-            undefined,
-            'Run undo with dryRun: true and no id to list the ids.',
-          );
-        }
-        entries = [entry];
-      } else if (steps !== undefined) {
-        entries = journal.newest(steps);
-      } else if (dryRun) {
-        entries = journal.newest(Infinity);
-      } else {
-        entries = journal.newest(1);
-      }
-      if (entries.length === 0) {
-        return { structured: { steps: [] }, text: 'undo: nothing to undo' };
-      }
-
-      // Newest first: reverting the latest call first keeps the older checks
-      // valid (their recorded bytes are what the latest call left behind only
-      // once the later writes are gone).
-      const stepResults: UndoOutput['steps'] = [];
-      // One preview across every entry: a dry run must see what reverting the
-      // newer entries would change, or its per-step preview lies.
-      const preview = dryRun ? new UndoPreview(ctx.fs, ctx.signal) : undefined;
-      const total = entries.reduce((n, entry) => n + restoreOrder(entry.records).length, 0);
-      let started = 0;
-      for (const entry of entries) {
-        ctx.signal.throwIfAborted();
-        const outcome = await restoreEntry(entry, ctx.fs, {
-          dryRun,
-          preview,
-          signal: ctx.signal,
-          onRewrite: (was, identity) => {
-            journal.reidentify(was, identity);
-          },
-          onRecord: () => {
-            started += 1;
-            ctx.onProgress({ current: started, total });
-          },
-        });
-        if (!dryRun) journal.replaceRecords(entry.id, outcome.remaining);
-        // A cancelled restore keeps what it finished: done records left the journal above.
-        ctx.signal.throwIfAborted();
-        stepResults.push({ id: entry.id, tool: entry.tool, results: outcome.results });
-      }
-
-      const allResults = stepResults.flatMap((s) => s.results);
-      const stepLines = stepResults.map((step) => {
-        const restored = step.results.filter((r) => !('error' in r)).map((r) => pathLabel(r.path));
-        const notRestored = step.results.flatMap((r) =>
-          'error' in r
-            ? [
-                `${pathLabel(r.path)}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`,
-              ]
-            : [],
-        );
-        const parts = [
-          ...(restored.length > 0
-            ? [`${dryRun ? 'would revert' : 'reverted'} ${joinRoster(restored, ', ')}`]
-            : []),
-          ...(notRestored.length > 0 ? [joinRoster(notRestored, ', ')] : []),
-        ];
-        return `undo: ${step.id} (${step.tool}) ${parts.join('; ')}${dryRun ? ' [dry run]' : ''}`;
-      });
-      return {
-        structured: { steps: listSteps(stepResults) },
-        text: [...stepLines, ...reasonLines(allResults)].join('\n'),
-        isError: isTotalFailure(summarize(allResults)),
-      };
+    const selection: UndoSelection =
+      id !== undefined ? { id } : steps !== undefined ? { steps } : {};
+    const stepResults = await journal.restore(selection, ctx.fs, {
+      dryRun,
+      signal: ctx.signal,
+      onProgress: ctx.onProgress,
     });
+    if (stepResults.length === 0) {
+      return { structured: { steps: [] }, text: 'undo: nothing to undo' };
+    }
+
+    const allResults = stepResults.flatMap((s) => s.results);
+    const stepLines = stepResults.map((step) => {
+      const restored = step.results.filter((r) => !('error' in r)).map((r) => pathLabel(r.path));
+      const notRestored = step.results.flatMap((r) =>
+        'error' in r
+          ? [`${pathLabel(r.path)}${r.error.code === ErrorCode.CANCELLED ? ' SKIPPED' : ' FAILED'}`]
+          : [],
+      );
+      const parts = [
+        ...(restored.length > 0
+          ? [`${dryRun ? 'would revert' : 'reverted'} ${joinRoster(restored, ', ')}`]
+          : []),
+        ...(notRestored.length > 0 ? [joinRoster(notRestored, ', ')] : []),
+      ];
+      return `undo: ${step.id} (${step.tool}) ${parts.join('; ')}${dryRun ? ' [dry run]' : ''}`;
+    });
+    return {
+      structured: { steps: listSteps(stepResults) },
+      text: [...stepLines, ...reasonLines(allResults)].join('\n'),
+      isError: isTotalFailure(summarize(allResults)),
+    };
   },
 });

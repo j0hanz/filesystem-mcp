@@ -3057,7 +3057,9 @@ describe('UndoJournal.restore', () => {
     const id = await journaled(journal, 'edit', (fs) => fs.writeFile(file, 'after'));
     await writeFile(file, 'outside');
     const steps = await journal.restore({ id }, newFs(), { dryRun: false });
-    assert.strictEqual(steps[0]?.results[0]?.error?.code, ErrorCode.CANCELLED);
+    const result = steps[0]?.results[0];
+    assert.ok(result && 'error' in result);
+    assert.strictEqual(result.error.code, ErrorCode.CANCELLED);
     assert.strictEqual(journal.get(id)?.records.length, 1);
   });
 

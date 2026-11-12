@@ -800,9 +800,7 @@ async function hashFile(
  * in reverse first, then deduplicated rmdirs deepest-first, so parallel batch
  * creates/moves empty shared parent folders before removing them.
  */
-export function restoreOrder(
-  records: readonly UndoRecord[],
-): { record: UndoRecord; order: number }[] {
+function restoreOrder(records: readonly UndoRecord[]): { record: UndoRecord; order: number }[] {
   const reversed = records.map((record, order) => ({ record, order })).reverse();
   const seenRmdir = new Set<string>();
   const rmdirs = reversed
