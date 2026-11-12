@@ -289,7 +289,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     const rec = cap.records[0];
     if (!isWrite(rec)) assert.fail('expected a write record');
     assert.strictEqual(rec.bytes.toString('utf8'), 'abc');
-    assert.strictEqual(rec.expect, sha256Hex('abcdef'));
+    assert.strictEqual(rec.expect, sha256Hex('abc\ndef'));
   });
 
   it('append when a concurrent writer creates the file after lstat abandons capture instead of recording remove', async () => {
@@ -308,7 +308,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     } as unknown as AbortSignal;
     const fs = makeFs(cap);
     await fs.appendFile(file, '-appended', { signal });
-    assert.strictEqual(await readFile(file, 'utf8'), 'concurrent-data-appended');
+    assert.strictEqual(await readFile(file, 'utf8'), 'concurrent-data\n-appended');
     assert.strictEqual(
       cap.unavailableReason(),
       'concurrent-append.txt: file was created concurrently',
@@ -995,7 +995,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await fs.writeFile(file, 'one');
     await fs.writeFile(file, 'two');
     await fs.appendFile(file, '!');
-    assert.strictEqual(await readFile(file, 'utf8'), 'two!');
+    assert.strictEqual(await readFile(file, 'utf8'), 'two\n!');
     await fs.rm(file);
     await fs.rmdir(dir);
     await assert.rejects(lstat(dir));

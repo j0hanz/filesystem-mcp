@@ -55,6 +55,7 @@ import {
   createTooLargeError,
   O_NOFOLLOW,
   READ_NOFOLLOW,
+  READ_NONBLOCK_NOFOLLOW,
   readFileWithStats,
   readProbe,
   WRITE_NOFOLLOW,
@@ -1259,7 +1260,10 @@ export class GuardedFileSystem {
       // signal would trade that for a silently-completed write; a client
       // that retries is double-appending either way, so the abortable
       // write stays.
-      await handle.writeFile(content, { signal });
+      const text = created
+        ? content
+        : (await this.#appendSeparator(validPath, handle, content)) + content;
+      await handle.writeFile(text, { signal });
       // Before the close in `finally`: a failed close must not hide bytes that landed.
       if (own.recording) {
         own.push(
@@ -1268,7 +1272,7 @@ export class GuardedFileSystem {
                 op: 'write',
                 path: validPath,
                 ...saved,
-                expect: sha256Hex(Buffer.concat([saved.bytes, Buffer.from(content, 'utf8')])),
+                expect: sha256Hex(Buffer.concat([saved.bytes, Buffer.from(text, 'utf8')])),
               }
             : { op: 'remove', path: validPath, expect: sha256Hex(content) },
         );
@@ -1294,6 +1298,37 @@ export class GuardedFileSystem {
     } finally {
       await handle.close();
     }
+  }
+
+  /**
+   * What an append writes before its content so the content starts on its own
+   * line: nothing when the file is empty or already ends with a line feed, or
+   * when the content is empty or opens with a newline itself. The newline
+   * follows the content's own style, since the content is written verbatim.
+   */
+  async #appendSeparator(
+    validPath: string,
+    handle: FileHandle,
+    content: string,
+  ): Promise<'' | '\n' | '\r\n'> {
+    if (content === '' || content.startsWith('\n') || content.startsWith('\r\n')) return '';
+    const opened = await handle.stat();
+    if (opened.size === 0) return '';
+    const last = Buffer.alloc(1);
+    try {
+      // The append handle is write-only, so the last byte needs its own handle.
+      // A file that cannot be read (POSIX mode 0222) gets no separator.
+      // shortcut: another process writing between this read and the write can cost or double a newline, upgrade to a locked read if that is reported.
+      await using tail = await fsOpen(validPath, READ_NONBLOCK_NOFOLLOW);
+      // The path may name another entry by now (a swapped file, a FIFO): only
+      // the file the append handle holds may decide, so anything else adds nothing.
+      if (!sameIdentity(identityOf(await tail.stat()), identityOf(opened))) return '';
+      if ((await tail.read(last, 0, 1, opened.size - 1)).bytesRead === 0) return '';
+    } catch {
+      return '';
+    }
+    if (last[0] === CHAR_LF) return '';
+    return content.includes('\r\n') ? '\r\n' : '\n';
   }
 
   /**

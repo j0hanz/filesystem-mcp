@@ -21,6 +21,8 @@ const { O_NOFOLLOW = 0, O_NONBLOCK = 0 } = constants as {
 };
 export { O_NOFOLLOW };
 export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
+// O_NONBLOCK: a FIFO swapped in at the path opens at once instead of waiting for a writer.
+export const READ_NONBLOCK_NOFOLLOW = READ_NOFOLLOW | O_NONBLOCK;
 // O_NONBLOCK: an append to a symlink-swapped FIFO fails fast instead of hanging.
 export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
 export const APPEND_CREATE_NOFOLLOW =
