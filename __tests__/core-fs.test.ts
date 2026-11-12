@@ -614,6 +614,49 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(content.toString('utf-8'), 'first\nsecond\n');
     });
 
+    const separatorCases: readonly [name: string, seed: string, content: string, want: string][] = [
+      [
+        'adds a newline before content when the file does not end with one',
+        'first',
+        'second\n',
+        'first\nsecond\n',
+      ],
+      ['adds no separator to an empty file', '', 'only', 'only'],
+      [
+        'adds no separator when content starts with a newline',
+        'first',
+        '\nsecond',
+        'first\nsecond',
+      ],
+      ['adds no separator when content starts with CRLF', 'first', '\r\nsecond', 'first\r\nsecond'],
+      ['an empty append writes nothing', 'first', '', 'first'],
+      ['separator is CRLF when content uses CRLF', 'a\r\nx', 'b\r\n', 'a\r\nx\r\nb\r\n'],
+      ['a file ending in a lone CR gets a separator', 'first\r', 'second', 'first\r\nsecond'],
+    ];
+    for (const [index, [name, seed, content, want]] of separatorCases.entries()) {
+      it(`appendFile: ${name}`, async () => {
+        const filePath = await writeTestFile(tmpDir, `append_separator_${index}.txt`, seed);
+        await fs.appendFile(filePath, content);
+        assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), want);
+      });
+    }
+
+    it('appendFile: appends without a separator when the file cannot be read', async (t) => {
+      // Windows chmod cannot drop read permission, and root reads a 0222 file anyway.
+      if (process.platform === 'win32' || process.getuid?.() === 0) {
+        t.skip('needs a file the process can write but not read');
+        return;
+      }
+      const filePath = await writeTestFile(tmpDir, 'append_unreadable.txt', 'first');
+      await chmod(filePath, 0o222);
+      try {
+        await fs.appendFile(filePath, 'second');
+      } finally {
+        await chmod(filePath, 0o644);
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'firstsecond');
+    });
+
     it('TC-FUNC-049: appendFile keeps the existing inode and mode', async (t) => {
       // Windows stat cannot represent 0600 (chmod only toggles the readonly
       // bit), and its st_ino is not guaranteed stable across handles. POSIX

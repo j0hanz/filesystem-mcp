@@ -562,7 +562,7 @@ describe('create body', () => {
 
     assert.notStrictEqual(result.isError, true);
     const entry = result.structured.files[0];
-    assert.strictEqual(entry?.size, oversize + 2);
+    assert.strictEqual(entry?.size, oversize + 3); // the seed has no final newline, so the append adds one
     // The store serves resourceUri via readRaw, which rejects over-cap files
     // with TOO_LARGE — an unservable link must not be advertised at all.
     assert.strictEqual(entry?.resourceUri, undefined);
@@ -604,7 +604,7 @@ describe('create body', () => {
     const entry = result.structured.files[0];
     assert.strictEqual(entry?.kind, 'binary');
     assert.strictEqual(entry?.mimeType, 'application/octet-stream');
-    assert.strictEqual(entry?.size, 4 + 'plain text tail'.length);
+    assert.strictEqual(entry?.size, 4 + 1 + 'plain text tail'.length); // + the separator: the seed does not end with a line feed
   });
 
   it('answers an NTFS stream path with INVALID_INPUT, not a raw EINVAL', async (t) => {
