@@ -641,6 +641,29 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
     }
 
+    it('appendFile: takes no separator from a file swapped in at the path after the open', async () => {
+      const { renameSync, writeFileSync } = await import('node:fs');
+      const filePath = await writeTestFile(tmpDir, 'append_swapped.txt', 'first\n');
+      const moved = join(tmpDir, 'append_swapped_moved.txt');
+      let checks = 0;
+      // The second check runs once the append handle is open: the path then names another file.
+      const signal = {
+        aborted: false,
+        throwIfAborted() {
+          if (++checks !== 2) return;
+          renameSync(filePath, moved);
+          writeFileSync(filePath, 'unterminated');
+        },
+        addEventListener() {},
+        removeEventListener() {},
+      } as unknown as AbortSignal;
+
+      await fs.appendFile(filePath, 'second', { signal });
+
+      // The opened file ends with a newline; the stranger's last byte must not decide.
+      assert.strictEqual(await readFile(moved, 'utf-8'), 'first\nsecond');
+    });
+
     it('appendFile: appends without a separator when the file cannot be read', async (t) => {
       // Windows chmod cannot drop read permission, and root reads a 0222 file anyway.
       if (process.platform === 'win32' || process.getuid?.() === 0) {

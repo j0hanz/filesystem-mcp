@@ -55,6 +55,7 @@ import {
   createTooLargeError,
   O_NOFOLLOW,
   READ_NOFOLLOW,
+  READ_NONBLOCK_NOFOLLOW,
   readFileWithStats,
   readProbe,
   WRITE_NOFOLLOW,
@@ -1311,15 +1312,18 @@ export class GuardedFileSystem {
     content: string,
   ): Promise<'' | '\n' | '\r\n'> {
     if (content === '' || content.startsWith('\n') || content.startsWith('\r\n')) return '';
-    const { size } = await handle.stat();
-    if (size === 0) return '';
+    const opened = await handle.stat();
+    if (opened.size === 0) return '';
     const last = Buffer.alloc(1);
     try {
       // The append handle is write-only, so the last byte needs its own handle.
       // A file that cannot be read (POSIX mode 0222) gets no separator.
       // shortcut: another process writing between this read and the write can cost or double a newline, upgrade to a locked read if that is reported.
-      await using tail = await fsOpen(validPath, READ_NOFOLLOW);
-      if ((await tail.read(last, 0, 1, size - 1)).bytesRead === 0) return '';
+      await using tail = await fsOpen(validPath, READ_NONBLOCK_NOFOLLOW);
+      // The path may name another entry by now (a swapped file, a FIFO): only
+      // the file the append handle holds may decide, so anything else adds nothing.
+      if (!sameIdentity(identityOf(await tail.stat()), identityOf(opened))) return '';
+      if ((await tail.read(last, 0, 1, opened.size - 1)).bytesRead === 0) return '';
     } catch {
       return '';
     }
