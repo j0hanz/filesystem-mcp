@@ -167,10 +167,11 @@ after it. The two tools also disagreed: `edit` tried the text as typed first,
 
 The Text view now owns the rule (**Mark** in `GLOSSARY.md`):
 
-- `locate(attempt)` runs the caller's attempt with the text as typed. In a
-  marked file, after a miss or a throw, it runs it once more with the leading
-  U+FEFF removed and keeps that only when it lands at the file start. When
-  both tries fail, the typed failure stands.
+- `locate(attempt, typed)` runs the caller's attempt with the text as typed.
+  In a marked file, after a miss or a throw, and only when one of the `typed`
+  texts starts with U+FEFF, it runs it once more with the leading U+FEFF
+  removed and keeps that only when it lands at the file start. When both tries
+  fail, the typed failure stands; an abort during the retry is rethrown.
 - `place(text, start)` takes the leading U+FEFF off text placed at the start
   of a marked file.
 - `unmark` leaves the interface. `edit` passes its match and `patch` its apply
