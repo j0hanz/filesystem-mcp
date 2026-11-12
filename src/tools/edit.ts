@@ -560,34 +560,26 @@ async function applyEdits(
         `edits[${String(index)}]: oldText has an unpaired surrogate, which would split a character in the file.`,
       );
     }
-    // A leading U+FEFF is matched as typed first. Only when that misses, and the
-    // stripped form matches at the start of the file, is it the copied file BOM.
+    // The Mark rule (GLOSSARY): the Text view decides when a leading U+FEFF is the file's mark.
     const typed = view.accept(edit.oldText);
-    const bare = view.unmark(typed);
-    let oldText = typed;
-    let newText = view.accept(edit.newText);
-    let found = await findEditMatches(newContent, typed, ignoreWhitespace, tick, signal);
-    if (found.count === 0 && bare !== typed) {
-      const stripped = await findEditMatches(newContent, bare, ignoreWhitespace, tick, signal);
-      if (stripped.first?.startIndex === 0) {
-        found = stripped;
-        oldText = bare;
-      }
+    const landing = await view.locate(async (needle) => {
+      const text = needle(typed);
+      const hit = await findEditMatches(newContent, text, ignoreWhitespace, tick, signal);
+      return hit.first
+        ? { value: { found: hit, first: hit.first, oldText: text }, start: hit.first.startIndex }
+        : undefined;
+    });
+    if (!landing) {
+      unmatchedEdits.push(edit.oldText);
+      continue;
     }
-    // Text placed at the start of a marked file: a leading U+FEFF in it is the
-    // file's mark, which the write restores, not a second one (GLOSSARY, Text view).
-    if (found.first?.startIndex === 0) newText = view.unmark(newText);
+    const { found, first, oldText } = landing.value;
+    const newText = view.place(view.accept(edit.newText), landing.start);
 
     // A second match is an error rather than a pick: splicing the first would
     // edit a block the caller may not have meant and still report success.
     if (found.count > 1) throw ambiguousEditError(newContent, found, index, appliedEdits > 0);
 
-    if (!found.first) {
-      unmatchedEdits.push(edit.oldText);
-      continue;
-    }
-
-    const first = found.first;
     const end = first.startIndex + first.length;
     // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
     const replacement = ignoreWhitespace
