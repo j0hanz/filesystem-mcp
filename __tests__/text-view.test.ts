@@ -66,6 +66,66 @@ describe('Text view', () => {
     assert.equal(viewText('a\n').unmark(`${BOM}a`), `${BOM}a`);
   });
 
+  it('locate keeps a typed landing and never retries', async () => {
+    const calls: string[] = [];
+    const hit = await viewText(`${BOM}a\n`).locate((needle) => {
+      calls.push(needle(`${BOM}x`));
+      return { value: 'typed', start: 4 };
+    });
+    assert.deepEqual(hit, { value: 'typed', start: 4 });
+    assert.deepEqual(calls, [`${BOM}x`]);
+  });
+
+  it('locate retries stripped in a marked file and keeps a landing at the start', async () => {
+    const hit = await viewText(`${BOM}a\n`).locate((needle) =>
+      needle(`${BOM}a`) === 'a' ? { value: 'bare', start: 0 } : undefined,
+    );
+    assert.deepEqual(hit, { value: 'bare', start: 0 });
+  });
+
+  it('locate drops a stripped landing past the start', async () => {
+    const hit = await viewText(`${BOM}a\nx\n`).locate((needle) =>
+      needle(`${BOM}x`) === 'x' ? { value: 'bare', start: 2 } : undefined,
+    );
+    assert.equal(hit, undefined);
+  });
+
+  it('an unmarked file runs the attempt once', async () => {
+    let calls = 0;
+    const hit = await viewText('a\n').locate(() => {
+      calls += 1;
+      return undefined;
+    });
+    assert.equal(hit, undefined);
+    assert.equal(calls, 1);
+  });
+
+  it('locate retries after a typed throw and keeps a landing at the start', async () => {
+    const hit = await viewText(`${BOM}a\n`).locate((needle) => {
+      if (needle(BOM) === BOM) throw new Error('typed');
+      return { value: 'bare', start: 0 };
+    });
+    assert.deepEqual(hit, { value: 'bare', start: 0 });
+  });
+
+  it('rethrows the typed failure when the retry also fails', async () => {
+    const typed = new Error('typed');
+    await assert.rejects(
+      viewText(`${BOM}a\n`).locate((needle) => {
+        throw needle(BOM) === BOM ? typed : new Error('retry');
+      }),
+      (e) => e === typed,
+    );
+  });
+
+  it('place drops a leading U+FEFF only at the start of a marked file', () => {
+    const marked = viewText(`${BOM}a\n`);
+    assert.equal(marked.place(`${BOM}b`, 0), 'b');
+    assert.equal(marked.place(`${BOM}${BOM}b`, 0), `${BOM}b`);
+    assert.equal(marked.place(`${BOM}b`, 3), `${BOM}b`);
+    assert.equal(viewText('a\n').place(`${BOM}b`, 0), `${BOM}b`);
+  });
+
   it('prefilterBytes drops the BOM bytes and refuses bytes holding a CR', () => {
     assert.deepEqual(prefilterBytes(Buffer.from(`${BOM}ab`)), Buffer.from('ab'));
     assert.deepEqual(prefilterBytes(Buffer.from('ab')), Buffer.from('ab'));
