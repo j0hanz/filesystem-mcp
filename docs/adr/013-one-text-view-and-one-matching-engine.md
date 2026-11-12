@@ -156,3 +156,28 @@ CRs back afterwards (`createMatchEngine` in
 such a file the regex `\r\n` matches nothing, and the regex `a\nb` matches
 `a\r\nb` while the literal needle `a\nb` does not. This was recorded only in
 `CHANGELOG.md` until now.
+
+## Addendum: the Text view owns the Mark rule (2026-11-12)
+
+This supersedes the 2026-11-10 addendum on `accept` and `unmark`. That one
+left `edit` and `patch` each deciding when a leading U+FEFF in client text is
+the file's mark, and the rule drew six fix commits in one week, two of them
+after it. The two tools also disagreed: `edit` tried the text as typed first,
+`patch` always stripped line 1.
+
+The Text view now owns the rule (**Mark** in `GLOSSARY.md`):
+
+- `locate(attempt)` runs the caller's attempt with the text as typed. In a
+  marked file, after a miss or a throw, it runs it once more with the leading
+  U+FEFF removed and keeps that only when it lands at the file start. When
+  both tries fail, the typed failure stands.
+- `place(text, start)` takes the leading U+FEFF off text placed at the start
+  of a marked file.
+- `unmark` leaves the interface. `edit` passes its match and `patch` its apply
+  as the attempt; neither knows the offset-0 rule.
+
+`patch` therefore tries line 1 as typed first, as `edit` does. A diff that
+types a U+FEFF after the mark as text now applies, and a mismatch reports the
+line as typed. Only an added line on line 1 is placed; a context line there
+is matched text and keeps what it typed. `patch` still drops a leading U+FEFF
+of the diff text itself.

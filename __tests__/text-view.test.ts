@@ -58,14 +58,6 @@ describe('Text view', () => {
     assert.equal(viewText(`${BOM}a\r\nb\r\n`).accept(`${BOM}a\r\nb`), `${BOM}a\nb`);
   });
 
-  it('unmark drops one leading U+FEFF only for a file with a mark', () => {
-    const marked = viewText(`${BOM}a\n`);
-    assert.equal(marked.unmark(`${BOM}a`), 'a');
-    assert.equal(marked.unmark(`${BOM}${BOM}a`), `${BOM}a`);
-    assert.equal(marked.unmark('a'), 'a');
-    assert.equal(viewText('a\n').unmark(`${BOM}a`), `${BOM}a`);
-  });
-
   it('locate keeps a typed landing and never retries', async () => {
     const calls: string[] = [];
     const hit = await viewText(`${BOM}a\n`).locate((needle) => {

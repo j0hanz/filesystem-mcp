@@ -61,9 +61,16 @@ with mixed endings is shown as written. A write through the view puts both
 back, so the file keeps its mark and its endings. A text search and every
 Rewrite read through one view; what a Rewrite reports as before and after is
 the text on disk, not the view. Text a client typed keeps a leading U+FEFF as
-content; only the tool that places the text rules it the file's mark, where
-the text sits at the start of the file.
+content unless the Mark rule takes it.
 _Avoid_: normalised text, decoded content, prepared text
+
+**Mark**:
+A file's leading byte-order mark, which the Text view hides. Text a client
+sends is first judged as typed; only when that finds nothing is a leading
+U+FEFF in it taken for the mark, and then only where the text sits at the
+start of the file. Text placed at the start of a marked file loses its
+leading U+FEFF to the mark rather than adding a second one.
+_Avoid_: BOM (the bytes on disk), signature
 
 ## Matching
 

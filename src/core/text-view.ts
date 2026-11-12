@@ -5,7 +5,7 @@
  * a write through the view keeps the file's mark and endings.
  */
 /** Where an attempt landed: `start` 0 is the file start. */
-export interface Landing<T> {
+interface Landing<T> {
   value: T;
   start: number;
 }
@@ -19,8 +19,6 @@ export interface TextView {
   readonly crlf: boolean;
   /** Text a client wrote, with the view's line endings. A leading U+FEFF is kept. */
   accept(text: string): string;
-  /** `text` without a leading U+FEFF, when the file has a mark. */
-  unmark(text: string): string;
   /**
    * The Mark rule (GLOSSARY). Runs `attempt` with client text as typed
    * (`needle` is the identity). In a marked file, when that misses (returns
@@ -56,7 +54,6 @@ export function viewText(disk: string): TextView {
     accept(text) {
       return crlf ? text.replaceAll('\r\n', '\n') : text;
     },
-    unmark,
     async locate(attempt) {
       let typedError: { error: unknown } | undefined;
       try {

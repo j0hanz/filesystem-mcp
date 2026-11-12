@@ -201,6 +201,31 @@ describe('patch body', () => {
     assert.strictEqual(await readFile(f, 'utf-8'), '\uFEFF\n\uFEFFc\n');
   });
 
+  it('line 1 typed as the view shows it applies to a double-mark file', async () => {
+    const f = join(root, 'patch_bom_twice_typed.txt');
+    await writeFile(f, '﻿﻿a\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,2 @@\n ﻿a\n-b\n+c\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '﻿﻿a\nc\n');
+  });
+
+  it('a typed context line 1 keeps a second U+FEFF', async () => {
+    const f = join(root, 'patch_bom_twice_context.txt');
+    await writeFile(f, '﻿﻿a\nb\n');
+    await patch({ path: f, diff: '--- a\n+++ a\n@@ -1,2 +1,3 @@\n ﻿a\n+n\n b\n' });
+    assert.strictEqual(await readFile(f, 'utf-8'), '﻿﻿a\nn\nb\n');
+  });
+
+  it('a mismatched marked diff reports the typed line', async () => {
+    const f = join(root, 'patch_bom_mismatch.txt');
+    await writeFile(f, '﻿a\nb\n');
+    const diff = '--- a\n+++ a\n@@ -1,2 +1,2 @@\n-﻿q\n+z\n b\n';
+    await assert.rejects(patch({ path: f, diff }), (error: unknown) => {
+      assert.ok(isFsError(error), 'expected FsError');
+      assert.ok((error.message ?? '').includes('expected "﻿q"'), error.message);
+      return true;
+    });
+  });
+
   it('names end of file for a line the file does not have', async () => {
     const f = join(root, 'patch_eof.txt');
     await writeFile(f, 'a\n');

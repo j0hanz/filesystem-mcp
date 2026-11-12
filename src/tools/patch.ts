@@ -95,10 +95,19 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       transport: ctx.transport,
       tool: 'patch',
     },
-    (content, view: TextView) => {
+    async (content, view: TextView) => {
       // A leading U+FEFF is the diff's own mark, whatever the file holds.
       const diff = view.accept(args.diff.startsWith('\uFEFF') ? args.diff.slice(1) : args.diff);
-      const result = patchContent({ ...args, diff }, content, (text) => view.unmark(text));
+      // The Mark rule (GLOSSARY): line 1 as typed first, then without the file's mark.
+      const landing = await view.locate((needle) => {
+        const patched = patchContent({ ...args, diff }, content, needle, (text) =>
+          view.place(text, 0),
+        );
+        return { value: patched, start: patched.atStart ? 0 : 1 };
+      });
+      // An attempt lands or throws, so locate only misses by rethrowing.
+      if (!landing) throw new FsError(ErrorCode.UNKNOWN, 'patch: no result', args.path);
+      const result = landing.value;
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };
     },
@@ -224,8 +233,9 @@ function mismatchDetail(
 function patchContent(
   args: z.infer<typeof PatchInputSchema>,
   content: string,
-  unmark: (text: string) => string = (text) => text,
-): { patched: string; linesAdded: number; linesRemoved: number } {
+  needle: (text: string) => string,
+  place: (text: string) => string,
+): { patched: string; linesAdded: number; linesRemoved: number; atStart: boolean } {
   // patch is single-file only: a multi-file unified diff (parsePatch length > 1)
   // is rejected. Multi-file application needs per-file PathGuard-resolved loaders
   // and is deferred (out of scope).
@@ -246,10 +256,11 @@ function patchContent(
     );
   }
   const firstHunk = parsedPatch.hunks[0];
-  if (firstHunk && firstHunk.oldStart <= 1) {
-    // The view hides the file's BOM; a diff copied from the raw file carries it on
-    // line 1. Only the first old-side and first new-side lines are line 1, and
-    // a context line is both, so each hunk line is stripped at most once.
+  const atStart = firstHunk !== undefined && firstHunk.oldStart <= 1;
+  if (firstHunk && atStart) {
+    // Only the first old-side and first new-side lines are line 1. A context or
+    // removed line there is matched text (`needle`); an added line there is
+    // placed text (`place`). A context line is matched, so it keeps what it typed.
     let oldLine = 1;
     let newLine = 1;
     for (const [i, line] of firstHunk.lines.entries()) {
@@ -257,8 +268,9 @@ function patchContent(
       // jsdiff reads a bare empty line as context.
       const mark = line === '' ? ' ' : line.charAt(0);
       if (mark !== ' ' && mark !== '-' && mark !== '+') continue;
-      if ((mark !== '+' && oldLine === 1) || (mark !== '-' && newLine === 1)) {
-        if (line !== '') firstHunk.lines[i] = mark + unmark(line.slice(1));
+      if (line !== '') {
+        if (mark !== '+' && oldLine === 1) firstHunk.lines[i] = mark + needle(line.slice(1));
+        else if (mark === '+' && newLine === 1) firstHunk.lines[i] = mark + place(line.slice(1));
       }
       if (mark !== '+') oldLine++;
       if (mark !== '-') newLine++;
@@ -333,5 +345,5 @@ function patchContent(
       args.path,
     );
   }
-  return { patched, linesAdded, linesRemoved };
+  return { patched, linesAdded, linesRemoved, atStart };
 }

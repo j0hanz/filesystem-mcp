@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed.
+
 ## [2.20.0] - 2026-11-11
 
 One Text view and one matching engine for `search_text`, `replace_text`,
