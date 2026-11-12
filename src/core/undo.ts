@@ -775,7 +775,7 @@ async function assertTreeKeepsPolicy(
   }
 }
 
-export interface RestoreOutcome {
+interface RestoreOutcome {
   results: UndoFileResult[];
   remaining: UndoRecord[];
 }
@@ -933,6 +933,9 @@ const errnoError = (code: string, syscall: string, path: string): NodeJS.ErrnoEx
  * one undo call, so an older step's preview sees what reverting the newer ones
  * would do. Identities the preview mints follow the journal's re-keying, so a
  * move is previewed against the same identity check the real run makes.
+ *
+ * @internal Built by `UndoJournal.restore`; exported only for the emulator
+ * test that no record sequence reaches.
  */
 export class UndoPreview {
   readonly #fs: GuardedFileSystem;
@@ -1311,7 +1314,7 @@ export class UndoPreview {
  * what the call changed. A record whose target no longer matches what the
  * call wrote is skipped, not restored — a skip never fails the call.
  */
-export async function restoreEntry(
+async function restoreEntry(
   entry: UndoEntry,
   fs: GuardedFileSystem,
   opts: {
