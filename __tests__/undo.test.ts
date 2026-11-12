@@ -995,7 +995,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await fs.writeFile(file, 'one');
     await fs.writeFile(file, 'two');
     await fs.appendFile(file, '!');
-    assert.strictEqual(await readFile(file, 'utf8'), 'two!');
+    assert.strictEqual(await readFile(file, 'utf8'), 'two\n!');
     await fs.rm(file);
     await fs.rmdir(dir);
     await assert.rejects(lstat(dir));

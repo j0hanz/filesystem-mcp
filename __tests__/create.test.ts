@@ -239,6 +239,25 @@ describe('create body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'first\nsecond\n');
   });
 
+  it('starts appended content on a new line when the file does not end with one', async () => {
+    const file = await writeTestFile(root, 'append_unterminated.txt', 'first');
+    const result = await create({ files: [{ path: file, content: 'second', append: true }] });
+
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), 'first\nsecond');
+    assert.strictEqual(result.structured.files[0]?.lineCount, 2);
+  });
+
+  it('two concurrent appends to one unterminated file land on separate lines', async () => {
+    // One call cannot name a file twice (the schema refuses the duplicate), so two calls race.
+    const file = await writeTestFile(root, 'append_twice.txt', 'x');
+    await Promise.all(
+      ['a', 'b'].map((content) => create({ files: [{ path: file, content, append: true }] })),
+    );
+
+    assert.deepStrictEqual((await readFile(file, 'utf-8')).split('\n').sort(), ['a', 'b', 'x']);
+  });
+
   it('reports the write time when the post-append stat fails', async (t) => {
     const file = await writeTestFile(root, 'append_stat_fails.txt', 'first\n');
     let appended = false;
@@ -274,16 +293,21 @@ describe('create body', () => {
   it('counts lines up to the size limit and not past it', async (t) => {
     await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
       const count = t.mock.method(GuardedFileSystem.prototype, 'countFileLines');
+      // Seeds end with a newline so the append adds no separator byte of its own.
       const content = 'x\n';
-      const atLimit = await writeTestFile(root, 'at_limit.log', 'a'.repeat(MIB - content.length));
+      const atLimit = await writeTestFile(
+        root,
+        'at_limit.log',
+        `${'a'.repeat(MIB - content.length - 1)}\n`,
+      );
       const at = await create({ files: [{ path: atLimit, content, append: true }] });
-      assert.strictEqual(at.structured.files[0]?.lineCount, 1);
+      assert.strictEqual(at.structured.files[0]?.lineCount, 2);
       assert.strictEqual(count.mock.callCount(), 1);
 
       const over = await writeTestFile(
         root,
         'over_limit.log',
-        'a'.repeat(MIB - content.length + 1),
+        `${'a'.repeat(MIB - content.length)}\n`,
       );
       const past = await create({ files: [{ path: over, content, append: true }] });
       assert.strictEqual(past.structured.files[0]?.lineCount, 0);

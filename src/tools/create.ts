@@ -43,7 +43,7 @@ const CreateFileItemSchema = z.strictObject({
     .boolean()
     .optional()
     .describe(
-      'Add content to the end, adding no newline; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.',
+      'Add content to the end, starting a new line if needed; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.',
     ),
   overwrite: z
     .boolean()

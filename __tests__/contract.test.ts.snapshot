@@ -41,7 +41,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "description": "Full text to write, verbatim, as UTF-8."
                 },
                 "append": {
-                  "description": "Add content to the end, adding no newline; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.",
+                  "description": "Add content to the end, starting a new line if needed; creates a missing file. Never asks; wins over overwrite. lineCount is 0 past FS_MAX_FILE_SIZE.",
                   "type": "boolean"
                 },
                 "overwrite": {
