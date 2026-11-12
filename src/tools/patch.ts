@@ -99,14 +99,16 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
       // A leading U+FEFF is the diff's own mark, whatever the file holds.
       const diff = view.accept(args.diff.startsWith('\uFEFF') ? args.diff.slice(1) : args.diff);
       // The Mark rule (GLOSSARY): line 1 as typed first, then without the file's mark.
-      const landing = await view.locate((needle) => {
-        const patched = patchContent({ ...args, diff }, content, needle, (text) =>
-          view.place(text, 0),
-        );
-        return { value: patched, start: patched.atStart ? 0 : 1 };
-      });
-      // An attempt lands or throws, so locate only misses by rethrowing.
-      if (!landing) throw new FsError(ErrorCode.UNKNOWN, 'patch: no result', args.path);
+      const landing = await view.locate(
+        (needle) => {
+          const patched = patchContent({ ...args, diff }, content, needle, (text) =>
+            view.place(text, 0),
+          );
+          return { value: patched, start: patched.atStart ? 0 : 1 };
+        },
+        // Every diff line's text, past its +/-/space mark: a superset of line 1's.
+        diff.split('\n').map((line) => line.slice(1)),
+      );
       const result = landing.value;
       // A patch of context lines only changes nothing: no write, no undo entry, no watcher event.
       return { content: result.patched, result, write: result.patched !== content };

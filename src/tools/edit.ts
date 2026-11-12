@@ -562,13 +562,16 @@ async function applyEdits(
     }
     // The Mark rule (GLOSSARY): the Text view decides when a leading U+FEFF is the file's mark.
     const typed = view.accept(edit.oldText);
-    const landing = await view.locate(async (needle) => {
-      const text = needle(typed);
-      const hit = await findEditMatches(newContent, text, ignoreWhitespace, tick, signal);
-      return hit.first
-        ? { value: { found: hit, first: hit.first, oldText: text }, start: hit.first.startIndex }
-        : undefined;
-    });
+    const landing = await view.locate(
+      async (needle) => {
+        const text = needle(typed);
+        const hit = await findEditMatches(newContent, text, ignoreWhitespace, tick, signal);
+        return hit.first
+          ? { value: { found: hit, first: hit.first, oldText: text }, start: hit.first.startIndex }
+          : undefined;
+      },
+      [typed],
+    );
     if (!landing) {
       unmatchedEdits.push(edit.oldText);
       continue;
