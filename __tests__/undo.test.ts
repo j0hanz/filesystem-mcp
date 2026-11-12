@@ -83,7 +83,8 @@ const undoEntry = async (
   entry: UndoEntry,
   fs: GuardedFileSystem,
   opts: { dryRun: boolean; signal?: AbortSignal },
-  journal = new UndoJournal(),
+  // A fixed budget: FS_MAX_UNDO_BYTES in the environment must not evict the entry.
+  journal = new UndoJournal(32 * 1024 * 1024),
 ): Promise<{ results: UndoFileResult[]; remaining: UndoRecord[] }> => {
   const id = journal.get(entry.id) === entry ? entry.id : journal.add(entry.tool, entry.records);
   const steps = await journal.restore({ id }, fs, opts);
@@ -92,7 +93,7 @@ const undoEntry = async (
 
 /** Dry-run the captured calls, given newest first, as one undo of that many steps. */
 const previewAll = async (entries: UndoEntry[], fs: GuardedFileSystem) => {
-  const journal = new UndoJournal();
+  const journal = new UndoJournal(32 * 1024 * 1024);
   for (const entry of [...entries].reverse()) journal.add(entry.tool, entry.records);
   const steps = await journal.restore({ steps: entries.length }, fs, { dryRun: true });
   return steps.flatMap((step) => step.results);
@@ -3042,7 +3043,8 @@ describe('UndoJournal.restore', () => {
       journal.restore({ steps: 2 }, newFs(), {
         dryRun: false,
         signal: controller.signal,
-        // Abort as the second record starts: the first has finished, the second does not run.
+        // Abort as the second record starts: the first has finished; the second
+        // starts after the abort, fails, and stays.
         onProgress: (p) => {
           if (p.current === 2) controller.abort();
         },
@@ -3051,7 +3053,27 @@ describe('UndoJournal.restore', () => {
     );
     assert.strictEqual(journal.get(newerId)?.records.length, 1);
     assert.strictEqual(journal.get(olderId)?.records.length, 1);
+    // Records restore in reverse: y finished before the abort, x did not.
+    assert.strictEqual(await readFile(y, 'utf8'), 'old');
+    assert.strictEqual(await readFile(x, 'utf8'), 'new');
     assert.strictEqual(await readFile(older, 'utf8'), 'new');
+  });
+
+  it('an entry added while a restore runs is not restored by it', async () => {
+    const done = join(tmpDir, 'jr-added-done.txt');
+    await writeFile(done, 'old');
+    const journal = new UndoJournal();
+    const id = await journaled(journal, 'edit', (fs) => fs.writeFile(done, 'new'));
+    let addedId: string | undefined;
+    const steps = await journal.restore({}, newFs(), {
+      dryRun: false,
+      onProgress: () => {
+        addedId ??= journal.add('edit', [writeRecord(1)]);
+      },
+    });
+    assert.ok(addedId);
+    assert.deepStrictEqual(ids(steps), [id]);
+    assert.ok(journal.get(addedId), 'the entry added meanwhile stays in the journal');
   });
 
   it('reports progress over every record of every selected entry', async () => {

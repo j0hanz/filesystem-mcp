@@ -302,7 +302,6 @@ export class UndoJournal {
       for (const entry of entries) {
         signal?.throwIfAborted();
         const outcome = await restoreEntry(entry, fs, {
-          dryRun,
           preview,
           signal,
           onRewrite: (was, identity) => {
@@ -1318,8 +1317,7 @@ async function restoreEntry(
   entry: UndoEntry,
   fs: GuardedFileSystem,
   opts: {
-    dryRun: boolean;
-    /** The dry run's view, shared across the entries of one undo; one is made when absent. */
+    /** A dry run's view, shared across the entries of one undo; absent for a real run. */
     preview?: UndoPreview | undefined;
     /**
      * A restore replaced the file `was` with a new inode; the owner of the
@@ -1334,9 +1332,7 @@ async function restoreEntry(
   },
 ): Promise<RestoreOutcome> {
   const { signal } = opts;
-  const world = opts.dryRun
-    ? (opts.preview ?? new UndoPreview(fs, signal)).world()
-    : diskWorld(fs, signal, opts.onRewrite);
+  const world = opts.preview ? opts.preview.world() : diskWorld(fs, signal, opts.onRewrite);
   // Records that did not run because a directory they sit under was not restored.
   const blocked: string[] = [];
   const isBlocked = (path: string): boolean =>
