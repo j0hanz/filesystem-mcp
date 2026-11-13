@@ -241,7 +241,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
               ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
               signal: ctx.signal,
             },
-            ctx.fs.pathGuard,
+            ctx.fs,
           );
 
           // Relative to the root, not to scope.root: `a.ts` from a search of

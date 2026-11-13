@@ -1126,7 +1126,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         { root: searchContentDir },
         'TARGET_LITERAL_STRING',
         { isRegex: false },
-        ctx.pathGuard,
+        new GuardedFileSystem(ctx.pathGuard),
       );
 
       assert.strictEqual(outcome.summary.filesMatched, 2);
@@ -1148,14 +1148,19 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         { root: dir },
         'NEEDLE;$',
         { isRegex: true },
-        ctx.pathGuard,
+        new GuardedFileSystem(ctx.pathGuard),
       );
       assert.strictEqual(outcome.matches.length, 1);
       assert.strictEqual(basename(outcome.matches[0]?.file ?? ''), 'crlf.txt');
       assert.strictEqual(outcome.matches[0]?.content, 'NEEDLE;');
 
       // latin1.txt fails read's sample check inside its first 512 bytes.
-      const all = await searchContent({ root: dir }, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      const all = await searchContent(
+        { root: dir },
+        'NEEDLE',
+        { isRegex: false },
+        new GuardedFileSystem(ctx.pathGuard),
+      );
       assert.deepStrictEqual(
         all.matches.map((m) => basename(m.file)),
         ['crlf.txt'],
@@ -1181,7 +1186,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         { root: dir },
         'NEEDLE',
         { isRegex: false },
-        ctx.pathGuard,
+        new GuardedFileSystem(ctx.pathGuard),
       );
       assert.deepStrictEqual(
         outcome.matches.map((m) => basename(m.file)),
@@ -1200,7 +1205,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         { root: dir },
         'NEEDLE',
         { isRegex: false, signal },
-        ctx.pathGuard,
+        new GuardedFileSystem(ctx.pathGuard),
       );
       assert.strictEqual(content.matches.length, 0);
       assert.strictEqual(content.summary.stoppedReason, 'timeout');
@@ -1466,7 +1471,7 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
             { root, explicitFile: victim },
             'TOP_SECRET',
             {},
-            ctx.pathGuard,
+            new GuardedFileSystem(ctx.pathGuard),
           );
         } catch {
           /* refusals are fine */
@@ -1530,7 +1535,7 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
             { root, explicitFile: victim },
             'TOP_SECRET',
             {},
-            ctx.pathGuard,
+            new GuardedFileSystem(ctx.pathGuard),
           );
         } catch {
           /* refusals are fine */

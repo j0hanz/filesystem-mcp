@@ -1,6 +1,6 @@
 import { ErrorCode, FsError } from './errors.ts';
 import { clipLine } from './fmt.ts';
-import { GuardedFileSystem } from './fs.ts';
+import type { GuardedFileSystem } from './fs.ts';
 import {
   createMatchEngine,
   isRe2Abort,
@@ -9,7 +9,6 @@ import {
   re2AbortError,
 } from './matcher.ts';
 import { Logger } from './observability.ts';
-import type { PathGuard } from './path.ts';
 import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
 import { scan, ScanSkip, skipOf } from './scan.ts';
 import { viewText } from './text-view.ts';
@@ -189,7 +188,7 @@ export async function searchContent(
   scope: ScanScope,
   pattern: string,
   options: SearchContentOptions,
-  pathGuard: PathGuard,
+  fs: GuardedFileSystem,
 ): Promise<SearchContentOutcome> {
   const flags = {
     isRegex: Boolean(options.isRegex),
@@ -207,7 +206,7 @@ export async function searchContent(
     let trimmed = false;
     let cut = false;
     const scanCtx: ScanContext = {
-      fs: new GuardedFileSystem(pathGuard),
+      fs,
       signal: options.signal,
       maxResults,
       engine,
@@ -217,7 +216,7 @@ export async function searchContent(
     const outcome = await scan<FileScan>(
       scope,
       {
-        pathGuard,
+        pathGuard: fs.pathGuard,
         tool: 'search_text',
         pattern: options.filePattern ?? '**/*',
         // Same rule as replace_text, so a search with the same glob previews the

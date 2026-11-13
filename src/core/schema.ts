@@ -12,10 +12,10 @@ import { MAX_SEARCH_DEPTH } from './util.ts';
  * dedupes its alternatives pairwise, synchronously: `{1..100000}` pins the
  * event loop for most of a minute, where 1024 costs tens of milliseconds.
  */
-export const MAX_BRACE_ALTERNATIVES = 1024;
+const MAX_BRACE_ALTERNATIVES = 1024;
 
 /** Bound synchronous glob compilation when checking candidate traversal segments. */
-export const MAX_DOTDOT_CHECK_CHARS = 4096;
+const MAX_DOTDOT_CHECK_CHARS = 4096;
 
 /**
  * fs.glob tests each name against a regex compiled from the segment,
@@ -24,7 +24,7 @@ export const MAX_DOTDOT_CHECK_CHARS = 4096;
  * under 100 ms, four about 1 s, and five do not finish; a chain of `?(a|aa)`
  * groups grows the same way.
  */
-export const MAX_SEGMENT_WILDCARDS = 3;
+const MAX_SEGMENT_WILDCARDS = 3;
 
 /** Brace range bodies (`x..y`, `x..y..step`); `foldPatternCase` in glob.ts keeps them as written. */
 // The range bodies fs.glob's brace expansion recognises, as it writes them.
