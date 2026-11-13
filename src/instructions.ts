@@ -1,10 +1,7 @@
+import { getMaxTextFileSize } from './core/config.ts';
 import { formatByteSize } from './core/fmt.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from './core/outbound.ts';
-import {
-  DEFAULT_SEARCH_CONTENT_RESULTS,
-  getMaxTextFileSize,
-  MAX_SEARCH_RESULTS,
-} from './core/util.ts';
+import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from './core/util.ts';
 import {
   FIND_FILES,
   LIST,
