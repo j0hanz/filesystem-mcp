@@ -6,9 +6,10 @@ import { after, before, describe, it } from 'node:test';
 
 import type * as z from 'zod/v4';
 
+import { getMaxTextFileSize } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
+import { MIB } from '../src/core/util.ts';
 import { CREATE } from '../src/tools/create.ts';
 import {
   cleanupTestRoot,

@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
+import { getMaxTextFileSize } from '../core/config.ts';
 import { confirm } from '../core/confirmation.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
@@ -18,7 +19,6 @@ import {
 } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
-import { getMaxTextFileSize } from '../core/util.ts';
 import {
   type BatchResult,
   type BatchSlot,

@@ -2,6 +2,7 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
 
+import { getMaxTextFileSize } from '../core/config.ts';
 import {
   type DiffBudget,
   finishDiff,
@@ -36,12 +37,7 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import {
-  DEFAULT_SEARCH_RESULTS,
-  getMaxTextFileSize,
-  MAX_SEARCH_RESULTS,
-  PARALLEL_CONCURRENCY,
-} from '../core/util.ts';
+import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, failureLines, isTotalFailure } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 

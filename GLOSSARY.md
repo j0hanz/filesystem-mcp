@@ -176,6 +176,19 @@ replayed onto another.
 _Avoid_: request context (the whole SDK shape a tool body never sees),
 bind context
 
+## Configuration
+
+**Setting**:
+An operator's choice that can be given as a command-line flag or as an `FS_*`
+environment variable. The flag wins. A flag whose value is invalid falls back
+to the default, never to the variable, and a rejected value is warned about
+once. A setting has one answer for the guard, the tools and `--print-config`
+alike. A list an operator can give both ways (deny patterns, allow patterns,
+read-only folders) is the union of both and is not a setting; neither is a
+choice settled once at startup (port, host, API key, read-only).
+_Avoid_: config value, option, override (the flag half), env var (the other
+half)
+
 ## Transport
 
 **Message limit**:

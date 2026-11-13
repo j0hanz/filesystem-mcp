@@ -20,10 +20,11 @@ import { createServer as createHttpServer } from 'node:http';
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 
+import { parseEnvInt, parseTrueEnvFlag } from '../core/config.ts';
 import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { PathGuard, ServerOptions } from '../core/path.ts';
-import { getMaxInboundMessageBytes, parseEnvInt, parseTrueEnvFlag } from '../core/util.ts';
+import { getMaxInboundMessageBytes } from '../core/util.ts';
 import type { WatcherRegistry } from '../core/watcher-registry.ts';
 import { createRuntimeState, createServer } from '../server.ts';
 import {

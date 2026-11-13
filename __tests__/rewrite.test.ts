@@ -4,13 +4,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { getMaxTextFileSize } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { Change } from '../src/core/rewrite.ts';
 import { rewriteEntry, rewriteFile } from '../src/core/rewrite.ts';
 import { ScanSkip } from '../src/core/scan.ts';
-import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
+import { MIB } from '../src/core/util.ts';
 import { cleanupTestRoot, createTestRoot, fsErrorMatcher, makeGuard, withEnv } from './helpers.ts';
 
 const upper = (c: string): Change<number> => ({ content: c.toUpperCase(), result: 1, write: true });

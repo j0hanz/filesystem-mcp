@@ -24,6 +24,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { getMaxTextFileSize } from '../src/core/config.ts';
 import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import {
@@ -40,7 +41,7 @@ import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
 import { searchContent } from '../src/core/search.ts';
 import { UndoJournal } from '../src/core/undo.ts';
-import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
+import { MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -443,7 +444,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
       const fullRead = await fs.read(filePath);
-      assert.ok(fullRead.content.endsWith('caf�\n'));
+      assert.ok(fullRead.content.endsWith('caf\uFFFD\n'));
     });
   });
 

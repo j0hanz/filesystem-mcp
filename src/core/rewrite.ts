@@ -1,12 +1,12 @@
 import type { Stats } from 'node:fs';
 
 import { withAbort } from './concurrency.ts';
+import { getMaxTextFileSize } from './config.ts';
 import { createTooLargeError } from './errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { type ScanSkip, skipOf } from './scan.ts';
 import { type TextView, viewText } from './text-view.ts';
-import { getMaxTextFileSize } from './util.ts';
 
 /**
  * The Rewrite: a call that replaces a text file's content with a transform of

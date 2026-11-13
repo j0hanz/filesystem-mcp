@@ -6,7 +6,16 @@ import { parseArgs as utilParseArgs } from 'node:util';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { printHelpAndExit, printVersionAndExit } from './cli-help.ts';
-import { cli, MODERN_PROTOCOL_REVISION } from './core/config.ts';
+import {
+  cli,
+  getAllowCwd,
+  getAllowMissingRoots,
+  getMaxTextFileSize,
+  getRootBoundary,
+  getToolTimeoutMs,
+  MODERN_PROTOCOL_REVISION,
+  parseTrueEnvFlag,
+} from './core/config.ts';
 import { formatUnknownErrorMessage, isNodeError } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
@@ -17,12 +26,7 @@ import {
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
-import {
-  getMaxInboundMessageBytes,
-  getMaxTextFileSize,
-  getToolTimeoutMs,
-  parseTrueEnvFlag,
-} from './core/util.ts';
+import { getMaxInboundMessageBytes } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
 
 // ════════════════════════════════════════════════════════════
@@ -211,9 +215,8 @@ export async function parseArgs(): Promise<{
     const v = parsed.values;
     // `--http-host` and `--api-key` are returned to the caller and handed to
     // the server as config. Every other flag lands in the CLI-override store
-    // (core/config.ts) — the one owner of the flag-beats-env rule — which deep
-    // core readers (path, sensitive, observability, util) consult before
-    // falling back to the operator's environment. Nothing writes process.env.
+    // (core/config.ts), whose Setting reads answer flag, else variable, else
+    // default for every reader. Nothing writes process.env.
     const httpHost = v['http-host'] ?? process.env['FS_HTTP_HOST'];
     // '' reads as unset, like FS_PORT: a set-but-empty FS_API_KEY (compose templating) means no key.
     const rawApiKey = v['api-key'] ?? process.env['FS_API_KEY'];
@@ -224,6 +227,7 @@ export async function parseArgs(): Promise<{
     if (v['root-boundary'] !== undefined) cli.rootBoundary = v['root-boundary'];
     if (v['allow-sensitive']) cli.allowSensitive = true;
     if (v['walk-cwd']) cli.allowCwdWalk = true;
+    if (v['allow-cwd']) cli.allowCwd = true;
     if (v['allow-missing-roots']) cli.allowMissingRoots = true;
     const patternList = (entries: readonly string[] | undefined): readonly string[] => [
       ...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean)),
@@ -233,17 +237,12 @@ export async function parseArgs(): Promise<{
     const allowPatterns = patternList(v.allow);
     if (allowPatterns.length > 0) cli.allowPatterns = allowPatterns;
 
-    const allowCwd =
-      v['allow-cwd'] ||
-      v['walk-cwd'] ||
-      parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
+    const allowCwd = getAllowCwd();
     const readOnly =
       v['read-only'] || parseTrueEnvFlag(process.env['FS_READ_ONLY'], 'FS_READ_ONLY');
     const printConfig = v['print-config'];
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
-    const allowMissingRoots =
-      v['allow-missing-roots'] ||
-      parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
+    const allowMissingRoots = getAllowMissingRoots();
 
     // A read-only dir need not be an allowed root — the guard unions these
     // with FS_READ_ONLY_DIRS and matches by containment, so an out-of-root
@@ -350,10 +349,8 @@ export async function runPrintConfig(
     // sources the guard and the matcher use (flag beats env).
     policy: {
       ...describeSensitivePolicy(),
-      rootBoundary: cli.rootBoundary ?? process.env['FS_ROOT_BOUNDARY'] ?? null,
-      allowMissingRoots:
-        cli.allowMissingRoots ??
-        parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS'),
+      rootBoundary: getRootBoundary() ?? null,
+      allowMissingRoots: getAllowMissingRoots(),
     },
   };
 

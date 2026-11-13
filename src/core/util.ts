@@ -1,47 +1,10 @@
 import { createHash } from 'node:crypto';
 import { availableParallelism } from 'node:os';
 
-import { cli } from './config.ts';
-import { warnInvalidSetting } from './path-utils.ts';
+import { getMaxTextFileSize, parseEnvInt } from './config.ts';
 
 const KIB = 1024;
 export const MIB = 1024 * KIB;
-
-export function parseEnvInt(
-  envVar: string,
-  defaultValue: number,
-  min: number,
-  max: number,
-): number {
-  return parseIntSetting(envVar, process.env[envVar], defaultValue, min, max);
-}
-
-/** Validate a raw integer setting (env var or CLI override) with a logged fallback. */
-function parseIntSetting(
-  name: string,
-  value: string | undefined,
-  defaultValue: number,
-  min: number,
-  max: number,
-): number {
-  if (!value) {
-    return defaultValue;
-  }
-
-  const trimmed = value.trim();
-  const parsed = Number(trimmed);
-  if (
-    trimmed === '' ||
-    Number.isNaN(parsed) ||
-    !Number.isInteger(parsed) ||
-    parsed < min ||
-    parsed > max
-  ) {
-    warnInvalidSetting(name, value, `${String(min)}-${String(max)}`, defaultValue);
-    return defaultValue;
-  }
-  return parsed;
-}
 
 /**
  * Split a comma-separated config value into trimmed, non-empty entries. Empty
@@ -54,21 +17,6 @@ export function splitCsvList(value: string | undefined): string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
-}
-
-/**
- * Parse a boolean env flag: `true`/`1` enable, `false`/`0`/empty disable.
- * Any other value warns once per var (when `name` is given) and reads as
- * false, so a typo like `FS_ALLOW_SENSITIVE=yes` is never silent.
- */
-export function parseTrueEnvFlag(value: string | undefined, name?: string): boolean {
-  if (value === undefined) return false;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed === 'true' || trimmed === '1') return true;
-  if (name && trimmed !== '' && trimmed !== 'false' && trimmed !== '0') {
-    warnInvalidSetting(name, value, '"true" or "1"', false);
-  }
-  return false;
 }
 
 /** sha256 of `data` as lowercase hex, the digest every result hash uses. */
@@ -130,16 +78,6 @@ export function getMaxUndoBytes(): number {
 
 export const ROOTS_TIMEOUT_MS = 5000;
 
-export function getMaxTextFileSize(): number {
-  return parseIntSetting(
-    'FS_MAX_FILE_SIZE',
-    cli.maxFileSize ?? process.env['FS_MAX_FILE_SIZE'],
-    10 * MIB,
-    MIB,
-    100 * MIB,
-  );
-}
-
 /**
  * Upper bound, in bytes, on one inbound JSON-RPC message on either transport.
  * Derived from the file-size limit so that a schema-valid `create` — whose
@@ -164,21 +102,6 @@ export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
 
 /** Default line chunk size for read continuation when no explicit range was given. */
 export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;
-
-/**
- * Deadline for one call of a tool that walks or reads the disk (list, stat,
- * read, find_files, search_text, edit, replace_text). Read per call, so the
- * `--tool-timeout` flag applied by cli.ts after module load still counts.
- */
-export function getToolTimeoutMs(): number {
-  return parseIntSetting(
-    'FS_TOOL_TIMEOUT_MS',
-    cli.toolTimeout ?? process.env['FS_TOOL_TIMEOUT_MS'],
-    5000,
-    1000,
-    600_000,
-  );
-}
 
 export const MAX_TREE_DEPTH = 50;
 export const DEFAULT_TREE_ENTRIES = 1000;
