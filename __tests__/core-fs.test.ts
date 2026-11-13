@@ -21,7 +21,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { after, before, describe, it, mock } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
@@ -31,12 +32,12 @@ import {
   GuardedFileSystem,
   identityOf,
   keepOwner,
+  type ReadProbeMeta,
   sameIdentity,
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
-import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent } from '../src/core/search.ts';
 import { UndoJournal } from '../src/core/undo.ts';
 import { getMaxTextFileSize, MIB } from '../src/core/util.ts';
@@ -47,6 +48,7 @@ import {
   createTestRoot,
   createTestServer,
   fsErrorMatcher,
+  makeGuard,
   trySymlink,
   withEnv,
   writeNLineFile,
@@ -85,7 +87,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     syncBuiltinESMExports();
     try {
       await assert.rejects(
-        fs.readRaw(filePath, { signal: AbortSignal.abort(reason) }),
+        fs.read(filePath, { binary: 'raw', signal: AbortSignal.abort(reason) }),
         (error) => error === reason,
       );
       assert.strictEqual(validation.mock.callCount(), 0);
@@ -121,7 +123,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       syncBuiltinESMExports();
       try {
         await assert.rejects(
-          fs.readRaw(filePath, { signal: controller.signal }),
+          fs.read(filePath, { binary: 'raw', signal: controller.signal }),
           (error: unknown) => {
             assert.strictEqual(Problem.fromUnknown(error, ErrorCode.NOT_FILE).code, code);
             assert.strictEqual(error, reason);
@@ -147,7 +149,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     syncBuiltinESMExports();
     try {
       await assert.rejects(
-        fs.readRaw(filePath, { signal: controller.signal }),
+        fs.read(filePath, { binary: 'raw', signal: controller.signal }),
         (error: unknown) => error === failure,
       );
     } finally {
@@ -169,8 +171,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     syncBuiltinESMExports();
     try {
       const reads: Record<string, () => Promise<unknown>> = {
-        readFile: () => fs.readFile(filePath, { kind: 'full' }),
-        readRaw: () => fs.readRaw(filePath),
+        readFile: () => fs.read(filePath),
+        readRaw: () => fs.read(filePath, { binary: 'raw' }),
         open: async () => {
           await (await fs.open(filePath)).close();
         },
@@ -189,7 +191,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   describe('Read slicing & batch (TC-FUNC-002–006)', () => {
     it('TC-FUNC-002: readFile with head slicing returns first N lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_head.txt', 10);
-      const result = await fs.readFile(filePath, { kind: 'head', lines: 5 });
+      const result = await fs.read(filePath, { slice: { kind: 'head', lines: 5 } });
 
       assert.strictEqual(result.readMode, 'head');
       assert.strictEqual(result.head, 5);
@@ -200,7 +202,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-003: readFile with tail slicing returns last N lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_tail.txt', 10);
-      const result = await fs.readFile(filePath, { kind: 'tail', lines: 3 });
+      const result = await fs.read(filePath, { slice: { kind: 'tail', lines: 3 } });
 
       assert.strictEqual(result.readMode, 'tail');
       assert.strictEqual(result.tail, 3);
@@ -221,9 +223,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       controllerNoLf.signal.throwIfAborted = () => {
         abortChecksNoLf++;
       };
-      const resNoLf = await fs.readFile(noTrailingLf, {
-        kind: 'tail',
-        lines: 2,
+      const resNoLf = await fs.read(noTrailingLf, {
+        slice: { kind: 'tail', lines: 2 },
         signal: controllerNoLf.signal,
       });
       assert.strictEqual(resNoLf.linesRead, 2);
@@ -239,9 +240,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       controllerLf.signal.throwIfAborted = () => {
         abortChecksLf++;
       };
-      const resLf = await fs.readFile(withTrailingLf, {
-        kind: 'tail',
-        lines: 2,
+      const resLf = await fs.read(withTrailingLf, {
+        slice: { kind: 'tail', lines: 2 },
         signal: controllerLf.signal,
       });
       assert.strictEqual(resLf.linesRead, 2);
@@ -256,11 +256,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-004: readFile with line range returns specific lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_range.txt', 10);
-      const result = await fs.readFile(filePath, {
-        kind: 'range',
-        start: 2,
-        end: 4,
-      });
+      const result = await fs.read(filePath, { slice: { kind: 'range', start: 2, end: 4 } });
 
       assert.strictEqual(result.readMode, 'range');
       assert.strictEqual(result.startLine, 2);
@@ -302,7 +298,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         await writeFile(filePath, Buffer.concat(raw));
         for (let start = 1; start <= expected.length; start++) {
           const label = `${JSON.stringify(eol)} from line ${start}`;
-          const result = await fs.readFile(filePath, { kind: 'range', start });
+          const result = await fs.read(filePath, { slice: { kind: 'range', start: start } });
           assert.strictEqual(result.content, expected.slice(start - 1).join('\n'), label);
           assert.strictEqual(result.linesRead, expected.length - start + 1, label);
           assert.strictEqual(result.hasMoreLines, false, label);
@@ -314,7 +310,9 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeNLineFile(tmpDir, 'read_range_skip.txt', 20_000);
       const write = t.mock.method(StringDecoder.prototype, 'write');
 
-      const result = await fs.readFile(filePath, { kind: 'range', start: 19_999, end: 20_000 });
+      const result = await fs.read(filePath, {
+        slice: { kind: 'range', start: 19_999, end: 20_000 },
+      });
 
       assert.strictEqual(result.content, 'Line 19999\nLine 20000');
       const decodedBytes = write.mock.calls.reduce(
@@ -326,7 +324,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-006: readFile full returns entire content and line count', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_full.txt', 5);
-      const result = await fs.readFile(filePath, { kind: 'full' });
+      const result = await fs.read(filePath);
 
       assert.strictEqual(result.readMode, 'full');
       assert.strictEqual(result.totalLines, 5);
@@ -340,19 +338,19 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     const cases = [
       {
         name: 'full read past the limit',
-        spec: { kind: 'full' },
+        options: {},
         message: new RegExp(`^File exceeds size limit \\(${limit + 1} > ${limit} bytes\\)$`),
         suggestion: 'Use head to preview.',
       },
       {
         name: 'range read hitting one over-long line',
-        spec: { kind: 'range', start: 1 },
+        options: { slice: { kind: 'range', start: 1 } },
         message: new RegExp(`^File exceeds size limit \\(\\d+ > ${limit} bytes, single line\\)$`),
         suggestion: 'Use a narrower range or head.',
       },
       {
         name: 'tail read that cannot collect its lines',
-        spec: { kind: 'tail', lines: 2 },
+        options: { slice: { kind: 'tail', lines: 2 } },
         message: new RegExp(
           `^File exceeds size limit \\(\\d+ > ${limit} bytes, could not collect 2 lines\\)$`,
         ),
@@ -360,13 +358,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       },
     ] as const;
 
-    for (const { name, spec, message, suggestion } of cases) {
+    for (const { name, options, message, suggestion } of cases) {
       it(`${name} names the limit and forwards its own remedy`, async () => {
         await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
           const filePath = join(tmpDir, 'oversize-read.txt');
           await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
 
-          await assert.rejects(fs.readFile(filePath, spec), (error: unknown) => {
+          await assert.rejects(fs.read(filePath, options), (error: unknown) => {
             fsErrorMatcher(ErrorCode.TOO_LARGE, message)(error);
             assert(isFsError(error));
             assert.strictEqual(error.problem.suggestion, suggestion);
@@ -381,7 +379,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         const filePath = join(tmpDir, 'exact-fit.txt');
         const text = `${'a'.repeat(limit - 2)}\nb`;
         await writeFile(filePath, text);
-        const result = await fs.readFile(filePath, { kind: 'head', lines: 2 });
+        const result = await fs.read(filePath, { slice: { kind: 'head', lines: 2 } });
         assert.strictEqual(result.content, text);
       });
     });
@@ -399,13 +397,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       ] as const) {
         const filePath = join(tmpDir, name);
         await writeFile(filePath, text);
-        assert.strictEqual((await fs.readFile(filePath, { kind: 'full' })).content, text, name);
+        assert.strictEqual((await fs.read(filePath)).content, text, name);
       }
 
       const invalid = join(tmpDir, 'split-invalid.txt');
       await writeFile(invalid, Buffer.concat([Buffer.alloc(511, 0x61), Buffer.from([0xc0, 0x61])]));
       await assert.rejects(
-        fs.readFile(invalid, { kind: 'full' }),
+        fs.read(invalid),
         (error) => isFsError(error) && error.message === 'Binary file detected.',
       );
     });
@@ -418,16 +416,16 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         Buffer.concat([Buffer.from(prefix), Buffer.from([0xe2, 0x0a, 0x82, 0xac, 0x0a])]),
       );
 
-      const full = await fs.readFile(filePath, { kind: 'full' });
+      const full = await fs.read(filePath);
       assert.strictEqual(full.content, `${prefix}\uFFFD\n\uFFFD\uFFFD\n`);
-      const head = await fs.readFile(filePath, { kind: 'head', lines: 2 });
+      const head = await fs.read(filePath, { slice: { kind: 'head', lines: 2 } });
       assert.strictEqual(head.content, `${prefix}\uFFFD\n\uFFFD\uFFFD`);
-      const range = await fs.readFile(filePath, { kind: 'range', start: 2, end: 2 });
+      const range = await fs.read(filePath, { slice: { kind: 'range', start: 2, end: 2 } });
       assert.strictEqual(range.content, '\uFFFD\uFFFD');
 
       await writeFile(filePath, `${prefix}€\n😀\né`);
       assert.strictEqual(
-        (await fs.readFile(filePath, { kind: 'head', lines: 3 })).content,
+        (await fs.read(filePath, { slice: { kind: 'head', lines: 3 } })).content,
         `${prefix}€\n😀\né`,
       );
     });
@@ -444,7 +442,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         ]),
       );
       // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
-      const fullRead = await fs.readFile(filePath, { kind: 'full' });
+      const fullRead = await fs.read(filePath);
       assert.ok(fullRead.content.endsWith('caf�\n'));
     });
   });
@@ -455,7 +453,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await fs.mkdir(dirname(nestedPath), { recursive: true });
       await fs.writeFile(nestedPath, 'deep nested content');
 
-      const { content } = await fs.readRaw(nestedPath);
+      const { content } = await fs.read(nestedPath, { binary: 'raw' });
       assert.strictEqual(content.toString('utf-8'), 'deep nested content');
     });
 
@@ -463,12 +461,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = join(tmpDir, 'overwrite_target.txt');
       await fs.writeFile(filePath, 'initial content');
 
-      const initialRead = await fs.readRaw(filePath);
+      const initialRead = await fs.read(filePath, { binary: 'raw' });
       assert.strictEqual(initialRead.content.toString('utf-8'), 'initial content');
 
       await fs.writeFile(filePath, 'overwritten content');
 
-      const overwrittenRead = await fs.readRaw(filePath);
+      const overwrittenRead = await fs.read(filePath, { binary: 'raw' });
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
     });
 
@@ -602,7 +600,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = join(tmpDir, 'append_missing.txt');
       const { validPath } = await fs.appendFile(filePath, 'created by append\n');
 
-      const { content } = await fs.readRaw(validPath);
+      const { content } = await fs.read(validPath, { binary: 'raw' });
       assert.strictEqual(content.toString('utf-8'), 'created by append\n');
     });
 
@@ -610,7 +608,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeTestFile(tmpDir, 'append_existing.txt', 'first\n');
       await fs.appendFile(filePath, 'second\n');
 
-      const { content } = await fs.readRaw(filePath);
+      const { content } = await fs.read(filePath, { binary: 'raw' });
       assert.strictEqual(content.toString('utf-8'), 'first\nsecond\n');
     });
 
@@ -637,7 +635,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       it(`appendFile: ${name}`, async () => {
         const filePath = await writeTestFile(tmpDir, `append_separator_${index}.txt`, seed);
         await fs.appendFile(filePath, content);
-        assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), want);
+        assert.strictEqual(
+          (await fs.read(filePath, { binary: 'raw' })).content.toString('utf-8'),
+          want,
+        );
       });
     }
 
@@ -696,7 +697,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const after = await stat(filePath);
       assert.strictEqual(after.ino, before.ino);
       assert.strictEqual(after.mode & 0o777, 0o600);
-      const { content } = await fs.readRaw(filePath);
+      const { content } = await fs.read(filePath, { binary: 'raw' });
       assert.strictEqual(content.toString('utf-8'), 'secret\nmore\n');
     });
 
@@ -708,7 +709,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       await fs.appendFile(linkPath, 'appended\n');
 
-      const { content } = await fs.readRaw(target);
+      const { content } = await fs.read(target, { binary: 'raw' });
       assert.strictEqual(content.toString('utf-8'), 't\nappended\n');
     });
 
@@ -888,7 +889,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       controller.abort();
 
       await assert.rejects(fs.appendFile(filePath, 'discarded\n', { signal: controller.signal }));
-      assert.strictEqual((await fs.readRaw(filePath)).content.toString('utf-8'), 'stable\n');
+      assert.strictEqual(
+        (await fs.read(filePath, { binary: 'raw' })).content.toString('utf-8'),
+        'stable\n',
+      );
     });
 
     it('TC-FUNC-047c: an aborted append to a missing file creates nothing', async () => {
@@ -1437,7 +1441,7 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
       for (let i = 0; i < 400; i++) {
         let rawContent: string | undefined;
         try {
-          rawContent = (await fs.readRaw(victim)).content.toString('utf-8');
+          rawContent = (await fs.read(victim, { binary: 'raw' })).content.toString('utf-8');
         } catch {
           /* ELOOP / ACCESS_DENIED / NOT_FOUND are all acceptable refusals */
         }
@@ -1446,7 +1450,7 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         }
         let textContent: string | undefined;
         try {
-          textContent = (await fs.readFile(victim, { kind: 'full' })).content;
+          textContent = (await fs.read(victim)).content;
         } catch {
           /* ELOOP / ACCESS_DENIED / NOT_FOUND are all acceptable refusals */
         }
@@ -1578,21 +1582,13 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
     await writeFile(target, 'hello\n');
     if (!(await trySymlink(target, link, () => t.skip('symlinks not permitted'), 'file'))) return;
 
-    const { content } = await fs.readRaw(link);
+    const { content } = await fs.read(link, { binary: 'raw' });
     assert.strictEqual(content.toString('utf-8'), 'hello\n');
     await fs.appendFile(link, 'more\n');
     assert.strictEqual(await readFile(target, 'utf-8'), 'hello\nmore\n');
   });
 
   describe('aborted read streams', () => {
-    let tmpDir: string;
-    before(async () => {
-      tmpDir = await createTestRoot();
-    });
-    after(async () => {
-      await cleanupTestRoot(tmpDir);
-    });
-
     const isAbort = (err: unknown): boolean =>
       ['TimeoutError', 'AbortError'].includes((err as { name?: string }).name ?? '');
 
@@ -1612,36 +1608,27 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
       }
     }
 
-    const aborted = (): AbortSignal => {
+    // beforeBody aborts after the probe, so the body stream itself meets the aborted signal.
+    const abortBeforeBody = (): { signal: AbortSignal; beforeBody: () => void } => {
       const controller = new AbortController();
-      controller.abort(new DOMException('test timeout', 'TimeoutError'));
-      return controller.signal;
+      return {
+        signal: controller.signal,
+        beforeBody: () => controller.abort(new DOMException('test timeout', 'TimeoutError')),
+      };
     };
 
-    it('a pre-aborted signal rejects without an uncaught exception', async () => {
-      const file = await writeTestFile(tmpDir, 'pre-aborted.txt', 'line one\nline two\n');
+    it('a signal aborted before the body rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(root, 'pre-aborted.txt', 'line one\nline two\n');
       await withUncaughtWatch(async () => {
-        const handle = await fsPromises.open(file, 'r');
-        try {
-          await assert.rejects(readFileBufferWithLimit(handle, 1024, file, aborted()), isAbort);
-        } finally {
-          await handle.close();
-        }
+        await assert.rejects(fs.read(file, abortBeforeBody()), isAbort);
       });
     });
 
-    it('a pre-aborted range read rejects without an uncaught exception', async () => {
-      const file = await writeTestFile(tmpDir, 'pre-aborted-range.txt', 'line one\nline two\n');
+    it('a range read aborted before the body rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(root, 'pre-aborted-range.txt', 'line one\nline two\n');
       await withUncaughtWatch(async () => {
-        const stats = await fsPromises.stat(file);
         await assert.rejects(
-          readFileWithStats(
-            file,
-            file,
-            stats,
-            { kind: 'range', start: 1, end: 1, signal: aborted() },
-            () => fsPromises.open(file, 'r'),
-          ),
+          fs.read(file, { slice: { kind: 'range', start: 1, end: 1 }, ...abortBeforeBody() }),
           isAbort,
         );
       });
@@ -2372,7 +2359,7 @@ describe('GuardedFileSystem.stat', () => {
         try {
           await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, () =>
             assert.rejects(
-              fs.readRaw(rawFile),
+              fs.read(rawFile, { binary: 'raw' }),
               fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
             ),
           );
@@ -2386,7 +2373,7 @@ describe('GuardedFileSystem.stat', () => {
         });
         try {
           await assert.rejects(
-            fs.readFile(textFile, { kind: 'full' }),
+            fs.read(textFile),
             fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
           );
         } finally {
@@ -2420,5 +2407,402 @@ describe('GuardedFileSystem.stat', () => {
     const a = { itemType: 'file', dev: 1, ino: 2, birthtimeMs: 3 } as const;
     assert.strictEqual(sameIdentity(a, { ...a }), true);
     assert.strictEqual(sameIdentity(a, { ...a, itemType: 'directory' }), false);
+  });
+});
+
+describe('GuardedFileSystem.readText', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const put = async (name: string, bytes: Buffer | string): Promise<string> => {
+    const path = join(root, name);
+    await writeFile(path, bytes);
+    return path;
+  };
+  const pastProbe = (tail: number[]): Buffer =>
+    Buffer.concat([Buffer.alloc(600, 'a'), Buffer.from(tail)]);
+
+  it('readText text verdict carries bytes and stats', async () => {
+    const path = await put('a.txt', 'héllo\n');
+    const verdict = await fs.readText(path);
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.deepEqual(verdict.bytes, Buffer.from('héllo\n'));
+    assert.equal(verdict.stats.size, 7);
+  });
+
+  it('readText binary by extension', async () => {
+    assert.deepEqual(await fs.readText(await put('a.png', 'plain text')), {
+      kind: 'binary',
+      utf16: false,
+    });
+  });
+
+  it('readText binary by sample', async () => {
+    const path = await put('b.txt', Buffer.from([0x61, 0x62, 0x63, 0, 0x64]));
+    assert.deepEqual(await fs.readText(path), { kind: 'binary', utf16: false });
+  });
+
+  it('readText UTF-16 BOM', async () => {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')]);
+    assert.deepEqual(await fs.readText(await put('c.txt', bytes)), {
+      kind: 'binary',
+      utf16: true,
+    });
+  });
+
+  it('readText undecodable past the probe', async () => {
+    const latin1 = await fs.readText(await put('d.txt', pastProbe([0xe9])));
+    assert.equal(latin1.kind, 'undecodable');
+    const nul = await fs.readText(await put('e.txt', pastProbe([0])));
+    assert.equal(nul.kind, 'undecodable');
+  });
+
+  it('readText too large', async () => {
+    const path = await put('big.txt', Buffer.alloc(MIB + 1, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.deepEqual(await fs.readText(path), { kind: 'tooLarge', size: MIB + 1 });
+    });
+  });
+
+  it('readText bounds the read of a file that reports size 0', async (t) => {
+    // procfs and some FUSE files report size 0 and stream on.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 0 })));
+      return handle;
+    });
+    const small = await fs.readText(await put('virtual.txt', 'text\n'));
+    assert.equal(small.kind, 'text');
+    const path = await put('stream.txt', Buffer.alloc(4 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      const verdict = await fs.readText(path);
+      assert.equal(verdict.kind, 'tooLarge');
+      if (verdict.kind !== 'tooLarge') return;
+      assert.ok(verdict.size > MIB && verdict.size < 2 * MIB, String(verdict.size));
+    });
+  });
+
+  for (const [stalls, reportedSize] of [
+    ['stat', undefined],
+    ['read', undefined],
+    ['read', 0],
+  ] as const) {
+    it(
+      `readText abandons a stalled ${stalls}${reportedSize === 0 ? ' of a size-0 file' : ''}`,
+      {
+        timeout: 2000,
+      },
+      async (t) => {
+        // A hung mount or FIFO: the call never returns until the test settles it.
+        let settle!: () => void;
+        const stalled = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        // Abort once the stalled call is in flight, not on a timer: a slow open
+        // would let the abort land before it, with nothing in flight to wait for.
+        let reached!: () => void;
+        const inFlight = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        let closed = false;
+        const open = fs.open.bind(fs);
+        t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+          const handle = await open(...args);
+          const real = await handle.stat();
+          t.mock.method(handle, 'stat', () => {
+            if (stalls !== 'stat') {
+              return Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size }));
+            }
+            reached();
+            return stalled.then(() => real);
+          });
+          if (stalls === 'read') {
+            t.mock.method(handle, 'read', () => {
+              reached();
+              return stalled.then(() => ({ bytesRead: 0, buffer: Buffer.alloc(0) }));
+            });
+          }
+          const close = handle.close.bind(handle);
+          t.mock.method(handle, 'close', async () => {
+            closed = true;
+            await close();
+          });
+          return handle;
+        });
+        const controller = new AbortController();
+        const pending = fs.readText(await put('stall.txt', 'text'), { signal: controller.signal });
+        void inFlight.then(() => controller.abort());
+        await assert.rejects(pending, { name: 'AbortError' });
+        // close() would queue behind the call in flight, so it waits for that call to settle.
+        assert.equal(closed, false);
+        settle();
+        await sleep(10);
+        assert.equal(closed, true);
+      },
+    );
+  }
+
+  it('readText keeps no whole read chunk per short read', async (t) => {
+    // procfs and FUSE files return a page per read; each kept chunk must be filled first.
+    const text = 'x'.repeat(64 * 1024);
+    const open = fs.open.bind(fs);
+    let reportedSize: number | undefined;
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      const read = handle.read.bind(handle);
+      t.mock.method(handle, 'stat', () =>
+        Promise.resolve(Object.assign(real, { size: reportedSize ?? real.size })),
+      );
+      t.mock.method(
+        handle,
+        'read',
+        (buffer: Buffer, offset: number, length: number, position: number) =>
+          read(buffer, offset, Math.min(length, 4096), position),
+      );
+      return handle;
+    });
+    const allocUnsafe = Buffer.allocUnsafe.bind(Buffer);
+    const large = t.mock.method(Buffer, 'allocUnsafe', (size: number) => allocUnsafe(size));
+    const largeAllocations = () =>
+      large.mock.calls.filter((call) => call.arguments[0] >= 64 * 1024).length;
+
+    reportedSize = 0;
+    const virtual = await fs.readText(await put('proc.txt', text));
+    assert.equal(virtual.kind, 'text');
+    if (virtual.kind !== 'text') return;
+    assert.equal(virtual.bytes.toString('utf8'), text);
+    assert.equal(largeAllocations(), 1, 'one chunk filled across the short reads');
+
+    large.mock.resetCalls();
+    reportedSize = undefined;
+    assert.equal((await fs.readText(await put('small.txt', 'text\n'))).kind, 'text');
+    assert.equal(largeAllocations(), 0, 'finding EOF after a sized read needs no read chunk');
+  });
+
+  it('readText reads a file that grew after the fstat to EOF', async (t) => {
+    // Another process appends between fstat and read; a Rewrite must not drop the tail.
+    const open = fs.open.bind(fs);
+    t.mock.method(fs, 'open', async (...args: Parameters<GuardedFileSystem['open']>) => {
+      const handle = await open(...args);
+      const real = await handle.stat();
+      t.mock.method(handle, 'stat', () => Promise.resolve(Object.assign(real, { size: 5 })));
+      return handle;
+    });
+    const verdict = await fs.readText(await put('grows.txt', 'head\ntail\n'));
+    assert.equal(verdict.kind, 'text');
+    if (verdict.kind !== 'text') return;
+    assert.equal(verdict.bytes.toString('utf8'), 'head\ntail\n');
+    const path = await put('grows-big.txt', Buffer.alloc(2 * MIB, 'a'));
+    await withEnv({ FS_MAX_FILE_SIZE: String(MIB) }, async () => {
+      assert.equal((await fs.readText(path)).kind, 'tooLarge');
+    });
+  });
+
+  it('readText pre-aborted signal rejects', async () => {
+    const path = await put('f.txt', 'text');
+    await assert.rejects(fs.readText(path, { signal: AbortSignal.abort() }));
+  });
+});
+
+describe('GuardedFileSystem.readNamedText', () => {
+  let tmpDir: string;
+  let fs: GuardedFileSystem;
+
+  beforeEach(async () => {
+    tmpDir = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([tmpDir]));
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('readNamedText returns validated path, content, and stats', async () => {
+    const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');
+
+    const result = await fs.readNamedText(filePath);
+
+    assert.strictEqual(result.validPath, normalizePath(filePath));
+    assert.strictEqual(result.content, 'editable content');
+    assert.strictEqual(result.stats.size, Buffer.byteLength('editable content'));
+  });
+
+  it('readNamedText rejects files above the configured text limit', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const filePath = join(tmpDir, 'too-large.txt');
+      await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
+
+      await assert.rejects(
+        fs.readNamedText(filePath),
+        fsErrorMatcher(ErrorCode.TOO_LARGE, 'File too large for edit'),
+      );
+    });
+  });
+
+  it('readNamedText rejects binary files', async () => {
+    const filePath = join(tmpDir, 'editable.png');
+    await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    await assert.rejects(
+      fs.readNamedText(filePath),
+      fsErrorMatcher(ErrorCode.BINARY_FILE, /^Binary file detected\.$/),
+    );
+  });
+
+  // Issue #11: the 512-byte binary probe must not reject a multi-byte
+  // character cut by the sample boundary.
+  it('readNamedText accepts UTF-8 split at the sample boundary', async () => {
+    for (const [name, text] of [
+      ['split-cjk.md', '我'.repeat(171)],
+      ['split-emoji.txt', `${'a'.repeat(510)}${'😀'.repeat(4)}`],
+      ['split-latin.txt', `${'a'.repeat(511)}${'é'.repeat(4)}`],
+    ] as const) {
+      const filePath = join(tmpDir, name);
+      await writeFile(filePath, text);
+      assert.strictEqual((await fs.readNamedText(filePath)).content, text, name);
+    }
+  });
+
+  it('readNamedText rejects non-UTF-8 bytes past the binary probe', async () => {
+    const filePath = join(tmpDir, 'latin1-late.txt');
+    await writeFile(
+      filePath,
+      Buffer.concat([
+        Buffer.alloc(600, 0x61),
+        Buffer.from('\ncaf'),
+        Buffer.from([0xe9]),
+        Buffer.from('\n'),
+      ]),
+    );
+    await assert.rejects(
+      fs.readNamedText(filePath),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^Binary or non-UTF-8 file detected\.$/),
+    );
+
+    const utf16 = join(tmpDir, 'utf16le.txt');
+    await writeFile(
+      utf16,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]),
+    );
+    // UTF-16 is named at the shared probe, for edit as for read.
+    await assert.rejects(
+      fs.readNamedText(utf16),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+      ),
+    );
+  });
+});
+
+describe('GuardedFileSystem.read binary policy', () => {
+  let root: string;
+  let fs: GuardedFileSystem;
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const UTF16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]);
+  const put = async (name: string, data: Buffer | string): Promise<string> => {
+    const path = join(root, name);
+    await writeFile(path, data);
+    return path;
+  };
+
+  before(async () => {
+    root = await createTestRoot();
+    fs = new GuardedFileSystem(await makeGuard([root]));
+  });
+
+  after(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  it('refuse (the default) rejects binary and UTF-16 with their own refusals', async () => {
+    await assert.rejects(
+      fs.read(await put('p.png', PNG)),
+      fsErrorMatcher(ErrorCode.BINARY_FILE, /^Binary file detected\.$/),
+    );
+    await assert.rejects(
+      fs.read(await put('u.txt', UTF16)),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^UTF-16 text file detected/),
+    );
+  });
+
+  it('media returns image bytes and still refuses other binary', async () => {
+    const png = await fs.read(await put('m.png', PNG), { binary: 'media' });
+    assert.equal(png.type, 'bytes');
+    if (png.type !== 'bytes') return;
+    assert.deepEqual([png.kind, png.mimeType], ['image', 'image/png']);
+    assert.deepEqual(png.content, PNG);
+    await assert.rejects(
+      fs.read(await put('m.bin', 'x\0y'), { binary: 'media' }),
+      fsErrorMatcher(ErrorCode.BINARY_FILE),
+    );
+    const text = await fs.read(await put('m.txt', 'plain\n'), { binary: 'media' });
+    assert.equal(text.type, 'text');
+  });
+
+  it('allow returns any binary as bytes but still refuses UTF-16', async () => {
+    const bin = await fs.read(await put('a.dat', 'x\0y'), { binary: 'allow' });
+    assert.equal(bin.type, 'bytes');
+    if (bin.type !== 'bytes') return;
+    assert.deepEqual([bin.kind, bin.mimeType], ['binary', 'application/octet-stream']);
+    await assert.rejects(
+      fs.read(await put('a16.txt', UTF16), { binary: 'allow' }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^UTF-16 text file detected/),
+    );
+  });
+
+  it('raw serves every file as bytes and UTF-16 as binary', async () => {
+    const utf16 = await fs.read(await put('r16.txt', UTF16), { binary: 'raw' });
+    assert.deepEqual([utf16.kind, utf16.mimeType], ['binary', 'application/octet-stream']);
+    assert.deepEqual(utf16.content, UTF16);
+    const text = await fs.read(await put('r.txt', 'plain'), { binary: 'raw' });
+    assert.deepEqual([text.kind, text.content.toString()], ['text', 'plain']);
+  });
+
+  it('runs beforeBody once with the classification, and its throw stops the read', async () => {
+    const file = await put('b.png', PNG);
+    const seen: unknown[] = [];
+    const stop = new Error('stop');
+    await assert.rejects(
+      fs.read(file, {
+        binary: 'raw',
+        beforeBody: (meta: ReadProbeMeta) => {
+          seen.push([meta.kind, meta.mimeType, meta.stats.size, meta.validPath]);
+          throw stop;
+        },
+      }),
+      (error) => error === stop,
+    );
+    assert.deepEqual(seen, [['image', 'image/png', PNG.length, normalizePath(file)]]);
+  });
+
+  it('opens the file once per read', async (t) => {
+    const file = await put('once.png', PNG);
+    const opens = t.mock.method(fsPromises, 'open');
+    syncBuiltinESMExports();
+    try {
+      await fs.read(file, { binary: 'media' });
+      // Linux stats through an O_PATH descriptor first; that is not a read open.
+      const O_PATH = 0o10000000;
+      const readOpens = opens.mock.calls.filter((c) => (Number(c.arguments[1]) & O_PATH) === 0);
+      assert.equal(readOpens.length, 1);
+    } finally {
+      opens.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 });

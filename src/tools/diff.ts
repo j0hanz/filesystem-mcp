@@ -4,7 +4,6 @@ import * as z from 'zod/v4';
 
 import { DIFF_TIMEOUT_MS, twoFilesPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
-import { readNamedText } from '../core/scan.ts';
 import { PositiveInt, RequiredPath } from '../core/schema.ts';
 import { defineTool } from './define.ts';
 
@@ -45,8 +44,8 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
   run: async (args, ctx) => {
     const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
       await Promise.all([
-        readNamedText(ctx.fs, args.a, { signal: ctx.signal, tool: 'diff' }),
-        readNamedText(ctx.fs, args.b, { signal: ctx.signal, tool: 'diff' }),
+        ctx.fs.readNamedText(args.a, { signal: ctx.signal, tool: 'diff' }),
+        ctx.fs.readNamedText(args.b, { signal: ctx.signal, tool: 'diff' }),
       ]);
 
     // Synchronous Myers diff; `timeout` is the only thing that can stop it.

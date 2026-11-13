@@ -5,10 +5,9 @@ import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.ts';
-import { binaryRefusal, createTooLargeError, ErrorCode, FsError, isFsError } from './errors.ts';
+import { createTooLargeError, ErrorCode, FsError, isFsError } from './errors.ts';
 import { countLines } from './fmt.ts';
 import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
-import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
@@ -40,19 +39,15 @@ export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promi
   return buffer.subarray(0, bytesRead);
 }
 
-interface ReadSpecBase {
-  signal?: AbortSignal;
-  maxSize?: number;
-  hardCap?: boolean;
-}
+/** A line slice of a text file: the first or last lines, or a 1-based range. */
+export type ReadSlice =
+  | { kind: 'head'; lines: number }
+  | { kind: 'tail'; lines: number }
+  | { kind: 'range'; start: number; end?: number };
 
-export type ReadSpec =
-  | ({ kind: 'full' } & ReadSpecBase)
-  | ({ kind: 'head'; lines: number } & ReadSpecBase)
-  | ({ kind: 'tail'; lines: number } & ReadSpecBase)
-  | ({ kind: 'range'; start: number; end?: number } & ReadSpecBase);
+export type ReadSpec = { kind: 'full' } | ReadSlice;
 
-interface ReadOptions {
+export interface ReadLimits {
   maxSize: number;
   hardCap?: boolean;
   signal?: AbortSignal;
@@ -79,7 +74,7 @@ export interface ReadFileResult {
   hasMoreLines?: boolean;
 }
 
-export async function readFileBufferWithLimit(
+async function readFileBufferWithLimit(
   handle: FileHandle,
   maxSize: number,
   requestedPath: string,
@@ -153,7 +148,7 @@ const LF = 0x0a;
  */
 async function* readLinesBounded(
   handle: FileHandle,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
   startLine: number,
 ): AsyncGenerator<string, void, undefined> {
@@ -235,7 +230,7 @@ async function readRangeContent(
   handle: FileHandle,
   startLine: number,
   endLine: number | undefined,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -305,7 +300,7 @@ async function readRangeContent(
 async function readTailContent(
   handle: FileHandle,
   tail: number,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -440,24 +435,13 @@ export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16'
   return isBinarySample(probe) ? 'binary' : undefined;
 }
 
-async function assertNotBinary(
-  validPath: string,
-  filePath: string,
-  handle: FileHandle,
-  normalized: ReadOptions,
-): Promise<void> {
-  normalized.signal?.throwIfAborted();
-  const kind = binaryKind(validPath, await readProbe(handle, normalized.signal));
-  if (kind !== undefined) throw binaryRefusal(kind, filePath);
-}
-
-async function readByMode(
+export async function readByMode(
   handle: FileHandle,
   validPath: string,
   filePath: string,
   stats: Stats,
   spec: ReadSpec,
-  options: ReadOptions,
+  options: ReadLimits,
 ): Promise<ReadFileResult> {
   const base = {
     path: validPath,
@@ -506,28 +490,4 @@ export function assertFileStats(filePath: string, stats: Stats): void {
   if (!stats.isFile()) {
     throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', filePath);
   }
-}
-
-/** Read an already-validated, already-stat'd file per `spec`, opened via `openVerified`. */
-export async function readFileWithStats(
-  filePath: string,
-  validPath: string,
-  stats: Stats,
-  spec: ReadSpec,
-  openVerified: () => Promise<FileHandle>,
-): Promise<ReadFileResult> {
-  const options: ReadOptions = {
-    maxSize: spec.maxSize ?? getMaxTextFileSize(),
-    ...(spec.hardCap ? { hardCap: true } : {}),
-    ...(spec.signal ? { signal: spec.signal } : {}),
-  };
-  spec.signal?.throwIfAborted();
-  assertFileStats(filePath, stats);
-
-  await using handle = await openVerified();
-
-  await assertNotBinary(validPath, filePath, handle, options);
-  spec.signal?.throwIfAborted();
-
-  return await readByMode(handle, validPath, filePath, stats, spec, options);
 }

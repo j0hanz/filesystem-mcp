@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
@@ -26,6 +27,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
+  binaryRefusal,
   createTooLargeError,
   ErrorCode,
   formatUnknownErrorMessage,
@@ -34,11 +36,12 @@ import {
   isMissing,
   isNodeError,
   isNotFoundErrno,
+  NOT_UTF8_MESSAGE,
   Problem,
   rethrowIfAborted,
   unlessMissing,
 } from './errors.ts';
-import { detectMimeFromContent, type FileKind } from './mime.ts';
+import { detectMimeType, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import {
@@ -48,18 +51,20 @@ import {
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import type { ReadFileResult, ReadSpec } from './read.ts';
+import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
   APPEND_NOFOLLOW,
   assertFileStats,
+  binaryKind,
   O_NOFOLLOW,
   READ_NOFOLLOW,
   READ_NONBLOCK_NOFOLLOW,
-  readFileWithStats,
+  readByMode,
   readProbe,
   WRITE_NOFOLLOW,
 } from './read.ts';
+import type { SkipVerdict } from './scan.ts';
 import {
   identityOf as fileIdentityOf,
   NOT_RECORDING,
@@ -74,6 +79,103 @@ import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { getMaxTextFileSize, sha256Hex } from './util.ts';
 
 export type { Stats };
+
+/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
+const READ_CHUNK_BYTES = 512 * 1024;
+/** The read past a sized read, which nearly always returns 0 at EOF. */
+const EOF_PROBE_BYTES = 4 * 1024;
+
+// ─── Read surface (ADR-015) ───────────────────────────────────────────────────
+
+/**
+ * What `read` does with a file that is not UTF-8 text: `refuse` it, return
+ * image/audio bytes (`media`), return any binary but UTF-16 (`allow`), or
+ * return every file as bytes (`raw`).
+ */
+type BinaryPolicy = 'refuse' | 'media' | 'allow' | 'raw';
+
+/** What `read` knows before it reads the body: the File class and the stat. */
+export interface ReadProbeMeta {
+  readonly validPath: string;
+  readonly stats: Stats;
+  readonly mimeType: string;
+  readonly kind: FileKind;
+}
+
+interface ReadOptionsBase {
+  readonly signal?: AbortSignal | undefined;
+  readonly maxSize?: number;
+  /** A slice past `maxSize` fails instead of coming back short. */
+  readonly hardCap?: boolean;
+  /** Runs after classification, before the body; a throw stops the read. */
+  readonly beforeBody?: (meta: ReadProbeMeta) => void;
+}
+
+export type ReadOptions = ReadOptionsBase &
+  (
+    | { readonly slice?: undefined; readonly binary?: BinaryPolicy }
+    | { readonly slice: ReadSlice; readonly binary?: 'refuse' }
+  );
+
+export type ReadTextResult = ReadFileResult & { readonly type: 'text' };
+
+export interface ReadBytesResult {
+  readonly type: 'bytes';
+  readonly content: Buffer;
+  readonly mimeType: string;
+  readonly kind: FileKind;
+  readonly validPath: string;
+  readonly modified: string;
+}
+
+export type ReadResult = ReadTextResult | ReadBytesResult;
+
+export type TextVerdict =
+  | { readonly kind: 'text'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'undecodable'; readonly bytes: Buffer; readonly stats: Stats }
+  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | { readonly kind: 'tooLarge'; readonly size: number };
+
+export interface ReadTextOptions {
+  readonly signal?: AbortSignal | undefined;
+  /** The client's spelling of the path, for errors. */
+  readonly requestedPath?: string | undefined;
+}
+
+export interface ReadNamedTextOptions {
+  readonly signal?: AbortSignal | undefined;
+  /** Names the tool in the too-large refusal. */
+  readonly tool?: string;
+}
+
+export interface NamedTextResult {
+  readonly validPath: string;
+  readonly content: string;
+  readonly stats: Stats;
+}
+
+/** The refusal a named file gets for a non-text verdict; `tool` labels the too-large message. */
+export function refusalOf(
+  verdict: SkipVerdict,
+  filePath: string,
+  tool: string | undefined,
+): FsError {
+  switch (verdict.kind) {
+    case 'tooLarge': {
+      const maxSize = getMaxTextFileSize();
+      return new FsError(
+        ErrorCode.TOO_LARGE,
+        `File too large for ${tool ?? 'edit'} (${verdict.size} bytes > ${maxSize} bytes)`,
+        filePath,
+        { size: verdict.size, maxFileSize: maxSize },
+      );
+    }
+    case 'binary':
+      return binaryRefusal(verdict.utf16 ? 'utf16' : 'binary', filePath);
+    case 'undecodable':
+      return new FsError(ErrorCode.INVALID_INPUT, NOT_UTF8_MESSAGE, filePath);
+  }
+}
 
 // Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
 // directory; used only under COUNT_THROUGH_FD, like the re-check it feeds.
@@ -1592,57 +1694,210 @@ export class GuardedFileSystem {
     await fsUtimes(destination, sourceStats.atime, sourceStats.mtime);
   }
 
-  async readFile(filePath: string, spec: ReadSpec): Promise<ReadFileResult> {
-    spec.signal?.throwIfAborted();
+  /**
+   * The one client read (ADR-015): guard, stat, one verified open, the
+   * 512-byte probe, then the binary policy, `beforeBody`, and the body. A
+   * slice is text only, so it always refuses binary.
+   */
+  async read(filePath: string, options: ReadOptions & { binary: 'raw' }): Promise<ReadBytesResult>;
+  async read(
+    filePath: string,
+    options?: ReadOptions & { binary?: 'refuse' },
+  ): Promise<ReadTextResult>;
+  async read(filePath: string, options?: ReadOptions): Promise<ReadResult>;
+  async read(filePath: string, options: ReadOptions = {}): Promise<ReadResult> {
+    const { signal } = options;
+    signal?.throwIfAborted();
     const validPath = await this.#guard('read', filePath);
-    const stats = await this.#statVerified(validPath, filePath, spec.signal);
-    return readFileWithStats(filePath, validPath, stats, spec, () =>
-      this.#openVerified(validPath, filePath, spec.signal),
-    );
+    signal?.throwIfAborted();
+    const stats = await this.#statVerified(validPath, filePath, signal);
+    assertFileStats(filePath, stats);
+    await using handle = await this.#openVerified(validPath, filePath, signal);
+    const probe = await readProbe(handle, signal);
+    const { mimeType, kind } = detectMimeType(validPath, probe);
+    const refusal = binaryKind(validPath, probe);
+    const media = kind === 'image' || kind === 'audio';
+    const policy = options.slice ? 'refuse' : (options.binary ?? 'refuse');
+    // `allow` (binary: true) still refuses UTF-16: the caller converts it first.
+    const bytes =
+      policy === 'raw' ||
+      (policy === 'media' && media) ||
+      (policy === 'allow' && refusal !== 'utf16' && (media || refusal === 'binary'));
+    if (!bytes && refusal !== undefined) throw binaryRefusal(refusal, filePath);
+    options.beforeBody?.({ validPath, stats, mimeType, kind });
+    const maxSize = options.maxSize ?? getMaxTextFileSize();
+
+    if (bytes) {
+      if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
+      let content: Buffer;
+      try {
+        content = await fsReadFile(handle, signal ? { signal } : undefined);
+      } catch (error) {
+        // Node wraps even a TimeoutError signal reason in AbortError.
+        if (error instanceof Error && error.name === 'AbortError') signal?.throwIfAborted();
+        throw error;
+      }
+      return {
+        type: 'bytes',
+        content,
+        mimeType,
+        kind,
+        validPath,
+        modified: stats.mtime.toISOString(),
+      };
+    }
+
+    const limits: ReadLimits = {
+      maxSize,
+      ...(options.hardCap ? { hardCap: true } : {}),
+      ...(signal ? { signal } : {}),
+    };
+    const spec: ReadSpec = options.slice ?? { kind: 'full' };
+    return {
+      type: 'text',
+      ...(await readByMode(handle, validPath, filePath, stats, spec, limits)),
+    };
   }
 
+  /**
+   * The one content verdict (ADR-005): guarded open, size, read's binary rule
+   * on the leading bytes, then strict UTF-8 on the rest. Never throws for a
+   * file's content and never decodes; a caller that searches lossily decodes
+   * an `undecodable` file's bytes itself.
+   */
+  async readText(filePath: string, options?: ReadTextOptions): Promise<TextVerdict> {
+    const signal = options?.signal;
+    const maxFileSize = getMaxTextFileSize();
+    let bytes: Buffer;
+    let stats: Stats;
+    {
+      // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
+      // re-checks the descriptor's real path (H4), so these bytes are the
+      // validated file's, not whatever the name points at by now. The signal
+      // lets a stalled open (FIFO swapped in, hung mount) be abandoned.
+      const handle = await this.open(filePath, {
+        signal,
+        requestedPath: options?.requestedPath,
+      });
+      // The fstat or read in flight, if any: the signal ends the wait for it, not the call.
+      let pending: Promise<unknown> | undefined;
+      const settled = async <T>(call: Promise<T>): Promise<T> => {
+        pending = call;
+        const result = await withAbort(call, signal);
+        pending = undefined;
+        return result;
+      };
+      try {
+        stats = await settled(handle.stat());
+        const { size } = stats;
+        if (size > maxFileSize) return { kind: 'tooLarge', size };
+        // Read the size fstat reported into one buffer: handle.readFile would fstat
+        // again, an extra round trip on every file a walk touches. Then read on to
+        // EOF, so a file that grew meanwhile is read whole (a Rewrite writes back
+        // what it read), as is a procfs or other virtual file, which reports a
+        // size of 0 while holding text. Usually that is one read that returns 0.
+        const chunks: Buffer[] = [];
+        let total = 0;
+        if (size > 0) {
+          const head = Buffer.allocUnsafe(size);
+          while (total < size) {
+            // In readFile's own chunks, with its check of the signal before each,
+            // so a deadline on a slow filesystem lands as soon as it did there.
+            signal?.throwIfAborted();
+            const length = Math.min(size - total, READ_CHUNK_BYTES);
+            const { bytesRead } = await settled(handle.read(head, total, length, total));
+            if (bytesRead === 0) break;
+            total += bytesRead;
+          }
+          chunks.push(head.subarray(0, total));
+        }
+        // A file that came up short has shrunk, so it is already at EOF.
+        if (total === size) {
+          // Each chunk is filled across reads before it is kept: procfs returns a
+          // page per read, and a kept subarray holds its whole chunk. After a sized
+          // read the first chunk is small, since it usually only finds EOF.
+          let chunk = Buffer.allocUnsafe(size > 0 ? EOF_PROBE_BYTES : READ_CHUNK_BYTES);
+          let used = 0;
+          for (;;) {
+            // Stop once past the cap: a virtual file may never end.
+            signal?.throwIfAborted();
+            const { bytesRead } = await settled(
+              handle.read(chunk, used, chunk.length - used, total),
+            );
+            if (bytesRead === 0) break;
+            total += bytesRead;
+            used += bytesRead;
+            if (total > maxFileSize) return { kind: 'tooLarge', size: total };
+            if (used === chunk.length) {
+              chunks.push(chunk);
+              chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+              used = 0;
+            }
+          }
+          if (used > 0) chunks.push(chunk.subarray(0, used));
+        }
+        const [only] = chunks;
+        // The common case is the one head buffer: no copy.
+        bytes = chunks.length === 1 && only ? only : Buffer.concat(chunks, total);
+      } finally {
+        // A failed close must not replace the verdict or the refusal, so it is logged, not thrown.
+        const close = () =>
+          handle.close().catch((closeErr: unknown) => {
+            Logger.warn(
+              `Failed to close read descriptor for ${filePath}: ${formatUnknownErrorMessage(closeErr)}`,
+            );
+          });
+        // close() queues behind a call still in flight, so after an abort close once it settles.
+        if (pending) void pending.then(close, close);
+        else await close();
+      }
+    }
+    // The probe is a slice of the bytes already read: no extra syscall.
+    const binary = binaryKind(filePath, bytes.subarray(0, MIME_SAMPLE_SIZE));
+    if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
+    // The probe samples only the leading bytes. A caller that writes the text
+    // back must refuse any byte the decode would replace with U+FFFD.
+    if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
+    return { kind: 'text', bytes, stats };
+  }
+
+  /**
+   * A file the client named is not a scan (ADR-005): any verdict but text fails
+   * the call, with the refusals edit, patch and diff have always given.
+   */
+  async readNamedText(filePath: string, options?: ReadNamedTextOptions): Promise<NamedTextResult> {
+    const signal = options?.signal;
+    const { stats, validPath } = await this.stat(filePath, { signal });
+    assertFileStats(filePath, stats);
+    const verdict = await this.readText(validPath, { signal, requestedPath: filePath });
+    if (verdict.kind !== 'text') throw refusalOf(verdict, filePath, options?.tool);
+    return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
+  }
+
+  /** Transitional: tools/read.ts moves to `read` in the next task. */
+  async readFile(
+    filePath: string,
+    spec: ReadSpec & { signal?: AbortSignal; maxSize?: number; hardCap?: boolean },
+  ): Promise<ReadFileResult> {
+    const { signal, maxSize, hardCap, ...slice } = spec;
+    return await this.read(filePath, {
+      ...(slice.kind === 'full' ? {} : { slice }),
+      ...(signal ? { signal } : {}),
+      ...(maxSize !== undefined ? { maxSize } : {}),
+      ...(hardCap ? { hardCap } : {}),
+    });
+  }
+
+  /** Transitional: resources.ts and tools/read.ts move to `read` in the next task. */
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },
-  ): Promise<{
-    content: Buffer;
-    mimeType: string;
-    kind: FileKind;
-    isBinary: boolean;
-    validPath: string;
-    modified: string;
-  }> {
-    options?.signal?.throwIfAborted();
-    const validPath = await this.#guard('read', filePath);
-    options?.signal?.throwIfAborted();
-    const stats = await this.#statVerified(validPath, filePath, options?.signal);
-    assertFileStats(filePath, stats);
-    // Enforce size limit before reading to avoid loading large files into memory.
-    // Binary detection is best-effort, but this is a hard limit.
-    const maxTextFileSize = getMaxTextFileSize();
-    if (stats.size > maxTextFileSize) {
-      throw createTooLargeError(stats.size, maxTextFileSize, filePath);
-    }
-    let content: Buffer;
-    await using handle = await this.#openVerified(validPath, filePath);
-    try {
-      content = await fsReadFile(handle, options);
-    } catch (error) {
-      // Node wraps even a TimeoutError signal reason in AbortError.
-      if (error instanceof Error && error.name === 'AbortError') {
-        options?.signal?.throwIfAborted();
-      }
-      throw error;
-    }
-    const mimeInfo = detectMimeFromContent(validPath, content);
-    return {
-      content,
-      mimeType: mimeInfo.mimeType,
-      kind: mimeInfo.kind,
-      isBinary: mimeInfo.kind !== 'text',
-      validPath,
-      modified: stats.mtime.toISOString(),
-    };
+  ): Promise<ReadBytesResult & { isBinary: boolean }> {
+    const result = await this.read(filePath, {
+      binary: 'raw',
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    return { ...result, isBinary: result.kind !== 'text' };
   }
 
   /** `requestedPath` names the client's spelling in errors; `signal` abandons a stalled open. */

@@ -11,7 +11,7 @@ import {
 import { Logger } from './observability.ts';
 import type { PathGuard } from './path.ts';
 import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
-import { readText, scan, ScanSkip, skipOf } from './scan.ts';
+import { scan, ScanSkip, skipOf } from './scan.ts';
 import { viewText } from './text-view.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
@@ -108,7 +108,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 
 async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  const verdict = await readText(scanCtx.fs, entryPath, scanCtx.signal);
+  const verdict = await scanCtx.fs.readText(entryPath, { signal: scanCtx.signal });
   if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does
