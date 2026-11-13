@@ -20,6 +20,7 @@ import {
 
 import type * as z from 'zod/v4';
 
+import { getToolTimeoutMs, type LoggingLevel } from '../core/config.ts';
 import {
   ErrorCode,
   formatDetailedError,
@@ -40,14 +41,12 @@ import {
   roundBindOf,
 } from '../core/input-required.ts';
 import { Logger, sanitizeLogField } from '../core/observability.ts';
-import type { LoggingLevel } from '../core/observability.ts';
 import { bytesOverMessageLimit, refuseToolResult } from '../core/outbound.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import type { UndoCapture, UndoJournal } from '../core/undo.ts';
-import { getToolTimeoutMs } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {

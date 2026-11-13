@@ -18,6 +18,7 @@ import {
   UriTemplate,
 } from '@modelcontextprotocol/server';
 
+import { getMaxTextFileSize } from './core/config.ts';
 import type { FsError } from './core/errors.ts';
 import { ErrorCode, formatUnknownErrorMessage, isFsError } from './core/errors.ts';
 import {
@@ -33,7 +34,6 @@ import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
 import { entryReadResult } from './core/store.ts';
-import { getMaxTextFileSize } from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
