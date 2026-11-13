@@ -8,7 +8,7 @@ import type * as z from 'zod/v4';
 
 import { NO_GRANT_SUGGESTION, OUTSIDE_ROOTS_SUGGESTION } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { GuardedFileSystem } from '../src/core/fs.ts';
+import { GuardedFileSystem, type ReadOptions } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { READ } from '../src/tools/index.ts';
@@ -291,22 +291,17 @@ describe('read body', () => {
     assert.match(result.text ?? '', /\/\/ .*big\.txt\nx/);
   });
 
-  it('batch slices over budget deterministically skip the later slice in input order', async () => {
+  it('batch slices over budget deterministically skip the later slice in input order', async (t) => {
     const line = 'y'.repeat(300 * 1024);
     const a = await writeTestFile(root, 'read-budget/a.txt', `${line}\nrest\n`);
     const b = await writeTestFile(root, 'read-budget/b.txt', `${line}\nrest\n`);
     const c = await writeTestFile(root, 'read-budget/c.txt', 'tiny\nrest\n');
-    const delayedFs = new (class extends GuardedFileSystem {
-      override async readFile(
-        filePath: string,
-        spec: Parameters<GuardedFileSystem['readFile']>[1],
-      ): ReturnType<GuardedFileSystem['readFile']> {
-        if (filePath === a) {
-          await new Promise((resolve) => setTimeout(resolve, 15));
-        }
-        return super.readFile(filePath, spec);
-      }
-    })(guard);
+    const delayedFs = new GuardedFileSystem(guard);
+    const realRead = delayedFs.read.bind(delayedFs);
+    t.mock.method(delayedFs, 'read', async (filePath: string, options?: ReadOptions) => {
+      if (filePath === a) await new Promise((resolve) => setTimeout(resolve, 15));
+      return realRead(filePath, options);
+    });
     const result = await read({ paths: [a, b, c], head: 1 }, { guard, fs: delayedFs });
     assert.strictEqual(result.isError, false);
     const errors = result.structured.results.map((r) => errorOf(r));

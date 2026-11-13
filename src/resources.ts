@@ -228,19 +228,23 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
         );
       }
       const fs = new GuardedFileSystem(options.pathGuard);
-      if (options.transport === 'stdio') {
-        // Text encodes to at least its own bytes and base64 to 4/3 of them,
-        // so a file over the limit is refused before it is read. One past the
-        // file size limit is left to readRaw, whose refusal names that limit:
-        // HTTP would not serve it either.
-        const { stats } = await fs.stat(rawPath, { signal: ctx.mcpReq.signal });
-        const floor = readFloorOver(options.transport, stats.size, false);
-        if (floor !== undefined && stats.size <= getMaxTextFileSize()) {
-          throw refuseResourceRead(floor, true);
-        }
-      }
-      const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
-      if (readResult.isBinary) {
+      const readResult = await fs.read(rawPath, {
+        binary: 'raw',
+        signal: ctx.mcpReq.signal,
+        // Text encodes to at least its own bytes and base64 to 4/3 of them, so
+        // a file over stdio's limit is refused once classified, before its body
+        // is read. One past the file size limit is left to read, whose refusal
+        // names that limit: HTTP would not serve it either.
+        beforeBody: ({ stats, kind }) => {
+          if (options.transport !== 'stdio' || stats.size > getMaxTextFileSize()) return;
+          const floor = readFloorOver(options.transport, stats.size, kind !== 'text');
+          if (floor !== undefined) throw refuseResourceRead(floor, true);
+        },
+      });
+      // UTF-16 and other non-UTF-8 text are binary here: served as bytes, never lossy text.
+      const isBinary = readResult.kind !== 'text';
+      if (isBinary && options.transport === 'stdio') {
+        // The body may have grown past what beforeBody saw.
         const floor = readFloorOver(options.transport, readResult.content.length, true);
         if (floor !== undefined) throw refuseResourceRead(floor, true);
       }
@@ -250,7 +254,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
           {
             uri: uri.href,
             mimeType: readResult.mimeType || 'application/octet-stream',
-            ...(readResult.isBinary
+            ...(isBinary
               ? { blob: readResult.content.toString('base64') }
               : { text: readResult.content.toString('utf-8') }),
           },

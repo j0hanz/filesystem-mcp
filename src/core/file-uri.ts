@@ -106,7 +106,7 @@ export interface WrittenFileMeta {
  * The URI and link a write tool may advertise for the file it wrote. None on a
  * dry run — nothing was written, so the file on disk is still the one the
  * caller already has. None when the size is unknown or over the text-size cap —
- * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
+ * the store serves the URI via a raw read, which would reject it with TOO_LARGE.
  * File resources are read directly from disk, not from the result store.
  * `lastModified` is the post-write mtime when the caller stat'd the file; a
  * link without it is still valid. None over stdio when `canLinkFile` says

@@ -1874,32 +1874,6 @@ export class GuardedFileSystem {
     return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
   }
 
-  /** Transitional: tools/read.ts moves to `read` in the next task. */
-  async readFile(
-    filePath: string,
-    spec: ReadSpec & { signal?: AbortSignal; maxSize?: number; hardCap?: boolean },
-  ): Promise<ReadFileResult> {
-    const { signal, maxSize, hardCap, ...slice } = spec;
-    return await this.read(filePath, {
-      ...(slice.kind === 'full' ? {} : { slice }),
-      ...(signal ? { signal } : {}),
-      ...(maxSize !== undefined ? { maxSize } : {}),
-      ...(hardCap ? { hardCap } : {}),
-    });
-  }
-
-  /** Transitional: resources.ts and tools/read.ts move to `read` in the next task. */
-  async readRaw(
-    filePath: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ReadBytesResult & { isBinary: boolean }> {
-    const result = await this.read(filePath, {
-      binary: 'raw',
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
-    return { ...result, isBinary: result.kind !== 'text' };
-  }
-
   /** `requestedPath` names the client's spelling in errors; `signal` abandons a stalled open. */
   async open(
     filePath: string,

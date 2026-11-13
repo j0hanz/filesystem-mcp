@@ -14,6 +14,7 @@ import {
   isBinaryRefusal,
 } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
+import type { ReadBytesResult, ReadOptions, ReadResult, ReadTextResult } from '../core/fs.ts';
 import {
   detectMimeFromContent,
   detectMimeType,
@@ -26,7 +27,6 @@ import {
   MAX_OUTBOUND_RESULT_BYTES,
   type Transport,
 } from '../core/outbound.ts';
-import type { ReadFileResult, ReadSpec } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -132,31 +132,35 @@ type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
 
 const READ_TOOL_LABEL = 'Read';
 
-function buildReadSpec(args: ReadFileInput, signal?: AbortSignal): ReadSpec {
-  const slice = args.paths !== undefined && hasLineRange(args);
+function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOptions {
   const base = {
     ...(signal ? { signal } : {}),
-    ...(slice ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true } : {}),
+    ...(args.paths !== undefined && hasLineRange(args)
+      ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true }
+      : {}),
   };
   const { head, tail, startLine, endLine } = args;
 
-  if (head !== undefined) return { kind: 'head', lines: head, ...base };
-  if (tail !== undefined) return { kind: 'tail', lines: tail, ...base };
+  if (head !== undefined) return { slice: { kind: 'head', lines: head }, ...base };
+  if (tail !== undefined) return { slice: { kind: 'tail', lines: tail }, ...base };
   if (startLine !== undefined || endLine !== undefined) {
     return {
-      kind: 'range',
-      start: startLine ?? 1,
-      ...(endLine !== undefined ? { end: endLine } : {}),
+      slice: {
+        kind: 'range',
+        start: startLine ?? 1,
+        ...(endLine !== undefined ? { end: endLine } : {}),
+      },
       ...base,
     };
   }
-  return { kind: 'full', ...base };
+  // A full read returns image/audio as a media block; binary: true also returns other binary.
+  return { binary: args.binary ? 'allow' : 'media', ...base };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
 // more behind, so a continuation cannot know the total without a second pass.
 function buildReadContinuation(
-  result: ReadFileResult,
+  result: ReadTextResult,
   requestedPath: string,
   lineNumbers: boolean,
 ): ReadContinuation | undefined {
@@ -269,7 +273,7 @@ async function collectFileBudget(
 }
 
 function buildPerPathReadValue(
-  result: ReadFileResult,
+  result: ReadTextResult,
   options: {
     includeHash?: boolean;
     lineNumbers: boolean;
@@ -341,7 +345,7 @@ function numberingBytes(firstLine: number, count: number): number {
  * Numbering a newline-heavy file multiplies it many times over, so refuse before
  * building the text: the executor's size refusal only runs after it exists.
  */
-function assertNumberingFits(result: ReadFileResult, filePath: string, transport: Transport): void {
+function assertNumberingFits(result: ReadTextResult, filePath: string, transport: Transport): void {
   const max = getMaxTextFileSize();
   const limit = transport === 'stdio' ? Math.min(max, MAX_OUTBOUND_RESULT_BYTES) : max;
   const bytes =
@@ -401,33 +405,39 @@ function readTrailer(v: PerPathReadValue): string[] {
   return lines;
 }
 
-/**
- * `binary: true` after the text path refused the file as binary. readRaw
- * re-validates the path (roots, denylist) and enforces the same size cap.
- * A file refused by its extension can still probe as text: it ships as the
- * extension says, octet-stream.
- */
-async function readBinaryResource(
-  filePath: string,
+/** A full read's bytes: image/audio as a media block, other binary as an embedded resource. */
+function bytesReadValue(
+  raw: ReadBytesResult,
   args: ReadFileInput,
-  ctx: ToolCtx,
-): Promise<PerPathReadValue> {
-  const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
-  const asText = raw.kind === 'text';
-  const kind: FileKind = asText ? 'binary' : raw.kind;
-  const mimeType = asText ? 'application/octet-stream' : raw.mimeType;
+  transport: Transport,
+): PerPathReadValue {
   const size = raw.content.length;
+  const uri = buildFileResourceUri(raw.validPath);
+  const contentHash = args.includeHash ? { contentHash: sha256Hex(raw.content) } : {};
+  if (raw.kind === 'image' || raw.kind === 'audio') {
+    const canLink = canLinkFile(transport, { uri, mimeType: raw.mimeType, size, kind: raw.kind });
+    return {
+      content: `[binary ${raw.kind} content: ${String(size)} bytes; returned as a ${raw.kind} content block]`,
+      mimeType: raw.mimeType,
+      kind: raw.kind,
+      size,
+      ...(canLink ? { resourceUri: uri } : {}),
+      modified: raw.modified,
+      mediaData: raw.content.toString('base64'),
+      ...contentHash,
+    };
+  }
   return {
-    content: `[binary ${kind} content: ${String(size)} bytes (${mimeType}); returned as an embedded resource block]`,
-    mimeType,
-    kind,
+    content: `[binary ${raw.kind} content: ${String(size)} bytes (${raw.mimeType}); returned as an embedded resource block]`,
+    mimeType: raw.mimeType,
+    kind: raw.kind,
     size,
     // Not gated by canLinkFile: the embedded block needs it, and a blob too
     // large for stdio makes refuseOversized refuse the whole result anyway.
-    resourceUri: buildFileResourceUri(raw.validPath),
+    resourceUri: uri,
     modified: raw.modified,
     blobData: raw.content.toString('base64'),
-    ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
+    ...contentHash,
   };
 }
 
@@ -436,45 +446,13 @@ async function readOnePath(
   args: ReadFileInput,
   ctx: ToolCtx,
 ): Promise<PerPathReadValue> {
-  // Image/audio full read: return a media content block instead of throwing
-  // BINARY_FILE ("Binary file detected."). Line-range reads are
-  // text-oriented and stay rejected. `readRaw` enforces the same size cap as
-  // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
-  // rather than blowing memory. svg is kind 'image' in EXT_MAP, so readRaw
-  // reports it binary and it returns as an image block.
+  // One guarded open: read classifies the file from its leading bytes and
+  // either returns its bytes (media, or any binary with binary: true) or its
+  // text. A line slice is text only, so binary is refused there.
   const isRangeRead = hasLineRange(args);
-  if (!isRangeRead) {
-    const mime = detectMimeType(filePath);
-    if (mime.kind === 'image' || mime.kind === 'audio') {
-      const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
-      if (raw.isBinary) {
-        const size = raw.content.length;
-        const canLink = canLinkFile(ctx.transport, {
-          uri: buildFileResourceUri(raw.validPath),
-          mimeType: raw.mimeType,
-          size,
-          kind: mime.kind,
-        });
-        return {
-          content: `[binary ${mime.kind} content: ${String(raw.content.length)} bytes; returned as a ${mime.kind} content block]`,
-          mimeType: raw.mimeType,
-          kind: mime.kind,
-          size,
-          ...(canLink ? { resourceUri: buildFileResourceUri(raw.validPath) } : {}),
-          modified: raw.modified,
-          mediaData: raw.content.toString('base64'),
-          ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
-        };
-      }
-    }
-  }
-
-  const spec = buildReadSpec(args, ctx.signal);
-  // The read re-validates and re-stats: the budget pass's stat is only a
-  // size estimate, never a substitute for the guarded open.
-  let result: ReadFileResult;
+  let result: ReadResult;
   try {
-    result = await ctx.fs.readFile(filePath, spec);
+    result = await ctx.fs.read(filePath, buildReadOptions(args, ctx.signal));
   } catch (error: unknown) {
     if (
       args.paths !== undefined &&
@@ -485,8 +463,6 @@ async function readOnePath(
       throw budgetSkip(filePath, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
     }
     if (!isBinaryRefusal(error)) throw error;
-    // The schema refuses binary with a range, so this is always a full read.
-    if (args.binary) return await readBinaryResource(filePath, args, ctx);
     throw new FsError(
       ErrorCode.BINARY_FILE,
       isRangeRead
@@ -496,6 +472,7 @@ async function readOnePath(
       error,
     );
   }
+  if (result.type === 'bytes') return bytesReadValue(result, args, ctx.transport);
 
   if (args.lineNumbers) assertNumberingFits(result, filePath, ctx.transport);
 

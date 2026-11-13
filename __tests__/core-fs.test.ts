@@ -988,7 +988,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-054: buildWrittenFileMeta omits the URI over the text cap and on a dry run', () => {
       // An edit or patch can push a readable file past the text-size cap;
-      // a resourceUri the store's readRaw would reject with TOO_LARGE must
+      // a resourceUri the store's raw read would reject with TOO_LARGE must
       // never be advertised.
       const huge = 'x'.repeat(10 * 1024 * 1024 + 1);
       const meta = buildWrittenFileMeta({
@@ -2351,7 +2351,7 @@ describe('GuardedFileSystem.stat', () => {
       const rawFile = await writeTestFile(root, 'swap-raw.txt', 'inside');
       const textFile = await writeTestFile(root, 'swap-text.txt', 'inside');
       try {
-        // readRaw would report the outside file's size in its TOO_LARGE refusal.
+        // A raw read would report the outside file's size in its TOO_LARGE refusal.
         let restore = swapAfterValidation('validateExistingPath', rawFile, async () => {
           await rename(rawFile, `${rawFile}.bak`);
           await symlink(big, rawFile);
