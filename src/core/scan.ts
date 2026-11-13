@@ -1,4 +1,4 @@
-import { opendir, realpath } from 'node:fs/promises';
+import { lstat, opendir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
@@ -65,6 +65,8 @@ export interface ScanEntry {
   readonly type: EntryType;
   /** Walk order. */
   readonly index: number;
+  /** A regular file's size, under `includeSizes`; absent when its lstat failed. */
+  readonly size?: number;
 }
 
 /**
@@ -97,6 +99,8 @@ export interface ScanOptions<R> {
   readonly weigh?: (result: R) => number;
   readonly maxEntries?: number;
   readonly signal?: AbortSignal;
+  /** lstat each admitted regular file once and hand its size to onEntry. */
+  readonly includeSizes?: boolean;
   /** Called after each onEntry resolves. */
   readonly onScanned?: (scanned: number) => void;
   /** Called once per walk index when it is done: onEntry settled, or it was never admitted. */
@@ -305,7 +309,8 @@ export async function scan<R>(
     if (free === undefined) return;
     const done = await (async () => {
       try {
-        return { result: await onEntry({ path, type, index }) };
+        const size = await entrySize(path, type, options);
+        return { result: await onEntry({ path, type, index, ...size }) };
       } catch {
         // A file swapped for a sensitive link after admission leaves no trace;
         // a re-check that throws counts the entry, as the failure does.
@@ -454,6 +459,24 @@ export async function probeDirectory(
   }
 }
 
+/**
+ * The size `includeSizes` asks for: one lstat of a regular file. A file gone
+ * since the walk keeps its place without one; an abort is the scan's stop.
+ */
+async function entrySize(
+  path: string,
+  type: EntryType,
+  options: Pick<ScanOptions<unknown>, 'includeSizes' | 'signal'>,
+): Promise<{ size?: number }> {
+  if (!options.includeSizes || type !== 'file') return {};
+  try {
+    return { size: (await withAbort(lstat(path), options.signal)).size };
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return {};
+  }
+}
+
 /** A named file: the guard's errors, onEntry's and a skip fail the call, unless the signal aborted. */
 async function scanNamedFile<R>(
   explicitFile: string,
@@ -474,7 +497,8 @@ async function scanNamedFile<R>(
   let result: R | ScanSkip | undefined;
   try {
     // resolveScanScope already proved it is a file.
-    result = await onEntry({ path: explicitFile, type: 'file', index: 0 });
+    const size = await entrySize(explicitFile, 'file', options);
+    result = await onEntry({ path: explicitFile, type: 'file', index: 0, ...size });
   } catch (error) {
     if (signal?.aborted) return timedOut;
     throw error;

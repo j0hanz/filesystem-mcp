@@ -663,3 +663,79 @@ describe('scan', () => {
     assert.deepEqual(await resolveScanScope(empty, fs, { allowFile: false }), { root: empty });
   });
 });
+
+describe('scan includeSizes', () => {
+  let root: string;
+  let guard: PathGuard;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+    await writeTestFile(root, 'a.txt', 'abc');
+    await writeTestFile(root, 'dir/b.txt', 'hello');
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const options = (overrides: Partial<ScanOptions<ScanEntry>> = {}): ScanOptions<ScanEntry> => ({
+    pathGuard: guard,
+    pattern: '**/*',
+    baseNameMatch: false,
+    includeHidden: true,
+    includeIgnored: false,
+    onlyFiles: false,
+    concurrency: 1,
+    includeSizes: true,
+    ...overrides,
+  });
+  const sizes = (entries: readonly ScanEntry[]): Record<string, number | undefined> =>
+    Object.fromEntries(entries.map((e) => [toPosixPath(relative(root, e.path)), e.size]));
+
+  /** Swaps the size lstat (only that caller) of `target` for `stand`, leaving every other lstat real. */
+  const onSizeLstat = (t: TestContext, target: string, stand: () => Promise<never>): void => {
+    const real = fsPromises.lstat.bind(fsPromises);
+    const lstat = t.mock.method(fsPromises, 'lstat', (path: string) =>
+      path === target && (new Error().stack ?? '').includes('entrySize') ? stand() : real(path),
+    );
+    syncBuiltinESMExports();
+    t.after(() => {
+      lstat.mock.restore();
+      syncBuiltinESMExports();
+    });
+  };
+
+  it('gives each regular file its size and leaves directories without one', async () => {
+    const out = await scan({ root }, options(), (entry) => Promise.resolve(entry));
+    assert.deepEqual(sizes(out.results), { 'a.txt': 3, dir: undefined, 'dir/b.txt': 5 });
+  });
+
+  it('leaves sizes out unless asked', async () => {
+    const out = await scan({ root }, options({ includeSizes: false }), (e) => Promise.resolve(e));
+    assert.ok(out.results.every((e) => e.size === undefined));
+  });
+
+  it('keeps a file whose size lstat fails, without a size', async (t) => {
+    const target = join(root, 'a.txt');
+    onSizeLstat(t, target, () =>
+      Promise.reject(Object.assign(new Error('gone'), { code: 'ENOENT' })),
+    );
+    const out = await scan({ root }, options(), (entry) => Promise.resolve(entry));
+    assert.ok(out.results.some((e) => e.path === target && e.size === undefined));
+    assert.equal(out.skippedInaccessible, 0);
+  });
+
+  it('a deadline during a size lstat cuts the scan as a timeout', async (t) => {
+    const controller = new AbortController();
+    onSizeLstat(t, join(root, 'a.txt'), () => {
+      controller.abort(new DOMException('deadline', 'TimeoutError'));
+      return new Promise<never>(() => undefined);
+    });
+    const out = await scan({ root }, options({ signal: controller.signal }), (entry) =>
+      Promise.resolve(entry),
+    );
+    assert.equal(out.stoppedReason, 'timeout');
+    assert.equal(out.skippedInaccessible, 0);
+  });
+});
