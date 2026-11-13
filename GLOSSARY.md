@@ -54,6 +54,13 @@ _Avoid_: walk (the raw traversal, which relocation and undo also use), search
 
 ## Text
 
+**File class**:
+Whether an entry is treated as UTF-8 text, media (`image` or `audio`), PDF,
+UTF-16, or binary, settled once by extension and the leading 512 bytes. A `read`
+call refuses UTF-16 even with `binary: true` so the caller converts it first,
+whereas a resource read serves UTF-16 as binary bytes.
+_Avoid_: mime sniff, content guess
+
 **Text view**:
 The text of a file as a tool judges it: a leading byte-order mark is hidden,
 and a file whose every line ends in CRLF is shown with LF endings; a file
