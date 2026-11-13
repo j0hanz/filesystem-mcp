@@ -340,3 +340,40 @@ export class FsError extends Error {
     return this.problem.code;
   }
 }
+
+/** `label` qualifies the size parenthetical; `suggestion` overrides the TOO_LARGE default remedy. */
+export function createTooLargeError(
+  bytesRead: number,
+  maxSize: number,
+  requestedPath: string,
+  { label, suggestion }: { label?: string; suggestion?: string } = {},
+): FsError {
+  return new FsError(
+    ErrorCode.TOO_LARGE,
+    `File exceeds size limit (${bytesRead} > ${maxSize} bytes${label ? `, ${label}` : ''})`,
+    requestedPath,
+    undefined,
+    suggestion,
+  );
+}
+
+/** The text path's binary refusal; `read` catches its code to offer `binary: true`. */
+export const BINARY_FILE_MESSAGE = 'Binary file detected.';
+
+export function isBinaryRefusal(error: unknown): error is FsError {
+  return error instanceof FsError && error.code === ErrorCode.BINARY_FILE;
+}
+
+/** The refusal of a file whose bytes a writer would not round-trip as UTF-8. */
+export const NOT_UTF8_MESSAGE = 'Binary or non-UTF-8 file detected.';
+
+/** The refusal `read`, `edit`, `patch` and `diff` give for a binary verdict. */
+export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsError {
+  return kind === 'utf16'
+    ? new FsError(
+        ErrorCode.INVALID_INPUT,
+        'UTF-16 text file detected; convert it to UTF-8 first.',
+        filePath,
+      )
+    : new FsError(ErrorCode.BINARY_FILE, BINARY_FILE_MESSAGE, filePath);
+}

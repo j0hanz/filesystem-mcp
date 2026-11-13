@@ -9,7 +9,7 @@ import { ErrorCode } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { MAX_MATCHES_PER_LINE, RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS } from '../src/core/fmt.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.ts';
 import { SEARCH_TEXT } from '../src/tools/index.ts';

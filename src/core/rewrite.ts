@@ -1,9 +1,9 @@
 import type { Stats } from 'node:fs';
 
 import { withAbort } from './concurrency.ts';
+import { createTooLargeError } from './errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { createTooLargeError } from './read.ts';
 import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
 import { type TextView, viewText } from './text-view.ts';
 import { getMaxTextFileSize } from './util.ts';

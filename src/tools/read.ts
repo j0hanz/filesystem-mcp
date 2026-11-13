@@ -5,7 +5,14 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { ErrorCode, formatDetailedError, FsError } from '../core/errors.ts';
+import {
+  BINARY_FILE_MESSAGE,
+  createTooLargeError,
+  ErrorCode,
+  formatDetailedError,
+  FsError,
+  isBinaryRefusal,
+} from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import {
   detectMimeFromContent,
@@ -19,13 +26,7 @@ import {
   MAX_OUTBOUND_RESULT_BYTES,
   type Transport,
 } from '../core/outbound.ts';
-import {
-  BINARY_FILE_MESSAGE,
-  createTooLargeError,
-  isBinaryRefusal,
-  type ReadFileResult,
-  type ReadSpec,
-} from '../core/read.ts';
+import type { ReadFileResult, ReadSpec } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,

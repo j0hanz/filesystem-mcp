@@ -5,7 +5,8 @@ import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, FsError, isFsError } from './errors.ts';
+import { binaryRefusal, createTooLargeError, ErrorCode, FsError, isFsError } from './errors.ts';
+import { countLines } from './fmt.ts';
 import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
 import { getMaxTextFileSize } from './util.ts';
 
@@ -78,22 +79,6 @@ export interface ReadFileResult {
   hasMoreLines?: boolean;
 }
 
-/** `label` qualifies the size parenthetical; `suggestion` overrides the TOO_LARGE default remedy. */
-export function createTooLargeError(
-  bytesRead: number,
-  maxSize: number,
-  requestedPath: string,
-  { label, suggestion }: { label?: string; suggestion?: string } = {},
-): FsError {
-  return new FsError(
-    ErrorCode.TOO_LARGE,
-    `File exceeds size limit (${bytesRead} > ${maxSize} bytes${label ? `, ${label}` : ''})`,
-    requestedPath,
-    undefined,
-    suggestion,
-  );
-}
-
 export async function readFileBufferWithLimit(
   handle: FileHandle,
   maxSize: number,
@@ -138,12 +123,6 @@ export async function readFileBufferWithLimit(
 
   return Buffer.concat(chunks, totalSize);
 }
-
-export const countLines = (content: string): number => {
-  if (content.length === 0) return 0;
-  const trimmed = content.endsWith('\n') ? content.slice(0, -1) : content;
-  return trimmed.split('\n').length;
-};
 
 async function peekHasMore(iterator: AsyncIterator<string>): Promise<boolean> {
   try {
@@ -451,16 +430,6 @@ async function readFullContent(
   return { content, totalLines: countLines(content) };
 }
 
-/** The text path's binary refusal; `read` catches its code to offer `binary: true`. */
-export const BINARY_FILE_MESSAGE = 'Binary file detected.';
-
-export function isBinaryRefusal(error: unknown): error is FsError {
-  return error instanceof FsError && error.code === ErrorCode.BINARY_FILE;
-}
-
-/** The refusal of a file whose bytes a writer would not round-trip as UTF-8. */
-export const NOT_UTF8_MESSAGE = 'Binary or non-UTF-8 file detected.';
-
 /** read's binary rule on a file's leading bytes; undefined for text. */
 export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16' | undefined {
   if (isKnownBinaryExtension(validPath)) return 'binary';
@@ -469,17 +438,6 @@ export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16'
   // as content.
   if (hasUtf16Bom(probe)) return 'utf16';
   return isBinarySample(probe) ? 'binary' : undefined;
-}
-
-/** The refusal `read`, `edit`, `patch` and `diff` give for a binary verdict. */
-export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsError {
-  return kind === 'utf16'
-    ? new FsError(
-        ErrorCode.INVALID_INPUT,
-        'UTF-16 text file detected; convert it to UTF-8 first.',
-        filePath,
-      )
-    : new FsError(ErrorCode.BINARY_FILE, BINARY_FILE_MESSAGE, filePath);
 }
 
 async function assertNotBinary(

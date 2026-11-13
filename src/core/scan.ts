@@ -4,7 +4,13 @@ import { opendir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
+import {
+  binaryRefusal,
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  NOT_UTF8_MESSAGE,
+} from './errors.ts';
 import type { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
 import { MIME_SAMPLE_SIZE } from './mime.ts';
@@ -12,7 +18,7 @@ import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { normalizePath, resolveEntryType } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { assertFileStats, binaryKind, binaryRefusal, NOT_UTF8_MESSAGE } from './read.ts';
+import { assertFileStats, binaryKind } from './read.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 /** The chunk `FileHandle#readFile` reads in, and checks its signal between. */

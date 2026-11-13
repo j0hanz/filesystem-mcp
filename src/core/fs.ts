@@ -26,6 +26,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
+  createTooLargeError,
   ErrorCode,
   formatUnknownErrorMessage,
   FsError,
@@ -52,7 +53,6 @@ import {
   APPEND_CREATE_NOFOLLOW,
   APPEND_NOFOLLOW,
   assertFileStats,
-  createTooLargeError,
   O_NOFOLLOW,
   READ_NOFOLLOW,
   READ_NONBLOCK_NOFOLLOW,

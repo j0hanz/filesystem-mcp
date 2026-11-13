@@ -2,11 +2,11 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { basename } from 'node:path';
 
+import { countLines } from './fmt.ts';
 import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
 import { canLinkFile, type Transport } from './outbound.ts';
 import { IS_WINDOWS, toPosixPath } from './path-utils.ts';
-import { countLines } from './read.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,

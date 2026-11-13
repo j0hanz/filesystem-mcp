@@ -1,4 +1,5 @@
 import { ErrorCode, FsError } from './errors.ts';
+import { clipLine } from './fmt.ts';
 import { GuardedFileSystem } from './fs.ts';
 import {
   createMatchEngine,
@@ -20,38 +21,6 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
  * file's text for as long as the match list lives (60 s in the page store).
  */
 const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
-
-/** Longest line a result carries; a longer one is cut to a window around the match. */
-export const MAX_MATCH_LINE_CHARS = 1000;
-const MATCH_LEAD_CHARS = 200;
-
-/**
- * `line` cut to a window that starts `MATCH_LEAD_CHARS` before `column`, with
- * each cut marked by the number of chars removed. A cut never splits a pair.
- */
-export function clipLine(line: string, column: number): string {
-  if (line.length <= MAX_MATCH_LINE_CHARS) return line;
-  let start = Math.max(0, column - MATCH_LEAD_CHARS);
-  let end = Math.min(line.length, start + MAX_MATCH_LINE_CHARS);
-  if (
-    start > 0 &&
-    isHighSurrogate(line.charCodeAt(start - 1)) &&
-    isLowSurrogate(line.charCodeAt(start))
-  )
-    start--;
-  if (
-    end < line.length &&
-    isHighSurrogate(line.charCodeAt(end - 1)) &&
-    isLowSurrogate(line.charCodeAt(end))
-  )
-    end++;
-  const head = start > 0 ? `…[${start} chars] ` : '';
-  const tail = end < line.length ? ` […${line.length - end} chars]` : '';
-  return head + line.slice(start, end) + tail;
-}
-
-const isHighSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
-const isLowSurrogate = (c: number): boolean => c >= 0xdc00 && c <= 0xdfff;
 
 interface SearchResult {
   file: string;

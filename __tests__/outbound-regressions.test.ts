@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { ErrorCode } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { jsonByteBound, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
-import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
+import { MAX_MATCH_LINE_CHARS } from '../src/core/fmt.ts';
 import { MIB } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
