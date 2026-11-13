@@ -2770,6 +2770,15 @@ describe('GuardedFileSystem.read binary policy', () => {
     );
   });
 
+  it('allow returns a UTF-16 svg as media, as media does', async () => {
+    const svg = await put('wide.svg', UTF16);
+    for (const binary of ['media', 'allow'] as const) {
+      const result = await fs.read(svg, { binary });
+      assert.equal(result.type, 'bytes', binary);
+      if (result.type === 'bytes') assert.equal(result.kind, 'image', binary);
+    }
+  });
+
   it('raw serves every file as bytes and UTF-16 as binary', async () => {
     const utf16 = await fs.read(await put('r16.txt', UTF16), { binary: 'raw' });
     assert.deepEqual([utf16.kind, utf16.mimeType], ['binary', 'application/octet-stream']);

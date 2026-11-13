@@ -1718,11 +1718,11 @@ export class GuardedFileSystem {
     const refusal = binaryKind(validPath, probe);
     const media = kind === 'image' || kind === 'audio';
     const policy = options.slice ? 'refuse' : (options.binary ?? 'refuse');
-    // `allow` (binary: true) still refuses UTF-16: the caller converts it first.
+    // `allow` (binary: true) still refuses UTF-16 text: the caller converts it first. Media is media whatever its encoding.
     const bytes =
       policy === 'raw' ||
       (policy === 'media' && media) ||
-      (policy === 'allow' && refusal !== 'utf16' && (media || refusal === 'binary'));
+      (policy === 'allow' && (media || refusal === 'binary'));
     if (!bytes && refusal !== undefined) throw binaryRefusal(refusal, filePath);
     options.beforeBody?.({ validPath, stats, mimeType, kind });
     const maxSize = options.maxSize ?? getMaxTextFileSize();
