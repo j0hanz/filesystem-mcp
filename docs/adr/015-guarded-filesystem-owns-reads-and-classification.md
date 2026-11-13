@@ -17,8 +17,8 @@ Three modules shared file classification and reading inconsistently:
 
 - **Unified classification (`src/core/mime.ts`)**: `EXTRA_BINARY_EXTENSIONS` folds into `EXT_MAP` (`KNOWN_BINARY_EXTENSIONS` derives from non-text entries other than `.svg`), and `isBinarySample` treats UTF-16 byte-order marks as binary everywhere. A full `read` still refuses UTF-16 with `INVALID_INPUT` even when `binary: true`, whereas `resources/read` serves UTF-16 as a base64 `blob`.
 - **Single-open read surface (`GuardedFileSystem`)**:
-  - `read(filePath, options?)`: client delivery (full or head/tail/range slice, policy `'refuse' | 'media' | 'allow' | 'raw'`, optional `beforeBody` check run after `fstat` + 512-byte classification and before body read).
-  - `readText(filePath, options?)`: non-throwing **Scan** / **Rewrite** / search `TextVerdict` returning raw bytes + `validPath`.
+  - `read(filePath, options?)`: client delivery (full or head/tail/range slice, policy `'refuse' | 'media' | 'allow' | 'raw'`, optional `beforeBody` check run after the guarded stat, the one verified open and the 512-byte classification, and before the body read). The stat stays ahead of the open so a FIFO or directory is refused before an open could block.
+  - `readText(filePath, options?)`: non-throwing **Scan** / **Rewrite** / search `TextVerdict` returning the raw bytes and the `fstat` result; callers already hold the validated path.
   - `readNamedText(filePath, options?)`: strict named UTF-8 text read (`diff`, `edit`, `patch`) translating non-text verdicts into `FsError`.
 - **Private read mechanics**: `src/core/read.ts` becomes strictly internal to `src/core/fs.ts`. `countLines` moves to `src/core/fmt.ts`, and `createTooLargeError` (with binary/UTF-8 error constants and `isBinaryRefusal`) moves to `src/core/errors.ts`.
 

@@ -428,9 +428,9 @@ async function readFullContent(
 /** read's binary rule on a file's leading bytes; undefined for text. */
 export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16' | undefined {
   if (isKnownBinaryExtension(validPath)) return 'binary';
-  // A UTF-16 BOM passes the binary probe (it is text), but every reader
-  // here (read and edit) decodes UTF-8 and would hand back U+FFFD and NULs
-  // as content.
+  // Checked before the binary probe, which also flags a UTF-16 BOM, so UTF-16
+  // gets its own refusal: every reader here decodes UTF-8 and would hand back
+  // U+FFFD and NULs as content.
   if (hasUtf16Bom(probe)) return 'utf16';
   return isBinarySample(probe) ? 'binary' : undefined;
 }
