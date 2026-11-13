@@ -1,9 +1,8 @@
 import * as z from 'zod/v4';
 
-import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
+import { formatCount, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { ResultPaths } from '../core/path.ts';
-import { type ExcludedDirs, resolveScanScope, type StoppedReason } from '../core/scan.ts';
+import type { ExcludedDirs, StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -16,10 +15,10 @@ import {
   SafeGlobPattern,
 } from '../core/schema.ts';
 import { searchContent } from '../core/search.ts';
-import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
 import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
 import { defineTool } from './define.ts';
+import { pagedScan } from './paged-scan.ts';
 
 // Type Definitions
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
@@ -210,115 +209,91 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     detail: buildSearchMatchDetail(result.totalMatches ?? 0, result.filesMatched ?? 0),
   }),
   mapPaths: mapOptionalPath,
-  run: async (args, ctx) => {
-    const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-    const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>(
-      {
-        store: ctx.pageStore,
-        queryKey: pageQueryKey('search_text', { ...args, path: requestedPath }, [
-          'cursor',
-          'maxResults',
-        ]),
-        cursor: args.cursor,
-        pageSize: args.maxResults,
-        produce: async () => {
-          const scope = await resolveScanScope(args.path, ctx.fs, {
+  run: async (args, ctx) =>
+    await pagedScan({
+      tool: 'search_text',
+      args,
+      ctx,
+      allowFile: true,
+      scopeSignal: true,
+      produce: async ({ scope, paths, fs }) => {
+        const result = await searchContent(
+          scope,
+          args.searchPattern,
+          {
+            includeHidden: args.includeHidden,
+            filePattern: args.pattern ?? '**/*',
+            caseSensitive: args.caseSensitive,
+            isRegex: args.isRegex,
+            maxResults: MAX_SEARCH_RESULTS,
+            skipIgnored: !args.includeIgnored,
+            context: args.context,
+            ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
             signal: ctx.signal,
-            allowFile: true,
-          });
-
-          const result = await searchContent(
-            scope,
-            args.searchPattern,
-            {
-              includeHidden: args.includeHidden,
-              filePattern: args.pattern ?? '**/*',
-              caseSensitive: args.caseSensitive,
-              isRegex: args.isRegex,
-              maxResults: MAX_SEARCH_RESULTS,
-              skipIgnored: !args.includeIgnored,
-              context: args.context,
-              ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-              signal: ctx.signal,
-            },
-            ctx.fs,
-          );
-
-          // Relative to the root, not to scope.root: `a.ts` from a search of
-          // `src` would name `<root>/a.ts` when passed back.
-          const paths = ctx.fs.pathGuard.resultPaths(scope.root);
-          return {
-            items: buildSortedPayloads(result, paths),
-            metadata: {
-              ...result.summary,
-              root: paths.root,
-              namedFile: scope.explicitFile !== undefined,
-            },
-            truncated: result.summary.truncated,
-          };
-        },
-        externalize: (matches, metadata) =>
-          putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
-            ...searchContentOutput(matches, metadata, undefined, undefined),
-          }),
+          },
+          fs,
+        );
+        return {
+          items: buildSortedPayloads(result, paths),
+          metadata: {
+            ...result.summary,
+            root: paths.root,
+            namedFile: scope.explicitFile !== undefined,
+          } satisfies SearchContentPageMetadata,
+          truncated: result.summary.truncated,
+        };
       },
-    );
-
-    const structured = searchContentOutput(
-      paged.page,
-      paged.metadata,
-      paged.nextCursor,
-      paged.resource?.entry.uri,
-    );
-    const rows = renderRows(structured.matches, args.context > 0, paged.metadata.namedFile);
-    const body =
-      rows.length > 0
-        ? rows.join('\n')
-        : [
-            `No matches for '${args.searchPattern}'`,
-            zeroMatchHint({
-              ...args,
-              filesScanned: structured.filesScanned ?? 0,
-              // Most trees hold a binary file, so one only explains the zero when
-              // no text file was searched at all.
-              incomplete:
-                Boolean(
-                  structured.stoppedReason ??
-                  structured.skippedTooLarge ??
-                  structured.skippedInaccessible ??
-                  structured.excludedDirs,
-                ) ||
-                (structured.skippedBinary !== undefined &&
-                  structured.skippedBinary === structured.filesScanned),
-            }),
-          ]
-            .filter(Boolean)
-            .join('\n');
-    // A page that holds every match is the one case the pager's trailer does
-    // not total, so the count line appears there and only there.
-    const countLine =
-      paged.metadata.matchingLines > 0 &&
-      paged.offset === 0 &&
-      structured.matches.length === paged.metadata.matchingLines
-        ? `\n\n// ${buildSearchMatchDetail(paged.metadata.matchingLines, paged.metadata.filesMatched)}`
-        : '';
-    const text =
-      body +
-      countLine +
-      pageTrailer({
-        offset: paged.offset,
-        shown: structured.matches.length,
-        total: paged.metadata.matchingLines,
-        noun: 'matches',
-        tool: 'search_text',
-        nextCursor: structured.nextCursor,
-        nextArgs: args,
-        stoppedReason: structured.stoppedReason,
-        skippedTooLarge: structured.skippedTooLarge,
-        skippedBinary: structured.skippedBinary,
-        skippedInaccessible: structured.skippedInaccessible,
-        excludedDirs: structured.excludedDirs,
-      });
-    return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
-  },
+      externalize: (matches, metadata) =>
+        putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
+          ...searchContentOutput(matches, metadata, undefined, undefined),
+        }),
+      trailer: (metadata, page) => {
+        const skips = searchContentOutput(page, metadata, undefined, undefined);
+        return {
+          total: metadata.matchingLines,
+          noun: 'matches',
+          stoppedReason: skips.stoppedReason,
+          skippedTooLarge: skips.skippedTooLarge,
+          skippedBinary: skips.skippedBinary,
+          skippedInaccessible: skips.skippedInaccessible,
+          excludedDirs: skips.excludedDirs,
+        };
+      },
+      render: ({ page, metadata, offset, trailer, nextCursor, resourceUri }) => {
+        const structured = searchContentOutput(page, metadata, nextCursor, resourceUri);
+        const rows = renderRows(structured.matches, args.context > 0, metadata.namedFile);
+        const body =
+          rows.length > 0
+            ? rows.join('\n')
+            : [
+                `No matches for '${args.searchPattern}'`,
+                zeroMatchHint({
+                  ...args,
+                  filesScanned: structured.filesScanned ?? 0,
+                  // Most trees hold a binary file, so one only explains the zero when
+                  // no text file was searched at all.
+                  incomplete:
+                    Boolean(
+                      structured.stoppedReason ??
+                      structured.skippedTooLarge ??
+                      structured.skippedInaccessible ??
+                      structured.excludedDirs,
+                    ) ||
+                    (structured.skippedBinary !== undefined &&
+                      structured.skippedBinary === structured.filesScanned),
+                }),
+              ]
+                .filter(Boolean)
+                .join('\n');
+        // A page that holds every match is the one case the pager's trailer does
+        // not total, so the count line appears there and only there.
+        const countLine =
+          metadata.matchingLines > 0 &&
+          offset === 0 &&
+          structured.matches.length === metadata.matchingLines
+            ? `\n\n// ${buildSearchMatchDetail(metadata.matchingLines, metadata.filesMatched)}`
+            : '';
+        return { structured, text: body + countLine + trailer };
+      },
+    }),
 });

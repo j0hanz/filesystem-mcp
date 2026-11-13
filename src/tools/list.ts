@@ -2,20 +2,11 @@ import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { withAbort } from '../core/concurrency.ts';
-import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode } from '../core/errors.ts';
-import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
-import type { GuardedFileSystem } from '../core/fs.ts';
+import { formatByteSize, formatCount } from '../core/fmt.ts';
 import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
-import {
-  type ExcludedDirs,
-  resolveScanScope,
-  scan,
-  type ScanScope,
-  type StoppedReason,
-} from '../core/scan.ts';
+import { type ExcludedDirs, scan, type ScanScope, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -25,7 +16,6 @@ import {
   OptionalPath,
   PositiveInt,
 } from '../core/schema.ts';
-import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
 import {
   DEFAULT_TREE_ENTRIES,
@@ -34,6 +24,7 @@ import {
   PARALLEL_CONCURRENCY,
 } from '../core/util.ts';
 import { defineTool } from './define.ts';
+import { pagedScan } from './paged-scan.ts';
 
 interface CollectedEntry {
   name: string;
@@ -53,7 +44,7 @@ interface CollectOptions extends RenderOptions {
   includeHidden: boolean;
   includeIgnored: boolean;
   signal: AbortSignal;
-  fs: GuardedFileSystem;
+  pathGuard: PathGuard;
   onProgress: (progress: { current: number; total?: number }) => void;
 }
 
@@ -114,7 +105,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
   const outcome = await scan<never>(
     scope,
     {
-      pathGuard: options.fs.pathGuard,
+      pathGuard: options.pathGuard,
       pattern: '**/*',
       baseNameMatch: false,
       includeHidden: options.includeHidden,
@@ -127,31 +118,14 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       // The walk runs on past the kept entries, so the totals stay exact.
       keep: MAX_LIST_ENTRIES,
       signal: options.signal,
+      includeSizes: wantSizes,
       onScanned: (n) => {
         options.onProgress({ current: n });
       },
     },
-    async ({ path: entryPath, type: entryType }) => {
+    ({ path: entryPath, type: entryType, size }) => {
       const relPath = toPosixRelative(rootPath, entryPath);
       const name = basename(relPath);
-
-      let size: number | undefined;
-      if (wantSizes && entryType === 'file') {
-        try {
-          // Race the abort from the first await: the guarded stat validates the
-          // path before statting, and that validation is not abort-aware, so
-          // the race must wrap the whole call.
-          const statted = await withAbort(
-            options.fs.stat(entryPath, { signal: options.signal }),
-            options.signal,
-          );
-          size = statted.stats.size;
-        } catch (error) {
-          // A deadline's TimeoutError is no AbortError: the signal says the scan was cut.
-          if (options.signal.aborted) throw error;
-          // A file can vanish between the walk and the stat; it keeps its place, without a size.
-        }
-      }
 
       totalEntries++;
       if (entryType === 'directory') {
@@ -172,7 +146,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       // Keep at most the best MAX_LIST_ENTRIES: prune whenever the buffer doubles,
       // so memory stays O(MAX_LIST_ENTRIES) and the sorts O(n log MAX_LIST_ENTRIES) overall.
       if (entries.length >= MAX_LIST_ENTRIES * 2) keepBest();
-      return undefined;
+      return Promise.resolve(undefined);
     },
   );
 
@@ -372,27 +346,24 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   }),
   mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
-    const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
     const renderOpts: RenderOptions = { includeSizes: args.includeSizes, sortBy: args.sortBy };
     const listNotes = (metadata: ListPageMetadata): string[] => [
       ...depthNote(args.maxDepth, metadata.unexpandedDirectories),
       ...ignoredNote(metadata.ignoredDirs),
     ];
-    const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
-      store: ctx.pageStore,
-      queryKey: pageQueryKey('list', { ...args, path: resolvedPath }, ['cursor', 'maxEntries']),
-      cursor: args.cursor,
-      pageSize: args.maxEntries,
-      produce: async () => {
-        // No signal: a deadline that already fired must reach the scan and come back partial.
-        const scope = await resolveScanScope(resolvedPath, ctx.fs, { allowFile: false });
+    return await pagedScan({
+      tool: 'list',
+      args,
+      ctx,
+      pageSizeField: 'maxEntries',
+      produce: async ({ scope }) => {
         const result = await collect(scope, {
           ...renderOpts,
           maxDepth: args.maxDepth,
           includeHidden: args.includeHidden,
           includeIgnored: args.includeIgnored,
           signal: ctx.signal,
-          fs: ctx.fs,
+          pathGuard: ctx.fs.pathGuard,
           onProgress: ctx.onProgress,
         });
         return {
@@ -402,7 +373,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
             result.totalEntries > result.entries.length || result.stoppedReason !== undefined,
         };
       },
-      externalize: (entries, metadata) => {
+      externalize: (entries: readonly CollectedEntry[], metadata: ListPageMetadata) => {
         const name = basename(metadata.path);
         const notes = listNotes(metadata);
         // The stored tree is the whole collected set, bounded by the hard cap.
@@ -427,47 +398,33 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         };
         return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
       },
+      trailer: (metadata) => ({
+        total: metadata.totalEntries,
+        noun: 'entries',
+        stoppedReason: metadata.stoppedReason,
+        skippedInaccessible: metadata.skippedInaccessible,
+        notes: listNotes(metadata),
+      }),
+      // The tree is what the model reads, so position and the full-list URI ride
+      // the text too — paging needs no second lookup. `pageTrailer` is the one
+      // owner of that line, and it owes it on the last page as much as the first.
+      render: ({ page, metadata, trailer, resourceUri }) => {
+        const sizesLine =
+          metadata.totalBytes !== undefined && args.includeSizes
+            ? summaryLine(metadata, metadata.totalBytes)
+            : '';
+        const structured: ListOutput = {
+          ...metadata,
+          entries: [...page],
+          entryCount: page.length,
+        };
+        const text =
+          renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), [...page], renderOpts) +
+          sizesLine +
+          (sizesLine && trailer ? trailer.slice(1) : trailer) +
+          (resourceUri !== undefined ? `\nfull tree at ${resourceUri}` : '');
+        return { structured, text };
+      },
     });
-
-    const structured: ListOutput = {
-      ...paged.metadata,
-      entries: [...paged.page],
-      entryCount: paged.page.length,
-      ...(paged.resource ? { resourceUri: paged.resource.entry.uri } : {}),
-      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
-    };
-    // The tree is what the model reads, so position and the full-list URI ride
-    // the text too — paging needs no second lookup. `pageTrailer` is the one
-    // owner of that line, and it owes it on the last page as much as the first.
-    const sizesLine =
-      paged.metadata.totalBytes !== undefined && args.includeSizes
-        ? summaryLine(paged.metadata, paged.metadata.totalBytes)
-        : '';
-    const trailer = pageTrailer({
-      offset: paged.offset,
-      shown: structured.entryCount,
-      total: structured.totalEntries,
-      noun: 'entries',
-      tool: 'list',
-      nextCursor: structured.nextCursor,
-      nextArgs: args,
-      stoppedReason: structured.stoppedReason,
-      skippedInaccessible: structured.skippedInaccessible,
-      notes: listNotes(paged.metadata),
-    });
-    const text =
-      renderMarkdown(
-        treeHeader(ctx.fs.pathGuard, paged.metadata.path),
-        [...paged.page],
-        renderOpts,
-      ) +
-      sizesLine +
-      (sizesLine && trailer ? trailer.slice(1) : trailer) +
-      (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
-    return {
-      structured,
-      text,
-      ...(paged.resource ? { resources: [paged.resource.link] } : {}),
-    };
   },
 });
