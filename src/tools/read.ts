@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
+import { getMaxTextFileSize } from '../core/config.ts';
 import {
   BINARY_FILE_MESSAGE,
   createTooLargeError,
@@ -36,7 +37,6 @@ import {
 } from '../core/schema.ts';
 import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
-  getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
   sha256Hex,
