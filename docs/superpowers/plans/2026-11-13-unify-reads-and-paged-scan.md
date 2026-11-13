@@ -5,6 +5,7 @@
 **Goal:** Deepen the file-classification/guarded-read seam (Candidate 1) and the Scan/Glob/paged-tool seam (Candidate 2) without changing any MCP wire contract or observable client behavior (except the intended UTF-16 `resources/read` base64 fix and unified binary classification).
 
 **Architecture:**
+
 - **Candidate 1 (hybrid C1-C + C1-A):** `src/core/mime.ts` folds `EXTRA_BINARY_EXTENSIONS` into `EXT_MAP` and treats UTF-16 byte-order marks as binary in `isBinarySample`. `GuardedFileSystem` (`src/core/fs.ts`) becomes the sole owner of all guarded reads via three methods (`read`, `readText`, `readNamedText`), using a typed `slice` (`head | tail | range`) vs full `binary?: 'refuse' | 'media' | 'allow' | 'raw'` and an optional `beforeBody` check run after `fstat` + 512-byte classification. `src/core/read.ts` becomes strictly internal to `src/core/fs.ts`; `countLines` moves to `src/core/fmt.ts`, and `createTooLargeError`, `BINARY_FILE_MESSAGE`, `NOT_UTF8_MESSAGE`, `binaryRefusal`, and `isBinaryRefusal` move to `src/core/errors.ts`.
 - **Candidate 2 (hybrid C2-C + C2-A):** `isSafeGlobSyntax` and its three cap constants (`MAX_BRACE_ALTERNATIVES`, `MAX_DOTDOT_CHECK_CHARS`, `MAX_SEGMENT_WILDCARDS`) move from `src/core/glob.ts` into `src/core/schema.ts`, making `glob.ts` strictly internal to `src/core/scan.ts`. `ScanOptions` gains `includeSizes?: boolean` so `scan` `lstat`s admitted regular files once (`ScanEntry.size`), eliminating `src/tools/list.ts`'s second per-file `fs.stat` pass. `searchContent` (`src/core/search.ts`) accepts `fs: GuardedFileSystem` directly and reads via `fs.readText`, while `clipLine` and `MAX_MATCH_LINE_CHARS` move to `src/core/fmt.ts`. `src/tools/paged-scan.ts` owns `pagedScan` (defaulting `pageSizeField = 'maxResults'`, `allowFile = false`, `scopeSignal = false`, and attaching `nextCursor`, `resourceUri`, and `resources`), unifying `list.ts`, `find-files.ts`, and `search-text.ts`.
 
@@ -38,6 +39,7 @@
 ### Task 1: Relocate shared pure helpers (`countLines`, `createTooLargeError`, binary errors, `clipLine`)
 
 **Files:**
+
 - Modify: `src/core/fmt.ts`, `src/core/errors.ts`, `src/core/read.ts`, `src/core/search.ts`, `src/core/file-uri.ts`, `src/core/rewrite.ts`, `src/tools/patch.ts`, `src/tools/read.ts`
 - Tests to update imports: `__tests__/patch.test.ts`, `__tests__/search-text.test.ts`, `__tests__/outbound-regressions.test.ts`
 
@@ -57,6 +59,7 @@
 ### Task 2: Unify binary & UTF-16 classification in `src/core/mime.ts`
 
 **Files:**
+
 - Modify: `src/core/mime.ts`
 - Check callers: `src/tools/stat.ts`, `src/tools/read.ts`, `src/core/file-uri.ts`, `src/tools/create.ts`, `src/core/read.ts`, `src/core/scan.ts`
 - Tests: `__tests__/mime.test.ts` (if present, or add/extend tests covering unified `EXT_MAP` + UTF-16 BOM in `isBinarySample` and `detectMimeType`)
@@ -77,6 +80,7 @@
 ### Task 3: Consolidate single-open `read`, `readText`, and `readNamedText` onto `GuardedFileSystem`
 
 **Files:**
+
 - Modify: `src/core/fs.ts`, `src/core/read.ts` (make strictly internal to `fs.ts` or merge private helpers), `src/core/scan.ts` (remove `readText`, `readNamedText`, `TextVerdict` exports), `src/core/rewrite.ts`, `src/tools/diff.ts`
 - Tests to migrate: `__tests__/core-fs.test.ts`, `__tests__/scan.test.ts`, `__tests__/read-only-roots.test.ts`
 
@@ -101,6 +105,7 @@
 ### Task 4: Migrate `src/tools/read.ts` and `src/resources.ts` to single-open `GuardedFileSystem.read`
 
 **Files:**
+
 - Modify: `src/tools/read.ts`, `src/resources.ts`
 - Tests to migrate: `__tests__/read.test.ts`, `__tests__/resources.test.ts`
 
@@ -123,6 +128,7 @@
 ### Task 5: Decouple `schema.ts` from `glob.ts`, isolate `glob.ts` behind `scan.ts`, and inject `fs` into `searchContent`
 
 **Files:**
+
 - Modify: `src/core/schema.ts`, `src/core/glob.ts`, `src/core/scan.ts`, `src/core/search.ts`, `src/core/path.ts` (comment cleanup if referencing internal `glob.ts`)
 - Tests to update: `__tests__/glob.test.ts`, `__tests__/search.test.ts`, `__tests__/search-literal.test.ts`, `__tests__/core-fs.test.ts`, `__tests__/scan.test.ts`, `__tests__/path-guard-unc.test.ts`
 
@@ -146,6 +152,7 @@
 ### Task 6: Extract `src/tools/paged-scan.ts` and migrate `list.ts`, `find-files.ts`, and `search-text.ts`
 
 **Files:**
+
 - Modify: `src/tools/define.ts` (export `RunResult<T>`), `src/tools/list.ts`, `src/tools/find-files.ts`, `src/tools/search-text.ts`
 - Create: `src/tools/paged-scan.ts`
 - Tests: `__tests__/list.test.ts`, `__tests__/find-files.test.ts`, `__tests__/search-text.test.ts`
