@@ -567,10 +567,10 @@ Change the `cli` doc comment (line 40) to: `/** Written once by cli.ts; an absen
 - [ ] **Step 2: Replace the comment at `src/cli.ts:212-216` with**
 
 ```ts
-    // `--http-host` and `--api-key` are returned to the caller and handed to
-    // the server as config. Every other flag lands in the CLI-override store
-    // (core/config.ts), whose Setting reads answer flag, else variable, else
-    // default for every reader. Nothing writes process.env.
+// `--http-host` and `--api-key` are returned to the caller and handed to
+// the server as config. Every other flag lands in the CLI-override store
+// (core/config.ts), whose Setting reads answer flag, else variable, else
+// default for every reader. Nothing writes process.env.
 ```
 
 - [ ] **Step 3: Verify no reader bypasses config**

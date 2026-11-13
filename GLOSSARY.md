@@ -85,7 +85,8 @@ _Avoid_: BOM (the bytes on disk), signature
 What a text search or a replacement settles about its needle before any text
 is read: which engine judges it — a native literal pass or the regex engine —
 under the flags, and the per-text bails that hand judgment to the regex
-engine (a fold character in the text; U+FFFD or a lone surrogate in the needle). Search and replace ask one module for their plans, their byte-level
+engine (a fold character in the text; U+FFFD or a lone surrogate in the
+needle). Search and replace ask one module for their plans, their byte-level
 prefiltering, their matches, and their replacements, directly over the Text
 view, so a preview judges exactly what its replacement will touch. The engine
 adapts a literal needle and its replacement for an all-CRLF view internally,
@@ -115,8 +116,8 @@ _Avoid_: remove, rm, unlink
 The writing of a whole text file on a client's behalf — a new file, an
 overwrite, or an append — planned before any Confirmation is asked for and
 checked again before anything is written. A plan seals the Landing identity
-of a file that would be replaced: an entry replaced while the prompt was open
-is refused, not overwritten, and one that appeared while it was open is
+of a file that would be replaced: an entry replaced while the prompt was
+open is refused, not overwritten, and one that appeared while it was open is
 refused too, not clobbered. An append, or an overwrite the client declared
 up front, destroys nothing, so it is pre-settled with no prompt.
 _Avoid_: write (a Rewrite replaces content; a Creation fills a file whole),
