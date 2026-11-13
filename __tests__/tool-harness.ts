@@ -7,6 +7,7 @@ import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
 import * as z from 'zod/v4';
 
+import type { LoggingLevel } from '../src/core/config.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import {
   bindContextOf,
@@ -14,7 +15,6 @@ import {
   requestStateCodec,
   type RoundBind,
 } from '../src/core/input-required.ts';
-import type { LoggingLevel } from '../src/core/observability.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../src/core/store.ts';
 import { UndoJournal } from '../src/core/undo.ts';

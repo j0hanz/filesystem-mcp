@@ -6,7 +6,7 @@
 // PathGuard.isSensitive, which delegates here.
 import { normalize, posix, sep } from 'node:path';
 
-import { cli } from './config.ts';
+import { cli, getAllowSensitive } from './config.ts';
 import {
   CHAR_COLON,
   IS_WINDOWS,
@@ -14,7 +14,7 @@ import {
   toPosixPath,
   trimTrailingDotsAndSpaces,
 } from './path-utils.ts';
-import { escapeRegExp, parseTrueEnvFlag } from './util.ts';
+import { escapeRegExp } from './util.ts';
 
 function normalizeForMatch(input: string): string {
   // Always lowercase for case-insensitive denylist matching on all platforms.
@@ -372,8 +372,7 @@ function splitPatternList(value: string): string[] {
 }
 
 function buildDenyTiers(): { builtin: readonly string[]; operator: readonly string[] } {
-  const allowSensitive =
-    cli.allowSensitive ?? parseTrueEnvFlag(process.env['FS_ALLOW_SENSITIVE'], 'FS_ALLOW_SENSITIVE');
+  const allowSensitive = getAllowSensitive();
   const envDenylist = process.env['FS_DENYLIST']
     ? splitPatternList(process.env['FS_DENYLIST'])
     : [];
