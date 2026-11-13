@@ -14,7 +14,7 @@ import {
 } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
-import { cli } from './config.ts';
+import { getAllowCwdWalk, getAllowMissingRoots, getRootBoundary } from './config.ts';
 import {
   classifyCauseChain,
   ErrorCode,
@@ -48,7 +48,7 @@ import {
   unicodeMatchKey,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
-import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
+import { ROOTS_TIMEOUT_MS } from './util.ts';
 
 // Allowed-directory assembly and the PathGuard that enforces it. The
 // sensitive-file denylist lives in sensitive.ts, and the character-level
@@ -1619,23 +1619,21 @@ export class PathGuard {
     const cliAllowedDirs = normalizeAllowedDirectories(this.options?.cliAllowedDirs ?? []);
 
     // Parse allowed directories from environment variable
-    const allowMissing =
-      cli.allowMissingRoots ??
-      parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS');
+    const allowMissing = getAllowMissingRoots();
     const envAllowedDirs = await resolveConfiguredDirs('FS_ALLOWED_DIRS', { allowMissing });
 
     // Parse FS_ROOT_BOUNDARY (the --root-boundary flag beats the env var)
+    const rawBoundary = getRootBoundary();
     const boundaries = await resolveConfiguredDirs('FS_ROOT_BOUNDARY', {
       resolveReal: true,
-      ...(cli.rootBoundary !== undefined ? { rawValue: cli.rootBoundary } : {}),
+      ...(rawBoundary !== undefined ? { rawValue: rawBoundary } : {}),
     });
 
     const allowCwd = Boolean(this.options?.allowCwd);
     const allowCwdDirs: string[] = [];
     if (allowCwd) {
       let cwd = normalizePath(process.cwd());
-      const walkCwd =
-        cli.allowCwdWalk ?? parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
+      const walkCwd = getAllowCwdWalk();
       if (walkCwd) {
         const home = normalizePath(homedir());
         const walkCeiling = [...boundaries, ...(isPathInsideDirectory(home, cwd) ? [home] : [])];
