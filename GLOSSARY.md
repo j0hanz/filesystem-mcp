@@ -85,8 +85,7 @@ _Avoid_: BOM (the bytes on disk), signature
 What a text search or a replacement settles about its needle before any text
 is read: which engine judges it — a native literal pass or the regex engine —
 under the flags, and the per-text bails that hand judgment to the regex
-engine (a fold character in the text; U+FFFD or a lone surrogate in the
-needle). Search and replace ask one module for their plans, their byte-level
+engine (a fold character in the text; U+FFFD or a lone surrogate in the needle). Search and replace ask one module for their plans, their byte-level
 prefiltering, their matches, and their replacements, directly over the Text
 view, so a preview judges exactly what its replacement will touch. The engine
 adapts a literal needle and its replacement for an all-CRLF view internally,
@@ -116,8 +115,8 @@ _Avoid_: remove, rm, unlink
 The writing of a whole text file on a client's behalf — a new file, an
 overwrite, or an append — planned before any Confirmation is asked for and
 checked again before anything is written. A plan seals the Landing identity
-of a file that would be replaced: an entry replaced while the prompt was
-open is refused, not overwritten, and one that appeared while it was open is
+of a file that would be replaced: an entry replaced while the prompt was open
+is refused, not overwritten, and one that appeared while it was open is
 refused too, not clobbered. An append, or an overwrite the client declared
 up front, destroys nothing, so it is pre-settled with no prompt.
 _Avoid_: write (a Rewrite replaces content; a Creation fills a file whole),
@@ -175,6 +174,19 @@ different value is refused, so a round minted for one request cannot be
 replayed onto another.
 _Avoid_: request context (the whole SDK shape a tool body never sees),
 bind context
+
+## Configuration
+
+**Setting**:
+An operator's choice that can be given as a command-line flag or as an `FS_*`
+environment variable. The flag wins. A flag whose value is invalid falls back
+to the default, never to the variable, and a rejected value is warned about
+once. A setting has one answer for the guard, the tools and `--print-config`
+alike. A list an operator can give both ways (deny patterns, allow patterns,
+read-only folders) is the union of both and is not a setting; neither is a
+choice settled once at startup (port, host, API key, read-only).
+_Avoid_: config value, option, override (the flag half), env var (the other
+half)
 
 ## Transport
 
