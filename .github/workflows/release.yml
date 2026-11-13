@@ -50,7 +50,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
 
       # The publish step pushes HEAD to main, so a dispatch from any other
       # branch would fast-forward main onto that branch's tip.
@@ -68,7 +68,7 @@ jobs:
       - name: Require green CI for this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Check (macos-latest)|Check (ubuntu-latest, node 26)|Release build paths'
+          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Check (macos-latest)|Check (ubuntu-latest, node 24)|Release build paths'
         run: |
           runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
             --jq '.check_runs | map(select(.app.id == 15368)) | sort_by(.id) | reverse | .[] | [.name, .status, (.conclusion // "none")] | @tsv')
@@ -219,7 +219,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install & build
@@ -370,7 +370,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
 
       - name: Pack
         run: |

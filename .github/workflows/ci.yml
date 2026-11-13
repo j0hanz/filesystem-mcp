@@ -28,12 +28,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # '' means the .nvmrc pin. Keep this key: without it the node 26
+        # '' means the .nvmrc pin. Keep this key: without it the node 24
         # include below merges into the default Ubuntu leg instead of adding one.
         node: ['']
         include:
           - os: ubuntu-latest
-            node: '26'
+            node: '24'
     # Mirrors package.json's check script (check:static + test) as separate
     # steps, so one failure does not hide the others. Keep the two in sync.
     steps:
