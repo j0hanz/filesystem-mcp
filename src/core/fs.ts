@@ -26,6 +26,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
+import { getMaxTextFileSize } from './config.ts';
 import {
   binaryRefusal,
   createTooLargeError,
@@ -76,7 +77,7 @@ import {
   snapshotTree,
 } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
-import { getMaxTextFileSize, sha256Hex } from './util.ts';
+import { sha256Hex } from './util.ts';
 
 export type { Stats };
 
