@@ -302,7 +302,7 @@ describe('PathGuard read-only directories', { concurrency: false }, () => {
     assert.equal((await fs.stat(file)).stats.isFile(), true);
     assert.equal((await fs.statDetailed(file)).stats.isFile(), true);
     assert.equal(await fs.countEntries(dir), 2);
-    assert.equal((await fs.readRaw(file)).content.toString(), 'keep');
+    assert.equal((await fs.read(file, { binary: 'raw' })).content.toString(), 'keep');
     const link = join(dir, 'link.txt');
     if (await trySymlink('f.txt', link, () => undefined, 'file')) {
       assert.equal((await fs.readlink(link)).linkString, 'f.txt');

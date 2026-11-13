@@ -5,9 +5,9 @@ import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, FsError, isFsError } from './errors.ts';
+import { createTooLargeError, ErrorCode, FsError, isFsError } from './errors.ts';
+import { countLines } from './fmt.ts';
 import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
-import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
@@ -39,19 +39,15 @@ export async function readProbe(handle: FileHandle, signal?: AbortSignal): Promi
   return buffer.subarray(0, bytesRead);
 }
 
-interface ReadSpecBase {
-  signal?: AbortSignal;
-  maxSize?: number;
-  hardCap?: boolean;
-}
+/** A line slice of a text file: the first or last lines, or a 1-based range. */
+export type ReadSlice =
+  | { kind: 'head'; lines: number }
+  | { kind: 'tail'; lines: number }
+  | { kind: 'range'; start: number; end?: number };
 
-export type ReadSpec =
-  | ({ kind: 'full' } & ReadSpecBase)
-  | ({ kind: 'head'; lines: number } & ReadSpecBase)
-  | ({ kind: 'tail'; lines: number } & ReadSpecBase)
-  | ({ kind: 'range'; start: number; end?: number } & ReadSpecBase);
+export type ReadSpec = { kind: 'full' } | ReadSlice;
 
-interface ReadOptions {
+export interface ReadLimits {
   maxSize: number;
   hardCap?: boolean;
   signal?: AbortSignal;
@@ -78,23 +74,7 @@ export interface ReadFileResult {
   hasMoreLines?: boolean;
 }
 
-/** `label` qualifies the size parenthetical; `suggestion` overrides the TOO_LARGE default remedy. */
-export function createTooLargeError(
-  bytesRead: number,
-  maxSize: number,
-  requestedPath: string,
-  { label, suggestion }: { label?: string; suggestion?: string } = {},
-): FsError {
-  return new FsError(
-    ErrorCode.TOO_LARGE,
-    `File exceeds size limit (${bytesRead} > ${maxSize} bytes${label ? `, ${label}` : ''})`,
-    requestedPath,
-    undefined,
-    suggestion,
-  );
-}
-
-export async function readFileBufferWithLimit(
+async function readFileBufferWithLimit(
   handle: FileHandle,
   maxSize: number,
   requestedPath: string,
@@ -139,12 +119,6 @@ export async function readFileBufferWithLimit(
   return Buffer.concat(chunks, totalSize);
 }
 
-export const countLines = (content: string): number => {
-  if (content.length === 0) return 0;
-  const trimmed = content.endsWith('\n') ? content.slice(0, -1) : content;
-  return trimmed.split('\n').length;
-};
-
 async function peekHasMore(iterator: AsyncIterator<string>): Promise<boolean> {
   try {
     const { done } = await iterator.next();
@@ -174,7 +148,7 @@ const LF = 0x0a;
  */
 async function* readLinesBounded(
   handle: FileHandle,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
   startLine: number,
 ): AsyncGenerator<string, void, undefined> {
@@ -256,7 +230,7 @@ async function readRangeContent(
   handle: FileHandle,
   startLine: number,
   endLine: number | undefined,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -326,7 +300,7 @@ async function readRangeContent(
 async function readTailContent(
   handle: FileHandle,
   tail: number,
-  options: ReadOptions,
+  options: ReadLimits,
   filePath: string,
 ): Promise<PartialReadResult> {
   options.signal?.throwIfAborted();
@@ -451,55 +425,23 @@ async function readFullContent(
   return { content, totalLines: countLines(content) };
 }
 
-/** The text path's binary refusal; `read` catches its code to offer `binary: true`. */
-export const BINARY_FILE_MESSAGE = 'Binary file detected.';
-
-export function isBinaryRefusal(error: unknown): error is FsError {
-  return error instanceof FsError && error.code === ErrorCode.BINARY_FILE;
-}
-
-/** The refusal of a file whose bytes a writer would not round-trip as UTF-8. */
-export const NOT_UTF8_MESSAGE = 'Binary or non-UTF-8 file detected.';
-
 /** read's binary rule on a file's leading bytes; undefined for text. */
 export function binaryKind(validPath: string, probe: Buffer): 'binary' | 'utf16' | undefined {
   if (isKnownBinaryExtension(validPath)) return 'binary';
-  // A UTF-16 BOM passes the binary probe (it is text), but every reader
-  // here (read and edit) decodes UTF-8 and would hand back U+FFFD and NULs
-  // as content.
+  // Checked before the binary probe, which also flags a UTF-16 BOM, so UTF-16
+  // gets its own refusal: every reader here decodes UTF-8 and would hand back
+  // U+FFFD and NULs as content.
   if (hasUtf16Bom(probe)) return 'utf16';
   return isBinarySample(probe) ? 'binary' : undefined;
 }
 
-/** The refusal `read`, `edit`, `patch` and `diff` give for a binary verdict. */
-export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsError {
-  return kind === 'utf16'
-    ? new FsError(
-        ErrorCode.INVALID_INPUT,
-        'UTF-16 text file detected; convert it to UTF-8 first.',
-        filePath,
-      )
-    : new FsError(ErrorCode.BINARY_FILE, BINARY_FILE_MESSAGE, filePath);
-}
-
-async function assertNotBinary(
-  validPath: string,
-  filePath: string,
-  handle: FileHandle,
-  normalized: ReadOptions,
-): Promise<void> {
-  normalized.signal?.throwIfAborted();
-  const kind = binaryKind(validPath, await readProbe(handle, normalized.signal));
-  if (kind !== undefined) throw binaryRefusal(kind, filePath);
-}
-
-async function readByMode(
+export async function readByMode(
   handle: FileHandle,
   validPath: string,
   filePath: string,
   stats: Stats,
   spec: ReadSpec,
-  options: ReadOptions,
+  options: ReadLimits,
 ): Promise<ReadFileResult> {
   const base = {
     path: validPath,
@@ -548,28 +490,4 @@ export function assertFileStats(filePath: string, stats: Stats): void {
   if (!stats.isFile()) {
     throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', filePath);
   }
-}
-
-/** Read an already-validated, already-stat'd file per `spec`, opened via `openVerified`. */
-export async function readFileWithStats(
-  filePath: string,
-  validPath: string,
-  stats: Stats,
-  spec: ReadSpec,
-  openVerified: () => Promise<FileHandle>,
-): Promise<ReadFileResult> {
-  const options: ReadOptions = {
-    maxSize: spec.maxSize ?? getMaxTextFileSize(),
-    ...(spec.hardCap ? { hardCap: true } : {}),
-    ...(spec.signal ? { signal: spec.signal } : {}),
-  };
-  spec.signal?.throwIfAborted();
-  assertFileStats(filePath, stats);
-
-  await using handle = await openVerified();
-
-  await assertNotBinary(validPath, filePath, handle, options);
-  spec.signal?.throwIfAborted();
-
-  return await readByMode(handle, validPath, filePath, stats, spec, options);
 }

@@ -4,6 +4,7 @@ import { open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { asciiBufferMayMatch } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { searchContent } from '../src/core/search.ts';
@@ -86,7 +87,7 @@ describe('literal search matches what RE2 would', () => {
               { root, explicitFile: file },
               pattern,
               { isRegex, caseSensitive, maxResults: 1000 },
-              guard,
+              new GuardedFileSystem(guard),
             )
           ).matches;
         const literal = await search(needle, false);
@@ -116,7 +117,7 @@ describe('a CRLF file with no hit', () => {
           { root, explicitFile: file },
           'needle',
           { isRegex: false, caseSensitive: true },
-          await makeGuard([root]),
+          new GuardedFileSystem(await makeGuard([root])),
         );
         assert.strictEqual(outcome.matches.length, 0);
       } finally {
@@ -142,7 +143,7 @@ describe('a file whose size reads as 0 while it holds text', () => {
         { root: procDir, explicitFile: join(procDir, 'status') },
         'Name',
         { isRegex, caseSensitive: true },
-        guard,
+        new GuardedFileSystem(guard),
       );
       assert.strictEqual(outcome.summary.filesMatched, 1, JSON.stringify(outcome.summary));
     });
@@ -184,7 +185,7 @@ describe('reading a file for a search', () => {
         { root, explicitFile: file },
         'needle',
         { isRegex: false, signal: controller.signal },
-        await makeGuard([root]),
+        new GuardedFileSystem(await makeGuard([root])),
       );
       assert.strictEqual(reads, 1, 'no read after the cancel');
       assert.strictEqual(outcome.summary.filesScanned, 0, JSON.stringify(outcome.summary));
@@ -210,7 +211,7 @@ describe('reading a file for a search', () => {
       { root, explicitFile: file },
       needle,
       { caseSensitive: false, isRegex: false },
-      await makeGuard([root]),
+      new GuardedFileSystem(await makeGuard([root])),
     );
     assert.strictEqual(result.matches.length, 1);
   });
@@ -223,7 +224,7 @@ describe('reading a file for a search', () => {
       { root, explicitFile: file },
       'xyz123',
       { caseSensitive: false, isRegex: false },
-      await makeGuard([root]),
+      new GuardedFileSystem(await makeGuard([root])),
     );
     assert.strictEqual(result.matches.length, 0);
   });

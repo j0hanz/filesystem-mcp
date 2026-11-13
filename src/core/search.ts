@@ -1,5 +1,6 @@
 import { ErrorCode, FsError } from './errors.ts';
-import { GuardedFileSystem } from './fs.ts';
+import { clipLine } from './fmt.ts';
+import type { GuardedFileSystem } from './fs.ts';
 import {
   createMatchEngine,
   isRe2Abort,
@@ -8,9 +9,8 @@ import {
   re2AbortError,
 } from './matcher.ts';
 import { Logger } from './observability.ts';
-import type { PathGuard } from './path.ts';
 import type { ExcludedDirs, ScanScope, StoppedReason } from './scan.ts';
-import { readText, scan, ScanSkip, skipOf } from './scan.ts';
+import { scan, ScanSkip, skipOf } from './scan.ts';
 import { viewText } from './text-view.ts';
 import { PARALLEL_CONCURRENCY } from './util.ts';
 
@@ -20,38 +20,6 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
  * file's text for as long as the match list lives (60 s in the page store).
  */
 const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
-
-/** Longest line a result carries; a longer one is cut to a window around the match. */
-export const MAX_MATCH_LINE_CHARS = 1000;
-const MATCH_LEAD_CHARS = 200;
-
-/**
- * `line` cut to a window that starts `MATCH_LEAD_CHARS` before `column`, with
- * each cut marked by the number of chars removed. A cut never splits a pair.
- */
-export function clipLine(line: string, column: number): string {
-  if (line.length <= MAX_MATCH_LINE_CHARS) return line;
-  let start = Math.max(0, column - MATCH_LEAD_CHARS);
-  let end = Math.min(line.length, start + MAX_MATCH_LINE_CHARS);
-  if (
-    start > 0 &&
-    isHighSurrogate(line.charCodeAt(start - 1)) &&
-    isLowSurrogate(line.charCodeAt(start))
-  )
-    start--;
-  if (
-    end < line.length &&
-    isHighSurrogate(line.charCodeAt(end - 1)) &&
-    isLowSurrogate(line.charCodeAt(end))
-  )
-    end++;
-  const head = start > 0 ? `…[${start} chars] ` : '';
-  const tail = end < line.length ? ` […${line.length - end} chars]` : '';
-  return head + line.slice(start, end) + tail;
-}
-
-const isHighSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
-const isLowSurrogate = (c: number): boolean => c >= 0xdc00 && c <= 0xdfff;
 
 interface SearchResult {
   file: string;
@@ -139,7 +107,7 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 
 async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  const verdict = await readText(scanCtx.fs, entryPath, scanCtx.signal);
+  const verdict = await scanCtx.fs.readText(entryPath, { signal: scanCtx.signal });
   if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does
@@ -220,7 +188,7 @@ export async function searchContent(
   scope: ScanScope,
   pattern: string,
   options: SearchContentOptions,
-  pathGuard: PathGuard,
+  fs: GuardedFileSystem,
 ): Promise<SearchContentOutcome> {
   const flags = {
     isRegex: Boolean(options.isRegex),
@@ -238,7 +206,7 @@ export async function searchContent(
     let trimmed = false;
     let cut = false;
     const scanCtx: ScanContext = {
-      fs: new GuardedFileSystem(pathGuard),
+      fs,
       signal: options.signal,
       maxResults,
       engine,
@@ -248,7 +216,7 @@ export async function searchContent(
     const outcome = await scan<FileScan>(
       scope,
       {
-        pathGuard,
+        pathGuard: fs.pathGuard,
         tool: 'search_text',
         pattern: options.filePattern ?? '**/*',
         // Same rule as replace_text, so a search with the same glob previews the

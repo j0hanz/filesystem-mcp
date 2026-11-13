@@ -587,7 +587,7 @@ describe('create body', () => {
     assert.notStrictEqual(result.isError, true);
     const entry = result.structured.files[0];
     assert.strictEqual(entry?.size, oversize + 3); // the seed has no final newline, so the append adds one
-    // The store serves resourceUri via readRaw, which rejects over-cap files
+    // The store serves resourceUri via a raw read, which rejects over-cap files
     // with TOO_LARGE — an unservable link must not be advertised at all.
     assert.strictEqual(entry?.resourceUri, undefined);
     const content = await readFile(file, 'utf-8');

@@ -1,10 +1,10 @@
 import type { Stats } from 'node:fs';
 
 import { withAbort } from './concurrency.ts';
+import { createTooLargeError } from './errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
 import type { GuardedFileSystem } from './fs.ts';
-import { createTooLargeError } from './read.ts';
-import { readNamedText, readText, type ScanSkip, skipOf } from './scan.ts';
+import { type ScanSkip, skipOf } from './scan.ts';
 import { type TextView, viewText } from './text-view.ts';
 import { getMaxTextFileSize } from './util.ts';
 
@@ -55,7 +55,7 @@ export function rewriteFile<T>(
   transform: (content: string, view: TextView) => Change<T> | Promise<Change<T>>,
 ): Promise<Rewritten<T>> {
   return locked(request, async () => {
-    const { validPath, content, stats } = await readNamedText(request.fs, request.path, {
+    const { validPath, content, stats } = await request.fs.readNamedText(request.path, {
       signal: request.signal,
       tool: request.tool,
     });
@@ -80,7 +80,7 @@ export function rewriteEntry<T>(
   ) => Promise<Change<T> | undefined>,
 ): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
-    const verdict = await readText(request.fs, request.path, request.signal);
+    const verdict = await request.fs.readText(request.path, { signal: request.signal });
     if (verdict.kind !== 'text') return skipOf(verdict);
     let view: TextView | undefined;
     const open = (): TextView => (view ??= viewText(verdict.bytes.toString('utf8')));

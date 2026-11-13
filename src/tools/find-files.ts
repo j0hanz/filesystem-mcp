@@ -2,15 +2,8 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import {
-  type ExcludedDirs,
-  resolveScanScope,
-  scan,
-  type ScanOutcome,
-  type StoppedReason,
-} from '../core/scan.ts';
+import { formatCount, truncateProgressPattern } from '../core/fmt.ts';
+import { type ExcludedDirs, scan, type ScanOutcome, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   IncludeHidden,
@@ -20,10 +13,10 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
 import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { defineTool } from './define.ts';
+import { pagedScan } from './paged-scan.ts';
 
 // ---------------------------------------------------------------------------
 
@@ -117,18 +110,12 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     detail: formatCount(result.totalMatches ?? 0, 'match', 'matches'),
   }),
   mapPaths: mapOptionalPath,
-  run: async (args, ctx) => {
-    const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-    const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({
-      store: ctx.pageStore,
-      queryKey: pageQueryKey('find_files', { ...args, path: requestedBasePath }, [
-        'cursor',
-        'maxResults',
-      ]),
-      cursor: args.cursor,
-      pageSize: args.maxResults,
-      produce: async () => {
-        const scope = await resolveScanScope(requestedBasePath, ctx.fs, { allowFile: false });
+  run: async (args, ctx) =>
+    await pagedScan({
+      tool: 'find_files',
+      args,
+      ctx,
+      produce: async ({ scope, paths }) => {
         const scanned = await scan(
           scope,
           {
@@ -154,11 +141,8 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
                 .sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path))
                 .map((item) => item.path)
             : results.toSorted((x, y) => x.localeCompare(y));
-        // Relative to the root, not to scope.root: `a.ts` from a search of
-        // `src` would name `<root>/a.ts` when passed back.
-        const paths = ctx.fs.pathGuard.resultPaths(scope.root);
         return {
-          items: found.map((path) => ({ path: paths.show(path) })),
+          items: found.map((path): SearchFileResult => ({ path: paths.show(path) })),
           metadata: {
             root: paths.root,
             matched: found.length,
@@ -167,7 +151,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             skippedInaccessible: scanned.skippedInaccessible,
             ...(stoppedReason ? { stoppedReason } : {}),
             ...(scanned.excludedDirs ? { excludedDirs: scanned.excludedDirs } : {}),
-          },
+          } satisfies SearchFilesPageMetadata,
           truncated: stoppedReason !== undefined,
         };
       },
@@ -177,40 +161,32 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           root: metadata.root,
           results,
         }),
-    });
-
-    const { metadata, offset } = paged;
-    const structured: SearchFilesOutput = {
-      root: metadata.root,
-      results: [...paged.page],
-      totalMatches: metadata.matched,
-      filesScanned: metadata.filesScanned,
-      ...(metadata.skippedInaccessible
-        ? { skippedInaccessible: metadata.skippedInaccessible }
-        : {}),
-      ...(metadata.excludedDirs ? { excludedDirs: metadata.excludedDirs } : {}),
-      ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
-      ...(paged.resource ? { resourceUri: paged.resource.entry.uri } : {}),
-      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
-    };
-    const body =
-      structured.results.length > 0
-        ? structured.results.map((r) => r.path).join('\n')
-        : `No files matching '${args.pattern}'`;
-    const text =
-      body +
-      pageTrailer({
-        offset,
-        shown: structured.results.length,
+      trailer: (metadata) => ({
         total: metadata.matched,
         noun: 'files',
-        tool: 'find_files',
-        nextCursor: structured.nextCursor,
-        nextArgs: args,
-        stoppedReason: structured.stoppedReason,
-        skippedInaccessible: structured.skippedInaccessible,
-        excludedDirs: structured.excludedDirs,
-      });
-    return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
-  },
+        stoppedReason: metadata.stoppedReason,
+        skippedInaccessible: metadata.skippedInaccessible,
+        excludedDirs: metadata.excludedDirs,
+      }),
+      render: ({ page, metadata, trailer }) => {
+        const structured: SearchFilesOutput = {
+          root: metadata.root,
+          results: [...page],
+          totalMatches: metadata.matched,
+          filesScanned: metadata.filesScanned,
+          ...(metadata.skippedInaccessible
+            ? { skippedInaccessible: metadata.skippedInaccessible }
+            : {}),
+          ...(metadata.excludedDirs ? { excludedDirs: metadata.excludedDirs } : {}),
+          ...(metadata.stoppedReason !== undefined
+            ? { stoppedReason: metadata.stoppedReason }
+            : {}),
+        };
+        const body =
+          page.length > 0
+            ? page.map((r) => r.path).join('\n')
+            : `No files matching '${args.pattern}'`;
+        return { structured, text: body + trailer };
+      },
+    }),
 });

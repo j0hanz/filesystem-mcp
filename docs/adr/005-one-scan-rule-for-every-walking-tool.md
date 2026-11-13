@@ -108,3 +108,10 @@ Stop reasons the Scan cannot see stay in the tools: a file cut mid-read in
 `search_text`, and a cap reached inside a file in `replace_text`. They are one
 or two lines on facts only that tool has, and they differ on purpose. A stop
 hook on the Scan would be about as wide as the code it hides.
+
+## Addendum, 2026-11-13: GuardedFileSystem owns the guarded text read
+
+`readText` and `readNamedText` leave `src/core/scan.ts` for `GuardedFileSystem`
+([`fs.ts`](../../src/core/fs.ts)) under ADR-015, so `GuardedFileSystem` owns
+every guarded read mode while `scan.ts` owns only the walk, its skip counters
+(`ScanSkip`), and admission.

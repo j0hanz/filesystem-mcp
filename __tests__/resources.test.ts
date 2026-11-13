@@ -414,7 +414,7 @@ describe('MCP Resources', () => {
       });
       const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
       assert.ok(file);
-      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'readRaw');
+      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'read');
 
       await assert.rejects(
         async () => file.read(new URL(buildFileResourceUri(filePath)), {}, context),
@@ -436,7 +436,7 @@ describe('MCP Resources', () => {
       });
       const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
       assert.ok(file);
-      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'readRaw');
+      const rawRead = t.mock.method(GuardedFileSystem.prototype, 'read');
 
       const result = await file.read(new URL(buildFileResourceUri(filePath)), {}, context);
 
@@ -444,7 +444,81 @@ describe('MCP Resources', () => {
       assert.ok('text' in content);
       assert.strictEqual(content.text, 'resource body');
       assert.strictEqual(rawRead.mock.callCount(), 1);
-      assert.strictEqual(rawRead.mock.calls[0]?.arguments[1]?.signal, controller.signal);
+      const options = rawRead.mock.calls[0]?.arguments[1];
+      assert.strictEqual(options?.signal, controller.signal);
+      assert.strictEqual(options?.binary, 'raw');
+    });
+
+    it('a stdio resource read checks the Message limit in one read, without a pre-stat', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'stdio-once.txt', 'once');
+      const contracts = getResourceContracts({
+        resourceStore: store,
+        pathGuard,
+        readOnly: false,
+        transport: 'stdio',
+      });
+      t.after(() => {
+        for (const contract of contracts) contract.destroy?.();
+      });
+      const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(file);
+      const stat = t.mock.method(GuardedFileSystem.prototype, 'stat');
+      const read = t.mock.method(GuardedFileSystem.prototype, 'read');
+
+      const result = await file.read(new URL(buildFileResourceUri(filePath)), {}, dummyContext);
+
+      assert.ok('text' in firstResourceContent(result));
+      assert.strictEqual(stat.mock.callCount(), 0);
+      assert.strictEqual(read.mock.callCount(), 1);
+      assert.strictEqual(typeof read.mock.calls[0]?.arguments[1]?.beforeBody, 'function');
+    });
+
+    it('a stdio resource read refuses a binary file over the Message limit before its body', async (t) => {
+      // 8 MiB is under the file size limit, but its base64 is over stdio's limit.
+      const filePath = join(tmpDir, 'stdio-big.bin');
+      await writeFile(filePath, Buffer.alloc(8 * MIB, 1));
+      const contracts = getResourceContracts({
+        resourceStore: store,
+        pathGuard,
+        readOnly: false,
+        transport: 'stdio',
+      });
+      t.after(() => {
+        for (const contract of contracts) contract.destroy?.();
+      });
+      const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(file);
+      const bodies = t.mock.method(fs.promises, 'readFile');
+      syncBuiltinESMExports();
+      t.after(() => {
+        bodies.mock.restore();
+        syncBuiltinESMExports();
+      });
+
+      await assert.rejects(
+        async () => file.read(new URL(buildFileResourceUri(filePath)), {}, dummyContext),
+        /at least \d+ bytes as JSON/,
+      );
+      assert.strictEqual(bodies.mock.callCount(), 0);
+    });
+
+    it('serves a UTF-16 text file as a base64 blob, not lossy text', async () => {
+      const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]);
+      const filePath = join(tmpDir, 'utf16-resource.txt');
+      await writeFile(filePath, bytes);
+      const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: false });
+      const file = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(file);
+      try {
+        const content = firstResourceContent(
+          await file.read(new URL(buildFileResourceUri(filePath)), {}, dummyContext),
+        );
+        assert.strictEqual(content.mimeType, 'application/octet-stream');
+        assert.ok('blob' in content);
+        assert.strictEqual(content.blob, bytes.toString('base64'));
+      } finally {
+        for (const contract of contracts) contract.destroy?.();
+      }
     });
 
     it('TC-FUNC-061: Read workspace text file via resource contract', async () => {

@@ -7,8 +7,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type * as z from 'zod/v4';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
+import { MAX_MATCH_LINE_CHARS } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { MAX_MATCH_LINE_CHARS } from '../src/core/search.ts';
 import { PATCH } from '../src/tools/patch.ts';
 import {
   cleanupTestRoot,

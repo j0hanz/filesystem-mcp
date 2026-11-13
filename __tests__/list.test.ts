@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 
 import type * as z from 'zod/v4';
 
@@ -471,21 +470,27 @@ describe('list body', () => {
     assert.match(result.text ?? '', /scan stopped early: hit the time limit/);
   });
 
-  it('reports a deadline that fires during a size stat', async () => {
-    const dir = join(root, 'list_timeout_stat');
-    await writeTestFile(dir, 'a.txt', 'x');
-    const controller = new AbortController();
+  it('sizes files from the scan, with no second stat per file', async () => {
+    const dir = join(root, 'list_sizes_once');
+    await writeTestFile(dir, 'a.txt', 'abc');
+    await writeTestFile(dir, 'sub/b.txt', 'hello');
+    const statted: string[] = [];
     const fs = new (class extends GuardedFileSystem {
       override async stat(...args: Parameters<GuardedFileSystem['stat']>) {
-        if (!args[0].endsWith('a.txt')) return super.stat(...args);
-        await setImmediatePromise();
-        const timeout = new DOMException('test timeout', 'TimeoutError');
-        controller.abort(timeout);
-        throw timeout;
+        statted.push(args[0]);
+        return super.stat(...args);
       }
     })(guard);
-    const result = await list({ path: dir, includeSizes: true }, { fs, signal: controller.signal });
-    assert.strictEqual(result.structured.stoppedReason, 'timeout');
+    const result = await list({ path: dir, includeSizes: true, maxDepth: 2 }, { fs });
+    const sizes = Object.fromEntries(
+      result.structured.entries.map((e) => [e.relativePath, e.size]),
+    );
+    assert.deepEqual(sizes, { 'a.txt': 3, sub: undefined, 'sub/b.txt': 5 });
+    assert.deepEqual(
+      statted.filter((path) => path.endsWith('.txt')),
+      [],
+      'the scan already lstat-ed each file',
+    );
   });
 
   it('counts an unreadable directory', async (t) => {

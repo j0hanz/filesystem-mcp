@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/matcher.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { searchContent } from '../src/core/search.ts';
@@ -24,8 +25,18 @@ describe('searchContent', () => {
     for (let i = 0; i < 30; i++) {
       await writeTestFile(root, `w${String(i).padStart(2, '0')}.txt`, 'CAP_HIT\nCAP_HIT\n');
     }
-    const first = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
-    const second = await searchContent({ root }, 'CAP_HIT', { maxResults: 7 }, guard);
+    const first = await searchContent(
+      { root },
+      'CAP_HIT',
+      { maxResults: 7 },
+      new GuardedFileSystem(guard),
+    );
+    const second = await searchContent(
+      { root },
+      'CAP_HIT',
+      { maxResults: 7 },
+      new GuardedFileSystem(guard),
+    );
     const key = (result: typeof first) =>
       result.matches.map((match) => `${basename(match.file)}:${match.line}`);
     assert.deepStrictEqual(key(first), key(second));
@@ -40,7 +51,12 @@ describe('searchContent', () => {
       'many.txt',
       Array.from({ length: 5000 }, () => 'CAP_ONE').join('\n') + '\n',
     );
-    const result = await searchContent({ root }, 'CAP_ONE', { maxResults: 5 }, guard);
+    const result = await searchContent(
+      { root },
+      'CAP_ONE',
+      { maxResults: 5 },
+      new GuardedFileSystem(guard),
+    );
     assert.strictEqual(result.matches.length, 5);
     assert.strictEqual(result.summary.matchingLines, 5);
     assert.strictEqual(result.summary.filesMatched, 1);
@@ -52,13 +68,28 @@ describe('searchContent', () => {
     await writeTestFile(root, 'huge.txt', bigLine);
     await writeTestFile(root, 'ok.txt', 'hello NEEDLE world\n');
 
-    const outcome = await searchContent({ root }, 'NEEDLE', { isRegex: true }, guard);
+    const outcome = await searchContent(
+      { root },
+      'NEEDLE',
+      { isRegex: true },
+      new GuardedFileSystem(guard),
+    );
     assert.strictEqual(outcome.summary.skippedTooLarge, 1);
     assert.strictEqual(outcome.matches.length, 1);
-    const again = await searchContent({ root }, 'NEEDLE', { isRegex: true }, guard);
+    const again = await searchContent(
+      { root },
+      'NEEDLE',
+      { isRegex: true },
+      new GuardedFileSystem(guard),
+    );
     assert.strictEqual(again.matches.length, 1);
 
-    const literal = await searchContent({ root }, 'NEEDLE', { isRegex: false }, guard);
+    const literal = await searchContent(
+      { root },
+      'NEEDLE',
+      { isRegex: false },
+      new GuardedFileSystem(guard),
+    );
     assert.strictEqual(literal.summary.skippedTooLarge, 0);
     assert.deepStrictEqual(
       literal.matches.map((match) => match.file).sort(),
@@ -73,7 +104,7 @@ describe('searchContent', () => {
       { root },
       'needle',
       { isRegex: false, maxResults: 100_000, signal: controller.signal },
-      guard,
+      new GuardedFileSystem(guard),
     );
     const timer = setTimeout(
       () => controller.abort(new DOMException('deadline', 'TimeoutError')),

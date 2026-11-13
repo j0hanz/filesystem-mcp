@@ -3,13 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import {
-  foldPatternCase,
-  globEntries,
-  type GlobEntriesOptions,
-  isSafeGlobSyntax,
-} from '../src/core/glob.ts';
+import { foldPatternCase, globEntries, type GlobEntriesOptions } from '../src/core/glob.ts';
 import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS } from '../src/core/path-utils.ts';
+import { isSafeGlobSyntax } from '../src/core/schema.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,

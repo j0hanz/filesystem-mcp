@@ -131,7 +131,7 @@ export interface LinkCandidate {
  */
 export function canLinkFile(transport: Transport, file: LinkCandidate): boolean {
   if (transport !== 'stdio') return true;
-  // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
+  // A raw read returns any non-text kind as base64 (`kind !== 'text'`).
   const binary = file.kind !== 'text';
   if (binary || file.content === undefined) {
     // The result wrapRead measures, with the file's bytes left out.
