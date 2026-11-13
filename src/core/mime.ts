@@ -110,50 +110,39 @@ const EXT_MAP: Record<string, MimeInfo> = {
   exe: { mimeType: 'application/octet-stream', kind: 'binary' },
   msi: { mimeType: 'application/octet-stream', kind: 'binary' },
   dmg: { mimeType: 'application/octet-stream', kind: 'binary' },
+
+  // Video, fonts, office documents and data files: bytes, never text
+  mov: { mimeType: 'application/octet-stream', kind: 'binary' },
+  avi: { mimeType: 'application/octet-stream', kind: 'binary' },
+  mkv: { mimeType: 'application/octet-stream', kind: 'binary' },
+  webm: { mimeType: 'application/octet-stream', kind: 'binary' },
+  mp4: { mimeType: 'application/octet-stream', kind: 'binary' },
+  ttf: { mimeType: 'application/octet-stream', kind: 'binary' },
+  otf: { mimeType: 'application/octet-stream', kind: 'binary' },
+  woff: { mimeType: 'application/octet-stream', kind: 'binary' },
+  woff2: { mimeType: 'application/octet-stream', kind: 'binary' },
+  doc: { mimeType: 'application/octet-stream', kind: 'binary' },
+  docx: { mimeType: 'application/octet-stream', kind: 'binary' },
+  xls: { mimeType: 'application/octet-stream', kind: 'binary' },
+  xlsx: { mimeType: 'application/octet-stream', kind: 'binary' },
+  ppt: { mimeType: 'application/octet-stream', kind: 'binary' },
+  pptx: { mimeType: 'application/octet-stream', kind: 'binary' },
+  sqlite: { mimeType: 'application/octet-stream', kind: 'binary' },
+  db: { mimeType: 'application/octet-stream', kind: 'binary' },
+  bin: { mimeType: 'application/octet-stream', kind: 'binary' },
+  dat: { mimeType: 'application/octet-stream', kind: 'binary' },
 };
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
 export const MIME_SAMPLE_SIZE = 512;
 
-// Every non-text kind is binary for read purposes, except SVG — an image kind
-// whose bytes are text, and which the read path must not fast-path as binary.
-// EXT_MAP covers the extensions it knows (image/audio/pdf/binary kinds all
-// become binary here, image-kind SVG excepted); EXTRA_BINARY_EXTENSIONS lists
-// the rest that EXT_MAP does not carry but the read path must still treat as
-// binary. The two tables had drifted; this derivation resolves the drift toward
-// binary (only changes whether a file skips its content probe).
-const EXTRA_BINARY_EXTENSIONS = [
-  'mov',
-  'avi',
-  'mkv',
-  'webm',
-  'ttf',
-  'otf',
-  'woff',
-  'woff2',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'sqlite',
-  'db',
-  'bin',
-  'dat',
-  'mp4',
-];
-
+// Every non-text kind is binary for read purposes, except SVG: an image kind
+// whose bytes are text, which a Scan or Rewrite reads as text.
 const KNOWN_BINARY_EXTENSIONS: ReadonlySet<string> = new Set(
-  [
-    ...Object.entries(EXT_MAP)
-      .filter(([, v]) => v.kind !== 'text')
-      .map(([k]) => k),
-    ...EXTRA_BINARY_EXTENSIONS,
-  ]
-    .filter((ext) => ext !== 'svg')
-    .map((ext) => `.${ext}`),
+  Object.entries(EXT_MAP)
+    .filter(([ext, v]) => v.kind !== 'text' && ext !== 'svg')
+    .map(([ext]) => `.${ext}`),
 );
 
 export function isKnownBinaryExtension(filePath: string): boolean {
@@ -182,28 +171,28 @@ function isUtf8Prefix(slice: Buffer): boolean {
   }
 }
 
-/** Single binary-vs-text verdict, shared by `detectMimeType` and the read path. */
+/**
+ * Single binary-vs-text verdict, shared by `detectMimeType` and the read path.
+ * UTF-16 is binary here: every reader decodes UTF-8 and would hand back NULs.
+ */
 export function isBinarySample(slice: Buffer): boolean {
   if (slice.length === 0) return false;
-  if (hasUtf16Bom(slice)) return false;
+  if (hasUtf16Bom(slice)) return true;
   if (slice.includes(0)) return true;
   return !isUtf8Prefix(slice);
 }
+
+const OCTET_STREAM: MimeInfo = { mimeType: 'application/octet-stream', kind: 'binary' };
 
 export function detectMimeType(path: string, sample?: Buffer): MimeInfo {
   const lastDot = path.lastIndexOf('.');
   const ext = lastDot > -1 ? path.slice(lastDot + 1).toLowerCase() : '';
   const known = Object.hasOwn(EXT_MAP, ext) ? EXT_MAP[ext] : undefined;
+  // A known non-text extension wins; text, known or not, must also probe as text.
+  if (known && known.kind !== 'text') return known;
+  if (sample && isBinarySample(sample.subarray(0, MIME_SAMPLE_SIZE))) return OCTET_STREAM;
   if (known) return known;
-
-  // No known extension: fall back to a binary/text probe of the content.
-  if (sample) {
-    return isBinarySample(sample.subarray(0, MIME_SAMPLE_SIZE))
-      ? { mimeType: 'application/octet-stream', kind: 'binary' }
-      : { mimeType: 'text/plain', kind: 'text' };
-  }
-
-  return { mimeType: 'application/octet-stream', kind: 'binary' };
+  return sample ? { mimeType: 'text/plain', kind: 'text' } : OCTET_STREAM;
 }
 
 export function detectMimeFromContent(path: string, content: string | Buffer): MimeInfo {
