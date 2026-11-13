@@ -444,7 +444,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
       // The read-only `read` tool path must stay lossy-but-tolerant: unchanged behavior.
       const fullRead = await fs.read(filePath);
-      assert.ok(fullRead.content.endsWith('caf\n'));
+      assert.ok(fullRead.content.endsWith('caf\uFFFD\n'));
     });
   });
 
