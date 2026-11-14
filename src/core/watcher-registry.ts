@@ -30,9 +30,9 @@ export type WatcherAttachResult =
 
 /**
  * Owns the uri → FSWatcher map and the subscription bookkeeping around it:
- * notify callbacks, desired subscribe/unsubscribe state, and the watcher cap —
+ * notify callbacks, in-flight subscribe cancellation, and the watcher cap —
  * plus `acquire`, the one ladder that sequences them correctly. `acquire` awaits
- * path validation midway and re-checks `isStale` and `hasWatcher` itself
+ * path validation midway and re-checks staleness and `hasWatcher` itself
  * afterwards, so callers do not: they take a lease and release it. The
  * individual primitives stay closure-private.
  */
@@ -51,24 +51,16 @@ export function createWatcherRegistry() {
   // this and the unsubscribe-by-URI over-release if that churn is observed.
   const activeCallbacks = new Map<string, Set<(uri: string) => void>>();
   const subscriberCounts = new Map<string, number>();
-  const desiredState = new Map<string, 'unsubscribed' | 'subscribing'>();
+  // In-flight `resources/subscribe` attaches, one token per call. A release
+  // aborts only the tokens that exist at that moment, so it can never poison a
+  // later acquire (no sticky per-URI state).
+  const pendingSubscribes = new Map<string, Set<{ aborted: boolean }>>();
   const debounceTimers = new Map<string, NodeJS.Timeout>();
   let destroyed = false;
 
-  // 'unsubscribed' exists only to abort a subscribe that is mid-await
-  // (isStale). If no subscribe is in flight, keep no entry at all: a lingering
-  // 'unsubscribed' would permanently block the modern attach path (which never
-  // calls startSubscribe) and leak one map entry per URI ever watched. This
-  // must be idempotent: remove()'s teardown branch calls this directly and
-  // then unconditionally calls dropWatcher (which also calls this) for the
-  // same uri — the second call must not clobber what the first one set.
-  const settleDesiredState = (uri: string): void => {
-    const current = desiredState.get(uri);
-    if (current === 'subscribing') {
-      desiredState.set(uri, 'unsubscribed');
-    } else if (current !== 'unsubscribed') {
-      desiredState.delete(uri);
-    }
+  const abortPendingSubscribes = (uri: string): void => {
+    for (const token of pendingSubscribes.get(uri) ?? []) token.aborted = true;
+    pendingSubscribes.delete(uri);
   };
 
   // Tears down the watcher itself, NOT the ref-count. The 'error' event calls
@@ -87,7 +79,6 @@ export function createWatcherRegistry() {
     watcher.close();
     watchers.delete(uri);
     activeCallbacks.delete(uri);
-    settleDesiredState(uri);
   };
 
   /** The last lease ended: drop the watcher and every trace of the URI. */
@@ -101,7 +92,7 @@ export function createWatcherRegistry() {
     if (watcher) dropWatcher(uri, watcher);
     activeCallbacks.delete(uri);
     subscriberCounts.delete(uri);
-    settleDesiredState(uri);
+    abortPendingSubscribes(uri);
   };
 
   const notifyAll = (uri: string): void => {
@@ -137,27 +128,6 @@ export function createWatcherRegistry() {
 
   const isAtCap = (): boolean => watchers.size >= MAX_WATCHERS;
 
-  /** The registry was destroyed, or this uri was unsubscribed, mid-await. */
-  const isStale = (uri: string): boolean => destroyed || desiredState.get(uri) === 'unsubscribed';
-
-  const startSubscribe = (uri: string): void => {
-    desiredState.set(uri, 'subscribing');
-  };
-
-  /**
-   * A subscribe that declared intent and then failed — bad URI, unvalidatable
-   * path, cap, fs.watch refusal — drops the entry entirely. Not
-   * `settleDesiredState`: that maps 'subscribing' onto 'unsubscribed' to abort
-   * an attach still mid-await, and a *finished* failure leaving 'unsubscribed'
-   * behind would make `isStale` true forever, so the modern attach path (which
-   * never calls `startSubscribe`) could never watch this uri again. Only
-   * clears its own 'subscribing' — a concurrent unsubscribe that already set
-   * 'unsubscribed' still wins.
-   */
-  const cancelSubscribe = (uri: string): void => {
-    if (desiredState.get(uri) === 'subscribing') desiredState.delete(uri);
-  };
-
   const addCallback = (uri: string, notify: (uri: string) => void): void => {
     let callbacks = activeCallbacks.get(uri);
     if (!callbacks) {
@@ -165,11 +135,6 @@ export function createWatcherRegistry() {
       activeCallbacks.set(uri, callbacks);
     }
     callbacks.add(notify);
-    // A live subscription needs no marker: every reader treats "no entry" the
-    // way it treated 'subscribed'. Clearing here is what retires the
-    // 'subscribing' marker `startSubscribe` set, so teardown deletes the entry
-    // instead of mapping it onto a 'unsubscribed' that would block a later attach.
-    desiredState.delete(uri);
   };
 
   const retain = (uri: string): void => {
@@ -257,11 +222,9 @@ export function createWatcherRegistry() {
      * callback (one watcher per URI).
      *
      * `markSubscribe` is the one branch that differs: only `resources/subscribe`
-     * declares desired state (what `isStale` aborts against). The listen path
-     * must not, or a rejected attach past that point strands a `'subscribing'`
-     * entry nothing settles. Whoever declares it, this function settles it:
-     * every failing exit past that point cancels the declaration, so no uri is
-     * poisoned for a later attach.
+     * gets a cancellation token, which a `release` landing mid-await aborts
+     * (reported as 'stale'). The token is per call, so it never affects a later
+     * acquire for the same uri, `subscriptions/listen` included.
      *
      * Every `ok` return takes one lease; lifetime is the caller's to manage.
      * HTTP releases when the listen response closes. Stdio tracks the listen
@@ -275,13 +238,6 @@ export function createWatcherRegistry() {
       notify: (uri: string) => void,
       { markSubscribe = false }: { markSubscribe?: boolean } = {},
     ): Promise<WatcherAttachResult> {
-      // Every failing exit below routes through here, so the declaration made by
-      // `startSubscribe` can never outlive the attach that made it.
-      const fail = (result: WatcherAttachResult & { ok: false }): WatcherAttachResult => {
-        if (markSubscribe) cancelSubscribe(uri);
-        return result;
-      };
-
       if (hasWatcher(uri)) {
         // A watcher already tracks this uri; just (re)register the callback so
         // its change events reach the new subscriber. No validation or cap work
@@ -297,45 +253,59 @@ export function createWatcherRegistry() {
         return { ok: false, reason: 'capped' };
       }
 
-      if (markSubscribe) startSubscribe(uri);
-
       const filePath = extractPath(uri);
-      if (!filePath) return fail({ ok: false, reason: 'bad-uri' });
+      if (!filePath) return { ok: false, reason: 'bad-uri' };
 
-      let resolved: string;
-      try {
-        resolved = await pathGuard.validateExistingPath(filePath);
-      } catch (error: unknown) {
-        return fail({ ok: false, reason: 'invalid-path', error });
+      const token = markSubscribe ? { aborted: false } : undefined;
+      if (token) {
+        let bucket = pendingSubscribes.get(uri);
+        if (!bucket) {
+          bucket = new Set();
+          pendingSubscribes.set(uri, bucket);
+        }
+        bucket.add(token);
       }
+      try {
+        let resolved: string;
+        try {
+          resolved = await pathGuard.validateExistingPath(filePath);
+        } catch (error: unknown) {
+          return { ok: false, reason: 'invalid-path', error };
+        }
 
-      // Re-check what the await could have changed. A stale uri is the one
-      // failure that must NOT cancel: an unsubscribe landed mid-await and its
-      // 'unsubscribed' marker is the thing that aborted this attach.
-      if (isStale(uri)) return { ok: false, reason: 'stale' };
-      if (hasWatcher(uri)) {
+        // Re-check what the await could have changed: the registry was destroyed,
+        // or a release aborted this subscribe.
+        if (destroyed || token?.aborted) return { ok: false, reason: 'stale' };
+        if (hasWatcher(uri)) {
+          addCallback(uri, notify);
+          retain(uri);
+          return { ok: true };
+        }
+        if (isAtCap()) {
+          warnWatcherCap(uri);
+          return { ok: false, reason: 'capped' };
+        }
+
         addCallback(uri, notify);
+        if (!attach(uri, resolved)) {
+          // fs.watch threw (inotify exhaustion, or a race deleted the path): take
+          // back the callback this call added. Not `release`: leases whose
+          // watcher errored still hold their counts (see `dropWatcher`), and a
+          // release here would end one of theirs.
+          const callbacks = activeCallbacks.get(uri);
+          callbacks?.delete(notify);
+          if (callbacks?.size === 0) activeCallbacks.delete(uri);
+          return { ok: false, reason: 'attach-failed' };
+        }
         retain(uri);
         return { ok: true };
+      } finally {
+        if (token) {
+          const bucket = pendingSubscribes.get(uri);
+          bucket?.delete(token);
+          if (bucket?.size === 0) pendingSubscribes.delete(uri);
+        }
       }
-      if (isAtCap()) {
-        warnWatcherCap(uri);
-        return fail({ ok: false, reason: 'capped' });
-      }
-
-      addCallback(uri, notify);
-      if (!attach(uri, resolved)) {
-        // fs.watch threw (inotify exhaustion, or a race deleted the path): take
-        // back the callback this call added. Not `release`: leases whose
-        // watcher errored still hold their counts (see `dropWatcher`), and a
-        // release here would end one of theirs.
-        const callbacks = activeCallbacks.get(uri);
-        callbacks?.delete(notify);
-        if (callbacks?.size === 0) activeCallbacks.delete(uri);
-        return fail({ ok: false, reason: 'attach-failed' });
-      }
-      retain(uri);
-      return { ok: true };
     },
 
     destroy(): void {
@@ -354,7 +324,7 @@ export function createWatcherRegistry() {
       watchers.clear();
       activeCallbacks.clear();
       subscriberCounts.clear();
-      desiredState.clear();
+      pendingSubscribes.clear();
     },
   };
 }
