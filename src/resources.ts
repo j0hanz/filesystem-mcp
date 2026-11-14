@@ -28,7 +28,7 @@ import {
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
-import { Logger, voidSend } from './core/observability.ts';
+import { Logger, sanitizeLogField, voidSend } from './core/observability.ts';
 import { bytesOverMessageLimit, readFloorOver, refuseResourceRead } from './core/outbound.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
@@ -328,7 +328,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
           }
           if (isFsError(err)) throw fsErrorToProtocolError(err);
           Logger.warn(
-            `Unexpected error validating path for watcher ${uri}: ${formatUnknownErrorMessage(err)}`,
+            `Unexpected error validating path for watcher ${sanitizeLogField(uri, 256)}: ${formatUnknownErrorMessage(err)}`,
           );
           throw err;
         }

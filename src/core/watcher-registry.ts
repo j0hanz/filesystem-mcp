@@ -5,7 +5,7 @@ import { basename, dirname } from 'node:path';
 import { parseEnvInt } from './config.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { extractPath } from './file-uri.ts';
-import { Logger } from './observability.ts';
+import { Logger, sanitizeLogField } from './observability.ts';
 import { isSamePath } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 
@@ -13,8 +13,13 @@ import type { PathGuard } from './path.ts';
 // (e.g. Linux inotify, default ~8192/user). One subscription == one watcher.
 export const MAX_WATCHERS = parseEnvInt('FS_MAX_WATCHERS', 256, 1, 4096);
 
+/** A client-supplied URI, safe for one log line. */
+const shownUri = (uri: string): string => sanitizeLogField(uri, 256);
+
 function warnWatcherCap(uri: string): void {
-  Logger.warn(`Cannot subscribe to ${uri}: MAX_WATCHERS limit (${MAX_WATCHERS}) reached.`);
+  Logger.warn(
+    `Cannot subscribe to ${shownUri(uri)}: MAX_WATCHERS limit (${MAX_WATCHERS}) reached.`,
+  );
 }
 
 /**
@@ -113,7 +118,9 @@ export function createWatcherRegistry() {
         try {
           cb(uri);
         } catch (err) {
-          Logger.warn(`Notify callback error for ${uri}: ${formatUnknownErrorMessage(err)}`);
+          Logger.warn(
+            `Notify callback error for ${shownUri(uri)}: ${formatUnknownErrorMessage(err)}`,
+          );
         }
       }
     }, 50);
@@ -184,7 +191,7 @@ export function createWatcherRegistry() {
             if (filename === null || isSamePath(filename, basename(resolvedPath))) notifyAll(uri);
           });
       watcher.on('error', (err: Error) => {
-        Logger.warn(`Watcher error for ${uri}: ${err.message}`);
+        Logger.warn(`Watcher error for ${shownUri(uri)}: ${sanitizeLogField(err.message, 256)}`);
         dropWatcher(uri, watcher);
       });
       // Two attaches that both cleared `hasWatcher` before either finished
@@ -198,7 +205,9 @@ export function createWatcherRegistry() {
       watchers.set(uri, watcher);
       return true;
     } catch (err) {
-      Logger.error(`Failed to create watcher for ${uri}: ${formatUnknownErrorMessage(err)}`);
+      Logger.error(
+        `Failed to create watcher for ${shownUri(uri)}: ${formatUnknownErrorMessage(err)}`,
+      );
       return false;
     }
   };
