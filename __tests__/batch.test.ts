@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ErrorCode, Problem } from '../src/core/errors.ts';
+import { ErrorCode, FsError, Problem } from '../src/core/errors.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import {
   type BatchSlot,
@@ -11,6 +11,7 @@ import {
   planIntoSlots,
   runOverPaths,
   summarize,
+  toProblem,
 } from '../src/tools/batch.ts';
 import type { ToolCtx } from '../src/tools/define.ts';
 
@@ -229,5 +230,24 @@ describe('cancelMessage', () => {
         `${verb} cancelled: approval for "/r/x" was declined by the user`,
       );
     }
+  });
+});
+
+describe('toProblem', () => {
+  it('keeps plain Problem objects intact and classifies Error instances via Problem.fromUnknown', () => {
+    const plain = { code: ErrorCode.NOT_FOUND, message: 'plain', path: '/p' };
+    assert.strictEqual(toProblem(plain, ErrorCode.UNKNOWN, '/fallback'), plain);
+
+    const fsErr = new FsError(ErrorCode.ACCESS_DENIED, 'denied', '/a');
+    assert.deepStrictEqual(toProblem(fsErr, ErrorCode.UNKNOWN, '/fallback'), {
+      code: ErrorCode.ACCESS_DENIED,
+      message: 'denied',
+      path: '/fallback',
+    });
+
+    const errnoErr = Object.assign(new Error('ENOENT: missing'), { code: 'ENOENT' });
+    const mapped = toProblem(errnoErr, ErrorCode.UNKNOWN, '/missing');
+    assert.strictEqual(mapped.code, ErrorCode.NOT_FOUND);
+    assert.strictEqual(mapped.path, '/missing');
   });
 });

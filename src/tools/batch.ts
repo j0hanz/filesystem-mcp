@@ -27,7 +27,7 @@ export interface BatchExecutionOptions {
   readonly progressTotal?: number;
 }
 
-function toProblem(error: unknown, defaultCode: ErrorCode, path: string): Problem {
+export function toProblem(error: unknown, defaultCode: ErrorCode, path: string): Problem {
   if (
     typeof error === 'object' &&
     error !== null &&

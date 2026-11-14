@@ -7,13 +7,19 @@ import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import { ErrorCode, FsError, Problem, rethrowIfAborted } from '../core/errors.ts';
+import { ErrorCode, FsError, type Problem, rethrowIfAborted } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { type BatchSlot, cancelMessage, executeBatchSlots, failureLines } from './batch.ts';
+import {
+  type BatchSlot,
+  cancelMessage,
+  executeBatchSlots,
+  failureLines,
+  toProblem,
+} from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -68,17 +74,6 @@ interface IndexedPlan {
   readonly index: number;
 }
 
-function isProblem(error: unknown): error is Problem {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    !(error instanceof Error) &&
-    'code' in error &&
-    'message' in error &&
-    typeof (error as { code: unknown }).code === 'string'
-  );
-}
-
 function pairFailure(
   pair: { source: string; destination: string },
   error: unknown,
@@ -86,7 +81,7 @@ function pairFailure(
   return {
     source: pair.source,
     destination: pair.destination,
-    error: isProblem(error) ? error : Problem.fromUnknown(error, ErrorCode.UNKNOWN, pair.source),
+    error: toProblem(error, ErrorCode.UNKNOWN, pair.source),
   };
 }
 
