@@ -40,7 +40,7 @@ import {
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
 import { searchContent } from '../src/core/search.ts';
-import { UndoJournal } from '../src/core/undo.ts';
+import { type RestoreStep, UndoJournal } from '../src/core/undo.ts';
 import { MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -57,6 +57,10 @@ import {
 } from './helpers.ts';
 
 const KIB = 1024;
+
+/** Each restored file as 'restored', or its error message, so a failure shows why. */
+const restoredOrError = (steps: RestoreStep[]): string[] =>
+  steps.flatMap((step) => step.results.map((r) => ('error' in r ? r.error.message : 'restored')));
 
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
@@ -594,9 +598,79 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       // Nothing was written, so the call stays undoable.
       assert.strictEqual(capture.unavailableReason(), undefined);
     });
+    it('concurrent writeFile through two hard links with UndoJournal restores cleanly step by step', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_undo_race_a.txt', 'seed\n');
+      const twin = join(tmpDir, 'hardlink_undo_race_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      const journal = new UndoJournal(1024 * 1024);
+      const runLogged = async (path: string, text: string) => {
+        const cap = journal.beginCapture();
+        const tracked = new GuardedFileSystem(ctx.pathGuard, cap);
+        await tracked.writeFile(path, text);
+        return journal.add('create', cap.journalRecords());
+      };
+
+      const [idA, idB] = await Promise.all([
+        runLogged(filePath, 'AAAA\n'),
+        runLogged(twin, 'BBBBBB\n'),
+      ]);
+      const finalBytes = await readFile(filePath, 'utf-8');
+      assert.ok(finalBytes === 'AAAA\n' || finalBytes === 'BBBBBB\n');
+
+      const secondId = finalBytes === 'AAAA\n' ? idA : idB;
+      const firstId = secondId === idA ? idB : idA;
+      const step2 = await journal.restore({ id: secondId }, fs, { dryRun: false });
+      assert.deepStrictEqual(restoredOrError(step2), ['restored']);
+      const step1 = await journal.restore({ id: firstId }, fs, { dryRun: false });
+      assert.deepStrictEqual(restoredOrError(step1), ['restored']);
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'seed\n');
+      assert.strictEqual(await readFile(twin, 'utf-8'), 'seed\n');
+    });
   });
 
   describe('Append (TC-FUNC-047–052)', () => {
+    it('concurrent appendFile through two hard links with UndoJournal separates and restores cleanly', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'hardlink_append_a.txt', 'head');
+      const twin = join(tmpDir, 'hardlink_append_b.txt');
+      try {
+        await link(filePath, twin);
+      } catch (error) {
+        return t.skip(
+          `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+        );
+      }
+
+      const journal = new UndoJournal(1024 * 1024);
+      const runAppend = async (path: string, line: string) => {
+        const cap = journal.beginCapture();
+        const tracked = new GuardedFileSystem(ctx.pathGuard, cap);
+        await tracked.appendFile(path, line);
+        return journal.add('create', cap.journalRecords());
+      };
+
+      const [idA, idB] = await Promise.all([runAppend(filePath, 'one'), runAppend(twin, 'two')]);
+      const content = await readFile(filePath, 'utf-8');
+      assert.ok(
+        content === 'head\none\ntwo' || content === 'head\ntwo\none',
+        `unexpected content: ${JSON.stringify(content)}`,
+      );
+
+      const secondId = content.endsWith('two') ? idB : idA;
+      const firstId = secondId === idB ? idA : idB;
+      const step2 = await journal.restore({ id: secondId }, fs, { dryRun: false });
+      assert.deepStrictEqual(restoredOrError(step2), ['restored']);
+      const step1 = await journal.restore({ id: firstId }, fs, { dryRun: false });
+      assert.deepStrictEqual(restoredOrError(step1), ['restored']);
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'head');
+    });
+
     it('TC-FUNC-047: appendFile creates a missing file with the content', async () => {
       const filePath = join(tmpDir, 'append_missing.txt');
       const { validPath } = await fs.appendFile(filePath, 'created by append\n');

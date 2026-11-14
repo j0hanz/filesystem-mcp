@@ -874,9 +874,50 @@ describe('MCP Resources', () => {
       openGate();
       assert.deepStrictEqual(await inFlight, { ok: false, reason: 'stale' });
 
-      // And a fresh acquire clears the marker and succeeds again.
+      // A listen acquire straight after the stale abort is unaffected.
+      const listen = await registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual(listen.ok, true);
+      registry.release(uri);
+
+      // A fresh acquire is unaffected.
       const resumed = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
       assert.strictEqual(resumed.ok, true);
+      registry.release(uri);
+
+      registry.destroy();
+    });
+
+    it('TC-FUNC-067b: release during in-flight subscribe does not block later markSubscribe=false or newer subscribe attaches', async () => {
+      const registry = createWatcherRegistry();
+      const file = await writeTestFile(tmpDir, 'resub-modern.txt', 'content');
+      const uri = buildFileResourceUri(file);
+
+      let releaseFirstGate: () => void = () => {};
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirstGate = resolve;
+      });
+      const gatedGuard = {
+        validateExistingPath: async (filePath: string) => {
+          await firstGate;
+          return pathGuard.validateExistingPath(filePath);
+        },
+      } as unknown as PathGuard;
+
+      const abortedSub = registry.acquire(gatedGuard, uri, () => {}, { markSubscribe: true });
+      registry.release(uri);
+
+      // A newer subscribe starting immediately after release must survive even
+      // while the released attach is still pending, failing only the aborted one.
+      const newerSub = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
+      assert.strictEqual(newerSub.ok, true);
+      registry.release(uri);
+
+      releaseFirstGate();
+      assert.deepStrictEqual(await abortedSub, { ok: false, reason: 'stale' });
+
+      // Modern `subscriptions/listen` calls acquire with markSubscribe=false.
+      const modernListen = await registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual(modernListen.ok, true);
       registry.release(uri);
 
       registry.destroy();

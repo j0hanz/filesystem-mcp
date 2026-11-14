@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
@@ -222,6 +223,23 @@ const TRANSFER_COPY_OPTIONS = {
 // (EBUSY, EPERM on Windows). Node retries those only when asked; without it
 // the removal stops part-way through the tree.
 const RM_RETRY = { maxRetries: 3, retryDelay: 100 } as const;
+
+// Inode locks this async chain holds. Module-wide like the `runExclusive` keys, so a lock taken
+// through one GuardedFileSystem is not re-taken (self-deadlock) through another.
+// A holder must not start parallel or detached writes to the same inode: work it spawns inherits this held set and skips the lock.
+const heldInodes = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** Names of one inode share its bytes, so writes through any of them serialize on this key. */
+function hardLinkKey(stats: Stats): string | undefined {
+  return stats.isFile() && stats.nlink > 1 ? `inode:${stats.dev}:${stats.ino}` : undefined;
+}
+
+/** Run `fn` under the inode lock unless this chain already holds it: `runExclusive` is not re-entrant. */
+function withInodeLock<T>(inodeKey: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const held = heldInodes.getStore();
+  if (inodeKey === undefined || held?.has(inodeKey)) return fn();
+  return runExclusive(inodeKey, () => heldInodes.run(new Set([...(held ?? []), inodeKey]), fn));
+}
 
 /**
  * A Transfer settled by `planTransfer`, before any change and before any
@@ -514,11 +532,15 @@ export class GuardedFileSystem {
    * Serialize a read-modify-write on the resolved write target, so two writers
    * of one file (any spelling, including via a symlinked parent) cannot both
    * read the same base and have the last rename win. `writeFile`/`appendFile`
-   * do not take the lock, so `fn` may call them.
+   * do not take the path lock and skip an inode lock this chain holds, so `fn` may call them.
    */
   async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
     const key = await this.#guard('write', filePath);
-    return runExclusive(key, () => fn(key));
+    // Path lock, then inode lock: another link's writer must not read the same base.
+    return runExclusive(key, async () => {
+      const inodeKey = await fsStat(key).then(hardLinkKey, () => undefined);
+      return withInodeLock(inodeKey, () => fn(key));
+    });
   }
 
   /**
@@ -1153,6 +1175,7 @@ export class GuardedFileSystem {
     content: string | Buffer,
     options: { signal?: AbortSignal | undefined; mode?: number | undefined },
     own: PathCapture,
+    relocked = false,
   ): Promise<void> {
     const { signal } = options;
 
@@ -1164,21 +1187,25 @@ export class GuardedFileSystem {
     // file to 0644 on every write. Carry the existing mode across instead.
     let existingMode: number | undefined;
     let inPlace = false;
-    // Names of one inode share its bytes, so in-place writes through any of them serialize on this key.
-    let inodeKey = '';
+    let inodeKey: string | undefined;
     let existingStats: Stats | undefined;
     let saved: SavedFile | undefined;
+    let relock = false;
     try {
       const existing = await fsStat(validPath);
       existingStats = existing;
       existingMode = existing.mode & 0o777;
-      inPlace = existing.isFile() && existing.nlink > 1;
-      inodeKey = `inode:${existing.dev}:${existing.ino}`;
+      inodeKey = hardLinkKey(existing);
+      inPlace = inodeKey !== undefined;
+      // The capture's read and the write must share one inode lock, or another link's write can
+      // truncate between them. Taken once: the second look, under the lock, does not retry.
+      // shortcut: an outside process swapping in another linked inode between the two looks writes it unlocked; retry under the new key if that matters.
+      relock = inPlace && !relocked;
       // Undo capture: save the bytes about to be overwritten. A write over a
       // non-regular entry (FIFO, socket) cannot be undone — the remove record
       // would delete the replacement and report restored while the original
       // entry is gone — so the capture refuses instead of lying.
-      if (own.recording) {
+      if (own.recording && !relock) {
         if (!existing.isFile()) {
           own.abandon('cannot capture a write over a non-regular file');
         } else {
@@ -1196,6 +1223,11 @@ export class GuardedFileSystem {
         );
         own.abandon('could not read the old content');
       }
+    }
+    if (relock) {
+      return withInodeLock(inodeKey, () =>
+        this.#writeValid(validPath, filePath, content, options, own, true),
+      );
     }
     if (existingStats) this.assertNoReadOnlyHardLink(validPath, existingStats);
     // An explicit mode (undo restoring a saved file) wins over the one a copy left.
@@ -1216,26 +1248,24 @@ export class GuardedFileSystem {
     if (inPlace) {
       // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
       signal?.throwIfAborted();
-      await runExclusive(inodeKey, async () => {
-        await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
-        await this.#assertFdWithinRoots(handle, filePath);
-        // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
-        signal?.throwIfAborted();
-        try {
-          // Before the bytes: a restored secret must not sit readable at the copy's mode.
-          if (options.mode !== undefined) await handle.chmod(options.mode);
-          // No signal on the write: once truncated, an abort would leave the file empty.
-          await handle.truncate(0);
-          await handle.writeFile(content);
-          await handle.sync();
-        } catch (error) {
-          // The old bytes are gone, so this exit reports.
-          own.abandon('the write failed part-way');
-          own.changed();
-          throw error;
-        }
-        recordWrite();
-      });
+      await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+      await this.#assertFdWithinRoots(handle, filePath);
+      // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
+      signal?.throwIfAborted();
+      try {
+        // Before the bytes: a restored secret must not sit readable at the copy's mode.
+        if (options.mode !== undefined) await handle.chmod(options.mode);
+        // No signal on the write: once truncated, an abort would leave the file empty.
+        await handle.truncate(0);
+        await handle.writeFile(content);
+        await handle.sync();
+      } catch (error) {
+        // The old bytes are gone, so this exit reports.
+        own.abandon('the write failed part-way');
+        own.changed();
+        throw error;
+      }
+      recordWrite();
     } else {
       try {
         signal?.throwIfAborted();
@@ -1299,6 +1329,7 @@ export class GuardedFileSystem {
     content: string,
     signal: AbortSignal | undefined,
     own: PathCapture,
+    relocked = false,
   ): Promise<void> {
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
@@ -1313,6 +1344,13 @@ export class GuardedFileSystem {
       this.assertNoReadOnlyHardLink(validPath, existing);
     } catch (error) {
       if (!isNotFoundErrno(error)) throw error;
+    }
+    // As in #writeValid: the capture, the separator probe and the append share one inode lock.
+    const inodeKey = existing && hardLinkKey(existing);
+    if (inodeKey !== undefined && !relocked) {
+      return withInodeLock(inodeKey, () =>
+        this.#appendValid(validPath, filePath, content, signal, own, true),
+      );
     }
     // Undo capture: the whole old file is saved, not its size — a multi-GB
     // append goes over the budget and reads as not undoable.

@@ -321,12 +321,10 @@ describe('Confirmation gaps', () => {
               ],
             },
           });
-          // The winning write replaces the file the other entry was approved against.
+          // The second entry names a file the first already writes: it is refused, not raced.
           const text = firstTextBlock(result).text ?? '';
-          assert.strictEqual(text.match(/replaced after the overwrite was approved/g)?.length, 1);
-          const content = await readFile(real, 'utf8');
-          assert.ok(['FIRST', 'SECOND'].includes(content), content);
-          if (delayFirstLock) assert.strictEqual(content, 'SECOND');
+          assert.strictEqual(text.match(/another entry in this batch/g)?.length, 1);
+          assert.strictEqual(await readFile(real, 'utf8'), 'FIRST');
         },
       );
     });
