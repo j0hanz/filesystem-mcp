@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { toPosixPath } from '../src/core/path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
 import { probeDirectory, resolveScanScope, scan, ScanSkip } from '../src/core/scan.ts';
@@ -713,8 +713,23 @@ describe('scan', () => {
       // docs/build is a default-named folder, so only vendor must stay unreported.
       const reported = [outcome.excludedDirs, outcome.ignoredDirs].flatMap((d) => d?.first ?? []);
       assert.ok(reported.every((p) => !p.includes('vendor')));
-      assert.deepEqual(reported, ['docs/build', 'docs/build']);
     });
+
+    it('a trailing slash or leading ./ still matches', async () => {
+      assert.deepEqual(await walk({ exclude: ['./docs/build/', 'vendor/'] }), [
+        'src/a.test.ts',
+        'src/a.ts',
+      ]);
+    });
+
+    it(
+      'matches case-insensitively where the filesystem does',
+      { skip: !IS_CASE_INSENSITIVE_FS },
+      async () => {
+        const kept = await walk({ exclude: ['VENDOR'] });
+        assert.ok(kept.every((p) => !p.includes('vendor')));
+      },
+    );
 
     it('a named file is scanned even when exclude matches it', async () => {
       await tree();

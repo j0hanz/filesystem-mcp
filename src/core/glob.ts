@@ -554,8 +554,16 @@ function createWalkFilter(
   onDirectory: ((absolutePath: string) => void) | undefined,
   onExcludedDir: ((posixRelativePath: string) => void) | undefined,
   onIgnoredDir: ((posixRelativePath: string) => void) | undefined,
-  exclude: readonly string[] = [],
+  excludeGlobs: readonly string[] = [],
 ): WalkFilter {
+  // Same spelling rules as `pattern`: a leading ./ or trailing / is no part of the match, and case folds where the disk does.
+  const exclude = excludeGlobs.map((glob) =>
+    foldPatternCase(
+      toPosixPath(glob)
+        .replace(/^(?:\.\/)+/u, '')
+        .replace(/\/+$/u, ''),
+    ),
+  );
   // An entry is out when it, or any folder above it, matches a pattern.
   const userExcluded = (posixRel: string): boolean => {
     if (exclude.length === 0) return false;
