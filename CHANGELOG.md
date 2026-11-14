@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP**: the server logs a warning when it listens beyond loopback with no root boundary, since a client holding the API key can then approve its own access grants.
+
 ### Changed
 
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).

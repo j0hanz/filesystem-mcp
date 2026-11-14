@@ -314,6 +314,10 @@ The server enforces these safety rules:
   approve its own access grants. On a shared machine set `FS_API_KEY`, and
   `--root-boundary` to limit what a grant can add. The server logs a warning
   when it starts without a key.
+- With an API key, the client that holds the key answers access-grant
+  prompts itself. When the server listens beyond `127.0.0.1`, set
+  `--root-boundary` so a leaked key cannot add folders outside it. The
+  server logs a warning when it starts without one.
 - Listening on any other address requires an API key of at least 16
   characters (`FS_API_KEY`). Clients send it as
   `Authorization: Bearer <key>`.
