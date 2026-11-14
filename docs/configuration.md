@@ -322,6 +322,9 @@ The server enforces these safety rules:
 - Browsers can only call it from `localhost` pages unless you set
   `FS_ALLOWED_ORIGINS`.
 - It rate-limits requests per client IP (`FS_RATE_LIMIT_RPM`).
+- Large request bodies are bounded in total: when the bodies being received
+  add up to more than 128 MiB (or one maximum-size body, if that is larger),
+  further large requests get `503` with `Retry-After` until one finishes.
 
 ```bash
 # Reachable from your network, with a key

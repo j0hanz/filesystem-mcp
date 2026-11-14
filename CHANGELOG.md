@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP**: the request bytes being received at once are bounded; further large requests get `503` until one finishes. Before, a few parallel maximum-size bodies could exhaust the server's memory.
+
 ### Changed
 
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).
