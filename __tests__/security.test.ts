@@ -217,6 +217,19 @@ describe('Security (P0)', () => {
       },
     );
 
+    it('TC-SEC-018: a root whose folder name ends in a dot still serves its files', async () => {
+      const dotted = join(root, 'proj.');
+      await writeTestFile(dotted, 'a.txt', 'x\n');
+      const dottedGuard = await makeGuard([dotted]);
+      assert.ok((await dottedGuard.validateExistingPath(join(dotted, 'a.txt'))).endsWith('a.txt'));
+      if (process.platform === 'win32') {
+        await assert.rejects(
+          dottedGuard.validateExistingPath(join(dotted, 'b.txt ')),
+          fsErrorMatcher(ErrorCode.INVALID_INPUT, /ends in a dot or a space/),
+        );
+      }
+    });
+
     it('TC-SEC-043: a Unicode case-fold look-alike sibling of the root is outside it', async (t) => {
       if (!IS_CASE_INSENSITIVE_FS) {
         t.skip('case folding applies on a case-insensitive filesystem');

@@ -711,8 +711,9 @@ export class PathGuard {
       // user to grant the working directory it resolves under is pointless.
       if (
         isUnresolvableDrivePath(requested) ||
-        (IS_WINDOWS && getReservedDeviceNameForPath(requested) !== undefined) ||
-        (IS_WINDOWS && hasTrailingDotOrSpace(requested))
+        (IS_WINDOWS &&
+          (getReservedDeviceNameForPath(requested) !== undefined ||
+            hasTrailingDotOrSpace(requested)))
       ) {
         continue;
       }
@@ -877,16 +878,24 @@ export class PathGuard {
         requestedPath,
       );
     }
-    if (IS_WINDOWS && hasTrailingDotOrSpace(requestedPath)) {
-      throw new FsError(
-        ErrorCode.INVALID_INPUT,
-        'A path component ends in a dot or a space. Windows programs strip such names or cannot open them. Remove the trailing character.',
-        requestedPath,
-      );
-    }
 
     const normalizedRequested = normalizePath(requestedPath);
     const allowedDirs = this.allowedDirectoriesState;
+
+    // Judge only the part below the root: a root folder named `proj ` exists
+    // and the user chose it.
+    if (IS_WINDOWS) {
+      const root = allowedDirs
+        .filter((dir) => isPathInsideDirectory(dir, normalizedRequested))
+        .reduce((a, b) => (b.length > a.length ? b : a), '');
+      if (hasTrailingDotOrSpace(normalizedRequested.slice(root.length))) {
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          'A path component ends in a dot or a space. Windows programs strip such names or cannot open them. Remove the trailing character.',
+          requestedPath,
+        );
+      }
+    }
 
     const accessDeniedHint =
       allowedDirs.length > 0
