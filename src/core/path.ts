@@ -12,6 +12,7 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getAllowCwdWalk, getAllowMissingRoots, getRootBoundary } from './config.ts';
@@ -49,7 +50,7 @@ import {
   unicodeMatchKeyExactCase,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
-import { ROOTS_TIMEOUT_MS } from './util.ts';
+import { ROOTS_HOLD_MS, ROOTS_TIMEOUT_MS } from './util.ts';
 
 // Allowed-directory assembly and the PathGuard that enforces it. The
 // sensitive-file denylist lives in sensitive.ts, and the character-level
@@ -387,11 +388,42 @@ export class PathGuard {
    */
   private readOnlyDirsState: string[] = [];
   private readOnlySpellings: string[] = [];
+  // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+  private rootsHold: Promise<void> = Promise.resolve();
 
   private readonly options: ServerOptions | undefined;
 
   constructor(options?: ServerOptions) {
     this.options = options;
+  }
+
+  /**
+   * Hold `rootsSettled()` until `pending` settles or `timeoutMs` elapses.
+   * Never rejects: a failed or silent seed releases waiting callers so they
+   * run against whatever roots the guard already holds.
+   * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+   */
+  holdUntil(pending: Promise<unknown>, timeoutMs: number = ROOTS_HOLD_MS): void {
+    const settled = Promise.race([
+      pending.then(
+        () => undefined,
+        () => undefined,
+      ),
+      sleep(timeoutMs, undefined, { ref: false }),
+    ]);
+    this.rootsHold = this.rootsHold.then(() => settled);
+  }
+
+  /**
+   * Resolves once every registered roots-seed hold has settled or timed out.
+   * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+   */
+  async rootsSettled(): Promise<void> {
+    for (;;) {
+      const hold = this.rootsHold;
+      await hold;
+      if (this.rootsHold === hold) return;
+    }
   }
 
   /**

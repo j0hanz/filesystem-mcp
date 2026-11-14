@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { isUnsafeCwdPath } from '../src/core/path-discovery.ts';
@@ -382,6 +383,53 @@ describe('PathGuard grant round-trip', () => {
       await guard.recomputeAllowedDirectories();
       assert.strictEqual(await guard.applyGrant(missing), true);
       assert.ok(containsPath(guard.getRoots(), missing), 'the granted directory is a root');
+    });
+  });
+
+  describe('roots hold', () => {
+    const settledWithin = async (p: Promise<void>, ms: number): Promise<boolean> =>
+      Promise.race([p.then(() => true), sleep(ms).then(() => false)]);
+
+    it('rootsSettled resolves at once with no hold', async () => {
+      const guard = await makeGuard([root]);
+      assert.strictEqual(await settledWithin(guard.rootsSettled(), 20), true);
+    });
+
+    it('rootsSettled waits for a hold, then resolves', async () => {
+      const guard = await makeGuard([root]);
+      let release!: () => void;
+      guard.holdUntil(new Promise<void>((resolve) => (release = resolve)));
+      const settled = guard.rootsSettled();
+      assert.strictEqual(await settledWithin(settled, 30), false);
+      release();
+      assert.strictEqual(await settledWithin(settled, 200), true);
+    });
+
+    it('a rejected hold releases without rejecting', async () => {
+      const guard = await makeGuard([root]);
+      guard.holdUntil(Promise.reject(new Error('roots/list failed')));
+      await guard.rootsSettled();
+    });
+
+    it('a hold that never settles releases after its timeout', async () => {
+      const guard = await makeGuard([root]);
+      guard.holdUntil(new Promise<void>(() => {}), 40);
+      const settled = guard.rootsSettled();
+      assert.strictEqual(await settledWithin(settled, 10), false);
+      assert.strictEqual(await settledWithin(settled, 500), true);
+    });
+
+    it('a second hold registered while the first is pending is waited for too', async () => {
+      const guard = await makeGuard([root]);
+      let releaseFirst!: () => void;
+      let releaseSecond!: () => void;
+      guard.holdUntil(new Promise<void>((resolve) => (releaseFirst = resolve)));
+      const settled = guard.rootsSettled();
+      guard.holdUntil(new Promise<void>((resolve) => (releaseSecond = resolve)));
+      releaseFirst();
+      assert.strictEqual(await settledWithin(settled, 30), false);
+      releaseSecond();
+      assert.strictEqual(await settledWithin(settled, 200), true);
     });
   });
 });

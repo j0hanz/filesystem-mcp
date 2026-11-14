@@ -1,4 +1,5 @@
-import type { McpSubscription } from '@modelcontextprotocol/client';
+import { Client, type McpSubscription } from '@modelcontextprotocol/client';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
@@ -8,6 +9,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { isNodeError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
@@ -188,6 +190,40 @@ describe('Stdio Transport (real subprocess)', () => {
       (second._meta as { entries?: { name: string }[] }).entries?.map((entry) => entry.name),
       ['bravo.txt'],
     );
+  });
+
+  it('a legacy client can call a tool on its declared root straight after connecting', async () => {
+    const dir = await createTestRoot();
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+    const entryPath = join(repoRoot, 'src', 'index.ts');
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPath],
+      cwd: repoRoot,
+      env: getDefaultEnvironment(),
+    });
+    const client = new Client(
+      { name: 'stdio-legacy-roots-test', version: '1.0.0' },
+      { capabilities: { roots: {} } },
+    );
+    try {
+      await writeFile(join(dir, 'a.txt'), 'hello');
+      client.setRequestHandler('roots/list', async () => {
+        await setTimeout(150); // slower than the tool call that follows connect()
+        return { roots: [{ uri: pathToFileURL(dir).href, name: 'workspace' }] };
+      });
+      await client.connect(transport);
+      assert.strictEqual(client.getProtocolEra(), 'legacy');
+      const result = await client.callTool({
+        name: 'stat',
+        arguments: { path: join(dir, 'a.txt') },
+      });
+      assert.notStrictEqual(result.isError, true);
+    } finally {
+      await client.close();
+      await transport.close();
+      await cleanupTestRoot(dir);
+    }
   });
 });
 
