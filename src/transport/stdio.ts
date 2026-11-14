@@ -183,12 +183,13 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       // Fires when the client's `notifications/initialized` lands. Safe to own:
       // the SDK's only touchpoint is its own initialized handler reading it.
       c.mcp.server.oninitialized = () => {
-        void seedRootsFromClient(c);
+        c.pathGuard.holdUntil(seedRootsFromClient(c));
       };
-      // Re-list and grant anything new. Grants are session-additive (R8): a
-      // root the client withdrew is not revoked mid-session.
+      // Re-list and grant anything new; tool calls wait for the re-list. Grants
+      // are session-additive (R8): a root the client withdrew is not revoked
+      // mid-session.
       c.mcp.server.setNotificationHandler('notifications/roots/list_changed', () => {
-        void seedRootsFromClient(c);
+        c.pathGuard.holdUntil(seedRootsFromClient(c));
       });
     }
     return c.mcp;

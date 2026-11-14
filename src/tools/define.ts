@@ -500,6 +500,8 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
 
   async execute(): Promise<CallToolResult | InputRequiredResult> {
     try {
+      // Hold legacy calls until an in-flight client roots seed settles so initial path checks see declared roots. sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+      await this.toolCtx.fs.pathGuard.rootsSettled();
       // Access-grant pre-check before any filesystem touch (R7/R8/R9). A
       // grant input_required short-circuits here (progress paused, not
       // finished); an R9 mismatch throws, which this catch surfaces as an

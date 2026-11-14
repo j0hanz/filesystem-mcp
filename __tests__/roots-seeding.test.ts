@@ -6,6 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import type { FilesystemServerContext } from '../src/server.ts';
@@ -67,5 +68,28 @@ describe('Client roots seeding (legacy era)', () => {
     }
     assert.equal(grants(), before, 'a repeated grant adds no entry');
     assert.equal(serverCtx.pathGuard.getAllowedDirectories().length, 1);
+  });
+
+  it('TC-ROOTS-003: a tool call made during a seed waits for it', async () => {
+    const late = await createTestRoot();
+    try {
+      await writeFile(join(late, 'b.txt'), 'late');
+      let release!: () => void;
+      serverCtx.pathGuard.holdUntil(new Promise<void>((resolve) => (release = resolve)));
+
+      let answered = false;
+      const call = client
+        .callTool({ name: 'stat', arguments: { path: join(late, 'b.txt') } })
+        .finally(() => (answered = true));
+      await sleep(50);
+      assert.strictEqual(answered, false, 'the call must wait for the hold');
+
+      assert.strictEqual(await serverCtx.pathGuard.applyGrant(late, 'workspace'), true);
+      release();
+      const result = await call;
+      assert.notStrictEqual(result.isError, true);
+    } finally {
+      await cleanupTestRoot(late);
+    }
   });
 });
