@@ -418,8 +418,12 @@ export class PathGuard {
    * Resolves once every registered roots-seed hold has settled or timed out.
    * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
    */
-  rootsSettled(): Promise<void> {
-    return this.rootsHold;
+  async rootsSettled(): Promise<void> {
+    for (;;) {
+      const hold = this.rootsHold;
+      await hold;
+      if (this.rootsHold === hold) return;
+    }
   }
 
   /**
@@ -545,8 +549,12 @@ export class PathGuard {
    * this class.
    */
   async entryVerdict(entryPath: string): Promise<EntryVerdict> {
-    if (this.isSensitive(entryPath) || this.isSensitive(normalizePath(entryPath))) {
-      return 'sensitive';
+    if (!this.allowedDirectoriesState) {
+      throw new FsError(
+        ErrorCode.UNKNOWN,
+        'PathGuard not initialized. Call initialize() first.',
+        entryPath,
+      );
     }
     try {
       await this.validateExistingPathDetailed(entryPath);
