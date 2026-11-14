@@ -408,16 +408,6 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(block.text?.includes('move me'));
   });
 
-  // idempotentHint is gone from the declarations (production never read it); pin
-  // that it stays off the wire too — it costs every client tokens without
-  // changing what any tool does.
-  it('TC-FUNC-058b: list does not publish idempotentHint on the wire', async () => {
-    const { tools } = await harness.client.listTools();
-    const listTool = tools.find((t) => t.name === 'list');
-    assert.ok(listTool, 'list must be registered');
-    assert.strictEqual(listTool.annotations?.idempotentHint, undefined);
-  });
-
   // A grant widens the allowed roots, and no resource list reads them: the
   // instructions resource has a fixed URI, the result template lists the
   // ResourceStore, and the file template lists nothing. Notifying here only
@@ -1000,9 +990,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         tool.annotations,
         {
           readOnlyHint,
+          idempotentHint: readOnlyHint,
           openWorldHint: false,
           ...(readOnlyHint ? {} : { destructiveHint: true }),
         },
+        tool.name,
+      );
+    }
+  });
+
+  it('TOOL-SURFACE-005: idempotentHint is true exactly on the read-only tools', async () => {
+    const { tools } = await harness.client.listTools();
+    for (const tool of tools) {
+      assert.equal(
+        tool.annotations?.idempotentHint,
+        tool.annotations?.readOnlyHint === true,
         tool.name,
       );
     }
@@ -1088,8 +1090,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // search_text and replace_text gain exclude; measured 31652 / 15646.
     // Raised 2026-11-15 to 31750 full and 15750 read-only: stat names
     // hardLinks; measured 31715 / 15709.
-    const BUDGET_CHARS = 31_750;
-    const BUDGET_CHARS_READ_ONLY = 15_750;
+    // Raised 2026-11-15 to 32050 full and 15900 read-only: every tool publishes
+    // idempotentHint; measured 32030 / ~15863.
+    const BUDGET_CHARS = 32_050;
+    const BUDGET_CHARS_READ_ONLY = 15_900;
 
     const full = await createTestClientPair([tmpDir]);
     try {
