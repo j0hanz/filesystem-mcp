@@ -48,8 +48,7 @@ export const Problem = {
   /** `rows` lets an operation read some errnos its own way (e.g. `DELETE_ERRNOS`). */
   fromUnknown(error: unknown, defaultCode: ErrorCode, path?: string, rows?: ErrnoRows): Problem {
     const problem = classify(error, rows);
-    const shouldOverride =
-      problem.code === ErrorCode.UNKNOWN || problem.code === ErrorCode.IO_ERROR;
+    const shouldOverride = problem.code === ErrorCode.UNKNOWN;
     const code = shouldOverride ? defaultCode : problem.code;
     const suggestion =
       (shouldOverride ? DEFAULT_SUGGESTIONS[code] : undefined) ??
@@ -84,6 +83,8 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
     'Text tools do not accept binary files. read returns the whole file with binary: true.',
   [ErrorCode.PERMISSION_DENIED]: 'Check OS file permissions.',
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',
+  [ErrorCode.IO_ERROR]:
+    'The operating system refused the operation (file busy, disk or handle limit). Retry; if it repeats, tell the person.',
 };
 
 const ERRNO_MAP: Readonly<Record<string, ErrorCode>> = {

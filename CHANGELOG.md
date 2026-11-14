@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Errors**: an operating-system failure such as a busy file (`EBUSY`), a handle limit or a disk error now reports `IO_ERROR` in every tool; before, `read` reported it as `NOT_FILE`, `stat` as `NOT_FOUND` and `list` as `NOT_DIRECTORY`, with a hint for the wrong problem.
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).
 - **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed. A line 1 that matches only once its U+FEFF is removed must also match at line 1: one that would apply further down is now refused, and a typed U+FEFF on a line hunk 1 lands on below line 1 is kept.
 
