@@ -1,13 +1,7 @@
-node_modules
-dist
-.git
-.github
-__tests__
-docs
-*.md
-!README.md
-Dockerfile
-.dockerignore
-eslint.config.mjs
-knip.json
-.prettierrc*
+# Allowlist: everything is excluded, then the paths the Dockerfile copies.
+# A new COPY source must be added here, or the build fails loudly.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
