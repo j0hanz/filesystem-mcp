@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { link, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -169,6 +169,16 @@ describe('stat body', () => {
 
     const allMissing = await stat({ paths: [missing] }, { guard });
     assert.strictEqual(allMissing.isError, true, 'every path failing fails the call');
+  });
+
+  it('reports hardLinks only for a file with more than one name', async () => {
+    const one = join(root, 'single.txt');
+    const two = join(root, 'linked.txt');
+    await writeFile(one, 'x');
+    await writeFile(two, 'y');
+    await link(two, join(root, 'linked-alias.txt'));
+    assert.equal((await statOne(two, { guard })).hardLinks, 2);
+    assert.equal('hardLinks' in (await statOne(one, { guard })), false);
   });
 
   // A folder has no size, so stat counts its direct children instead. Secret

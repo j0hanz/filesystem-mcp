@@ -20,6 +20,7 @@ interface FileInfo {
   created: string;
   modified: string;
   accessed: string;
+  hardLinks?: number;
   permissions?: string;
   readOnly?: boolean;
   isHidden: boolean;
@@ -74,6 +75,7 @@ function buildFileInfoResult(
     created: stats.birthtime.toISOString(),
     modified: stats.mtime.toISOString(),
     accessed: stats.atime.toISOString(),
+    ...(stats.isFile() && stats.nlink > 1 ? { hardLinks: stats.nlink } : {}),
     ...accessFields(stats.mode),
     isHidden: name.startsWith('.'),
     ...(mimeType !== undefined ? { mimeType } : {}),
@@ -176,7 +178,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     "Symlinks report their own metadata, not the target's. " +
     '`path` gives one result; `paths` gives one per path, in input order. ' +
     'Returns per-path values or errors ({ code, message }), plus summary { total, succeeded, failed }. ' +
-    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), mimeType, symlinkTarget.',
+    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), hardLinks (a file with other names; a write changes them all), mimeType, symlinkTarget.',
   input: StatInputSchema,
   readOnlyHint: true,
   deadline: true,
