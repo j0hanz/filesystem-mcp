@@ -13,7 +13,6 @@ import {
   open as fsOpen,
   opendir as fsOpendir,
   readdir as fsReaddir,
-  readFile as fsReadFile,
   readlink as fsReadlink,
   rename as fsRename,
   rm as fsRm,
@@ -1775,14 +1774,24 @@ export class GuardedFileSystem {
 
     if (bytes) {
       if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
-      let content: Buffer;
+      // The stat above is older than this handle: a file that grew since must not be read whole.
+      const buffer = Buffer.allocUnsafe(maxSize + 1);
+      let filled = 0;
       try {
-        content = await fsReadFile(handle, signal ? { signal } : undefined);
+        while (filled < buffer.length) {
+          signal?.throwIfAborted();
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          signal?.throwIfAborted();
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
       } catch (error) {
         // Node wraps even a TimeoutError signal reason in AbortError.
         if (error instanceof Error && error.name === 'AbortError') signal?.throwIfAborted();
         throw error;
       }
+      if (filled > maxSize) throw createTooLargeError(filled, maxSize, filePath);
+      const content = buffer.subarray(0, filled);
       return {
         type: 'bytes',
         content,

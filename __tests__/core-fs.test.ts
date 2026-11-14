@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { constants } from 'node:fs';
+import { appendFileSync, constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
@@ -112,19 +112,27 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeTestFile(tmpDir, 'raw-native-cancel.txt', 'unchanged');
       const controller = new AbortController();
       const reason = new DOMException('Cancel at native read', name);
-      const originalRead = fsPromises.readFile;
-      let nativeSignal: AbortSignal | undefined;
-      t.mock.method(
-        fsPromises,
-        'readFile',
-        async (...args: Parameters<typeof fsPromises.readFile>) => {
-          const options = args[1];
-          nativeSignal =
-            typeof options === 'object' && options !== null ? options.signal : undefined;
-          controller.abort(reason);
-          return originalRead(...args);
-        },
-      );
+      const originalOpen = fsPromises.open;
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await originalOpen(...args);
+        const originalRead = handle.read.bind(handle);
+        t.mock.method(
+          handle,
+          'read',
+          (
+            buffer: NodeJS.ArrayBufferView,
+            offset?: number | null,
+            length?: number | null,
+            position?: number | null,
+          ) => {
+            if (position === null) {
+              controller.abort(reason);
+            }
+            return originalRead(buffer, offset, length, position);
+          },
+        );
+        return handle;
+      });
       syncBuiltinESMExports();
       try {
         await assert.rejects(
@@ -135,7 +143,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
             return true;
           },
         );
-        assert.strictEqual(nativeSignal, controller.signal);
       } finally {
         t.mock.restoreAll();
         syncBuiltinESMExports();
@@ -147,9 +154,27 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     const filePath = await writeTestFile(tmpDir, 'raw-native-failure.txt', 'unchanged');
     const controller = new AbortController();
     const failure = Object.assign(new Error('Native read failed'), { code: 'EIO' });
-    t.mock.method(fsPromises, 'readFile', () => {
-      controller.abort(new DOMException('Deadline elapsed', 'TimeoutError'));
-      return Promise.reject(failure);
+    const originalOpen = fsPromises.open;
+    t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+      const handle = await originalOpen(...args);
+      const originalRead = handle.read.bind(handle);
+      t.mock.method(
+        handle,
+        'read',
+        (
+          buffer: NodeJS.ArrayBufferView,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ) => {
+          if (position === null) {
+            controller.abort(new DOMException('Deadline elapsed', 'TimeoutError'));
+            return Promise.reject(failure);
+          }
+          return originalRead(buffer, offset, length, position);
+        },
+      );
+      return handle;
     });
     syncBuiltinESMExports();
     try {
@@ -2903,6 +2928,20 @@ describe('GuardedFileSystem.read binary policy', () => {
       (error) => error === stop,
     );
     assert.deepEqual(seen, [['image', 'image/png', PNG.length, normalizePath(file)]]);
+  });
+
+  it('a binary read of a file that grows past maxSize is refused', async () => {
+    const filePath = await writeTestFile(root, 'grow.bin', '0123456789');
+    await assert.rejects(
+      fs.read(filePath, {
+        binary: 'raw',
+        maxSize: 16,
+        beforeBody: () => {
+          appendFileSync(filePath, Buffer.alloc(64, 0x61));
+        },
+      }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE),
+    );
   });
 
   it('opens the file once per read', async (t) => {
