@@ -314,6 +314,32 @@ describe('replace_text body', () => {
     assert.strictEqual(await readFile(b, 'utf-8'), 'xx\n');
   });
 
+  it('transforms two different hard-linked files once each', async (t) => {
+    const a = await writeTestFile(root, 'hardlink_two/a.txt', 'x\n');
+    const b = join(dirname(a), 'b.txt');
+    const c = await writeTestFile(root, 'hardlink_two/c.txt', 'x\n');
+    const d = join(dirname(a), 'd.txt');
+    try {
+      await link(a, b);
+      await link(c, d);
+    } catch (error) {
+      t.skip(`hard links not supported here: ${String(error)}`);
+      return;
+    }
+    const result = await replace({
+      path: dirname(a),
+      searchPattern: 'x',
+      replacement: 'xx',
+      caseSensitive: true,
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(result.structured.totalMatches, 2);
+    assert.strictEqual(await readFile(a, 'utf-8'), 'xx\n');
+    assert.strictEqual(await readFile(b, 'utf-8'), 'xx\n');
+    assert.strictEqual(await readFile(c, 'utf-8'), 'xx\n');
+    assert.strictEqual(await readFile(d, 'utf-8'), 'xx\n');
+  });
+
   it('converts LF literal text to CRLF in a CRLF file', async () => {
     const call = async (args: ReplaceArgs) => {
       const result = await replace(args);
