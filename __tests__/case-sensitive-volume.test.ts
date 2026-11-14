@@ -57,45 +57,69 @@ async function makeCaseSensitiveDir(): Promise<string | undefined> {
 }
 
 describe('case-sensitive volume containment', () => {
-  it(
-    'a sibling that differs from the root only in case is outside the root',
-    { todo: 'plan 115: remove when the guard is per-volume' },
-    async (t) => {
-      const base = await makeCaseSensitiveDir();
-      if (base === undefined) return t.skip('no case-sensitive directory available here');
+  it('a sibling that differs from the root only in case is outside the root', async (t) => {
+    const base = await makeCaseSensitiveDir();
+    if (base === undefined) return t.skip('no case-sensitive directory available here');
 
-      try {
-        // base/Proj is the allowed root; base/proj is a different folder.
-        // 1. mkdir both; write base/proj/secret.txt = 'OUTSIDE'.
-        const allowedRoot = join(base, 'Proj');
-        const siblingDir = join(base, 'proj');
-        await mkdir(allowedRoot);
-        await mkdir(siblingDir);
+    try {
+      // base/Proj is the allowed root; base/proj is a different folder.
+      // 1. mkdir both; write base/proj/secret.txt = 'OUTSIDE'.
+      const allowedRoot = join(base, 'Proj');
+      const siblingDir = join(base, 'proj');
+      await mkdir(allowedRoot);
+      await mkdir(siblingDir);
 
-        const secretFile = join(siblingDir, 'secret.txt');
-        await writeFile(secretFile, 'OUTSIDE');
+      const secretFile = join(siblingDir, 'secret.txt');
+      await writeFile(secretFile, 'OUTSIDE');
 
-        // 2. Build the guard and GuardedFileSystem with base/Proj as the only root
-        //    (same construction as __tests__/security.test.ts).
-        const guard = await makeGuard([allowedRoot]);
-        const fs = new GuardedFileSystem(guard);
+      // 2. Build the guard and GuardedFileSystem with base/Proj as the only root
+      //    (same construction as __tests__/security.test.ts).
+      const guard = await makeGuard([allowedRoot]);
+      const fs = new GuardedFileSystem(guard);
 
-        // 3. Assert each of these rejects with ACCESS_DENIED:
-        //    fs.read(join(base, 'proj', 'secret.txt'))
-        //    fs.writeFile(join(base, 'proj', 'new.txt'), 'x')
-        const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED);
-        await assert.rejects(fs.read(secretFile), denied);
-        await assert.rejects(fs.writeFile(join(siblingDir, 'new.txt'), 'x'), denied);
+      // 3. Assert each of these rejects with ACCESS_DENIED:
+      //    fs.read(join(base, 'proj', 'secret.txt'))
+      //    fs.writeFile(join(base, 'proj', 'new.txt'), 'x')
+      const denied = fsErrorMatcher(ErrorCode.ACCESS_DENIED);
+      await assert.rejects(fs.read(secretFile), denied);
+      await assert.rejects(fs.writeFile(join(siblingDir, 'new.txt'), 'x'), denied);
 
-        // 4. Assert base/proj/new.txt does not exist afterwards.
-        assert.strictEqual(
-          existsSync(join(siblingDir, 'new.txt')),
-          false,
-          'base/proj/new.txt does not exist afterwards',
-        );
-      } finally {
-        await cleanupTestRoot(base);
-      }
-    },
-  );
+      // 4. Assert base/proj/new.txt does not exist afterwards.
+      assert.strictEqual(
+        existsSync(join(siblingDir, 'new.txt')),
+        false,
+        'base/proj/new.txt does not exist afterwards',
+      );
+    } finally {
+      await cleanupTestRoot(base);
+    }
+  });
+
+  it('entries differing only in ASCII case are distinct in a case-sensitive directory', async (t) => {
+    const base = await makeCaseSensitiveDir();
+    if (base === undefined) return t.skip('no case-sensitive directory available here');
+
+    try {
+      const allowedRoot = join(base, 'Proj');
+      await mkdir(allowedRoot);
+
+      const fileUpper = join(allowedRoot, 'Entry.txt');
+      const fileLower = join(allowedRoot, 'entry.txt');
+      await writeFile(fileUpper, 'UPPER');
+      await writeFile(fileLower, 'LOWER');
+
+      const guard = await makeGuard([allowedRoot]);
+      const fs = new GuardedFileSystem(guard);
+
+      // Both distinct entries are readable by their exact names.
+      assert.strictEqual((await fs.read(fileUpper)).content, 'UPPER');
+      assert.strictEqual((await fs.read(fileLower)).content, 'LOWER');
+
+      // A missing casing does not fold onto an existing entry.
+      const notFound = fsErrorMatcher(ErrorCode.NOT_FOUND);
+      await assert.rejects(fs.read(join(allowedRoot, 'ENTRY.TXT')), notFound);
+    } finally {
+      await cleanupTestRoot(base);
+    }
+  });
 });

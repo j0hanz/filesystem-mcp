@@ -1,4 +1,4 @@
-import type { Stats } from 'node:fs';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
@@ -35,7 +35,7 @@ import {
   IS_CASE_INSENSITIVE_FS,
   IS_WINDOWS,
   isPathInsideDirectory,
-  isPathWithinDirectories,
+  isPathSeparator,
   isSamePath,
   isUncOrDevicePath,
   isUnresolvableDrivePath,
@@ -46,6 +46,7 @@ import {
   normalizePath,
   toPosixRelative,
   unicodeMatchKey,
+  unicodeMatchKeyExactCase,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
 import { ROOTS_TIMEOUT_MS } from './util.ts';
@@ -73,9 +74,109 @@ async function isCaseAliasOfEntry(left: string, right: string): Promise<boolean>
     lstat(left).catch(() => undefined),
     lstat(right).catch(() => undefined),
   ]);
-  // A zero inode says nothing about identity (some filesystems report none): keep the old answer.
-  if (!a || !b || a.ino === 0 || b.ino === 0) return false;
-  return a.dev === b.dev && a.ino === b.ino;
+  if (!a || !b) return false;
+  if (a.ino !== 0 && b.ino !== 0) {
+    return a.dev === b.dev && a.ino === b.ino;
+  }
+  try {
+    const [realLeft, realRight] = await Promise.all([realpath(left), realpath(right)]);
+    return realLeft === realRight;
+  } catch {
+    return false;
+  }
+}
+
+function isCaseAliasOfEntrySync(left: string, right: string): boolean {
+  if (!IS_CASE_INSENSITIVE_FS || left.toLowerCase() !== right.toLowerCase()) return false;
+  let a: Stats | undefined;
+  let b: Stats | undefined;
+  try {
+    a = lstatSync(left);
+    b = lstatSync(right);
+  } catch {
+    return false;
+  }
+  if (a.ino !== 0 && b.ino !== 0) {
+    return a.dev === b.dev && a.ino === b.ino;
+  }
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+async function isCandidateInsideRoot(root: string, candidate: string): Promise<boolean> {
+  if (!isPathInsideDirectory(root, candidate)) return false;
+  if (
+    candidate.startsWith(root) &&
+    (candidate.length === root.length || isPathSeparator(candidate.charCodeAt(root.length)))
+  ) {
+    return true;
+  }
+  if (!IS_CASE_INSENSITIVE_FS) return false;
+  const prefix = candidate.slice(0, root.length);
+  return isCaseAliasOfEntry(root, prefix);
+}
+
+function isCandidateInsideRootSync(root: string, candidate: string): boolean {
+  if (!isPathInsideDirectory(root, candidate)) return false;
+  if (
+    candidate.startsWith(root) &&
+    (candidate.length === root.length || isPathSeparator(candidate.charCodeAt(root.length)))
+  ) {
+    return true;
+  }
+  if (!IS_CASE_INSENSITIVE_FS) return false;
+  const prefix = candidate.slice(0, root.length);
+  return isCaseAliasOfEntrySync(root, prefix);
+}
+
+async function isPathWithinAllowedDirectories(
+  candidate: string,
+  allowedDirs: readonly string[],
+): Promise<boolean> {
+  for (const dir of allowedDirs) {
+    if (await isCandidateInsideRoot(dir, candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPathWithinAllowedDirectoriesSync(
+  candidate: string,
+  allowedDirs: readonly string[],
+): boolean {
+  for (const dir of allowedDirs) {
+    if (isCandidateInsideRootSync(dir, candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function isDirectoryCaseSensitive(
+  realDir: string,
+  entries: readonly string[],
+): Promise<boolean> {
+  if (!IS_CASE_INSENSITIVE_FS) return true;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const lower = entry.toLowerCase();
+    if (seen.has(lower)) return true;
+    seen.add(lower);
+  }
+  for (const entry of entries) {
+    const flipped = entry.replace(/[a-zA-Z]/, (c) =>
+      c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase(),
+    );
+    if (flipped !== entry) {
+      const isAlias = await isCaseAliasOfEntry(join(realDir, entry), join(realDir, flipped));
+      return !isAlias;
+    }
+  }
+  return false;
 }
 
 /**
@@ -169,9 +270,10 @@ async function partitionRootsWithin(
   const dropped: string[] = [];
   for (const root of roots.map(normalizePath)) {
     const real = await projectRealPath(root, signal);
-    (real !== undefined && isPathWithinDirectories(real, normalizedBounds) ? kept : dropped).push(
-      root,
-    );
+    (real !== undefined && (await isPathWithinAllowedDirectories(real, normalizedBounds))
+      ? kept
+      : dropped
+    ).push(root);
   }
   return { kept, dropped };
 }
@@ -209,7 +311,7 @@ async function resolveRootSpellings(
   const reals = await Promise.all(roots.map((dir) => resolveRealPath(dir, signal)));
   return roots.map((root, i) => {
     const real = reals[i];
-    return { root, spellings: real && !isSamePath(real, root) ? [root, real] : [root] };
+    return { root, spellings: real && real !== root ? [root, real] : [root] };
   });
 }
 
@@ -337,7 +439,7 @@ export class PathGuard {
     let best: string | undefined;
     for (const dir of this.getAllowedDirectories()) {
       if (
-        isPathInsideDirectory(dir, normalized) &&
+        isCandidateInsideRootSync(dir, normalized) &&
         (best === undefined || dir.length > best.length)
       ) {
         best = dir;
@@ -370,7 +472,7 @@ export class PathGuard {
    * nothing about reads, which are unaffected.
    */
   isReadOnlyPath(path: string): boolean {
-    return isPathWithinDirectories(normalizePath(path), this.readOnlySpellings);
+    return isPathWithinAllowedDirectoriesSync(normalizePath(path), this.readOnlySpellings);
   }
 
   isSensitive(filePath: string): boolean {
@@ -424,7 +526,7 @@ export class PathGuard {
         const normalized = normalizePath(entryPath);
         if (
           isUncOrDevicePath(normalized) &&
-          !isPathWithinDirectories(normalized, this.allowedDirectoriesState)
+          !(await isPathWithinAllowedDirectories(normalized, this.allowedDirectoriesState))
         ) {
           return 'inaccessible';
         }
@@ -511,7 +613,7 @@ export class PathGuard {
         // holds no link below its root, so only an aliased root changes the answer,
         // and only for a target that climbs out of that root.
         const root = this.allowedRootContaining(current);
-        if (!isAbsolute(raw) && root !== undefined && !isPathInsideDirectory(root, target)) {
+        if (!isAbsolute(raw) && root !== undefined && !isCandidateInsideRootSync(root, target)) {
           target = normalizePath(resolve(await realpath(current), raw));
         }
       } catch {
@@ -519,7 +621,7 @@ export class PathGuard {
       }
       if (
         isUncOrDevicePath(target) &&
-        !isPathWithinDirectories(target, this.allowedDirectoriesState ?? [])
+        !(await isPathWithinAllowedDirectories(target, this.allowedDirectoriesState ?? []))
       ) {
         return true;
       }
@@ -576,7 +678,7 @@ export class PathGuard {
         continue;
       }
       const normalized = normalizePath(requested);
-      if (isPathWithinDirectories(normalized, allowedDirs)) {
+      if (await isPathWithinAllowedDirectories(normalized, allowedDirs)) {
         continue;
       }
       const targetDir = await this.grantTargetFor(requested, normalized);
@@ -666,7 +768,7 @@ export class PathGuard {
       // Verify rather than assume: a boundary that no longer covers this
       // directory would drop it in the recompute above, and reporting success
       // for a grant that did not land is exactly the failure this replaces.
-      if (isPathWithinDirectories(dir, this.getAllowedDirectories())) {
+      if (await isPathWithinAllowedDirectories(dir, this.getAllowedDirectories())) {
         return true;
       }
       rollBack();
@@ -745,7 +847,7 @@ export class PathGuard {
         ? `Allowed: ${allowedDirs.join(', ')}`
         : 'No allowed directories configured.';
 
-    if (!isPathWithinDirectories(normalizedRequested, allowedDirs)) {
+    if (!(await isPathWithinAllowedDirectories(normalizedRequested, allowedDirs))) {
       // Out of root. The access-grant `input_required` round-trip is driven by
       // the executor's pre-check (precheckAccess) BEFORE the operation runs, so
       // by the time validation reaches here any grantable out-of-root path has
@@ -799,8 +901,8 @@ export class PathGuard {
           normalizedRequested,
         );
         if (
-          !isPathWithinDirectories(realAncestor, allowedDirs) ||
-          !isPathWithinDirectories(resolvedTarget, allowedDirs)
+          !(await isPathWithinAllowedDirectories(realAncestor, allowedDirs)) ||
+          !(await isPathWithinAllowedDirectories(resolvedTarget, allowedDirs))
         ) {
           this.throwAccessDenied(requestedPath, accessDeniedHint);
         }
@@ -871,7 +973,7 @@ export class PathGuard {
 
     const normalizedReal = normalizePath(realPath);
 
-    if (!isPathWithinDirectories(normalizedReal, allowedDirs)) {
+    if (!(await isPathWithinAllowedDirectories(normalizedReal, allowedDirs))) {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
@@ -957,7 +1059,7 @@ export class PathGuard {
         requested.trim().length === 0 ||
         isUnresolvableDrivePath(requested) ||
         isAbsolute(expandHome(requested)) ||
-        isPathWithinDirectories(normalizePath(requested), bases.expanded)
+        (await isPathWithinAllowedDirectories(normalizePath(requested), bases.expanded))
       ) {
         continue;
       }
@@ -1021,7 +1123,7 @@ export class PathGuard {
     for (const entry of bases?.entries ?? []) {
       for (const spelling of entry.spellings) {
         if (
-          isPathInsideDirectory(spelling, walked) &&
+          isCandidateInsideRootSync(spelling, walked) &&
           (found === undefined || spelling.length > found.spelling.length)
         ) {
           found = { root: entry.root, spelling };
@@ -1057,7 +1159,7 @@ export class PathGuard {
         // Mirrors resolveRelativePaths: a spelling that lands inside a root
         // from the working directory resolves there, so it must land here.
         const fromCwd = normalizePath(rel);
-        if (isPathWithinDirectories(fromCwd, allowed)) {
+        if (isPathWithinAllowedDirectoriesSync(fromCwd, allowed)) {
           return isSamePath(fromCwd, absolutePath) ? rel : absolutePath;
         }
         return severalRoots ? absolutePath : rel;
@@ -1071,7 +1173,9 @@ export class PathGuard {
     // previous IS_WINDOWS-only fold left darwin doing exact-case compares here
     // while isPathInsideDirectory folded — a root matched case-insensitively
     // everywhere else was missed.
-    return this.getAllowedDirectories().some((dir) => isSamePath(dir, normalizedPath));
+    return this.getAllowedDirectories().some(
+      (dir) => dir === normalizedPath || isCaseAliasOfEntrySync(dir, normalizedPath),
+    );
   }
 
   /**
@@ -1087,7 +1191,7 @@ export class PathGuard {
   assertWritable(path: string): void {
     const normalized = normalizePath(path);
     if (!this.isReadOnlyPath(normalized)) return;
-    const ro = this.readOnlySpellings.find((dir) => isPathInsideDirectory(dir, normalized));
+    const ro = this.readOnlySpellings.find((dir) => isCandidateInsideRootSync(dir, normalized));
     throw new FsError(
       ErrorCode.ACCESS_DENIED,
       `Read-only root: ${path} is inside ${ro ?? 'a read-only root'}. Writes, moves, and deletes are refused there. Set by --read-only-root, FS_READ_ONLY_DIRS, or the Read-only folders setting in the Claude Desktop extension.`,
@@ -1157,13 +1261,13 @@ export class PathGuard {
             }
             const allowedDirs = this.getAllowedDirectories();
             const linkParent = normalizePath(await realpath(dirname(current)));
-            if (!isPathWithinDirectories(linkParent, allowedDirs)) {
+            if (!(await isPathWithinAllowedDirectories(linkParent, allowedDirs))) {
               this.throwAccessDenied(requestedPath);
             }
             const target = await readlink(current);
             const resolvedTarget = isAbsolute(target) ? target : resolve(linkParent, target);
             const normalizedTarget = normalizePath(resolvedTarget);
-            if (!isPathWithinDirectories(normalizedTarget, allowedDirs)) {
+            if (!(await isPathWithinAllowedDirectories(normalizedTarget, allowedDirs))) {
               this.throwAccessDenied(requestedPath);
             }
             current =
@@ -1241,7 +1345,7 @@ export class PathGuard {
       }
     }
     // An ancestor that resolves out of the roots is the caller's to refuse.
-    if (!isPathWithinDirectories(real, allowedDirs)) return undefined;
+    if (!(await isPathWithinAllowedDirectories(real, allowedDirs))) return undefined;
 
     const spelled: string[] = [];
     for (const [index, name] of missing.entries()) {
@@ -1271,7 +1375,7 @@ export class PathGuard {
         // Missing as typed, or a dangling link: the caller's checks judge it.
         break;
       }
-      if (!isPathWithinDirectories(real, allowedDirs)) {
+      if (!(await isPathWithinAllowedDirectories(real, allowedDirs))) {
         this.throwAccessDenied(requestedPath, accessDeniedHint);
       }
     }
@@ -1298,8 +1402,12 @@ export class PathGuard {
       return undefined;
     }
     if (entries.includes(name)) return name;
-    const key = unicodeMatchKey(name);
-    const matches = entries.filter((entry) => unicodeMatchKey(entry) === key);
+    const isCaseSensitive = await isDirectoryCaseSensitive(realDir, entries);
+    const key = isCaseSensitive ? unicodeMatchKeyExactCase(name) : unicodeMatchKey(name);
+    const matches = entries.filter(
+      (entry) =>
+        (isCaseSensitive ? unicodeMatchKeyExactCase(entry) : unicodeMatchKey(entry)) === key,
+    );
     // A match the denylist covers is refused here, as a lone one would be by
     // the caller, so the ambiguity error below never lists a hidden name.
     if (!allowSensitive) {
@@ -1341,15 +1449,15 @@ export class PathGuard {
       requestedPath,
       normalizedRequested,
     );
-    const assertInside = (): void => {
+    const assertInside = async (): Promise<void> => {
       if (
-        !isPathWithinDirectories(realAncestor, allowedDirs) ||
-        !isPathWithinDirectories(resolvedTarget, allowedDirs)
+        !(await isPathWithinAllowedDirectories(realAncestor, allowedDirs)) ||
+        !(await isPathWithinAllowedDirectories(resolvedTarget, allowedDirs))
       ) {
         this.throwAccessDenied(requestedPath, accessDeniedHint);
       }
     };
-    assertInside();
+    await assertInside();
     // Part of it is not on disk as typed; it may be under another Unicode
     // spelling (#101). A followed link may also name a missing target spelled
     // differently on disk, and respelling a parent can expose such a link, so
@@ -1381,7 +1489,7 @@ export class PathGuard {
         requestedPath,
         respelled,
       ));
-      assertInside();
+      await assertInside();
       candidate = respelled;
     }
     // Re-check the resolved target: a symlink inside an allowed root may point
@@ -1473,7 +1581,7 @@ export class PathGuard {
     }
     const normalizedRealParent = normalizePath(realParent);
 
-    if (!isPathWithinDirectories(normalizedRealParent, allowedDirs)) {
+    if (!(await isPathWithinAllowedDirectories(normalizedRealParent, allowedDirs))) {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
@@ -1531,7 +1639,7 @@ export class PathGuard {
       }
       return target;
     }
-    if (!isPathWithinDirectories(realTarget, allowedDirs)) {
+    if (!(await isPathWithinAllowedDirectories(realTarget, allowedDirs))) {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
     this.assertNotSensitiveFile(realTarget, requestedPath);
