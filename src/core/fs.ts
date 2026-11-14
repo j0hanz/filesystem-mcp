@@ -14,6 +14,7 @@ import {
   opendir as fsOpendir,
   readdir as fsReaddir,
   readlink as fsReadlink,
+  realpath as fsRealpath,
   rename as fsRename,
   rm as fsRm,
   rmdir as fsRmdir,
@@ -482,6 +483,66 @@ export class GuardedFileSystem {
     }
   }
 
+  /**
+   * On platforms without O_NOFOLLOW (Windows) or without procfs (macOS, Windows),
+   * verify that the opened handle matches the path on disk and has not been
+   * swapped for a symlink or a file outside the allowed roots (TOCTOU).
+   */
+  async #verifyOpenedHandle(
+    handle: FileHandle,
+    validPath: string,
+    requestedPath: string,
+  ): Promise<void> {
+    let linkStat: Stats;
+    try {
+      linkStat = await fsLstat(validPath);
+    } catch (error) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    if (linkStat.isSymbolicLink()) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    const handleStat = await handle.stat();
+    if (handleStat.dev !== linkStat.dev || handleStat.ino !== linkStat.ino) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    let real: string;
+    try {
+      real = await fsRealpath(validPath);
+    } catch (error) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    const realNorm = normalizePath(real);
+    if (
+      this.pathGuard.allowedRootContaining(realNorm) === undefined ||
+      this.pathGuard.isSensitive(realNorm)
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+  }
+
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
   async #openVerified(
     validPath: string,
@@ -495,7 +556,10 @@ export class GuardedFileSystem {
       `file handle for ${validPath}`,
     );
     try {
-      await this.#assertFdWithinRoots(handle, requestedPath);
+      const fdPath = await this.#assertFdWithinRoots(handle, requestedPath);
+      if (O_NOFOLLOW === 0 || fdPath === undefined) {
+        await this.#verifyOpenedHandle(handle, validPath, requestedPath);
+      }
       return handle;
     } catch (error) {
       await handle.close();

@@ -55,59 +55,50 @@ describe('swap after validation', () => {
     }
   });
 
-  it(
-    'A: final component swapped for a file link',
-    {
-      todo:
-        process.platform === 'win32'
-          ? 'plan 123: final-component swap is followed on win32'
-          : undefined,
-    },
-    async (t) => {
-      const target = join(root, 'a.txt');
-      const victim = join(outside, 'victim.txt');
-      await writeFile(target, 'in-root');
+  it('A: final component swapped for a file link', async (t) => {
+    const target = join(root, 'a.txt');
+    const victim = join(outside, 'victim.txt');
+    await writeFile(target, 'in-root');
 
-      let linkCreated = false;
-      let skipped = false;
+    let linkCreated = false;
+    let skipped = false;
 
-      swapBeforeOpen(target, async () => {
-        await unlink(target);
-        const created = await trySymlink(
-          victim,
-          target,
-          () => {
-            skipped = true;
-            t.skip('file symlinks refused on this platform');
-          },
-          'file',
-        );
-        if (created) linkCreated = true;
-      });
+    swapBeforeOpen(target, async () => {
+      await unlink(target);
+      const created = await trySymlink(
+        victim,
+        target,
+        () => {
+          skipped = true;
+          t.skip('file symlinks refused on this platform');
+        },
+        'file',
+      );
+      if (created) linkCreated = true;
+    });
 
+    try {
       try {
-        try {
-          const result = await fs.read(target);
-          if (skipped) return;
-          assert.doesNotMatch(
-            result.content,
-            /TOP_SECRET/,
-            'returned content must not contain TOP_SECRET',
-          );
-          assert.fail('expected read to be refused, but it succeeded');
-        } catch (error) {
-          if (skipped) return;
-          if (error instanceof assert.AssertionError) {
-            throw error;
-          }
-        }
-      } finally {
-        mock.restoreAll();
-        syncBuiltinESMExports();
-        if (linkCreated) {
-          await unlink(target).catch(() => {});
+        const result = await fs.read(target);
+        if (skipped) return;
+        assert.doesNotMatch(
+          result.content,
+          /TOP_SECRET/,
+          'returned content must not contain TOP_SECRET',
+        );
+        assert.fail('expected read to be refused, but it succeeded');
+      } catch (error) {
+        if (skipped) return;
+        if (error instanceof assert.AssertionError) {
+          throw error;
         }
       }
-    },
-  );
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      if (linkCreated) {
+        await unlink(target).catch(() => {});
+      }
+    }
+  });
 });
