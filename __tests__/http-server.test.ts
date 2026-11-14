@@ -658,6 +658,21 @@ describe('rate limiting', () => {
     );
     assert.strictEqual(result.status, 429);
   });
+
+  it('counts requests with a wrong token toward the limit', async () => {
+    const headers = {
+      'content-type': 'application/json',
+      Authorization: 'Bearer wrong-token-0123456789',
+    };
+    const post = () => fetch(base, { method: 'POST', headers, body: '{}' });
+    const r1 = await post();
+    const r2 = await post();
+    const r3 = await post();
+    await Promise.all([r1.text(), r2.text(), r3.text()]);
+    assert.strictEqual(r1.status, 401);
+    assert.strictEqual(r2.status, 401);
+    assert.strictEqual(r3.status, 429);
+  });
 });
 
 describe('FS_TRUST_PROXY wiring', () => {
