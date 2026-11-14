@@ -1038,6 +1038,32 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
     });
 
+    it('TC-FUNC-047f: a write stops when the undo capture detects a swapped path', async () => {
+      const filePath = await writeTestFile(tmpDir, 'swap_refused.txt', 'old\n');
+      const cap = new UndoJournal(1024 * 1024).beginCapture();
+      const tracked = new GuardedFileSystem(ctx.pathGuard, cap);
+      mock.method(tracked, 'readSaved', async () => {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+          filePath,
+        );
+      });
+      try {
+        await assert.rejects(
+          tracked.writeFile(filePath, 'new\n'),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, 'TOCTOU'),
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('swap_refused.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
+    });
+
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
       const emptyPath = await writeTestFile(tmpDir, 'count_lines_empty.txt', '');
       assert.strictEqual(await fs.countFileLines(emptyPath), 0);

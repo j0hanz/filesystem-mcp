@@ -1213,6 +1213,13 @@ export class GuardedFileSystem {
         }
       }
     } catch (error) {
+      // A refusal from the capture's verified read (a parent swapped for a link) is not a stat failure: stop the write.
+      if (
+        isFsError(error) &&
+        (error.code === ErrorCode.ACCESS_DENIED || error.code === ErrorCode.SYMLINK_NOT_ALLOWED)
+      ) {
+        throw error;
+      }
       // ENOENT is the normal new-file case: the default mode is correct there.
       // Anything else (EACCES, EIO) means the mode about to be overwritten could
       // not be read, and the write will silently widen the file — say so rather
