@@ -18,7 +18,18 @@ const nodeBuiltinImportRestrictions = nodeBuiltins.map((name) => ({
 export default tseslint.config(
   {
     name: 'project/global-ignores',
-    ignores: ['dist/**', 'node_modules/**', '.claude/**', 'examples/**'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      '.claude/**',
+      'examples/**',
+      // Local-only folders: flat config does not read .gitignore, and `eslint . --fix` would rewrite other worktrees.
+      '.worktrees/**',
+      '.scratch/**',
+      'graphify-out/**',
+      'reports/**',
+      'coverage/**',
+    ],
   },
 
   {
