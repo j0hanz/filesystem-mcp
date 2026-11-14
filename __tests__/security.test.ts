@@ -175,6 +175,45 @@ describe('Security (P0)', () => {
       assert.ok(resolved.endsWith('aux.ts'));
     });
 
+    it('TC-SEC-015: a trailing dot or space is refused on Windows and ordinary elsewhere', async () => {
+      for (const name of ['notes.txt.', 'notes.txt ']) {
+        const target = join(root, 'src', name);
+        if (process.platform === 'win32') {
+          await assert.rejects(
+            guard.validateExistingPath(target),
+            fsErrorMatcher(ErrorCode.INVALID_INPUT, /ends in a dot or a space/),
+          );
+          continue;
+        }
+        await writeTestFile(root, `src/${name}`, 'x\n');
+        assert.ok((await guard.validateExistingPath(target)).endsWith(name));
+      }
+    });
+
+    it(
+      'TC-SEC-016: superscript and spaced device names are refused on Windows',
+      { skip: process.platform !== 'win32' },
+      async () => {
+        for (const name of ['NUL .txt', 'COM¹', 'LPT².log']) {
+          await assert.rejects(
+            guard.validateExistingPath(join(root, 'src', name)),
+            fsErrorMatcher(ErrorCode.ACCESS_DENIED, /Reserved Windows device name/),
+          );
+        }
+      },
+    );
+
+    it(
+      'TC-SEC-017: no grant is offered for an outside path with a trailing dot',
+      { skip: process.platform !== 'win32' },
+      async () => {
+        assert.deepStrictEqual(
+          await guard.precheckAccess([join(root, '..', 'elsewhere', 'a.txt.')]),
+          [],
+        );
+      },
+    );
+
     it('TC-SEC-043: a Unicode case-fold look-alike sibling of the root is outside it', async (t) => {
       if (!IS_CASE_INSENSITIVE_FS) {
         t.skip('case folding applies on a case-insensitive filesystem');

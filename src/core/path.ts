@@ -33,6 +33,7 @@ import {
   expandHome,
   getReservedDeviceNameForPath,
   hasAlternateDataStream,
+  hasTrailingDotOrSpace,
   IS_CASE_INSENSITIVE_FS,
   IS_WINDOWS,
   isPathInsideDirectory,
@@ -710,7 +711,8 @@ export class PathGuard {
       // user to grant the working directory it resolves under is pointless.
       if (
         isUnresolvableDrivePath(requested) ||
-        (IS_WINDOWS && getReservedDeviceNameForPath(requested) !== undefined)
+        (IS_WINDOWS && getReservedDeviceNameForPath(requested) !== undefined) ||
+        (IS_WINDOWS && hasTrailingDotOrSpace(requested))
       ) {
         continue;
       }
@@ -872,6 +874,13 @@ export class PathGuard {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
         `Reserved Windows device name not allowed: ${reservedDevice}.`,
+        requestedPath,
+      );
+    }
+    if (IS_WINDOWS && hasTrailingDotOrSpace(requestedPath)) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        'A path component ends in a dot or a space. Windows strips those, so the path would name a different file. Remove the trailing character.',
         requestedPath,
       );
     }
