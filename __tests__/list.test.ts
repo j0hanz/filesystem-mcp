@@ -44,6 +44,17 @@ describe('list body', () => {
   const list = (args: ListArgs, options: Partial<ToolBodyOptions> = {}) =>
     runToolBodyResult(LIST, args, { guard, pageStore, resourceStore, ...options });
 
+  it('exclude leaves a folder out of the tree', async () => {
+    await writeTestFile(root, 'src/a.ts', 'needle');
+    await writeTestFile(root, 'vendor/b.ts', 'needle');
+    const { structured } = await list({ path: root, maxDepth: 2, exclude: ['vendor'] });
+    assert.ok(structured.entries.some((e) => e.relativePath === 'src/a.ts'));
+    assert.equal(
+      structured.entries.some((e) => e.relativePath.startsWith('vendor')),
+      false,
+    );
+  });
+
   it('replays a second page from the same snapshot', async () => {
     await writeTestFile(root, 'a.txt', 'a');
     await writeTestFile(root, 'b.txt', 'b');

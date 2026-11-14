@@ -6,6 +6,7 @@ import { formatCount, truncateProgressPattern } from '../core/fmt.ts';
 import { type ExcludedDirs, scan, type ScanOutcome, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
+  ExcludeGlobs,
   IncludeHidden,
   IncludeIgnored,
   mapOptionalPath,
@@ -36,6 +37,7 @@ const SearchFilesInputSchema = z.strictObject({
     .describe('Files per page; totalMatches counts all kept matches.'),
   includeIgnored: IncludeIgnored,
   includeHidden: IncludeHidden,
+  exclude: ExcludeGlobs,
   sortBy: z
     .enum(['name', 'path'])
     .optional()
@@ -106,6 +108,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'Use when you know a name or path pattern but not the location. ' +
     'Do not use it for file contents; use `search_text` instead. To browse a folder, use `list`. ' +
     'Matches files; type: "directory" or "any" also matches directories, printed with a trailing /. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
+    'exclude leaves out more names or paths. ' +
     'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
     'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). ' +
     'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
@@ -135,6 +138,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             pattern: args.pattern,
             baseNameMatch: true,
             includeHidden: args.includeHidden,
+            ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
             includeIgnored: args.includeIgnored,
             onlyFiles: args.type === 'file',
             entryType: args.type,

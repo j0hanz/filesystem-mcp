@@ -1084,8 +1084,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // measured 29392 / 14128.
     // Raised 2026-11-15 to 29700 full (read-only unchanged): edit retries an
     // unmatched oldText ignoring whitespace; measured 29636.
-    const BUDGET_CHARS = 29_700;
-    const BUDGET_CHARS_READ_ONLY = 14_150;
+    // Raised 2026-11-15 to 31700 full and 15700 read-only: list, find_files,
+    // search_text and replace_text gain exclude; measured 31652 / 15646.
+    const BUDGET_CHARS = 31_700;
+    const BUDGET_CHARS_READ_ONLY = 15_700;
 
     const full = await createTestClientPair([tmpDir]);
     try {

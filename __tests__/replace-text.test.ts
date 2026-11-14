@@ -51,6 +51,14 @@ describe('replace_text body', () => {
     return { ...result, rows: result.structured.results as readonly Row[] };
   };
 
+  it('exclude leaves a folder unchanged', async () => {
+    await writeTestFile(root, 'src/a.ts', 'needle');
+    await writeTestFile(root, 'vendor/b.ts', 'needle');
+    await replace({ path: root, searchPattern: 'needle', replacement: 'pin', exclude: ['vendor'] });
+    assert.equal(await readFile(join(root, 'vendor/b.ts'), 'utf8'), 'needle');
+    assert.equal(await readFile(join(root, 'src/a.ts'), 'utf8'), 'pin');
+  });
+
   it('names the changed files on a live run without returnDiff', async () => {
     await writeTestFile(root, 'a.txt', 'NEEDLE one\n');
     await writeTestFile(root, 'b.txt', 'NEEDLE two\n');

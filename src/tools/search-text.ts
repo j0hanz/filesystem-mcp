@@ -6,6 +6,7 @@ import type { ExcludedDirs, StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
+  ExcludeGlobs,
   IncludeHidden,
   IncludeIgnored,
   mapOptionalPath,
@@ -44,6 +45,7 @@ const GrepInputSchema = z.strictObject({
     ),
   isRegex: defaultFalseBoolean('Treat searchPattern as an RE2 regex'),
   includeHidden: IncludeHidden,
+  exclude: ExcludeGlobs,
   includeIgnored: IncludeIgnored,
   caseSensitive: defaultFalseBoolean(
     'Match case exactly. replace_text matches case by default, so pass true to preview what it will replace.',
@@ -195,6 +197,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     'Do not use it to find files by name; use `find_files` instead. ' +
     'A regex may span lines; the hit is on its first line. ' +
     'Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
+    'exclude leaves out more names or paths. ' +
     'Lines over 1000 chars are clipped around the match. ' +
     'Stops early at 10000 matching lines or the timeout, setting stoppedReason. ' +
     'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires after about 60 s), and resourceUri for a multi-page or stopped first page.',
@@ -222,6 +225,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           args.searchPattern,
           {
             includeHidden: args.includeHidden,
+            ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
             filePattern: args.pattern ?? '**/*',
             caseSensitive: args.caseSensitive,
             isRegex: args.isRegex,

@@ -46,6 +46,17 @@ describe('search_text body', () => {
   const search = (args: SearchArgs, options: Partial<ToolBodyOptions> = {}) =>
     runToolBodyResult(SEARCH_TEXT, args, { guard, pageStore, resourceStore, ...options });
 
+  it('exclude leaves a folder out of the search', async () => {
+    await writeTestFile(root, 'src/a.ts', 'needle\n');
+    await writeTestFile(root, 'vendor/b.ts', 'needle\n');
+    const { structured } = await search({
+      path: root,
+      searchPattern: 'needle',
+      exclude: ['vendor'],
+    });
+    assert.deepStrictEqual([...new Set(structured.matches.map((m) => m.file))], ['src/a.ts']);
+  });
+
   it('says which default-named folder it skipped', async () => {
     await writeTestFile(root, 'build/gen.ts', 'needle\n');
     await writeTestFile(root, 'src/a.ts', 'other\n');
