@@ -873,3 +873,66 @@ describe('the request body limit follows FS_MAX_FILE_SIZE', () => {
     }
   });
 });
+
+describe('the HTTP server bounds request bytes in flight', () => {
+  let tmpDir: string;
+  let http: HttpTestContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    // 27 MiB gives a body limit of 3 * 27 + 1 = 82 MiB (near 80 MiB),
+    // and a budget of Math.max(82 MiB, 128 MiB) = 128 MiB.
+    http = await bootHttpTest([tmpDir], { FS_MAX_FILE_SIZE: String(27 * MIB) });
+  });
+
+  after(async () => {
+    await http.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('refuses further large uploads with 503 when the in-flight budget is exceeded', async () => {
+    const headers: OutgoingHttpHeaders = {
+      'content-type': 'application/json',
+      Authorization: `Bearer ${TEST_API_KEY}`,
+      'content-length': String(50 * MIB),
+    };
+
+    let req1: ClientRequest | undefined;
+    let req2: ClientRequest | undefined;
+
+    try {
+      // Open two uploads holding 50 MiB each (100 MiB <= 128 MiB budget).
+      req1 = await new Promise<ClientRequest>((resolve) => {
+        const r = request(http.base, { method: 'POST', headers });
+        r.on('error', () => {});
+        r.flushHeaders();
+        r.write('{', () => resolve(r));
+      });
+
+      req2 = await new Promise<ClientRequest>((resolve) => {
+        const r = request(http.base, { method: 'POST', headers });
+        r.on('error', () => {});
+        r.flushHeaders();
+        r.write('{', () => resolve(r));
+      });
+
+      // Third upload of 50 MiB (100 + 50 = 150 MiB > 128 MiB budget) gets 503 immediately.
+      const result = await postWithoutEndingUpload(http.base, headers, (req) => {
+        req.flushHeaders();
+        req.write('{');
+      });
+
+      assert.strictEqual(result.status, 503);
+      const body = result.body as { jsonrpc?: string; error?: { code?: number; message?: string } };
+      assert.strictEqual(body.jsonrpc, '2.0');
+      assert.strictEqual(body.error?.code, -32000);
+      assert.strictEqual(
+        body.error?.message,
+        'Server busy: too many large requests in flight. Retry shortly.',
+      );
+    } finally {
+      req1?.destroy();
+      req2?.destroy();
+    }
+  });
+});

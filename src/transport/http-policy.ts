@@ -12,7 +12,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
-import { splitCsvList } from '../core/util.ts';
+import { MIB, splitCsvList } from '../core/util.ts';
 import { jsonRpcError } from './shared.ts';
 
 const MAX_BEARER_TOKEN_LENGTH = 4096;
@@ -443,4 +443,62 @@ export function createRateLimiter(
     buckets.clear();
   };
   return limiter;
+}
+
+// ─── Request body budget ──────────────────────────────────────────────────────
+
+function parseContentLength(header: string | string[] | undefined): number | undefined {
+  if (typeof header !== 'string') return undefined;
+  const trimmed = header.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+/**
+ * Bounds the request bytes being buffered and parsed at once: each body is held
+ * whole, so a few parallel near-limit uploads could otherwise exhaust the heap.
+ */
+export function createBodyBudget(budgetBytes: number, unknownCost: number): RequestHandler {
+  let inFlight = 0;
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const parsedLength = parseContentLength(req.headers['content-length']);
+    const cost = parsedLength ?? unknownCost;
+
+    if (cost < MIB) {
+      next();
+      return;
+    }
+
+    if (inFlight + cost > budgetBytes) {
+      sendJsonRpcError(
+        res,
+        503,
+        JSONRPC_SERVER_ERROR,
+        'Server busy: too many large requests in flight. Retry shortly.',
+        null,
+        {
+          'Retry-After': '1',
+        },
+      );
+      return;
+    }
+
+    inFlight += cost;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      inFlight -= cost;
+    };
+
+    if (res.closed || res.destroyed) {
+      release();
+    } else {
+      res.once('close', release);
+    }
+
+    next();
+  };
 }
