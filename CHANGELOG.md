@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Writes**: when saving a file's old bytes for undo finds that a parent folder was swapped for a link out of the allowed roots, the write now fails with `ACCESS_DENIED`; before, the refusal was logged and the write went ahead.
+
 ### Changed
 
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).
