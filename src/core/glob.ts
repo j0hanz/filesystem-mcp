@@ -249,6 +249,7 @@ export interface GlobEntriesOptions {
   baseNameMatch?: boolean;
   maxDepth?: number;
   onlyFiles?: boolean;
+  entryType?: 'file' | 'directory' | 'any';
   suppressErrors?: boolean;
   /** Skip what a walk should not surface: DEFAULT_EXCLUDED_NAMES and .gitignore. */
   skipIgnored?: boolean;
@@ -508,13 +509,13 @@ function* processDirentMatch(
   cwd: string,
   maxDepth: number | undefined,
   seen: Set<string>,
-  onlyFiles: boolean,
+  entryFilter: 'file' | 'directory' | 'any' | 'all',
 ): Generator<GlobEntry> {
   const absolutePath = resolve(cwd, match.parentPath, match.name);
   // The walk's scope is its cwd, whatever the pattern spells: a `..` or a root
   // the validator did not foresee must not reach a caller, where it would be
   // read, rewritten, or counted and named as inaccessible.
-  if (!isPathInsideDirectory(cwd, absolutePath)) return;
+  if (isSamePath(cwd, absolutePath) || !isPathInsideDirectory(cwd, absolutePath)) return;
 
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);
@@ -524,7 +525,9 @@ function* processDirentMatch(
   if (seen.has(absolutePath)) return;
   seen.add(absolutePath);
 
-  if (onlyFiles && !match.isFile()) return;
+  if (entryFilter === 'file' && !match.isFile()) return;
+  if (entryFilter === 'directory' && !match.isDirectory()) return;
+  if (entryFilter === 'any' && !match.isFile() && !match.isDirectory()) return;
   yield { path: absolutePath, dirent: match };
 }
 
@@ -674,7 +677,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
   const patterns = options.includeHidden ? buildHiddenPatterns(pattern) : [pattern];
   if (options.pathGuard) await assertLeadingFoldersStayLocal(patterns, cwd, options.pathGuard);
   const seen = new Set<string>();
-  const onlyFiles = options.onlyFiles ?? true;
+  const entryFilter = options.entryType ?? (options.onlyFiles === false ? 'all' : 'file');
   const filter = createWalkFilter(
     cwd,
     options.skipIgnored ?? false,
@@ -700,7 +703,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
       // the rejected dirent itself, and any rejected entry below the top level.
       // Re-apply the ignore rules (not the depth bound) to drop those.
       if (filter.isExcluded(match)) continue;
-      yield* processDirentMatch(match, cwd, maxDepth, seen, onlyFiles);
+      yield* processDirentMatch(match, cwd, maxDepth, seen, entryFilter);
     }
   } catch (error) {
     if (!suppressErrors) throw error;

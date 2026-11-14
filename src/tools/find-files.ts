@@ -137,20 +137,13 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             includeHidden: args.includeHidden,
             includeIgnored: args.includeIgnored,
             onlyFiles: args.type === 'file',
+            entryType: args.type,
             ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
             concurrency: PARALLEL_CONCURRENCY,
             cap: MAX_SEARCH_RESULTS,
             signal: ctx.signal,
           },
-          (entry) => {
-            if (entry.type === 'directory') {
-              return Promise.resolve({ path: entry.path, dir: true });
-            }
-            if (args.type !== 'directory' && entry.type === 'file') {
-              return Promise.resolve({ path: entry.path, dir: false });
-            }
-            return Promise.resolve(undefined);
-          },
+          (entry) => Promise.resolve({ path: entry.path, dir: entry.type === 'directory' }),
         );
         const { results, stoppedReason } = keepFirstResults(scanned, MAX_SEARCH_RESULTS);
         // Sorted after the scan, on the kept results.

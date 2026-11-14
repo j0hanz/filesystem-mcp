@@ -333,8 +333,25 @@ describe('find_files body', () => {
     });
 
     it('directory returns only directories, each with a trailing slash', async () => {
-      const paths = (await findResults({ pattern: 'utils', type: 'directory' })).map((r) => r.path);
-      assert.deepStrictEqual(paths, ['pkg/utils/']);
+      const res = await find({ pattern: 'utils*', type: 'directory' });
+      assert.deepStrictEqual(
+        res.structured.results.map((r) => r.path),
+        ['pkg/utils/'],
+      );
+      assert.strictEqual(res.structured.filesScanned, 1);
+    });
+
+    it('globstar excludes the search root itself under directory and any', async () => {
+      const dirs = (await findResults({ pattern: '**', type: 'directory' })).map((r) => r.path);
+      assert.deepStrictEqual(dirs, ['docs/', 'pkg/', 'pkg/utils/']);
+      const all = (await findResults({ pattern: '**', type: 'any' })).map((r) => r.path);
+      assert.deepStrictEqual(all, [
+        'docs/',
+        'docs/utils',
+        'pkg/',
+        'pkg/utils/',
+        'pkg/utils/utils.ts',
+      ]);
     });
 
     it('any returns both, and only directories end in a slash', async () => {
@@ -382,6 +399,20 @@ describe('find_files body', () => {
         (r) => r.path,
       );
       assert.ok(!paths.some((p) => p.startsWith('link-utils')));
+    });
+
+    it('a broken symlink does not count as inaccessible under directory or any', async (t) => {
+      if (
+        !(await trySymlink(join(root, 'missing-target'), join(root, 'broken-utils'), () =>
+          t.skip('symlinks unavailable'),
+        ))
+      ) {
+        return;
+      }
+      for (const type of ['directory', 'any'] as const) {
+        const res = await find({ pattern: '*utils*', type });
+        assert.strictEqual(res.structured.skippedInaccessible, undefined);
+      }
     });
 
     it('rejects an unknown type', () => {

@@ -84,6 +84,7 @@ export interface ScanOptions<R> {
   readonly includeHidden: boolean;
   readonly includeIgnored: boolean;
   readonly onlyFiles: boolean;
+  readonly entryType?: 'file' | 'directory' | 'any';
   /** 0-based, as globEntries takes it. */
   readonly maxDepth?: number;
   readonly concurrency: number;
@@ -351,6 +352,7 @@ export async function scan<R>(
     baseNameMatch: options.baseNameMatch,
     includeHidden: options.includeHidden,
     onlyFiles: options.onlyFiles,
+    ...(options.entryType !== undefined ? { entryType: options.entryType } : {}),
     skipIgnored: !options.includeIgnored,
     pathGuard,
     ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
