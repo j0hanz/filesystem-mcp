@@ -115,3 +115,11 @@ hook on the Scan would be about as wide as the code it hides.
 ([`fs.ts`](../../src/core/fs.ts)) under ADR-015, so `GuardedFileSystem` owns
 every guarded read mode while `scan.ts` owns only the walk, its skip counters
 (`ScanSkip`), and admission.
+
+## Amendment, 2026-11-14
+
+`list` did not take the shared `maxDepth`. Its input is still 1-based
+(`1` = direct children) with a maximum of 50, and `src/tools/list.ts`
+converts it for the scan. The other walking tools are 0-based with a maximum
+of 100 as decided. Changing `list` is a breaking input change and is not
+scheduled.

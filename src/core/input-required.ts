@@ -112,9 +112,9 @@ export interface PendingInput {
  * HMAC key for the requestState codec. Read once from
  * `FS_REQUEST_STATE_KEY` (UTF-8, must be >=32 bytes); a random
  * 32-byte key is generated at boot when the env var is unset or too short. A
- * per-process key is correct for stdio and the single-node HTTP leg (decision
- * record 11). A server restart invalidates in-flight tokens; the client
- * re-requests, which is fail-closed and safe.
+ * per-process key is correct for stdio and the single-node HTTP leg. A server
+ * restart invalidates in-flight tokens; the client re-requests, which is
+ * fail-closed and safe.
  */
 function configuredRequestStateKey(): Uint8Array | undefined {
   const env = process.env['FS_REQUEST_STATE_KEY'];
