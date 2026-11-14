@@ -77,6 +77,8 @@ export function getMaxUndoBytes(): number {
 }
 
 export const ROOTS_TIMEOUT_MS = 5000;
+// sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+export const ROOTS_HOLD_MS = 2000;
 
 /**
  * Upper bound, in bytes, on one inbound JSON-RPC message on either transport.
