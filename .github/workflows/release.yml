@@ -122,8 +122,22 @@ jobs:
           fi
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "### Version: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
+          # A re-run after the push: the tag is on the remote already. Resume
+          # only when that tag really carries this version; anything else is a
+          # conflict a person must look at.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$NEW" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/v$NEW:refs/tags/v$NEW"
+            TAGGED=$(git show "v$NEW:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+            if [ "$TAGGED" != "$NEW" ]; then
+              echo "::error::Tag v$NEW exists but its package.json says $TAGGED"
+              exit 1
+            fi
+            echo "resume=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag v$NEW is already pushed; resuming after the push step"
+          fi
 
       - name: Bump package.json, server.json, MCPB and plugin manifests
+        if: steps.ver.outputs.resume != 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -168,16 +182,19 @@ jobs:
           npm install --package-lock-only --ignore-scripts
 
       - name: Install & validate
+        if: steps.ver.outputs.resume != 'true'
         run: |
           npm ci --ignore-scripts
           npm run check
 
       - name: Release-only build paths (Docker, MCPB)
+        if: steps.ver.outputs.resume != 'true'
         run: bash scripts/check-release-paths.sh
 
       # Push with the deploy key: the main-branch ruleset lets only this
       # key (and the repository admin) update main without a PR (plan 064).
       - name: Commit, tag & push
+        if: steps.ver.outputs.resume != 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
@@ -197,7 +214,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
-        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "::notice::GitHub release v$VERSION already exists"
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          fi
 
   # ─────────────────────────────────────────
   # 2a. Build the npm tarball (no publish token in this job)
