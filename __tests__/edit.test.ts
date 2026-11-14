@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile, utimes, writeFile } from 'node:fs/promises';
+import { link, readFile, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import type * as z from 'zod/v4';
 
+import { isNodeError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { EDIT, findFrom, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import {
@@ -48,6 +49,47 @@ describe('edit body', () => {
 
   const edit = async (args: EditArgs, options: Partial<ToolBodyOptions> = {}): Promise<EditRun> =>
     (await runToolBodyResult(EDIT, args, { fs, ...options })) as EditRun;
+
+  it('concurrent edit across two hard links preserves both edits without deadlock', async (t) => {
+    const fileA = await writeTestFile(root, 'hl-edit-a.txt', 'line1\nline2\n');
+    const fileB = join(root, 'hl-edit-b.txt');
+    try {
+      await link(fileA, fileB);
+    } catch (error) {
+      return t.skip(
+        `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+      );
+    }
+
+    const [resA, resB] = await Promise.all([
+      edit({ path: fileA, edits: [{ oldText: 'line1', newText: 'LINE1' }] }),
+      edit({ path: fileB, edits: [{ oldText: 'line2', newText: 'LINE2' }] }),
+    ]);
+
+    assert.notStrictEqual(resA.isError, true);
+    assert.notStrictEqual(resB.isError, true);
+    assert.strictEqual(await readFile(fileA, 'utf-8'), 'LINE1\nLINE2\n');
+    assert.strictEqual(await readFile(fileB, 'utf-8'), 'LINE1\nLINE2\n');
+  });
+
+  it('concurrent edit and appendFile across two hard links keep both changes', async (t) => {
+    const fileA = await writeTestFile(root, 'hl-mix-a.txt', 'alpha\n');
+    const fileB = join(root, 'hl-mix-b.txt');
+    try {
+      await link(fileA, fileB);
+    } catch (error) {
+      return t.skip(
+        `hard links not supported here: ${isNodeError(error) ? String(error.code) : 'unknown'}`,
+      );
+    }
+
+    await Promise.all([
+      edit({ path: fileA, edits: [{ oldText: 'alpha', newText: 'ALPHA' }] }),
+      fs.appendFile(fileB, 'beta\n'),
+    ]);
+
+    assert.strictEqual(await readFile(fileA, 'utf-8'), 'ALPHA\nbeta\n');
+  });
 
   it('applies an edit in single-path and batch form', async () => {
     const file = join(root, 'edit.txt');
