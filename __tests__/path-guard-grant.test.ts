@@ -424,8 +424,8 @@ describe('PathGuard grant round-trip', () => {
       let releaseFirst!: () => void;
       let releaseSecond!: () => void;
       guard.holdUntil(new Promise<void>((resolve) => (releaseFirst = resolve)));
-      guard.holdUntil(new Promise<void>((resolve) => (releaseSecond = resolve)));
       const settled = guard.rootsSettled();
+      guard.holdUntil(new Promise<void>((resolve) => (releaseSecond = resolve)));
       releaseFirst();
       assert.strictEqual(await settledWithin(settled, 30), false);
       releaseSecond();
