@@ -32,7 +32,9 @@ import { defineTool, type ToolCtx } from './define.ts';
 const EPOCH = new Date(0);
 
 const CreateFileItemSchema = z.strictObject({
-  path: RequiredPath.describe('Absolute file path inside a writable root; one entry per file.'),
+  path: RequiredPath.describe(
+    'File path inside a writable root, absolute or relative to it; one entry per file.',
+  ),
   content: z
     .string()
     .refine((val) => Buffer.byteLength(val, 'utf8') <= getMaxTextFileSize(), {

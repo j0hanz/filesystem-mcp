@@ -182,7 +182,10 @@ describe('relative paths', () => {
       { skip: process.platform === 'win32' },
       async () => {
         await writeTestFile(root, '~\\notes', 'tilde\n');
-        const result = await harness.client.callTool({ name: 'read', arguments: { path: '~\\notes' } });
+        const result = await harness.client.callTool({
+          name: 'read',
+          arguments: { path: '~\\notes' },
+        });
         assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
         assert.match(firstTextBlock(result).text ?? '', /tilde/u);
       },

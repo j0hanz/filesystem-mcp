@@ -274,7 +274,7 @@ export const RequiredPath = z
       hasTraversalSegment(val) ? 'Path cannot contain ".." segments' : undefined,
     ),
   )
-  .describe('File or directory path inside an allowed workspace root.');
+  .describe('File or directory path inside a root, absolute or relative to it.');
 
 export const OptionalPath = RequiredPath.optional();
 

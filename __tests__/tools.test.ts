@@ -1138,4 +1138,29 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       await ro.close();
     }
   });
+
+  it('TOOL-SURFACE-004: no path description claims paths must be absolute', async () => {
+    const pair = await createTestClientPair([tmpDir]);
+    try {
+      const { tools } = await pair.client.listTools();
+      interface SchemaNode {
+        description?: string;
+        items?: SchemaNode;
+        properties?: Record<string, SchemaNode>;
+      }
+      const props = (name: string): Record<string, SchemaNode> | undefined =>
+        tools.find((t) => t.name === name)?.inputSchema.properties as
+          Record<string, SchemaNode> | undefined;
+      assert.strictEqual(
+        props('create')?.['files']?.items?.properties?.['path']?.description,
+        'File path inside a writable root, absolute or relative to it; one entry per file.',
+      );
+      assert.strictEqual(
+        props('stat')?.['paths']?.items?.description,
+        'File or directory path inside a root, absolute or relative to it.',
+      );
+    } finally {
+      await pair.close();
+    }
+  });
 });
