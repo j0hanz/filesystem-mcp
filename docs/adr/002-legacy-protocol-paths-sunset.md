@@ -90,8 +90,8 @@ project.
     of Protocol versions, the `roots/list` and 2025-era sentences in Folders
     and paths and Resources and file subscriptions, and the `--legacy` modes
     of the fsq, tail, and python examples it lists;
-  - the `legacy_roots` line in
-    [`src/instructions.ts:67`](../../src/instructions.ts#L67).
+  - the `legacy_roots` line in `src/instructions.ts` (search for
+    `legacy_roots`).
 - A client that still opens with `initialize` after removal gets the SDK's
   own unsupported-protocol-version error; this server adds no further
   compatibility shim for that case.

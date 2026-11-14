@@ -1,6 +1,6 @@
 # ADR-004: Do not serve Agent Skills through the MCP skills extension yet
 
-**Status**: proposed, 2026-10-27
+**Status**: accepted (no-go), 2026-10-27
 **Deciders**: j0hanz, in the design spike for issue #133
 
 ## Context

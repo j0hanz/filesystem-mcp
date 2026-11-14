@@ -314,6 +314,9 @@ The server enforces these safety rules:
   approve its own access grants. On a shared machine set `FS_API_KEY`, and
   `--root-boundary` to limit what a grant can add. The server logs a warning
   when it starts without a key.
+- Every client of one HTTP server shares its undo journal: any client can
+  list and revert another client's changes. Run one server per user when
+  that matters.
 - Listening on any other address requires an API key of at least 16
   characters (`FS_API_KEY`). Clients send it as
   `Authorization: Bearer <key>`.

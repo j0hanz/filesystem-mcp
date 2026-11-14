@@ -109,6 +109,7 @@ The removal of one or more entries from the filesystem under the sensitive-file
 and workspace root policies, planned before any confirmation is asked for and
 checked again before anything is removed. A recursive deletion of a non-empty
 directory requires Confirmation; an entry replaced while the prompt was open
+is asked about again, once (see Confirmation), and one replaced after the approval
 is refused, not deleted.
 _Avoid_: remove, rm, unlink
 
@@ -116,10 +117,10 @@ _Avoid_: remove, rm, unlink
 The writing of a whole text file on a client's behalf — a new file, an
 overwrite, or an append — planned before any Confirmation is asked for and
 checked again before anything is written. A plan seals the Landing identity
-of a file that would be replaced: an entry replaced while the prompt was
-open is refused, not overwritten, and one that appeared while it was open is
-refused too, not clobbered. An append, or an overwrite the client declared
-up front, destroys nothing, so it is pre-settled with no prompt.
+of a file that would be replaced: an entry replaced, or one that appeared, while
+the prompt was open is asked about again, once (see Confirmation); one replaced
+after the approval is refused, not overwritten. An append, or an overwrite the
+client declared up front, destroys nothing, so it is pre-settled with no prompt.
 _Avoid_: write (a Rewrite replaces content; a Creation fills a file whole),
 create (one tool), mkdir (one kind of Creation)
 
@@ -149,10 +150,11 @@ reports nothing.
 _Avoid_: undo session, transaction, undo buffer
 
 **Undo journal**:
-The session's record of undoable calls, newest last, and the one place an
-undo runs: it picks the entries, previews a dry run across all of them,
-keeps moved entries traceable after a restore replaces a file, and drops
-what was restored. A cancelled undo keeps what it finished.
+The record, per connection over stdio and per endpoint over HTTP, of undoable
+calls, newest last, and the one place an undo runs: it picks the entries,
+previews a dry run across all of them, keeps moved entries traceable after a
+restore replaces a file, and drops what was restored. A cancelled undo keeps
+what it finished.
 _Avoid_: undo log, history, undo stack
 
 ## Approval
