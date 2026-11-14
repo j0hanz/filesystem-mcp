@@ -264,13 +264,20 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(expandHome('~'), home);
     assert.strictEqual(expandHome('~/'), home);
     assert.strictEqual(expandHome('~//'), home);
-    assert.strictEqual(expandHome('~\\'), home);
-    assert.strictEqual(expandHome('~\\\\'), home);
     assert.strictEqual(expandHome('~/foo'), join(home, 'foo'));
-    assert.strictEqual(expandHome('~\\foo'), join(home, 'foo'));
     assert.strictEqual(expandHome('~//foo'), join(home, 'foo'));
-    assert.strictEqual(expandHome('~\\\\foo'), join(home, 'foo'));
     assert.strictEqual(expandHome('relative/path'), 'relative/path');
+    if (process.platform === 'win32') {
+      assert.strictEqual(expandHome('~\\'), home);
+      assert.strictEqual(expandHome('~\\\\'), home);
+      assert.strictEqual(expandHome('~\\foo'), join(home, 'foo'));
+      assert.strictEqual(expandHome('~\\\\foo'), join(home, 'foo'));
+    } else {
+      // A backslash is a filename character on POSIX: these name files.
+      assert.strictEqual(expandHome('~\\'), '~\\');
+      assert.strictEqual(expandHome('~\\foo'), '~\\foo');
+      assert.strictEqual(expandHome('~\\\\foo'), '~\\\\foo');
+    }
   });
 
   it('normalizePath lowercases drive letter on Windows', (t) => {

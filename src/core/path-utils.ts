@@ -161,7 +161,8 @@ export const isUncOrDevicePath = (normalizedPath: string): boolean =>
   IS_WINDOWS && normalizedPath.startsWith('\\\\');
 
 export function expandHome(filepath: string): string {
-  if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
+  // A backslash is a filename character on POSIX, so `~\x` names a file there.
+  if (filepath === '~' || filepath.startsWith('~/') || (IS_WINDOWS && filepath.startsWith('~\\'))) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');
     return rest ? join(HOMEDIR, rest) : HOMEDIR;
   }
