@@ -215,6 +215,11 @@ export function unicodeMatchKey(name: string): string {
   return foldNameCase(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
 }
 
+/** `unicodeMatchKey` without ASCII case folding, for case-sensitive directories. */
+export function unicodeMatchKeyExactCase(name: string): string {
+  return name.normalize('NFC').replace(/\p{Zs}/gu, ' ');
+}
+
 /**
  * True when two paths are one path once case (where the filesystem folds it)
  * and Unicode spelling are folded: the spellings the path guard resolves to
@@ -263,7 +268,8 @@ export function normalizeAllowedDirectory(dir: string): string {
 
 // `\` separates path segments only on Windows. On POSIX it is a filename
 // character, so `/root\x` names a sibling of `/root`, not a child.
-const isPathSeparator = (code: number): boolean => code === 47 || (IS_WINDOWS && code === 92);
+export const isPathSeparator = (code: number): boolean =>
+  code === 47 || (IS_WINDOWS && code === 92);
 
 export function isPathInsideDirectory(
   normalizedDirectory: string,
