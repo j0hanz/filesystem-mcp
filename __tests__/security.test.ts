@@ -181,7 +181,10 @@ describe('Security (P0)', () => {
         if (process.platform === 'win32') {
           await assert.rejects(
             guard.validateExistingPath(target),
-            fsErrorMatcher(ErrorCode.INVALID_INPUT, /ends in a dot or a space/),
+            fsErrorMatcher(
+              ErrorCode.INVALID_INPUT,
+              /ends in a dot or a space\. Windows programs strip such names or cannot open them\. Remove the trailing character\./,
+            ),
           );
           continue;
         }

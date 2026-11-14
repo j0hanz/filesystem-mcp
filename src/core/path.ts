@@ -880,7 +880,7 @@ export class PathGuard {
     if (IS_WINDOWS && hasTrailingDotOrSpace(requestedPath)) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        'A path component ends in a dot or a space. Windows strips those, so the path would name a different file. Remove the trailing character.',
+        'A path component ends in a dot or a space. Windows programs strip such names or cannot open them. Remove the trailing character.',
         requestedPath,
       );
     }

@@ -132,8 +132,9 @@ export function getReservedDeviceNameForPath(requestedPath: string): string | un
 }
 
 /**
- * True when a component after the root ends in `.` or a space. Win32 strips
- * those, so the path would name a different file. `.` and `..` are not names.
+ * True when a component after the root ends in `.` or a space. Node creates
+ * such names verbatim, but Explorer and cmd strip them or cannot open them.
+ * `.` and `..` are not names.
  */
 export function hasTrailingDotOrSpace(requestedPath: string): boolean {
   return requestedPath
