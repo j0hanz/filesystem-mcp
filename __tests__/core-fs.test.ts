@@ -14,6 +14,7 @@ import fsPromises, {
   rm,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -1036,6 +1037,61 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         name.startsWith('commit_precheck.txt.'),
       );
       assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
+    });
+
+    it('a failed rename leaves the target untouched and removes the temp file', async () => {
+      const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
+      mock.method(fsPromises, 'rename', async (): Promise<void> => {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'no directory entry may start with rename_fail.txt.');
+    });
+
+    it('a failed rename whose cleanup also fails still reports the rename error and logs a warning', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
+      const logged: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        logged.push(args.map(String).join(' '));
+      });
+      mock.method(fsPromises, 'rename', async (): Promise<void> => {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      });
+      mock.method(fsPromises, 'unlink', async (): Promise<void> => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked, unlink'), { code: 'EBUSY' });
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      assert.ok(
+        logged.some((line) => line.includes('Failed to clean up temp file')),
+        'one logged line must contain "Failed to clean up temp file"',
+      );
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      for (const tempFile of leftovers) {
+        await unlink(join(dirname(filePath), tempFile));
+      }
+      const afterCleanup = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      assert.deepStrictEqual(afterCleanup, [], 'leftover temp files must be removed');
     });
 
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
