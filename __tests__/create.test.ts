@@ -474,6 +474,73 @@ describe('create body', () => {
     }
   });
 
+  it('append followed by pending on one file through a linked folder refuses the second entry without prompting', async (t) => {
+    const own = await createTestRoot();
+    try {
+      const file = join(own, 'append-pending.txt');
+      await writeTestFile(own, 'append-pending.txt', 'head\n');
+      const alias = join(own, 'create-alias');
+      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
+      let prompted = false;
+      const result = await create(
+        {
+          files: [
+            { path: file, content: 'tail\n', append: true },
+            { path: join(alias, 'append-pending.txt'), content: 'clobber\n' },
+          ],
+        },
+        {
+          fs: new GuardedFileSystem(await makeGuard([own])),
+          confirm: () => {
+            prompted = true;
+            return { action: 'accept', content: { choice: 'overwrite' } };
+          },
+        },
+      );
+
+      assert.strictEqual(prompted, false, 'duplicate pending entry must fail before confirmation');
+      assert.strictEqual(result.structured.files.length, 1);
+      const failures = result.structured.failures ?? [];
+      assert.strictEqual(failures.length, 1);
+      assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
+      assert.match(failures[0]?.error.message ?? '', /another entry in this batch/);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'head\ntail\n');
+    } finally {
+      await cleanupTestRoot(own);
+    }
+  });
+
+  it('approved pending entries landing on one file write only the first and refuse the second', async (t) => {
+    const own = await createTestRoot();
+    try {
+      const file = join(own, 'pending-approved.txt');
+      await writeTestFile(own, 'pending-approved.txt', 'old\n');
+      const alias = join(own, 'create-alias');
+      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
+      const result = await create(
+        {
+          files: [
+            { path: file, content: 'first\n' },
+            { path: join(alias, 'pending-approved.txt'), content: 'second\n' },
+          ],
+        },
+        {
+          fs: new GuardedFileSystem(await makeGuard([own])),
+          confirm: choose('overwrite'),
+        },
+      );
+
+      assert.strictEqual(result.structured.files.length, 1);
+      const failures = result.structured.failures ?? [];
+      assert.strictEqual(failures.length, 1);
+      assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
+      assert.match(failures[0]?.error.message ?? '', /another entry in this batch/);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'first\n');
+    } finally {
+      await cleanupTestRoot(own);
+    }
+  });
+
   it('two entries for one new file through a linked folder: the second is refused', async (t) => {
     const own = await createTestRoot();
     try {

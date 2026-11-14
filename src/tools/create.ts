@@ -262,6 +262,24 @@ type CreateSlotValue =
 type CreateFilePlanResult =
   { status: 'plan'; plan: CreatePlan } | { status: 'fail'; failure: CreateFailure };
 
+function duplicateLandingSlot(
+  inputPath: string,
+  firstInputPath: string,
+): BatchSlot<CreateSlotValue> {
+  return {
+    status: 'failure',
+    path: inputPath,
+    error: toCreateFailure(
+      inputPath,
+      new FsError(
+        ErrorCode.INVALID_INPUT,
+        `create cancelled: another entry in this batch already writes "${firstInputPath}"`,
+        inputPath,
+      ),
+    ).error,
+  };
+}
+
 /**
  * Phase 1 (no mutation): plan one file through the guarded filesystem.
  */
@@ -310,8 +328,11 @@ async function handleCreate(
   // Two entries that land on one file (through a linked folder, say) race as
   // two spellings do: the last write wins and both report success. The schema
   // compares spellings only, so the Landings settle it here. A `pending` twin
-  // stays: the Confirmation asks once for both. Two appends both land.
+  // stays until approved: the Confirmation asks once, then only the first
+  // writes. Any other pairing with a `pending` entry fails at once. Two
+  // appends both land.
   const firstByLanding = new Map<string, CreatePlan>();
+  const duplicatePendingOf = new Map<number, string>();
   for (const index of [...plans.keys()].sort((a, b) => a - b)) {
     const plan = plans.get(index);
     if (!plan) continue;
@@ -321,19 +342,12 @@ async function handleCreate(
       firstByLanding.set(key, plan);
       continue;
     }
-    if (plan.kind === 'pending' || (plan.kind === 'append' && first.kind === 'append')) continue;
-    slots[index] = {
-      status: 'failure',
-      path: plan.inputPath,
-      error: toCreateFailure(
-        plan.inputPath,
-        new FsError(
-          ErrorCode.INVALID_INPUT,
-          `create cancelled: another entry in this batch already writes "${first.inputPath}"`,
-          plan.inputPath,
-        ),
-      ).error,
-    };
+    if (plan.kind === 'pending' && first.kind === 'pending') {
+      duplicatePendingOf.set(index, first.inputPath);
+      continue;
+    }
+    if (plan.kind === 'append' && first.kind === 'append') continue;
+    slots[index] = duplicateLandingSlot(plan.inputPath, first.inputPath);
     plans.delete(index);
   }
 
@@ -363,6 +377,15 @@ async function handleCreate(
   for (const [index, plan] of plans) {
     const file = files[index];
     if (!file) continue;
+    const firstInputPath = duplicatePendingOf.get(index);
+    if (
+      firstInputPath !== undefined &&
+      plan.kind === 'pending' &&
+      confirmed.verdict(plan.validPath) === 'proceed'
+    ) {
+      slots[index] = duplicateLandingSlot(plan.inputPath, firstInputPath);
+      continue;
+    }
     slots[index] = {
       status: 'pending',
       path: plan.inputPath,
