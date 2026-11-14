@@ -549,12 +549,8 @@ export class PathGuard {
    * this class.
    */
   async entryVerdict(entryPath: string): Promise<EntryVerdict> {
-    if (!this.allowedDirectoriesState) {
-      throw new FsError(
-        ErrorCode.UNKNOWN,
-        'PathGuard not initialized. Call initialize() first.',
-        entryPath,
-      );
+    if (this.isSensitive(entryPath) || this.isSensitive(normalizePath(entryPath))) {
+      return 'sensitive';
     }
     try {
       await this.validateExistingPathDetailed(entryPath);
