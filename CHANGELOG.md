@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).
 - **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed. A line 1 that matches only once its U+FEFF is removed must also match at line 1: one that would apply further down is now refused, and a typed U+FEFF on a line hunk 1 lands on below line 1 is kept.
 
+### Fixed
+
+- **replace_text**: two different hard-linked files are no longer taken for one file on NTFS, where file ids exceed what a number holds; before, the second file could be skipped without being counted.
+
 ## [2.20.0] - 2026-11-11
 
 One Text view and one matching engine for `search_text`, `replace_text`,

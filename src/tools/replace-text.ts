@@ -182,7 +182,7 @@ interface ReplaceContext {
   remaining: number;
   /** A file had a match left unreplaced because the cap ran out. */
   cut: boolean;
-  /** `dev:ino` of each multi-link file already claimed this run: a later name for it is skipped. */
+  /** Exact `dev:ino` (bigint) of each multi-link file already claimed this run: a later name for it is skipped. */
   linked: Set<string>;
 }
 
@@ -213,7 +213,9 @@ async function processEntry(
         // Hard links share one inode, so a write through one name is seen by every
         // other name: a second name would transform the same bytes again.
         if (stats.nlink > 1) {
-          const id = `${stats.dev}:${stats.ino}`;
+          // Exact (bigint): as a number an NTFS file id loses its low bits, and two files would read as one.
+          const exact = (await ctx.fs.lstatExact(entryPath)).stats;
+          const id = `${String(exact.dev)}:${String(exact.ino)}`;
           if (ctx.linked.has(id)) return undefined;
           ctx.linked.add(id);
         }
