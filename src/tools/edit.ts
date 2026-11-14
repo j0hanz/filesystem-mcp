@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
+import { closestLines } from '../core/closest-lines.ts';
 import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
@@ -145,6 +146,7 @@ interface EditResult {
   content: string;
   appliedEdits: number;
   unmatchedEdits: string[];
+  firstUnmatched?: { oldText: string; content: string };
   linesAdded?: number;
   linesRemoved?: number;
   diff?: string;
@@ -549,6 +551,7 @@ async function applyEdits(
   let newContent = content;
   let appliedEdits = 0;
   const unmatchedEdits: string[] = [];
+  let firstUnmatched: { oldText: string; content: string } | undefined;
 
   for (const [index, edit] of edits.entries()) {
     if (await tick()) signal?.throwIfAborted();
@@ -573,6 +576,7 @@ async function applyEdits(
       [typed],
     );
     if (!landing) {
+      firstUnmatched ??= { oldText: typed, content: newContent };
       unmatchedEdits.push(edit.oldText);
       continue;
     }
@@ -597,7 +601,12 @@ async function applyEdits(
     appliedEdits += 1;
   }
 
-  return { content: newContent, appliedEdits, unmatchedEdits };
+  return {
+    content: newContent,
+    appliedEdits,
+    unmatchedEdits,
+    ...(firstUnmatched ? { firstUnmatched } : {}),
+  };
 }
 
 async function editOnce(
@@ -618,12 +627,14 @@ async function editOnce(
     async (content, view) => {
       const result = await applyEdits(content, view, edits, options.ignoreWhitespace, ctx.signal);
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
+        const first = result.firstUnmatched;
+        const window = first ? `\n\n${closestLines(first.content, first.oldText)}` : '';
         throw new FsError(
           ErrorCode.INVALID_INPUT,
           `no match for oldText ${joinRoster(
             result.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
             ', ',
-          )}; it must match the file exactly`,
+          )}; it must match the file exactly${window}`,
           filePath,
         );
       }
