@@ -106,30 +106,35 @@ function isCaseAliasOfEntrySync(left: string, right: string): boolean {
   }
 }
 
-async function isCandidateInsideRoot(root: string, candidate: string): Promise<boolean> {
+/**
+ * The string half of containment, shared by both twins below: true or false
+ * when the spelling settles it, `undefined` when only a case-alias check can.
+ */
+function lexicalContainment(root: string, candidate: string): boolean | undefined {
   if (!isPathInsideDirectory(root, candidate)) return false;
   if (
     candidate.startsWith(root) &&
-    (candidate.length === root.length || isPathSeparator(candidate.charCodeAt(root.length)))
+    (candidate.length === root.length ||
+      // A filesystem root (`/`, `c:\`) ends with its own separator.
+      isPathSeparator(root.charCodeAt(root.length - 1)) ||
+      isPathSeparator(candidate.charCodeAt(root.length)))
   ) {
     return true;
   }
-  if (!IS_CASE_INSENSITIVE_FS) return false;
-  const prefix = candidate.slice(0, root.length);
-  return isCaseAliasOfEntry(root, prefix);
+  return IS_CASE_INSENSITIVE_FS ? undefined : false;
+}
+
+async function isCandidateInsideRoot(root: string, candidate: string): Promise<boolean> {
+  return (
+    lexicalContainment(root, candidate) ?? isCaseAliasOfEntry(root, candidate.slice(0, root.length))
+  );
 }
 
 function isCandidateInsideRootSync(root: string, candidate: string): boolean {
-  if (!isPathInsideDirectory(root, candidate)) return false;
-  if (
-    candidate.startsWith(root) &&
-    (candidate.length === root.length || isPathSeparator(candidate.charCodeAt(root.length)))
-  ) {
-    return true;
-  }
-  if (!IS_CASE_INSENSITIVE_FS) return false;
-  const prefix = candidate.slice(0, root.length);
-  return isCaseAliasOfEntrySync(root, prefix);
+  return (
+    lexicalContainment(root, candidate) ??
+    isCaseAliasOfEntrySync(root, candidate.slice(0, root.length))
+  );
 }
 
 async function isPathWithinAllowedDirectories(
@@ -930,12 +935,7 @@ export class PathGuard {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       await this.validateAccess(requestedPath);
 
-    if (await this.reachesRemoteLink(normalizedRequested)) {
-      this.throwRemoteDenied(
-        requestedPath,
-        `${accessDeniedHint} A link on this path points at a network or device path.`,
-      );
-    }
+    await this.assertNoRemoteLink(normalizedRequested, requestedPath, accessDeniedHint);
 
     let spelled = normalizedRequested;
     let realPath: string;
@@ -1233,6 +1233,21 @@ export class PathGuard {
       requestedPath,
     );
   }
+
+  /** Refuses a path that follows a link to a network or device path. */
+  private async assertNoRemoteLink(
+    normalizedPath: string,
+    requestedPath: string,
+    accessDeniedHint: string,
+  ): Promise<void> {
+    if (await this.reachesRemoteLink(normalizedPath)) {
+      this.throwRemoteDenied(
+        requestedPath,
+        `${accessDeniedHint} A link on this path points at a network or device path.`,
+      );
+    }
+  }
+
   private async resolveNearestExistingAncestor(
     requestedPath: string,
     currentPath: string,
@@ -1363,12 +1378,7 @@ export class PathGuard {
       if (onDisk === undefined) break;
       spelled.push(onDisk);
       if (!resolveLast && index === missing.length - 1) break;
-      if (await this.reachesRemoteLink(join(ancestor, ...spelled))) {
-        this.throwRemoteDenied(
-          requestedPath,
-          `${accessDeniedHint} A link on this path points at a network or device path.`,
-        );
-      }
+      await this.assertNoRemoteLink(join(ancestor, ...spelled), requestedPath, accessDeniedHint);
       try {
         real = normalizePath(await realpath(join(ancestor, ...spelled)));
       } catch {
@@ -1438,12 +1448,7 @@ export class PathGuard {
       allowSensitive,
     );
 
-    if (await this.reachesRemoteLink(normalizedRequested)) {
-      this.throwRemoteDenied(
-        requestedPath,
-        `${accessDeniedHint} A link on this path points at a network or device path.`,
-      );
-    }
+    await this.assertNoRemoteLink(normalizedRequested, requestedPath, accessDeniedHint);
 
     let { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
       requestedPath,
@@ -1542,12 +1547,7 @@ export class PathGuard {
 
     // The parent only, so the link itself stays deletable. Before the lstat below,
     // which follows a link in the parent; respellMissing checks what it re-spells.
-    if (await this.reachesRemoteLink(dirname(normalizedRequested))) {
-      this.throwRemoteDenied(
-        requestedPath,
-        `${accessDeniedHint} A link on this path points at a network or device path.`,
-      );
-    }
+    await this.assertNoRemoteLink(dirname(normalizedRequested), requestedPath, accessDeniedHint);
 
     // Probe the final component before the parent, so a target that is not on
     // disk as typed can be re-spelled (#101) before either is checked.

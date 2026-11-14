@@ -55,6 +55,8 @@ class TtlLru<V> {
     this.delete(key);
     this.#byKey.set(key, { value, expiresAt: Date.now() + this.#ttlMs, weight });
     this.#weight += weight;
+    // Nothing else may touch the map again, so the entry's expiry frees it.
+    setTimeout(() => this.prune(), this.#ttlMs + 1).unref();
     while (
       this.#byKey.size > 0 &&
       (this.#byKey.size > this.#maxEntries || this.#weight > this.#maxWeight)

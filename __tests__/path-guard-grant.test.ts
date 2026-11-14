@@ -52,6 +52,15 @@ describe('PathGuard grant round-trip', () => {
     if (root) await cleanupTestRoot(root);
   });
 
+  it('a filesystem root as the allowed directory admits the paths under it', async () => {
+    // `/` and `c:\` end with their own separator, unlike every other root.
+    const guard = new PathGuard({ cliAllowedDirs: [parse(root).root] });
+    await guard.recomputeAllowedDirectories();
+    const file = await writeTestFile(root, 'file.txt', 'x');
+
+    assert.ok(isSamePath(await guard.validateExistingPath(file), realpathSync.native(file)));
+  });
+
   it('TC-PG-001: precheckAccess returns [] for a path already inside an allowed root', async () => {
     const guard = await makeGuard([root]);
     const inside = join(root, 'file.txt');
