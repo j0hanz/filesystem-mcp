@@ -31,7 +31,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "type-check:test": "tsc -p tsconfig.test.json",
-    "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip",
+    "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip && knip --production --include files,dependencies",
     "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
     "test": "node --test --test-timeout=60000",

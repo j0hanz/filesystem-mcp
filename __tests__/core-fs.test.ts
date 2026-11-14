@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { constants } from 'node:fs';
+import { appendFileSync, constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
@@ -14,6 +14,7 @@ import fsPromises, {
   rm,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -112,19 +113,27 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeTestFile(tmpDir, 'raw-native-cancel.txt', 'unchanged');
       const controller = new AbortController();
       const reason = new DOMException('Cancel at native read', name);
-      const originalRead = fsPromises.readFile;
-      let nativeSignal: AbortSignal | undefined;
-      t.mock.method(
-        fsPromises,
-        'readFile',
-        async (...args: Parameters<typeof fsPromises.readFile>) => {
-          const options = args[1];
-          nativeSignal =
-            typeof options === 'object' && options !== null ? options.signal : undefined;
-          controller.abort(reason);
-          return originalRead(...args);
-        },
-      );
+      const originalOpen = fsPromises.open;
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await originalOpen(...args);
+        const originalRead = handle.read.bind(handle);
+        t.mock.method(
+          handle,
+          'read',
+          (
+            buffer: NodeJS.ArrayBufferView,
+            offset?: number | null,
+            length?: number | null,
+            position?: number | null,
+          ) => {
+            if (position === null) {
+              controller.abort(reason);
+            }
+            return originalRead(buffer, offset, length, position);
+          },
+        );
+        return handle;
+      });
       syncBuiltinESMExports();
       try {
         await assert.rejects(
@@ -135,7 +144,6 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
             return true;
           },
         );
-        assert.strictEqual(nativeSignal, controller.signal);
       } finally {
         t.mock.restoreAll();
         syncBuiltinESMExports();
@@ -147,9 +155,27 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     const filePath = await writeTestFile(tmpDir, 'raw-native-failure.txt', 'unchanged');
     const controller = new AbortController();
     const failure = Object.assign(new Error('Native read failed'), { code: 'EIO' });
-    t.mock.method(fsPromises, 'readFile', () => {
-      controller.abort(new DOMException('Deadline elapsed', 'TimeoutError'));
-      return Promise.reject(failure);
+    const originalOpen = fsPromises.open;
+    t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+      const handle = await originalOpen(...args);
+      const originalRead = handle.read.bind(handle);
+      t.mock.method(
+        handle,
+        'read',
+        (
+          buffer: NodeJS.ArrayBufferView,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ) => {
+          if (position === null) {
+            controller.abort(new DOMException('Deadline elapsed', 'TimeoutError'));
+            return Promise.reject(failure);
+          }
+          return originalRead(buffer, offset, length, position);
+        },
+      );
+      return handle;
     });
     syncBuiltinESMExports();
     try {
@@ -1036,6 +1062,143 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         name.startsWith('commit_precheck.txt.'),
       );
       assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
+    });
+
+    it('TC-FUNC-047f: a write stops when the undo capture detects a swapped path', async () => {
+      const filePath = await writeTestFile(tmpDir, 'swap_refused.txt', 'old\n');
+      const cap = new UndoJournal(1024 * 1024).beginCapture();
+      const tracked = new GuardedFileSystem(ctx.pathGuard, cap);
+      mock.method(tracked, 'readSaved', async () => {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+          filePath,
+        );
+      });
+      try {
+        await assert.rejects(
+          tracked.writeFile(filePath, 'new\n'),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, 'TOCTOU'),
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('swap_refused.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'the temp file must be cleaned up');
+    });
+
+    it("TC-FUNC-047g: a native ELOOP from the capture's O_NOFOLLOW open stops the write", async () => {
+      const filePath = await writeTestFile(tmpDir, 'swap_eloop.txt', 'old\n');
+      const cap = new UndoJournal(1024 * 1024).beginCapture();
+      const tracked = new GuardedFileSystem(ctx.pathGuard, cap);
+      mock.method(tracked, 'readSaved', async () => {
+        throw Object.assign(new Error('ELOOP: too many symbolic links encountered, open'), {
+          code: 'ELOOP',
+        });
+      });
+      try {
+        await assert.rejects(
+          tracked.writeFile(filePath, 'new\n'),
+          fsErrorMatcher(ErrorCode.SYMLINK_NOT_ALLOWED, 'TOCTOU'),
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('swap_eloop.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, []);
+    });
+
+    it('TC-FUNC-047h: a write refuses when its parent now resolves outside the roots', async () => {
+      const outsideDir = await mkdtemp(join(tmpdir(), 'fs-mcp-outside-'));
+      const filePath = await writeTestFile(tmpDir, 'parent_swap.txt', 'old\n');
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      // Only the write's last look at the parent sees the swap; validation saw the real dir.
+      mock.method(fsPromises, 'realpath', (async (p: string, ...rest: unknown[]) => {
+        if (
+          isSamePath(p, dirname(filePath)) &&
+          (new Error().stack ?? '').includes('assertParentStillWritable')
+        ) {
+          return outsideDir;
+        }
+        return await (realRealpath as (...a: unknown[]) => Promise<string>)(p, ...rest);
+      }) as typeof fsPromises.realpath);
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(
+          fs.writeFile(filePath, 'new\n'),
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, 'TOCTOU'),
+        );
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+        await rm(outsideDir, { recursive: true, force: true });
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('parent_swap.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, []);
+    });
+
+    it('a failed rename leaves the target untouched and removes the temp file', async () => {
+      const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
+      mock.method(fsPromises, 'rename', async (): Promise<void> => {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      assert.deepStrictEqual(leftovers, [], 'no directory entry may start with rename_fail.txt.');
+    });
+
+    it('a failed rename whose cleanup also fails still reports the rename error and logs a warning', async (t) => {
+      const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
+      const logged: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        logged.push(args.map(String).join(' '));
+      });
+      mock.method(fsPromises, 'rename', async (): Promise<void> => {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      });
+      mock.method(fsPromises, 'unlink', async (): Promise<void> => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked, unlink'), { code: 'EBUSY' });
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.strictEqual(await readFile(filePath, 'utf-8'), 'old\n');
+      assert.ok(
+        logged.some((line) => line.includes('Failed to clean up temp file')),
+        'one logged line must contain "Failed to clean up temp file"',
+      );
+      const leftovers = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      for (const tempFile of leftovers) {
+        await unlink(join(dirname(filePath), tempFile));
+      }
+      const afterCleanup = (await readdir(dirname(filePath))).filter((name) =>
+        name.startsWith('rename_fail.txt.'),
+      );
+      assert.deepStrictEqual(afterCleanup, [], 'leftover temp files must be removed');
     });
 
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
@@ -2877,6 +3040,40 @@ describe('GuardedFileSystem.read binary policy', () => {
       (error) => error === stop,
     );
     assert.deepEqual(seen, [['image', 'image/png', PNG.length, normalizePath(file)]]);
+  });
+
+  it('a binary read of a file that grows past maxSize is refused', async () => {
+    const filePath = await writeTestFile(root, 'grow.bin', '0123456789');
+    await assert.rejects(
+      fs.read(filePath, {
+        binary: 'raw',
+        maxSize: 16,
+        beforeBody: () => {
+          appendFileSync(filePath, Buffer.alloc(64, 0x61));
+        },
+      }),
+      fsErrorMatcher(ErrorCode.TOO_LARGE),
+    );
+  });
+
+  it('a binary read that grows within maxSize returns every byte', async () => {
+    const filePath = await writeTestFile(root, 'grow-ok.bin', '0123456789');
+    const result = await fs.read(filePath, {
+      binary: 'raw',
+      maxSize: 4096,
+      beforeBody: () => {
+        appendFileSync(filePath, Buffer.alloc(1000, 0x61));
+      },
+    });
+    assert.ok(Buffer.isBuffer(result.content));
+    assert.strictEqual(result.content.length, 1010);
+  });
+
+  it('a small binary read does not hold a maxSize allocation', async () => {
+    const file = await put('small.png', PNG);
+    const result = await fs.read(file, { binary: 'raw', maxSize: 64 * MIB });
+    assert.ok(Buffer.isBuffer(result.content));
+    assert.ok(result.content.buffer.byteLength < MIB, 'backing store sized to the file');
   });
 
   it('opens the file once per read', async (t) => {

@@ -135,6 +135,32 @@ describe('list body', () => {
     assert.strictEqual(tree.truncated, true);
   });
 
+  it('names the 20000 kept-entry cap and reports exact totals when exceeded', async () => {
+    const dir = join(root, 'overflow_20000');
+    await mkdir(dir, { recursive: true });
+    const dirCount = 201;
+    const filesPerDir = 100;
+    const totalExpected = dirCount + dirCount * filesPerDir;
+
+    for (let d = 0; d < dirCount; d++) {
+      const sub = join(dir, `d${String(d)}`);
+      await mkdir(sub, { recursive: true });
+      const writes: Promise<void>[] = [];
+      for (let f = 0; f < filesPerDir; f++) {
+        writes.push(writeFile(join(sub, `f${String(f)}.txt`), ''));
+      }
+      await Promise.all(writes);
+    }
+
+    const result = await list({ path: dir, maxDepth: 2, maxEntries: 5 });
+
+    assert.strictEqual(result.structured.stoppedReason, 'maxResults');
+    assert.strictEqual(result.structured.totalEntries, totalExpected);
+    assert.doesNotMatch(result.text ?? '', /10000-result scan cap/);
+    assert.doesNotMatch(result.text ?? '', /lower bound/);
+    assert.match(result.text ?? '', /kept the first 20000 of \d+ entries; the totals are exact/);
+  });
+
   it('draws later-page entries under their ancestors', async () => {
     const sub = join(root, 'tree_page_dir');
     for (const dir of ['a', 'b']) {

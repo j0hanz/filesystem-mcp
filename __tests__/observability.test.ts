@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import nodeFs from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { sanitizeLogField } from '../src/core/observability.ts';
+import { createWatcherRegistry, MAX_WATCHERS } from '../src/core/watcher-registry.ts';
+import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
 
 describe('sanitizeLogField', () => {
   it('flattens control characters so a client value cannot forge a log line', () => {
@@ -15,5 +22,73 @@ describe('sanitizeLogField', () => {
   it('caps the value length, or leaves it uncapped on request', () => {
     assert.strictEqual(sanitizeLogField('x'.repeat(500)).length, 128);
     assert.strictEqual(sanitizeLogField('x'.repeat(500), Infinity).length, 500);
+  });
+
+  it('sanitizes client-supplied URI when warning at the watcher cap', async (t) => {
+    const dir = await createTestRoot();
+    const guard = await makeGuard([dir]);
+    const registry = createWatcherRegistry();
+    const logged: unknown[][] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      logged.push(args);
+    });
+    const acquiredUris: string[] = [];
+
+    try {
+      for (let i = 0; i < MAX_WATCHERS; i++) {
+        const sub = join(dir, `sub-${i}`);
+        await mkdir(sub);
+        const uri = buildFileResourceUri(sub);
+        const res = await registry.acquire(guard, uri, () => {});
+        assert.strictEqual(res.ok, true);
+        acquiredUris.push(uri);
+      }
+
+      const forgedUri = `${buildFileResourceUri(dir)}/x\n[error] forged line`;
+      const capped = await registry.acquire(guard, forgedUri, () => {});
+      assert.deepStrictEqual(capped, { ok: false, reason: 'capped' });
+
+      const capLogs = logged.filter(
+        (args) => typeof args[0] === 'string' && args[0].includes('Cannot subscribe to'),
+      );
+      assert.strictEqual(capLogs.length, 1);
+      const firstArg = capLogs[0]?.[0];
+      assert(typeof firstArg === 'string');
+      assert.strictEqual(firstArg.includes('\n'), false);
+    } finally {
+      for (const uri of acquiredUris) {
+        registry.release(uri);
+      }
+      await cleanupTestRoot(dir);
+    }
+  });
+
+  it('sanitizes the error text when a watcher cannot be created', async (t) => {
+    const dir = await createTestRoot();
+    const guard = await makeGuard([dir]);
+    const registry = createWatcherRegistry();
+    const logged: unknown[][] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      logged.push(args);
+    });
+    // The error message carries the client-chosen path, newline included.
+    t.mock.method(nodeFs, 'statSync', () => {
+      throw new Error('ENOENT: no such file\n[error] forged line');
+    });
+    syncBuiltinESMExports();
+    try {
+      await registry.acquire(guard, buildFileResourceUri(dir), () => {});
+      const failLogs = logged.filter(
+        (args) => typeof args[0] === 'string' && args[0].includes('Failed to create watcher'),
+      );
+      assert.strictEqual(failLogs.length, 1);
+      const line = failLogs[0]?.[0];
+      assert(typeof line === 'string');
+      assert.strictEqual(line.includes('\n'), false);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await cleanupTestRoot(dir);
+    }
   });
 });

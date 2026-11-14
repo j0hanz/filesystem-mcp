@@ -20,11 +20,11 @@ import { createServer as createHttpServer } from 'node:http';
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 
-import { parseEnvInt, parseTrueEnvFlag } from '../core/config.ts';
+import { getRootBoundary, parseEnvInt, parseTrueEnvFlag } from '../core/config.ts';
 import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { PathGuard, ServerOptions } from '../core/path.ts';
-import { getMaxInboundMessageBytes } from '../core/util.ts';
+import { getMaxInboundMessageBytes, MIB } from '../core/util.ts';
 import type { WatcherRegistry } from '../core/watcher-registry.ts';
 import { createRuntimeState, createServer } from '../server.ts';
 import {
@@ -33,6 +33,7 @@ import {
   bearerAuthMiddleware,
   computeAllowedOriginHostnames,
   corsMiddleware,
+  createBodyBudget,
   createRateLimiter,
   isLoopbackHttpHost,
   JSONRPC_SERVER_ERROR,
@@ -172,6 +173,11 @@ function setupExpressApp(
 
   const resourceUpdateSink = notifier.resourceUpdated.bind(notifier);
 
+  const bodyBudget = createBodyBudget(
+    Math.max(getMaxInboundMessageBytes(), 128 * MIB),
+    getMaxInboundMessageBytes(),
+  );
+
   // One bound for both transports, derived from the write tools' own limit
   // (getMaxInboundMessageBytes): a create the schema accepts must not be
   // refused here. Mounted after CORS, the rate limiter and auth, so a refused
@@ -181,7 +187,7 @@ function setupExpressApp(
   // parsedBody is supplied — which this route never does.
   const parseJson = express.json({ limit: `${String(getMaxInboundMessageBytes())}b` });
 
-  app.post('/mcp', parseJson, (req: Request, res: Response, next: NextFunction) => {
+  app.post('/mcp', bodyBudget, parseJson, (req: Request, res: Response, next: NextFunction) => {
     void (async () => {
       if (!isJsonContentType(req.headers['content-type'])) {
         sendJsonRpcError(
@@ -276,6 +282,10 @@ export async function startHttpServer(
   if (apiKey === undefined) {
     Logger.warn(
       '[HTTP] No API key set: any local user or process can call this server and approve its own access grants. Set FS_API_KEY, and use --root-boundary to limit grants.',
+    );
+  } else if (!isLoopbackHttpHost(httpHost) && getRootBoundary() === undefined) {
+    Logger.warn(
+      '[HTTP] Listening beyond loopback with no root boundary: any client holding the API key can approve its own access grants and add folders. Set --root-boundary to limit grants.',
     );
   }
   const allowedHosts = resolveAllowedHosts(httpHost, process.env['FS_ALLOWED_HOSTS']);

@@ -21,7 +21,7 @@ const testCommand = process.env.STRYKER_FULL
   : `node --test --test-timeout=60000 ${SCOPED_TESTS.join(' ')}`;
 
 export default {
-  mutate: ['src/core/path.ts', 'src/core/sensitive.ts'],
+  mutate: ['src/core/path.ts', 'src/core/sensitive.ts', 'src/core/path-utils.ts'],
   testRunner: 'command',
   commandRunner: { command: testCommand },
   coverageAnalysis: 'off',

@@ -140,6 +140,10 @@ async with Client(transport) as client: ...
 - The server is stateless per request, with no session ID. One server can
   serve many clients at once, and they share its allowed folders, including
   folders granted by any one of them.
+- Clients also share one undo journal. `undo` therefore needs the undo `id`
+  from the tool result; `steps` and a bare `undo` are refused with
+  `INVALID_INPUT`. `undo` with `dryRun: true` lists every client's ids, and
+  any client can revert another client's change.
 - Prefer absolute paths. A relative path resolves against the root unless the
   server was started inside one, which a remote client cannot know.
 - 2025-era clients get no confirmations and no change notifications over HTTP;
@@ -466,8 +470,10 @@ The server asks the user before:
 Every form is an `elicitation/create` request in form mode, with a `message`
 and a `requestedSchema` that has exactly one property. Answer with
 `{ action: 'accept', content: { <property>: <value> } }`, or with
-`{ action: 'decline' }`. Declining fails that item with `CANCELLED`; for a
-grant, the path then fails with `ACCESS_DENIED`. Accepting with `skip` is not
+`{ action: 'decline' }`. Declining fails that item with `CANCELLED` in
+`create` and `delete`; in `move` it cancels the whole call, and nothing is
+moved; for a grant, the path then fails with `ACCESS_DENIED`. Accepting with
+`skip` is not
 a failure, and nothing changes. `create` and `move` list the path under
 `skipped` instead of `files` or `moves`, and `delete` reports
 `deleted: false` with the text `SKIPPED`. A client that announces success

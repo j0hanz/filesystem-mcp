@@ -314,6 +314,13 @@ The server enforces these safety rules:
   approve its own access grants. On a shared machine set `FS_API_KEY`, and
   `--root-boundary` to limit what a grant can add. The server logs a warning
   when it starts without a key.
+- Every client of one HTTP server shares its undo journal: any client can
+  list and revert another client's changes. Run one server per user when
+  that matters.
+- With an API key, the client that holds the key answers access-grant
+  prompts itself. When the server listens beyond `127.0.0.1`, set
+  `--root-boundary` so a leaked key cannot add folders outside it. The
+  server logs a warning when it starts without one.
 - Listening on any other address requires an API key of at least 16
   characters (`FS_API_KEY`). Clients send it as
   `Authorization: Bearer <key>`.
@@ -322,6 +329,12 @@ The server enforces these safety rules:
 - Browsers can only call it from `localhost` pages unless you set
   `FS_ALLOWED_ORIGINS`.
 - It rate-limits requests per client IP (`FS_RATE_LIMIT_RPM`).
+- Request bodies are bounded in total: when the bodies being received add up
+  to more than 128 MiB (or one maximum-size body, if that is larger), further
+  large requests get `503` with `Retry-After` until one finishes. Bodies under
+  1 MiB share a separate 32 MiB pool, so large uploads never block ordinary
+  calls. A compressed body counts as one maximum-size body, since it is
+  decompressed before parsing.
 
 ```bash
 # Reachable from your network, with a key

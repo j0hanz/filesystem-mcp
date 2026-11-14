@@ -13,8 +13,8 @@ import {
   open as fsOpen,
   opendir as fsOpendir,
   readdir as fsReaddir,
-  readFile as fsReadFile,
   readlink as fsReadlink,
+  realpath as fsRealpath,
   rename as fsRename,
   rm as fsRm,
   rmdir as fsRmdir,
@@ -483,6 +483,92 @@ export class GuardedFileSystem {
     }
   }
 
+  /**
+   * On platforms without O_NOFOLLOW (Windows) or without procfs (macOS, Windows),
+   * verify that the opened handle matches the path on disk and has not been
+   * swapped for a symlink or a file outside the allowed roots (TOCTOU).
+   */
+  async #verifyOpenedHandle(
+    handle: FileHandle,
+    validPath: string,
+    requestedPath: string,
+  ): Promise<void> {
+    // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
+    let linkStat: BigIntStats;
+    try {
+      linkStat = await fsLstat(validPath, { bigint: true });
+    } catch (error) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    if (linkStat.isSymbolicLink()) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    const handleStat = await handle.stat({ bigint: true });
+    if (handleStat.dev !== linkStat.dev || handleStat.ino !== linkStat.ino) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    let real: string;
+    try {
+      real = await fsRealpath(validPath);
+    } catch (error) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    const realNorm = normalizePath(real);
+    if (
+      this.pathGuard.allowedRootContaining(realNorm) === undefined ||
+      this.pathGuard.isSensitive(realNorm)
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+  }
+
+  /** Re-resolves the parent of a write target: still inside a writable root, or refused. */
+  async #assertParentStillWritable(validPath: string, requestedPath: string): Promise<void> {
+    let real: string;
+    try {
+      real = normalizePath(await fsRealpath(dirname(validPath)));
+    } catch (error) {
+      // A missing parent fails the temp-file create with its own error; nothing escapes.
+      if (isNotFoundErrno(error)) return;
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    if (this.pathGuard.allowedRootContaining(real) === undefined) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    this.pathGuard.assertWritable(real);
+  }
+
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
   async #openVerified(
     validPath: string,
@@ -496,7 +582,10 @@ export class GuardedFileSystem {
       `file handle for ${validPath}`,
     );
     try {
-      await this.#assertFdWithinRoots(handle, requestedPath);
+      const fdPath = await this.#assertFdWithinRoots(handle, requestedPath);
+      if (O_NOFOLLOW === 0 || fdPath === undefined) {
+        await this.#verifyOpenedHandle(handle, validPath, requestedPath);
+      }
       return handle;
     } catch (error) {
       await handle.close();
@@ -1213,6 +1302,22 @@ export class GuardedFileSystem {
         }
       }
     } catch (error) {
+      // A refusal from the capture's verified read (a parent swapped for a link) is not a stat failure: stop the write.
+      if (
+        isFsError(error) &&
+        (error.code === ErrorCode.ACCESS_DENIED || error.code === ErrorCode.SYMLINK_NOT_ALLOWED)
+      ) {
+        throw error;
+      }
+      // O_NOFOLLOW's native ELOOP: the target was swapped for a link after validation.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ELOOP') {
+        throw new FsError(
+          ErrorCode.SYMLINK_NOT_ALLOWED,
+          'Path changed under validation and is now a symbolic link (TOCTOU).',
+          filePath,
+          error,
+        );
+      }
       // ENOENT is the normal new-file case: the default mode is correct there.
       // Anything else (EACCES, EIO) means the mode about to be overwritten could
       // not be read, and the write will silently widen the file — say so rather
@@ -1267,6 +1372,9 @@ export class GuardedFileSystem {
       }
       recordWrite();
     } else {
+      // Validation ran before the lock wait and the capture read: a parent swapped
+      // for a link since then would carry the temp file and the rename outside.
+      await this.#assertParentStillWritable(validPath, filePath);
       try {
         signal?.throwIfAborted();
         // Create the temp file already narrowed to the target's mode: a 0600
@@ -1768,14 +1876,32 @@ export class GuardedFileSystem {
 
     if (bytes) {
       if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
-      let content: Buffer;
+      // The stat above is older than this handle: a file that grew since must not be read whole.
+      // Sized to the stat plus one overflow byte, grown only if the file grew, capped at maxSize + 1.
+      const cap = maxSize + 1;
+      let buffer = Buffer.allocUnsafe(Math.min(stats.size + 1, cap));
+      let filled = 0;
       try {
-        content = await fsReadFile(handle, signal ? { signal } : undefined);
+        for (;;) {
+          if (filled === buffer.length) {
+            if (buffer.length === cap) break;
+            const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, cap));
+            buffer.copy(grown, 0, 0, filled);
+            buffer = grown;
+          }
+          signal?.throwIfAborted();
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          signal?.throwIfAborted();
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
       } catch (error) {
         // Node wraps even a TimeoutError signal reason in AbortError.
         if (error instanceof Error && error.name === 'AbortError') signal?.throwIfAborted();
         throw error;
       }
+      if (filled > maxSize) throw createTooLargeError(filled, maxSize, filePath);
+      const content = buffer.subarray(0, filled);
       return {
         type: 'bytes',
         content,

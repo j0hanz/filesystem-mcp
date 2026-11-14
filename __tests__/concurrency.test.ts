@@ -87,3 +87,83 @@ describe('runExclusive argument isolation', () => {
     assert.strictEqual(receivedArg, undefined, 'expected optionalArg to be undefined');
   });
 });
+
+const gate = (): { promise: Promise<void>; open: () => void } => {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+};
+
+describe('runExclusive serialization', () => {
+  it('same key never overlaps, in call order', async () => {
+    const key = Symbol('serialization-key');
+    const order: string[] = [];
+    const gate1 = gate();
+    const gate2 = gate();
+    const gate3 = gate();
+
+    const p1 = runExclusive(key, async () => {
+      order.push('start-1');
+      await gate1.promise;
+      order.push('end-1');
+    });
+
+    const p2 = runExclusive(key, async () => {
+      order.push('start-2');
+      await gate2.promise;
+      order.push('end-2');
+    });
+
+    const p3 = runExclusive(key, async () => {
+      order.push('start-3');
+      await gate3.promise;
+      order.push('end-3');
+    });
+
+    gate3.open();
+    gate2.open();
+    gate1.open();
+
+    await Promise.all([p1, p2, p3]);
+
+    assert.deepEqual(order, ['start-1', 'end-1', 'start-2', 'end-2', 'start-3', 'end-3']);
+  });
+
+  it('different keys run together', async () => {
+    const keyA = Symbol('key-A');
+    const keyB = Symbol('key-B');
+    const gateA = gate();
+    let aFinished = false;
+
+    const pA = runExclusive(keyA, async () => {
+      await gateA.promise;
+      aFinished = true;
+    });
+
+    const pB = runExclusive(keyB, async () => 'b-done');
+
+    const resultB = await pB;
+    assert.strictEqual(resultB, 'b-done');
+    assert.strictEqual(aFinished, false, 'expected A to still be pending when B resolves');
+
+    gateA.open();
+    await pA;
+    assert.strictEqual(aFinished, true);
+  });
+
+  it('a rejected holder does not block the next', async () => {
+    const key = Symbol('rejection-key');
+
+    const p1 = runExclusive(key, async () => {
+      throw new Error('first failed');
+    });
+
+    const p2 = runExclusive(key, async () => 'second ok');
+
+    await assert.rejects(p1, { message: 'first failed' });
+    const result2 = await p2;
+    assert.strictEqual(result2, 'second ok');
+  });
+});

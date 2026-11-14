@@ -132,4 +132,17 @@ describe('Problem.fromUnknown with errno rows', () => {
       'gone',
     );
   });
+
+  it('keeps IO_ERROR for a real I/O failure instead of the default code', () => {
+    const busy = Problem.fromUnknown(errnoError('EBUSY'), ErrorCode.NOT_FILE, '/f');
+    assert.strictEqual(busy.code, ErrorCode.IO_ERROR);
+    assert.doesNotMatch(busy.suggestion ?? '', /directory/);
+    assert.strictEqual(
+      Problem.fromUnknown(errnoError('EIO'), ErrorCode.NOT_FOUND).code,
+      ErrorCode.IO_ERROR,
+    );
+  });
+  it('still gives an unclassified error the default code', () => {
+    assert.strictEqual(Problem.fromUnknown('nope', ErrorCode.NOT_FILE).code, ErrorCode.NOT_FILE);
+  });
 });

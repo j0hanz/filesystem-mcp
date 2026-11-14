@@ -242,6 +242,15 @@ function summaryLine(metadata: ListPageMetadata, totalBytes: number): string {
   )}, ${formatByteSize(totalBytes)} total`;
 }
 
+/** The kept-entries cap: the walk ran on, so the totals are exact and only the listing is cut. */
+function keptNote(metadata: ListPageMetadata): string[] {
+  return metadata.stoppedReason === 'maxResults'
+    ? [
+        `// kept the first ${String(MAX_LIST_ENTRIES)} of ${String(metadata.totalEntries)} entries; the totals are exact. Lower maxDepth or list a subfolder to see the rest.`,
+      ]
+    : [];
+}
+
 const DEFAULT_LIST_DEPTH = 1;
 
 /** A raised maxDepth reads as the whole tree, so say what it stopped short of. */
@@ -348,6 +357,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   run: async (args, ctx) => {
     const renderOpts: RenderOptions = { includeSizes: args.includeSizes, sortBy: args.sortBy };
     const listNotes = (metadata: ListPageMetadata): string[] => [
+      ...keptNote(metadata),
       ...depthNote(args.maxDepth, metadata.unexpandedDirectories),
       ...ignoredNote(metadata.ignoredDirs),
     ];
@@ -401,7 +411,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       trailer: (metadata) => ({
         total: metadata.totalEntries,
         noun: 'entries',
-        stoppedReason: metadata.stoppedReason,
+        stoppedReason: metadata.stoppedReason === 'maxResults' ? undefined : metadata.stoppedReason,
         skippedInaccessible: metadata.skippedInaccessible,
         notes: listNotes(metadata),
       }),

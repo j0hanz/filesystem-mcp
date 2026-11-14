@@ -12,7 +12,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
-import { splitCsvList } from '../core/util.ts';
+import { MIB, splitCsvList } from '../core/util.ts';
 import { jsonRpcError } from './shared.ts';
 
 const MAX_BEARER_TOKEN_LENGTH = 4096;
@@ -443,4 +443,72 @@ export function createRateLimiter(
     buckets.clear();
   };
   return limiter;
+}
+
+// ─── Request body budget ──────────────────────────────────────────────────────
+
+function parseContentLength(header: string | string[] | undefined): number | undefined {
+  if (typeof header !== 'string') return undefined;
+  const trimmed = header.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+/** Bytes reserved for sub-MiB bodies, so ordinary tool calls never wait behind large uploads. */
+const SMALL_BODY_BUDGET_BYTES = 32 * MIB;
+
+/**
+ * Bounds the request bytes being buffered and parsed at once: each body is held
+ * whole, so a few parallel near-limit uploads could otherwise exhaust the heap.
+ * Bodies under 1 MiB draw on their own pool, so the total stays bounded while
+ * large uploads cannot starve small calls.
+ */
+export function createBodyBudget(
+  budgetBytes: number,
+  unknownCost: number,
+  smallBudgetBytes = SMALL_BODY_BUDGET_BYTES,
+): RequestHandler {
+  const large = { inFlight: 0, limit: budgetBytes };
+  const small = { inFlight: 0, limit: smallBudgetBytes };
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const parsedLength = parseContentLength(req.headers['content-length']);
+    // express.json inflates gzip/deflate/br, so Content-Length undercounts an
+    // encoded body: charge the most it can grow to (the parser's own limit).
+    const encoding = req.headers['content-encoding'];
+    const encoded = encoding !== undefined && encoding.trim().toLowerCase() !== 'identity';
+    const cost = encoded ? unknownCost : (parsedLength ?? unknownCost);
+    const pool = cost < MIB ? small : large;
+
+    if (pool.inFlight + cost > pool.limit) {
+      sendJsonRpcError(
+        res,
+        503,
+        JSONRPC_SERVER_ERROR,
+        'Server busy: too many request bytes in flight. Retry shortly.',
+        null,
+        {
+          'Retry-After': '1',
+        },
+      );
+      return;
+    }
+
+    pool.inFlight += cost;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      pool.inFlight -= cost;
+    };
+
+    if (res.closed || res.destroyed) {
+      release();
+    } else {
+      res.once('close', release);
+    }
+
+    next();
+  };
 }

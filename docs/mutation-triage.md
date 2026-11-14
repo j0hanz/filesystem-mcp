@@ -55,3 +55,40 @@ stays free to change. This covers every surviving `StringLiteral` inside an
 in `path.ts`); Linux alone killed 21 more, in POSIX-only branches. Apart
 from the security checks and message text above, the logic-branch and
 equivalent survivors among them are open for the next round.
+
+## Audit 2: `src/core/path-utils.ts` (2026-11-14)
+
+Run against scoped tests (`__tests__/path-helpers.test.ts` and suite).
+
+- Initial baseline: 247 mutants, 104 killed, 1 timed out, 96 survived (52.24% mutation score, 67 non-StringLiteral survivors).
+- After killing tests: 247 mutants, 156 killed, 1 timed out, 44 survived (78.11% mutation score, 21 non-StringLiteral survivors, 23 StringLiterals).
+
+### Backstops and equivalent mutants
+
+| Site                | Mutated logic                                                      | Classification | Covered by / Reason                                                                                                                                                           |
+| :------------------ | :----------------------------------------------------------------- | :------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path-utils.ts:54`  | `IS_WINDOWS` replaced with `true`                                  | Needs POSIX    | On Windows host, `process.platform === 'win32'` evaluates to `true`; mutating to `true` has no effect.                                                                        |
+| `path-utils.ts:165` | `/^[/\\]+/` replaced with `/[/\\]+/`                               | Equivalent     | String is guaranteed to start with `/` or `\`; regex engine matches at earliest index (0), so unanchored match is identical.                                                  |
+| `path-utils.ts:180` | `resolved.length >= 2` replaced with `true` / `> 2`                | Backstop       | `resolve()` on Windows always returns a drive path (`<Drive>:\...`, length >= 3) or UNC path (`\\...`, length >= 5).                                                          |
+| `path-utils.ts:180` | `resolved.charCodeAt(1) === CHAR_COLON` replaced with `true`       | Backstop       | For drive paths, `charCodeAt(1)` is `:`. For UNC paths, lowercasing `\` is a no-op; lowercasing the first character unconditionally produces the exact same result.           |
+| `path-utils.ts:180` | `IS_WINDOWS` replaced with `true`                                  | Needs POSIX    | Evaluates to `true` on Windows host.                                                                                                                                          |
+| `path-utils.ts:187` | `IS_CASE_INSENSITIVE_FS` replaced with `true`                      | Needs Linux    | `IS_WINDOWS` is already `true` on Windows; needs Linux to evaluate.                                                                                                           |
+| `path-utils.ts:187` | `platform() === 'darwin'` replaced with `false` / `!== 'darwin'`   | Needs Darwin   | Short-circuited by `IS_WINDOWS` on Windows; needs macOS to evaluate.                                                                                                          |
+| `path-utils.ts:199` | `if (left === right) return true;` removed / replaced with `false` | Equivalent     | Optimization fast-path; if `left === right`, subsequent `resolve()` and case normalization return identical strings and return `true` anyway.                                 |
+| `path-utils.ts:261` | `normalized.endsWith(sep)` and slice ternary branches              | Backstop       | `normalizePath` calls `resolve()`, which unconditionally strips trailing separators from non-root paths on both Windows and POSIX; root paths are already returned at `:258`. |
+
+### New killing tests added (`__tests__/path-helpers.test.ts`)
+
+- `resolveEntryType classifies dirent-like objects`
+- `warnInvalidSetting prints once per setting:value pair`
+- `splitDirList splits delimiter-separated paths, trims, and discards empty segments`
+- `isSlash identifies forward slash and backslash char codes`
+- `isAlpha tests boundary ascii upper and lower case letters`
+- `trimTrailingDotsAndSpaces trims multiple trailing dots and spaces`
+- `isWindowsDrivePath requires drive letter at the root start`
+- `isUncOrDevicePath matches UNC device prefix on Windows only`
+- `expandHome expands tilde paths and strips leading slashes after tilde`
+- `normalizePath lowercases drive letter on Windows`
+- `unicodeMatchKey folds ASCII case on case-insensitive filesystems`
+- `isEquivalentPath returns false for completely different paths`
+- `normalizeAllowedDirectory trims whitespace and returns empty string for empty input`

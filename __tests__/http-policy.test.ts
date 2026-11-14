@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { connect, createServer as createProbeServer } from 'node:net';
 import { describe, it } from 'node:test';
 
-import type { Request, Response } from 'express';
+import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 
 import { ErrorCode } from '../src/core/errors.ts';
-import { splitCsvList } from '../src/core/util.ts';
+import { MIB, splitCsvList } from '../src/core/util.ts';
 import {
   assertHttpBindingPolicy,
   assertHttpHostPolicy,
   bearerAuthMiddleware,
   computeAllowedOriginHostnames,
   corsMiddleware,
+  createBodyBudget,
   createRateLimiter,
   isLoopbackHttpHost,
   isOriginAllowed,
@@ -36,6 +39,8 @@ interface MockResponse {
   headers: Record<string, string>;
   body?: string;
   ended: boolean;
+  closed?: boolean;
+  destroyed?: boolean;
   header(name: string, value: string): MockResponse;
   set(headers: Record<string, string>): MockResponse;
   status(code: number): MockResponse;
@@ -43,38 +48,46 @@ interface MockResponse {
   end(): MockResponse;
 }
 
-function createMockResponse(): Response & MockResponse {
-  const res: MockResponse = {
-    headers: {},
-    ended: false,
-    header(name: string, value: string) {
-      this.headers[name.toLowerCase()] = value;
-      return this;
-    },
-    set(headers: Record<string, string>) {
-      for (const [k, v] of Object.entries(headers)) {
-        this.headers[k.toLowerCase()] = v;
-      }
-      return this;
-    },
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    // Express sets the JSON content type and serializes; the mock records what
-    // the assertions read back, so `res.body` stays the JSON string either way.
-    json(body: unknown) {
-      this.headers['content-type'] = 'application/json; charset=utf-8';
-      this.body = JSON.stringify(body);
-      this.ended = true;
-      return this;
-    },
-    end() {
-      this.ended = true;
-      return this;
-    },
-  };
-  return res as unknown as Response & MockResponse;
+class MockResponseEmitter extends EventEmitter implements MockResponse {
+  statusCode?: number;
+  headers: Record<string, string> = {};
+  body?: string;
+  ended = false;
+  closed = false;
+  destroyed = false;
+
+  header(name: string, value: string): this {
+    this.headers[name.toLowerCase()] = value;
+    return this;
+  }
+
+  set(headers: Record<string, string>): this {
+    for (const [k, v] of Object.entries(headers)) {
+      this.headers[k.toLowerCase()] = v;
+    }
+    return this;
+  }
+
+  status(code: number): this {
+    this.statusCode = code;
+    return this;
+  }
+
+  json(body: unknown): this {
+    this.headers['content-type'] = 'application/json; charset=utf-8';
+    this.body = JSON.stringify(body);
+    this.ended = true;
+    return this;
+  }
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+}
+
+function createMockResponse(): Response & MockResponse & EventEmitter {
+  return new MockResponseEmitter() as unknown as Response & MockResponse & EventEmitter;
 }
 
 function createMockRequest(
@@ -744,6 +757,249 @@ describe('HTTP Policy & Security', () => {
     });
   });
 
+  describe('body budget', () => {
+    const send = (
+      mw: ReturnType<typeof createBodyBudget>,
+      headers: Record<string, string>,
+    ): { res: ReturnType<typeof createMockResponse>; passed: boolean } => {
+      const res = createMockResponse();
+      let passed = false;
+      mw(createMockRequest({ headers }), res, () => {
+        passed = true;
+      });
+      return { res, passed };
+    };
+
+    it('1. a 100-byte request calls next() and is charged to the small pool until close', () => {
+      const mw = createBodyBudget(128 * MIB, 30 * MIB);
+      const { res, passed } = send(mw, { 'content-length': '100' });
+      assert.strictEqual(passed, true);
+      assert.strictEqual(res.statusCode, undefined);
+      assert.strictEqual(res.listenerCount('close'), 1, 'small requests release on close');
+    });
+
+    it('sub-MiB bodies share their own bounded pool, which large uploads cannot exhaust', () => {
+      const mw = createBodyBudget(128 * MIB, 30 * MIB, 2 * MIB);
+      const half = String(MIB - 1);
+      // Large uploads fill the large pool; small calls still pass.
+      assert.strictEqual(send(mw, { 'content-length': String(120 * MIB) }).passed, true);
+      const first = send(mw, { 'content-length': half });
+      assert.strictEqual(first.passed, true);
+      assert.strictEqual(send(mw, { 'content-length': half }).passed, true);
+      // The small pool is bounded too: a third near-1 MiB body exceeds 2 MiB.
+      const third = send(mw, { 'content-length': half });
+      assert.strictEqual(third.passed, false);
+      assert.strictEqual(third.res.statusCode, 503);
+      first.res.emit('close');
+      assert.strictEqual(send(mw, { 'content-length': half }).passed, true);
+    });
+
+    it('a compressed body is charged the fallback cost, not its encoded Content-Length', () => {
+      const mw = createBodyBudget(128 * MIB, 80 * MIB);
+      const gz = send(mw, { 'content-length': '1000', 'content-encoding': 'gzip' });
+      assert.strictEqual(gz.passed, true);
+      // 80 MiB already charged: another 80 MiB does not fit in 128 MiB.
+      assert.strictEqual(send(mw, { 'content-length': String(80 * MIB) }).res.statusCode, 503);
+      gz.res.emit('close');
+      // `identity` is not an encoding: charged by its length.
+      const plain = send(mw, { 'content-length': '1000', 'content-encoding': 'identity' });
+      assert.strictEqual(plain.passed, true);
+      assert.strictEqual(send(mw, { 'content-length': String(80 * MIB) }).passed, true);
+    });
+
+    it('2. two requests of 80 MiB against a 128 MiB budget: the first calls next(), the second gets 503 with Retry-After', () => {
+      const budget = 128 * MIB;
+      const unknownCost = 30 * MIB;
+      const mw = createBodyBudget(budget, unknownCost);
+
+      const req1 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res1 = createMockResponse();
+      let next1Called = false;
+      mw(req1, res1, () => {
+        next1Called = true;
+      });
+      assert.strictEqual(next1Called, true);
+      assert.strictEqual(res1.statusCode, undefined);
+
+      const req2 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res2 = createMockResponse();
+      let next2Called = false;
+      mw(req2, res2, () => {
+        next2Called = true;
+      });
+      assert.strictEqual(next2Called, false);
+      assert.strictEqual(res2.statusCode, 503);
+      assert.strictEqual(res2.headers['retry-after'], '1');
+      const body = JSON.parse(res2.body ?? '{}');
+      assert.strictEqual(body.jsonrpc, '2.0');
+      assert.strictEqual(body.error.code, -32000);
+      assert.strictEqual(
+        body.error.message,
+        'Server busy: too many request bytes in flight. Retry shortly.',
+      );
+    });
+
+    it('3. after the first response emits close, a third 80 MiB request calls next()', () => {
+      const budget = 128 * MIB;
+      const unknownCost = 30 * MIB;
+      const mw = createBodyBudget(budget, unknownCost);
+
+      const req1 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res1 = createMockResponse();
+      let next1Called = false;
+      mw(req1, res1, () => {
+        next1Called = true;
+      });
+      assert.strictEqual(next1Called, true);
+
+      const req2 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res2 = createMockResponse();
+      let next2Called = false;
+      mw(req2, res2, () => {
+        next2Called = true;
+      });
+      assert.strictEqual(next2Called, false);
+      assert.strictEqual(res2.statusCode, 503);
+
+      res1.emit('close');
+
+      const req3 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res3 = createMockResponse();
+      let next3Called = false;
+      mw(req3, res3, () => {
+        next3Called = true;
+      });
+      assert.strictEqual(next3Called, true);
+      assert.strictEqual(res3.statusCode, undefined);
+    });
+
+    it('4. a request with no Content-Length is charged the fallback cost passed to the factory', () => {
+      const budget = 128 * MIB;
+      const unknownCost = 80 * MIB;
+      const mw = createBodyBudget(budget, unknownCost);
+
+      const req1 = createMockRequest({ headers: {} });
+      const res1 = createMockResponse();
+      let next1Called = false;
+      mw(req1, res1, () => {
+        next1Called = true;
+      });
+      assert.strictEqual(next1Called, true);
+
+      const req2 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res2 = createMockResponse();
+      let next2Called = false;
+      mw(req2, res2, () => {
+        next2Called = true;
+      });
+      assert.strictEqual(next2Called, false);
+      assert.strictEqual(res2.statusCode, 503);
+    });
+
+    it('5. close emitted twice releases once (a later request is still bounded)', () => {
+      const budget = 128 * MIB;
+      const unknownCost = 30 * MIB;
+      const mw = createBodyBudget(budget, unknownCost);
+
+      const req1 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res1 = createMockResponse();
+      let next1Called = false;
+      mw(req1, res1, () => {
+        next1Called = true;
+      });
+      assert.strictEqual(next1Called, true);
+
+      res1.emit('close');
+      res1.emit('close');
+
+      const req2 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res2 = createMockResponse();
+      let next2Called = false;
+      mw(req2, res2, () => {
+        next2Called = true;
+      });
+      assert.strictEqual(next2Called, true);
+
+      const req3 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res3 = createMockResponse();
+      let next3Called = false;
+      mw(req3, res3, () => {
+        next3Called = true;
+      });
+      assert.strictEqual(next3Called, false);
+      assert.strictEqual(res3.statusCode, 503);
+    });
+
+    it('a request with invalid Content-Length is charged the fallback cost', () => {
+      const budget = 128 * MIB;
+      const unknownCost = 80 * MIB;
+      const mw = createBodyBudget(budget, unknownCost);
+
+      const req1 = createMockRequest({ headers: { 'content-length': 'invalid-content-length' } });
+      const res1 = createMockResponse();
+      let next1Called = false;
+      mw(req1, res1, () => {
+        next1Called = true;
+      });
+      assert.strictEqual(next1Called, true);
+
+      const req2 = createMockRequest({ headers: { 'content-length': String(80 * MIB) } });
+      const res2 = createMockResponse();
+      let next2Called = false;
+      mw(req2, res2, () => {
+        next2Called = true;
+      });
+      assert.strictEqual(next2Called, false);
+      assert.strictEqual(res2.statusCode, 503);
+    });
+
+    it('res.once("close") fires and releases budget when parseJson refuses with 413', async () => {
+      // Proves STOP condition does not occur: a 413 from express.json releases budget.
+      const app = express();
+      const budget = createBodyBudget(10 * MIB, 5 * MIB);
+      const parseJson = express.json({ limit: `${String(2 * MIB)}b` });
+      app.post('/test', budget, parseJson, (_req, res) => {
+        res.json({ ok: true });
+      });
+      app.use(
+        (err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+          res.status(err.status ?? 500).json({ error: err.message });
+        },
+      );
+
+      const server = app.listen(0, '127.0.0.1');
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const port = (server.address() as AddressInfo).port;
+
+      try {
+        // 1. Send 3 MiB body (exceeds 2 MiB limit -> 413).
+        const body3MiB = 'x'.repeat(3 * MIB);
+        const res1 = await fetch(`http://127.0.0.1:${String(port)}/test`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: body3MiB,
+        });
+        assert.strictEqual(res1.status, 413);
+        await res1.text();
+
+        // 2. If 3 MiB leaked, an 8 MiB request would fail (3 + 8 = 11 > 10 MiB budget -> 503).
+        // Since 'close' fired and released the 3 MiB, 8 MiB is within 10 MiB budget.
+        const req2 = createMockRequest({ headers: { 'content-length': String(8 * MIB) } });
+        const res2 = createMockResponse();
+        let next2Called = false;
+        budget(req2, res2, () => {
+          next2Called = true;
+        });
+        assert.strictEqual(next2Called, true, 'budget must be released after 413 response');
+        assert.strictEqual(res2.statusCode, undefined);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    });
+  });
+
   describe('Utility functions (isLoopbackHttpHost, splitCsvList, resolveTrustProxySetting)', () => {
     it('protectedResourceUrl drops a fragment from FS_PUBLIC_URL (RFC 8707 §2)', () => {
       const url = protectedResourceUrl(
@@ -857,10 +1113,53 @@ describe('keyless bind rate limiting', () => {
     );
     try {
       assert.ok(!lines.some((line) => line.includes('No API key set')));
+      assert.ok(!lines.some((line) => line.includes('no root boundary')));
     } finally {
       await httpServer[Symbol.asyncDispose]();
       await cleanupTestRoot(dir);
     }
+  });
+
+  it('warns once at startup on a non-loopback host with no root boundary', async (t) => {
+    await withEnv({ FS_ROOT_BOUNDARY: undefined, FS_ALLOWED_HOSTS: '0.0.0.0' }, async () => {
+      const dir = await createTestRoot();
+      const lines: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+      const httpServer = await startHttpServer(
+        0,
+        { cliAllowedDirs: [dir] },
+        { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+      );
+      try {
+        assert.strictEqual(lines.filter((line) => line.includes('no root boundary')).length, 1);
+      } finally {
+        await httpServer[Symbol.asyncDispose]();
+        await cleanupTestRoot(dir);
+      }
+    });
+  });
+
+  it('does not warn on a non-loopback host when a root boundary is set', async (t) => {
+    const dir = await createTestRoot();
+    await withEnv({ FS_ROOT_BOUNDARY: dir, FS_ALLOWED_HOSTS: '0.0.0.0' }, async () => {
+      const lines: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+      const httpServer = await startHttpServer(
+        0,
+        { cliAllowedDirs: [dir] },
+        { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+      );
+      try {
+        assert.ok(!lines.some((line) => line.includes('no root boundary')));
+      } finally {
+        await httpServer[Symbol.asyncDispose]();
+        await cleanupTestRoot(dir);
+      }
+    });
   });
 });
 
