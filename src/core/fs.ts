@@ -226,6 +226,7 @@ const RM_RETRY = { maxRetries: 3, retryDelay: 100 } as const;
 
 // Inode locks this async chain holds. Module-wide like the `runExclusive` keys, so a lock taken
 // through one GuardedFileSystem is not re-taken (self-deadlock) through another.
+// A holder must not start parallel or detached writes to the same inode: work it spawns inherits this held set and skips the lock.
 const heldInodes = new AsyncLocalStorage<ReadonlySet<string>>();
 
 /** Names of one inode share its bytes, so writes through any of them serialize on this key. */

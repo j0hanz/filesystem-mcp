@@ -332,7 +332,7 @@ async function handleCreate(
   // writes. Any other pairing with a `pending` entry fails at once. Two
   // appends both land.
   const firstByLanding = new Map<string, CreatePlan>();
-  const duplicatePendingOf = new Map<number, string>();
+  const duplicatePendingOf = new Map<number, { inputPath: string; validPath: string }>();
   for (const index of [...plans.keys()].sort((a, b) => a - b)) {
     const plan = plans.get(index);
     if (!plan) continue;
@@ -343,7 +343,7 @@ async function handleCreate(
       continue;
     }
     if (plan.kind === 'pending' && first.kind === 'pending') {
-      duplicatePendingOf.set(index, first.inputPath);
+      duplicatePendingOf.set(index, { inputPath: first.inputPath, validPath: first.validPath });
       continue;
     }
     if (plan.kind === 'append' && first.kind === 'append') continue;
@@ -377,13 +377,9 @@ async function handleCreate(
   for (const [index, plan] of plans) {
     const file = files[index];
     if (!file) continue;
-    const firstInputPath = duplicatePendingOf.get(index);
-    if (
-      firstInputPath !== undefined &&
-      plan.kind === 'pending' &&
-      confirmed.verdict(plan.validPath) === 'proceed'
-    ) {
-      slots[index] = duplicateLandingSlot(plan.inputPath, firstInputPath);
+    const first = duplicatePendingOf.get(index);
+    if (first !== undefined && confirmed.verdict(first.validPath) === 'proceed') {
+      slots[index] = duplicateLandingSlot(plan.inputPath, first.inputPath);
       continue;
     }
     slots[index] = {

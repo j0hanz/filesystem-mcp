@@ -874,7 +874,12 @@ describe('MCP Resources', () => {
       openGate();
       assert.deepStrictEqual(await inFlight, { ok: false, reason: 'stale' });
 
-      // And a fresh acquire clears the marker and succeeds again.
+      // A listen acquire straight after the stale abort is unaffected.
+      const listen = await registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual(listen.ok, true);
+      registry.release(uri);
+
+      // A fresh acquire is unaffected.
       const resumed = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
       assert.strictEqual(resumed.ok, true);
       registry.release(uri);
