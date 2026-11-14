@@ -61,7 +61,9 @@ jobs:
         run: npx prettier --check .
       - name: Knip
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npx knip
+        run: |
+          npx knip
+          npx knip --production --include files,dependencies
       - name: Test
         # dist-smoke boots dist/index.js, so tests need a successful build.
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (matrix.os != 'ubuntu-latest' || matrix.node != '') }}
