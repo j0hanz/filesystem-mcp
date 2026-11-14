@@ -84,6 +84,8 @@ export interface ScanOptions<R> {
   readonly includeHidden: boolean;
   readonly includeIgnored: boolean;
   readonly onlyFiles: boolean;
+  /** Globs the walk leaves out, pruned before a folder is read; a named file ignores them. */
+  readonly exclude?: readonly string[];
   readonly entryType?: 'file' | 'directory' | 'any';
   /** 0-based, as globEntries takes it. */
   readonly maxDepth?: number;
@@ -354,6 +356,7 @@ export async function scan<R>(
     onlyFiles: options.onlyFiles,
     ...(options.entryType !== undefined ? { entryType: options.entryType } : {}),
     skipIgnored: !options.includeIgnored,
+    ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     pathGuard,
     ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
     ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),

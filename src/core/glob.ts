@@ -4,7 +4,7 @@ import {
   readFile as fsReadFile,
   lstat,
 } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
@@ -265,6 +265,12 @@ export interface GlobEntriesOptions {
    * sensitive entries (the move-protection check) does not pass it.
    */
   pathGuard?: Pick<PathGuard, 'isSensitive' | 'reachesRemoteLink'>;
+  /**
+   * Globs for entries to leave out, with everything under a match. Without a `/` a
+   * pattern matches a name at any depth; with one, the path relative to `cwd`.
+   * A pruned folder fires neither `onExcludedDir` nor `onIgnoredDir`.
+   */
+  exclude?: readonly string[];
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
   /**
@@ -548,7 +554,18 @@ function createWalkFilter(
   onDirectory: ((absolutePath: string) => void) | undefined,
   onExcludedDir: ((posixRelativePath: string) => void) | undefined,
   onIgnoredDir: ((posixRelativePath: string) => void) | undefined,
+  exclude: readonly string[] = [],
 ): WalkFilter {
+  // An entry is out when it, or any folder above it, matches a pattern.
+  const userExcluded = (posixRel: string): boolean => {
+    if (exclude.length === 0) return false;
+    const segments = posixRel.split('/');
+    return exclude.some((glob) =>
+      glob.includes('/')
+        ? segments.some((_, i) => posix.matchesGlob(segments.slice(0, i + 1).join('/'), glob))
+        : segments.some((name) => posix.matchesGlob(name, glob)),
+    );
+  };
   // fs.glob asks once per pattern variant, so a directory is asked about repeatedly.
   const reportedDirs = new Set<string>();
   const reportedExcluded = new Set<string>();
@@ -605,6 +622,7 @@ function createWalkFilter(
       if (!isPathInsideDirectory(cwd, absoluteOf(match))) return true;
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
+      if (userExcluded(posixRel)) return true;
       if (excluded(posixRel, isDir)) {
         if (
           isDir &&
@@ -651,7 +669,10 @@ function createWalkFilter(
     isExcluded: (match) => {
       const posixRel = relativeOf(match);
       return (
-        excluded(posixRel, match.isDirectory()) || sensitiveDir(match) || sensitiveTree(posixRel)
+        userExcluded(posixRel) ||
+        excluded(posixRel, match.isDirectory()) ||
+        sensitiveDir(match) ||
+        sensitiveTree(posixRel)
       );
     },
   };
@@ -688,6 +709,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.onDirectory,
     options.onExcludedDir,
     options.onIgnoredDir,
+    options.exclude,
   );
 
   const iterable = fsGlob(await Promise.all(patterns.map((p) => foldPatternInWalk(p, cwd))), {

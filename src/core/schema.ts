@@ -351,6 +351,14 @@ export const IncludeHidden = defaultFalseBoolean('Include hidden items (starting
 export const IncludeIgnored = defaultFalseBoolean(
   'Include ignored items (node_modules, .git, etc).',
 );
+export const ExcludeGlobs = z
+  .array(SafeGlobPattern)
+  .min(1)
+  .max(20)
+  .optional()
+  .describe(
+    'Globs for entries to leave out, with everything under a matching folder. Without / a pattern matches a name at any depth (vendor, *.test.ts); with / it matches the path relative to path.',
+  );
 export const MaxDepth = z
   .uint32()
   .min(0)
