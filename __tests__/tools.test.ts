@@ -1080,8 +1080,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // rewrite gives every tool "Use when" / "Do not use" routing, failure and
     // undo behavior, and a Returns sentence (no outputSchema), scored 4.8;
     // measured 29180 / 13916.
-    const BUDGET_CHARS = 29_200;
-    const BUDGET_CHARS_READ_ONLY = 13_950;
+    // Raised 2026-11-14 to 29450 full and 14150 read-only: find_files gains type;
+    // measured 29392 / 14128.
+    const BUDGET_CHARS = 29_450;
+    const BUDGET_CHARS_READ_ONLY = 14_150;
 
     const full = await createTestClientPair([tmpDir]);
     try {
