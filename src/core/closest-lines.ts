@@ -13,7 +13,7 @@ const splitLines = (text: string): string[] =>
 
 /** A line's character bigrams with all whitespace removed. */
 function lineGrams(line: string): Grams {
-  const text = line.replace(/\s+/gu, '').toLowerCase();
+  const text = line.slice(0, MAX_LINE_CHARS).replace(/\s+/gu, '').toLowerCase();
   const grams = new Map<string, number>();
   if (text.length === 1) grams.set(text, 1);
   for (let i = 0; i < text.length - 1; i++) {

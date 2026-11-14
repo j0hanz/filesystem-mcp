@@ -109,4 +109,13 @@ describe('closestLines', () => {
     const hugeLine = `${'abcd'.repeat(2_500_001)}\n`;
     assert.match(closestLines(hugeLine, 'xyz'), /too many to search for the closest text/);
   });
+
+  it('bounds line bigram scoring to the first 500 characters', () => {
+    const filler = ['vvvvv', 'vvvvv', 'vvvvv', 'vvvvv'];
+    const earlyLine = `match_prefix_${'z'.repeat(600)}`;
+    const lateLine = `${'y'.repeat(600)}match_prefix_${'q'.repeat(20)}`;
+    const content = [earlyLine, ...filler, lateLine].join('\n');
+    const out = closestLines(content, `match_prefix_${'q'.repeat(20)}`);
+    assert.match(out, /First difference, oldText line 1 against file line 1:/);
+  });
 });
