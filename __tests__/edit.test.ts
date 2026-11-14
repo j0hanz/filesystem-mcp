@@ -68,8 +68,8 @@ describe('edit body', () => {
 
     assert.notStrictEqual(resA.isError, true);
     assert.notStrictEqual(resB.isError, true);
-    assert.strictEqual(await readFile(fileA, 'utf-8'), 'LINE1\nline2\n');
-    assert.strictEqual(await readFile(fileB, 'utf-8'), 'LINE1\nline2\n');
+    assert.strictEqual(await readFile(fileA, 'utf-8'), 'LINE1\nLINE2\n');
+    assert.strictEqual(await readFile(fileB, 'utf-8'), 'LINE1\nLINE2\n');
   });
 
   it('concurrent edit and appendFile across two hard links keep both changes', async (t) => {
