@@ -34,7 +34,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "Absolute file path inside a writable root; one entry per file."
+                  "description": "File path inside a writable root, absolute or relative to it; one entry per file."
                 },
                 "content": {
                   "type": "string",
@@ -65,7 +65,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             }
           }
         },
@@ -93,7 +93,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             },
             "description": "Exact paths (no globs): files, directories, or symlinks. Duplicates collapse"
           },
@@ -506,7 +506,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             }
           }
         },
@@ -835,7 +835,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             }
           }
         },
@@ -1126,7 +1126,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             }
           }
         },
@@ -1348,7 +1348,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "description": "File or directory path inside an allowed workspace root."
+              "description": "File or directory path inside a root, absolute or relative to it."
             }
           }
         },

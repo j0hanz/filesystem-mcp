@@ -177,6 +177,20 @@ describe('relative paths', () => {
       assert.strictEqual(await exists(join(elsewhere, 'out/new.txt')), false);
     });
 
+    it(
+      'reads a POSIX file whose name starts with a tilde and a backslash',
+      { skip: process.platform === 'win32' },
+      async () => {
+        await writeTestFile(root, '~\\notes', 'tilde\n');
+        const result = await harness.client.callTool({
+          name: 'read',
+          arguments: { path: '~\\notes' },
+        });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+        assert.match(firstTextBlock(result).text ?? '', /tilde/u);
+      },
+    );
+
     it('refuses a batch whose relative and absolute entries name one file', async () => {
       const result = await harness.client.callTool({
         name: 'create',

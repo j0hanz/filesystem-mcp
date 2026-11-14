@@ -7,6 +7,7 @@ import {
   escapeNonAscii,
   expandHome,
   getReservedDeviceNameForPath,
+  hasTrailingDotOrSpace,
   IS_CASE_INSENSITIVE_FS,
   isAlpha,
   isEquivalentPath,
@@ -152,6 +153,27 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(getReservedDeviceNameForPath('C:/workspace/valid_file.txt'), undefined);
   });
 
+  it('names a device spelled with a superscript digit or a space before the extension', () => {
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/NUL .txt'), 'NUL');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/com\u00b9'), 'COM\u00b9');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/LPT\u00b2.log'), 'LPT\u00b2');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/COM\u00b3:s'), 'COM\u00b3');
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/NULL.txt'), undefined);
+    assert.strictEqual(getReservedDeviceNameForPath('C:/r/COM\u2074'), undefined);
+  });
+
+  it('sees a component that ends in a dot or a space', () => {
+    assert.strictEqual(hasTrailingDotOrSpace('C:\\r\\file.txt.'), true);
+    assert.strictEqual(hasTrailingDotOrSpace('C:\\r\\file.txt '), true);
+    assert.strictEqual(hasTrailingDotOrSpace('C:/r/dir./a.txt'), true);
+    assert.strictEqual(hasTrailingDotOrSpace('src/a.txt...'), true);
+    assert.strictEqual(hasTrailingDotOrSpace('C:\\r\\file.txt'), false);
+    assert.strictEqual(hasTrailingDotOrSpace('src/./a.txt'), false);
+    assert.strictEqual(hasTrailingDotOrSpace('../a.txt'), false);
+    assert.strictEqual(hasTrailingDotOrSpace('\\\\server.\\share\\a.txt'), false);
+    assert.strictEqual(hasTrailingDotOrSpace('\\\\?\\C:\\r\\a.txt'), false);
+  });
+
   it('resolveEntryType classifies dirent-like objects', () => {
     assert.strictEqual(
       resolveEntryType({
@@ -264,13 +286,20 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(expandHome('~'), home);
     assert.strictEqual(expandHome('~/'), home);
     assert.strictEqual(expandHome('~//'), home);
-    assert.strictEqual(expandHome('~\\'), home);
-    assert.strictEqual(expandHome('~\\\\'), home);
     assert.strictEqual(expandHome('~/foo'), join(home, 'foo'));
-    assert.strictEqual(expandHome('~\\foo'), join(home, 'foo'));
     assert.strictEqual(expandHome('~//foo'), join(home, 'foo'));
-    assert.strictEqual(expandHome('~\\\\foo'), join(home, 'foo'));
     assert.strictEqual(expandHome('relative/path'), 'relative/path');
+    if (process.platform === 'win32') {
+      assert.strictEqual(expandHome('~\\'), home);
+      assert.strictEqual(expandHome('~\\\\'), home);
+      assert.strictEqual(expandHome('~\\foo'), join(home, 'foo'));
+      assert.strictEqual(expandHome('~\\\\foo'), join(home, 'foo'));
+    } else {
+      // A backslash is a filename character on POSIX: these name files.
+      assert.strictEqual(expandHome('~\\'), '~\\');
+      assert.strictEqual(expandHome('~\\foo'), '~\\foo');
+      assert.strictEqual(expandHome('~\\\\foo'), '~\\\\foo');
+    }
   });
 
   it('normalizePath lowercases drive letter on Windows', (t) => {

@@ -97,6 +97,13 @@ const RESERVED_DEVICE_NAMES = new Set<string>([
   'LPT7',
   'LPT8',
   'LPT9',
+  // Win32 maps superscript digits 1-3 (Latin-1) to device numbers.
+  'COM¹',
+  'COM²',
+  'COM³',
+  'LPT¹',
+  'LPT²',
+  'LPT³',
 ]);
 
 /**
@@ -108,8 +115,8 @@ export const trimTrailingDotsAndSpaces = (segment: string): string => segment.re
 
 function getReservedDeviceName(segment: string): string | undefined {
   const trimmed = trimTrailingDotsAndSpaces(segment);
-  const withoutStream = trimmed.split(':')[0] ?? '';
-  const baseName = (withoutStream.split('.')[0] ?? '').toUpperCase();
+  // Win32 also ignores spaces before the extension: `NUL .txt` opens NUL.
+  const baseName = (trimmed.split(/[.:]/u)[0] ?? '').trimEnd().toUpperCase();
   return RESERVED_DEVICE_NAMES.has(baseName) ? baseName : undefined;
 }
 
@@ -122,6 +129,18 @@ export function getReservedDeviceNameForPath(requestedPath: string): string | un
     }
   }
   return undefined;
+}
+
+/**
+ * True when a component after the root ends in `.` or a space. Node creates
+ * such names verbatim, but Explorer and cmd strip them or cannot open them.
+ * `.` and `..` are not names.
+ */
+export function hasTrailingDotOrSpace(requestedPath: string): boolean {
+  return requestedPath
+    .slice(win32.parse(requestedPath).root.length)
+    .split(/[\\/]/u)
+    .some((c) => c !== '.' && c !== '..' && /[. ]$/u.test(c));
 }
 
 export function isWindowsDriveRelativePath(requestedPath: string): boolean {
@@ -161,7 +180,8 @@ export const isUncOrDevicePath = (normalizedPath: string): boolean =>
   IS_WINDOWS && normalizedPath.startsWith('\\\\');
 
 export function expandHome(filepath: string): string {
-  if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
+  // A backslash is a filename character on POSIX, so `~\x` names a file there.
+  if (filepath === '~' || filepath.startsWith('~/') || (IS_WINDOWS && filepath.startsWith('~\\'))) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');
     return rest ? join(HOMEDIR, rest) : HOMEDIR;
   }
