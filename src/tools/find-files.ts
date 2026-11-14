@@ -44,8 +44,19 @@ const SearchFilesInputSchema = z.strictObject({
       'name: by file name across folders, ties by path. Sorts the first 10,000 kept matches before paging.',
     ),
   maxDepth: MaxDepth,
+  type: z
+    .enum(['file', 'directory', 'any'])
+    .optional()
+    .default('file')
+    .describe('What to match. Directory results end in /.'),
   cursor: CursorSchema,
 });
+
+const TYPE_NOUN: Record<'file' | 'directory' | 'any', string> = {
+  file: 'files',
+  directory: 'directories',
+  any: 'files or directories',
+};
 
 interface SearchFileResult {
   path: string;
@@ -94,7 +105,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'Find files whose name or path matches a glob under a directory. ' +
     'Use when you know a name or path pattern but not the location. ' +
     'Do not use it for file contents; use `search_text` instead. To browse a folder, use `list`. ' +
-    'Matches files, never directories. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
+    'Matches files; type: "directory" or "any" also matches directories, printed with a trailing /. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
     'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
     'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). ' +
     'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
@@ -110,8 +121,9 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     detail: formatCount(result.totalMatches ?? 0, 'match', 'matches'),
   }),
   mapPaths: mapOptionalPath,
-  run: async (args, ctx) =>
-    await pagedScan({
+  run: async (args, ctx) => {
+    const noun = TYPE_NOUN[args.type];
+    return await pagedScan({
       tool: 'find_files',
       args,
       ctx,
@@ -124,25 +136,34 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             baseNameMatch: true,
             includeHidden: args.includeHidden,
             includeIgnored: args.includeIgnored,
-            onlyFiles: true,
+            onlyFiles: args.type === 'file',
             ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
             concurrency: PARALLEL_CONCURRENCY,
             cap: MAX_SEARCH_RESULTS,
             signal: ctx.signal,
           },
-          (entry) => Promise.resolve(entry.path),
+          (entry) => {
+            if (entry.type === 'directory') {
+              return Promise.resolve({ path: entry.path, dir: true });
+            }
+            if (args.type !== 'directory' && entry.type === 'file') {
+              return Promise.resolve({ path: entry.path, dir: false });
+            }
+            return Promise.resolve(undefined);
+          },
         );
         const { results, stoppedReason } = keepFirstResults(scanned, MAX_SEARCH_RESULTS);
         // Sorted after the scan, on the kept results.
         const found =
           args.sortBy === 'name'
             ? results
-                .map((path) => ({ path, name: basename(path) }))
+                .map((item) => ({ ...item, name: basename(item.path) }))
                 .sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path))
-                .map((item) => item.path)
-            : results.toSorted((x, y) => x.localeCompare(y));
+            : results.toSorted((x, y) => x.path.localeCompare(y.path));
         return {
-          items: found.map((path): SearchFileResult => ({ path: paths.show(path) })),
+          items: found.map(({ path, dir }): SearchFileResult => ({
+            path: paths.show(path) + (dir ? '/' : ''),
+          })),
           metadata: {
             root: paths.root,
             matched: found.length,
@@ -157,13 +178,13 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
       },
       // The whole result, root included: its paths are relative to that root.
       externalize: (results, metadata) =>
-        putJsonResource(ctx.resourceStore, `${args.pattern} files`, {
+        putJsonResource(ctx.resourceStore, `${args.pattern} ${noun}`, {
           root: metadata.root,
           results,
         }),
       trailer: (metadata) => ({
         total: metadata.matched,
-        noun: 'files',
+        noun,
         stoppedReason: metadata.stoppedReason,
         skippedInaccessible: metadata.skippedInaccessible,
         excludedDirs: metadata.excludedDirs,
@@ -185,8 +206,9 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         const body =
           page.length > 0
             ? page.map((r) => r.path).join('\n')
-            : `No files matching '${args.pattern}'`;
+            : `No ${noun} matching '${args.pattern}'`;
         return { structured, text: body + trailer };
       },
-    }),
+    });
+  },
 });

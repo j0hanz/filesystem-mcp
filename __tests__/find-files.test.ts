@@ -293,6 +293,7 @@ describe('find_files body', () => {
       { includeHidden: true },
       { sortBy: 'name' },
       { maxDepth: 2 },
+      { type: 'any' },
     ];
     for (const change of changes) {
       await assert.rejects(
@@ -315,6 +316,77 @@ describe('find_files body', () => {
     assert.ok(uri);
     const full = JSON.parse(resourceStore.getEntry(uri).text) as { results: unknown[] };
     assert.deepStrictEqual(full.results, []);
+  });
+
+  describe('type', () => {
+    const findResults = async (args: FindArgs) => (await find(args)).structured.results;
+
+    beforeEach(async () => {
+      await writeTestFile(join(root, 'pkg', 'utils'), 'utils.ts', 'x');
+      await writeTestFile(join(root, 'pkg', 'node_modules', 'utils'), 'index.js', 'x');
+      await writeTestFile(join(root, 'docs'), 'utils', 'a file named utils');
+    });
+
+    it('defaults to files only', async () => {
+      const paths = (await findResults({ pattern: 'utils*' })).map((r) => r.path);
+      assert.deepStrictEqual(paths, ['docs/utils', 'pkg/utils/utils.ts']);
+    });
+
+    it('directory returns only directories, each with a trailing slash', async () => {
+      const paths = (await findResults({ pattern: 'utils', type: 'directory' })).map((r) => r.path);
+      assert.deepStrictEqual(paths, ['pkg/utils/']);
+    });
+
+    it('any returns both, and only directories end in a slash', async () => {
+      const paths = (await findResults({ pattern: 'utils', type: 'any' })).map((r) => r.path);
+      assert.deepStrictEqual(paths, ['docs/utils', 'pkg/utils/']);
+    });
+
+    it('includeIgnored reaches directories inside ignored folders', async () => {
+      const paths = (
+        await findResults({ pattern: 'utils', type: 'directory', includeIgnored: true })
+      ).map((r) => r.path);
+      assert.deepStrictEqual(paths, ['pkg/node_modules/utils/', 'pkg/utils/']);
+    });
+
+    it('maxDepth 0 lists direct child directories and never the root', async () => {
+      const paths = (await findResults({ pattern: '*', type: 'directory', maxDepth: 0 })).map(
+        (r) => r.path,
+      );
+      assert.deepStrictEqual(paths, ['docs/', 'pkg/']);
+    });
+
+    it('sortBy name orders a directory by its own name', async () => {
+      const paths = (
+        await findResults({ pattern: '*', type: 'any', sortBy: 'name', maxDepth: 0 })
+      ).map((r) => r.path);
+      assert.deepStrictEqual(paths, ['docs/', 'pkg/']);
+    });
+
+    it('a printed directory path reads back as a search path', async () => {
+      const paths = (await findResults({ pattern: '*.ts', path: join(root, 'pkg/utils/') })).map(
+        (r) => r.path,
+      );
+      assert.deepStrictEqual(paths, ['pkg/utils/utils.ts']);
+    });
+
+    it('a symlink to a directory is not a directory result', async (t) => {
+      if (
+        !(await trySymlink(join(root, 'pkg', 'utils'), join(root, 'link-utils'), () =>
+          t.skip('symlinks unavailable'),
+        ))
+      ) {
+        return;
+      }
+      const paths = (await findResults({ pattern: '*utils', type: 'directory' })).map(
+        (r) => r.path,
+      );
+      assert.ok(!paths.some((p) => p.startsWith('link-utils')));
+    });
+
+    it('rejects an unknown type', () => {
+      assert.ok(!FIND_FILES.def.input.safeParse({ pattern: '*', type: 'folder' }).success);
+    });
   });
 });
 
