@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.21.0] - 2026-11-14
 
-### Added
-
-- **HTTP**: the server logs a warning when it listens beyond loopback with no root boundary, since a client holding the API key can then approve its own access grants.
+Eight path, swap and logging fixes, a bound on HTTP request bytes, and
+appends that start on a new line. Before upgrading, read Changed if you
+append to files with `create`, match error codes from `read`, `stat` or
+`list`, apply diffs to files that start with a byte-order mark, or read
+UTF-16 files as resources; read Security if you send many large HTTP
+requests at once (`503`) or write to paths another process may swap.
 
 ### Security
 
@@ -18,18 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reads**: the check that an opened file is still the validated one compares exact 64-bit file ids; before, two NTFS files with nearby ids could be taken for one.
 - **HTTP**: the request bytes being received at once are bounded; further requests get `503` until one finishes. Bodies under 1 MiB draw on a separate 32 MiB pool, and a compressed body counts at its largest decompressed size. Before, a few parallel maximum-size bodies could exhaust the server's memory.
 - **Logging**: a failure to create a resource watcher logs its error text with control characters flattened, so a file name cannot forge extra log lines.
+- **Logging**: a resource URI sent by a client is cleaned of control characters and cut to 256 characters before it is logged, so a client cannot forge extra log lines through a subscribe.
+- **Paths**: inside a case-sensitive folder on Windows or macOS, a path whose name differs from an allowed root's only in ASCII case is now refused; before, it could reach a sibling folder outside the root. Root containment now checks the entry on disk.
+- **Reads**: on Windows and macOS, where the open cannot refuse a link, a read now checks that the opened file is still the validated one and still inside the allowed roots, and refuses with `ACCESS_DENIED` if the path was swapped for a link after validation.
+
+### Added
+
+- **HTTP**: the server logs a warning when it listens beyond loopback with no root boundary, since a client holding the API key can then approve its own access grants.
 
 ### Changed
 
 - **Errors**: an operating-system failure such as a busy file (`EBUSY`), a handle limit or a disk error now reports `IO_ERROR` in every tool; before, `read` reported it as `NOT_FILE`, `stat` as `NOT_FOUND` and `list` as `NOT_DIRECTORY`, with a hint for the wrong problem.
 - **create**: `append: true` now starts the content on a new line when the existing file does not end with one; before, the text was joined to the last line. The newline is CRLF when the content uses CRLF. Nothing is added to an empty or new file, or when the content already starts with a newline (#153).
 - **patch**: in a file that starts with a byte-order mark, line 1 of a diff is now matched as typed first and only then with its leading U+FEFF removed, as `edit` does; a diff that types a U+FEFF after the mark as text now applies, and a mismatch reports the line as typed. A line 1 that matches only once its U+FEFF is removed must also match at line 1: one that would apply further down is now refused, and a typed U+FEFF on a line hunk 1 lands on below line 1 is kept.
+- **Resources**: reading a UTF-16 file as a resource now returns it as a base64 blob; before, it was decoded as text.
 
 ### Fixed
 
 - **read**: a binary read of a file that grows while it is being read is refused with `TOO_LARGE` once it passes the size limit; before, the whole file was returned. The read buffer starts at the file's size and grows only if the file does, so a small read no longer holds a buffer of the full size limit.
 - **list**: a tree of more than 20,000 entries now says `kept the first 20000 of N entries; the totals are exact`; before, the text named a 10,000-result cap and a `maxResults` argument `list` does not have, and called the exact total a lower bound.
 - **replace_text**: two different hard-linked files are no longer taken for one file on NTFS, where file ids exceed what a number holds; before, the second file could be skipped without being counted.
+- **Paths**: a root of `/` on Linux or macOS now admits the paths under it; before, every one was refused. A Windows drive root such as `C:\` no longer costs two extra file checks per path.
+- **read**: `binary: true` now returns a UTF-16 svg as an image, as the default read does; before, it was refused.
+- **Writes**: writes, rewrites, appends and undo captures to two hard links of one file now run one at a time; before, they could interleave.
+- **create**: two entries in one batch that name the same path and wait for approval no longer race each other's writes.
+- **Resources**: a subscribe cancelled while its watcher is starting no longer leaves later subscribes to that URI marked as cancelled.
+- **Memory**: page snapshots and cached results expire after 60 seconds on an idle server; before, they stayed until the next request.
 
 ## [2.20.0] - 2026-11-11
 
