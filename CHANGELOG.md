@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **read**: a binary read of a file that grows while it is being read is refused with `TOO_LARGE` once it passes the size limit; before, the whole file was returned.
+- **list**: a tree of more than 20,000 entries now says `kept the first 20000 of N entries; the totals are exact`; before, the text named a 10,000-result cap and a `maxResults` argument `list` does not have, and called the exact total a lower bound.
 
 ## [2.20.0] - 2026-11-11
 
