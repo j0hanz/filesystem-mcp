@@ -13,8 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Writes**: when saving a file's old bytes for undo finds that a parent folder was swapped for a link out of the allowed roots, the write now fails with `ACCESS_DENIED`; before, the refusal was logged and the write went ahead.
-- **HTTP**: the request bytes being received at once are bounded; further large requests get `503` until one finishes. Before, a few parallel maximum-size bodies could exhaust the server's memory.
+- **Writes**: when saving a file's old bytes for undo finds that a parent folder was swapped for a link out of the allowed roots, the write now fails with `ACCESS_DENIED`; before, the refusal was logged and the write went ahead. A target swapped for a symbolic link now fails with `SYMLINK_NOT_ALLOWED` the same way.
+- **Writes**: a write re-checks its folder just before creating the temporary file, and refuses with `ACCESS_DENIED` when the folder now resolves outside the allowed roots or into a read-only root.
+- **Reads**: the check that an opened file is still the validated one compares exact 64-bit file ids; before, two NTFS files with nearby ids could be taken for one.
+- **HTTP**: the request bytes being received at once are bounded; further requests get `503` until one finishes. Bodies under 1 MiB draw on a separate 32 MiB pool, and a compressed body counts at its largest decompressed size. Before, a few parallel maximum-size bodies could exhaust the server's memory.
+- **Logging**: a failure to create a resource watcher logs its error text with control characters flattened, so a file name cannot forge extra log lines.
 
 ### Changed
 
@@ -24,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **read**: a binary read of a file that grows while it is being read is refused with `TOO_LARGE` once it passes the size limit; before, the whole file was returned.
+- **read**: a binary read of a file that grows while it is being read is refused with `TOO_LARGE` once it passes the size limit; before, the whole file was returned. The read buffer starts at the file's size and grows only if the file does, so a small read no longer holds a buffer of the full size limit.
 - **list**: a tree of more than 20,000 entries now says `kept the first 20000 of N entries; the totals are exact`; before, the text named a 10,000-result cap and a `maxResults` argument `list` does not have, and called the exact total a lower bound.
 - **replace_text**: two different hard-linked files are no longer taken for one file on NTFS, where file ids exceed what a number holds; before, the second file could be skipped without being counted.
 

@@ -132,6 +132,18 @@ jobs:
               echo "::error::Tag v$NEW exists but its package.json says $TAGGED"
               exit 1
             fi
+            # Later jobs check out the tag, but CI was checked on $GITHUB_SHA: the tag
+            # must be this run's release commit, the version bump directly on top of it.
+            PARENT=$(git rev-parse "v$NEW^{commit}^")
+            if [ "$PARENT" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag v$NEW is not the release commit for $GITHUB_SHA (its parent is $PARENT)"
+              exit 1
+            fi
+            EXTRA=$(git diff --name-only "$GITHUB_SHA" "v$NEW^{commit}" | grep -vxF -e package.json -e package-lock.json -e server.json -e mcpb/manifest.json -e .codex-plugin/plugin.json -e .cursor-plugin/plugin.json || true)
+            if [ -n "$EXTRA" ]; then
+              echo "::error::Tag v$NEW changes files a release commit does not touch: $EXTRA"
+              exit 1
+            fi
             echo "resume=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Tag v$NEW is already pushed; resuming after the push step"
           fi

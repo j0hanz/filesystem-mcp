@@ -206,7 +206,7 @@ export function createWatcherRegistry() {
       return true;
     } catch (err) {
       Logger.error(
-        `Failed to create watcher for ${shownUri(uri)}: ${formatUnknownErrorMessage(err)}`,
+        `Failed to create watcher for ${shownUri(uri)}: ${sanitizeLogField(formatUnknownErrorMessage(err), 256)}`,
       );
       return false;
     }

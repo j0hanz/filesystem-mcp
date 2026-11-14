@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import nodeFs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -57,6 +59,35 @@ describe('sanitizeLogField', () => {
       for (const uri of acquiredUris) {
         registry.release(uri);
       }
+      await cleanupTestRoot(dir);
+    }
+  });
+
+  it('sanitizes the error text when a watcher cannot be created', async (t) => {
+    const dir = await createTestRoot();
+    const guard = await makeGuard([dir]);
+    const registry = createWatcherRegistry();
+    const logged: unknown[][] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      logged.push(args);
+    });
+    // The error message carries the client-chosen path, newline included.
+    t.mock.method(nodeFs, 'statSync', () => {
+      throw new Error('ENOENT: no such file\n[error] forged line');
+    });
+    syncBuiltinESMExports();
+    try {
+      await registry.acquire(guard, buildFileResourceUri(dir), () => {});
+      const failLogs = logged.filter(
+        (args) => typeof args[0] === 'string' && args[0].includes('Failed to create watcher'),
+      );
+      assert.strictEqual(failLogs.length, 1);
+      const line = failLogs[0]?.[0];
+      assert(typeof line === 'string');
+      assert.strictEqual(line.includes('\n'), false);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
       await cleanupTestRoot(dir);
     }
   });

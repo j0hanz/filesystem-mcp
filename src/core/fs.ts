@@ -493,9 +493,10 @@ export class GuardedFileSystem {
     validPath: string,
     requestedPath: string,
   ): Promise<void> {
-    let linkStat: Stats;
+    // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
+    let linkStat: BigIntStats;
     try {
-      linkStat = await fsLstat(validPath);
+      linkStat = await fsLstat(validPath, { bigint: true });
     } catch (error) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -511,7 +512,7 @@ export class GuardedFileSystem {
         requestedPath,
       );
     }
-    const handleStat = await handle.stat();
+    const handleStat = await handle.stat({ bigint: true });
     if (handleStat.dev !== linkStat.dev || handleStat.ino !== linkStat.ino) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -541,6 +542,31 @@ export class GuardedFileSystem {
         requestedPath,
       );
     }
+  }
+
+  /** Re-resolves the parent of a write target: still inside a writable root, or refused. */
+  async #assertParentStillWritable(validPath: string, requestedPath: string): Promise<void> {
+    let real: string;
+    try {
+      real = normalizePath(await fsRealpath(dirname(validPath)));
+    } catch (error) {
+      // A missing parent fails the temp-file create with its own error; nothing escapes.
+      if (isNotFoundErrno(error)) return;
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+        error,
+      );
+    }
+    if (this.pathGuard.allowedRootContaining(real) === undefined) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+    this.pathGuard.assertWritable(real);
   }
 
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
@@ -1283,6 +1309,15 @@ export class GuardedFileSystem {
       ) {
         throw error;
       }
+      // O_NOFOLLOW's native ELOOP: the target was swapped for a link after validation.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ELOOP') {
+        throw new FsError(
+          ErrorCode.SYMLINK_NOT_ALLOWED,
+          'Path changed under validation and is now a symbolic link (TOCTOU).',
+          filePath,
+          error,
+        );
+      }
       // ENOENT is the normal new-file case: the default mode is correct there.
       // Anything else (EACCES, EIO) means the mode about to be overwritten could
       // not be read, and the write will silently widen the file — say so rather
@@ -1337,6 +1372,9 @@ export class GuardedFileSystem {
       }
       recordWrite();
     } else {
+      // Validation ran before the lock wait and the capture read: a parent swapped
+      // for a link since then would carry the temp file and the rename outside.
+      await this.#assertParentStillWritable(validPath, filePath);
       try {
         signal?.throwIfAborted();
         // Create the temp file already narrowed to the target's mode: a 0600
@@ -1839,10 +1877,18 @@ export class GuardedFileSystem {
     if (bytes) {
       if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
       // The stat above is older than this handle: a file that grew since must not be read whole.
-      const buffer = Buffer.allocUnsafe(maxSize + 1);
+      // Sized to the stat plus one overflow byte, grown only if the file grew, capped at maxSize + 1.
+      const cap = maxSize + 1;
+      let buffer = Buffer.allocUnsafe(Math.min(stats.size + 1, cap));
       let filled = 0;
       try {
-        while (filled < buffer.length) {
+        for (;;) {
+          if (filled === buffer.length) {
+            if (buffer.length === cap) break;
+            const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, cap));
+            buffer.copy(grown, 0, 0, filled);
+            buffer = grown;
+          }
           signal?.throwIfAborted();
           const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
           signal?.throwIfAborted();

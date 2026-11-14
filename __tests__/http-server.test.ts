@@ -928,7 +928,7 @@ describe('the HTTP server bounds request bytes in flight', () => {
       assert.strictEqual(body.error?.code, -32000);
       assert.strictEqual(
         body.error?.message,
-        'Server busy: too many large requests in flight. Retry shortly.',
+        'Server busy: too many request bytes in flight. Retry shortly.',
       );
     } finally {
       req1?.destroy();

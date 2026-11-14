@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import fsPromises, { mkdir, unlink, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { after, before, describe, it, mock } from 'node:test';
 
+import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
@@ -99,6 +100,41 @@ describe('swap after validation', () => {
       if (linkCreated) {
         await unlink(target).catch(() => {});
       }
+    }
+  });
+
+  // The final component stays a regular file, so only the parent re-check
+  // (/proc fd on Linux, realpath after open elsewhere) can catch this swap.
+  it('B: parent directory swapped for a link to outside the roots', async (t) => {
+    const dir = join(root, 'swapdir');
+    const parked = join(root, 'swapdir.real');
+    await mkdir(dir, { recursive: true });
+    const target = join(dir, 'victim.txt');
+    await writeFile(target, 'in-root');
+
+    let linkCreated = false;
+    let skipped = false;
+    swapBeforeOpen(target, async () => {
+      await rename(dir, parked);
+      linkCreated = await trySymlink(outside, dir, () => {
+        skipped = true;
+        t.skip('directory links refused on this platform');
+      });
+    });
+
+    try {
+      await assert.rejects(fs.read(target), (error: unknown) => {
+        if (skipped) return true;
+        assert.ok(isFsError(error), `expected FsError, got ${String(error)}`);
+        assert.strictEqual(error.code, ErrorCode.ACCESS_DENIED);
+        assert.doesNotMatch(error.message, /TOP_SECRET/);
+        return true;
+      });
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      if (linkCreated) await rm(dir, { recursive: false, force: true }).catch(() => {});
+      await rename(parked, dir).catch(() => {});
     }
   });
 });

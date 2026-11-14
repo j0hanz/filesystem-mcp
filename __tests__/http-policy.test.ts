@@ -758,23 +758,53 @@ describe('HTTP Policy & Security', () => {
   });
 
   describe('body budget', () => {
-    it('1. a 100-byte request calls next() and holds no budget', () => {
-      const budget = 128 * MIB;
-      const unknownCost = 30 * MIB;
-      const mw = createBodyBudget(budget, unknownCost);
-      const req = createMockRequest({ headers: { 'content-length': '100' } });
+    const send = (
+      mw: ReturnType<typeof createBodyBudget>,
+      headers: Record<string, string>,
+    ): { res: ReturnType<typeof createMockResponse>; passed: boolean } => {
       const res = createMockResponse();
-      let nextCalled = false;
-      mw(req, res, () => {
-        nextCalled = true;
+      let passed = false;
+      mw(createMockRequest({ headers }), res, () => {
+        passed = true;
       });
-      assert.strictEqual(nextCalled, true);
+      return { res, passed };
+    };
+
+    it('1. a 100-byte request calls next() and is charged to the small pool until close', () => {
+      const mw = createBodyBudget(128 * MIB, 30 * MIB);
+      const { res, passed } = send(mw, { 'content-length': '100' });
+      assert.strictEqual(passed, true);
       assert.strictEqual(res.statusCode, undefined);
-      assert.strictEqual(
-        res.listenerCount('close'),
-        0,
-        'sub-1MiB requests do not attach a close listener',
-      );
+      assert.strictEqual(res.listenerCount('close'), 1, 'small requests release on close');
+    });
+
+    it('sub-MiB bodies share their own bounded pool, which large uploads cannot exhaust', () => {
+      const mw = createBodyBudget(128 * MIB, 30 * MIB, 2 * MIB);
+      const half = String(MIB - 1);
+      // Large uploads fill the large pool; small calls still pass.
+      assert.strictEqual(send(mw, { 'content-length': String(120 * MIB) }).passed, true);
+      const first = send(mw, { 'content-length': half });
+      assert.strictEqual(first.passed, true);
+      assert.strictEqual(send(mw, { 'content-length': half }).passed, true);
+      // The small pool is bounded too: a third near-1 MiB body exceeds 2 MiB.
+      const third = send(mw, { 'content-length': half });
+      assert.strictEqual(third.passed, false);
+      assert.strictEqual(third.res.statusCode, 503);
+      first.res.emit('close');
+      assert.strictEqual(send(mw, { 'content-length': half }).passed, true);
+    });
+
+    it('a compressed body is charged the fallback cost, not its encoded Content-Length', () => {
+      const mw = createBodyBudget(128 * MIB, 80 * MIB);
+      const gz = send(mw, { 'content-length': '1000', 'content-encoding': 'gzip' });
+      assert.strictEqual(gz.passed, true);
+      // 80 MiB already charged: another 80 MiB does not fit in 128 MiB.
+      assert.strictEqual(send(mw, { 'content-length': String(80 * MIB) }).res.statusCode, 503);
+      gz.res.emit('close');
+      // `identity` is not an encoding: charged by its length.
+      const plain = send(mw, { 'content-length': '1000', 'content-encoding': 'identity' });
+      assert.strictEqual(plain.passed, true);
+      assert.strictEqual(send(mw, { 'content-length': String(80 * MIB) }).passed, true);
     });
 
     it('2. two requests of 80 MiB against a 128 MiB budget: the first calls next(), the second gets 503 with Retry-After', () => {
@@ -805,7 +835,7 @@ describe('HTTP Policy & Security', () => {
       assert.strictEqual(body.error.code, -32000);
       assert.strictEqual(
         body.error.message,
-        'Server busy: too many large requests in flight. Retry shortly.',
+        'Server busy: too many request bytes in flight. Retry shortly.',
       );
     });
 
