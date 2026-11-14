@@ -327,7 +327,7 @@ npm install -g @j0hanz/filesystem-mcp
 | :--------------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | `list_roots`     | Shows the folders the server may use.                                                                                          |
 | `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                                 |
-| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                                           |
+| `find_files`     | Finds files or directories by name or glob, such as `**/*.test.ts`.                                                            |
 | `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                                           |
 | `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                                            |
 | `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`.                  |
