@@ -230,6 +230,67 @@ describe('edit body', () => {
     }
   });
 
+  it('falls back to a whitespace-tolerant match when the exact text is absent', async () => {
+    const file = join(root, 'fallback.ts');
+    await writeFile(file, 'function a() {\n    return 1;\n}\n');
+    const { structured, text } = await runToolBodyResult(
+      EDIT,
+      {
+        path: file,
+        edits: [
+          {
+            oldText: 'function a() {\n  return 1;\n}',
+            newText: 'function a() {\n  return 2;\n}',
+          },
+        ],
+      },
+      { roots: [root] },
+    );
+    assert.equal(await readFile(file, 'utf8'), 'function a() {\n    return 2;\n}\n');
+    const row = structured.results[0];
+    assert.ok(row && 'value' in row);
+    assert.equal(row.value.whitespaceMatches, 1);
+    assert.match(text ?? '', /1 matched ignoring whitespace/);
+  });
+
+  it('flags a fallback match in the summary', async () => {
+    const file = join(root, 'literal.ts');
+    await writeFile(file, 'const s  =  "a";\n');
+    const { text } = await runToolBodyResult(
+      EDIT,
+      { path: file, edits: [{ oldText: 'const s = "a";', newText: 'const s = "c";' }] },
+      { roots: [root] },
+    );
+    assert.match(text ?? '', /1 matched ignoring whitespace/);
+  });
+
+  it('writes nothing when the fallback matches more than once', async () => {
+    const file = join(root, 'twice.ts');
+    const body = '  x = 1;\n\tx = 1;\n';
+    await writeFile(file, body);
+    const { isError, text } = await runToolBodyResult(
+      EDIT,
+      { path: file, edits: [{ oldText: 'x  =  1;', newText: 'x = 2;' }] },
+      { roots: [root] },
+    );
+    assert.equal(isError, true);
+    assert.match(text ?? '', /no match for oldText/);
+    assert.equal(await readFile(file, 'utf8'), body);
+  });
+
+  it('omits whitespaceMatches when every edit matched exactly', async () => {
+    const file = join(root, 'exact.ts');
+    await writeFile(file, 'a\n');
+    const { structured } = await runToolBodyResult(
+      EDIT,
+      { path: file, edits: [{ oldText: 'a', newText: 'b' }] },
+      { roots: [root] },
+    );
+    const row = structured.results[0];
+    assert.ok(row && 'value' in row);
+    assert.equal('whitespaceMatches' in row.value, false);
+  });
+
   // Leading whitespace in the flexible pattern matches from any column of the
   // indentation, which is the same occurrence, not a second one.
   it('with ignoreWhitespace applies a unique indented oldText', async () => {
@@ -512,8 +573,9 @@ describe('edit body', () => {
       path: mixedFile,
       edits: [{ oldText: 'mixed\nlf', newText: 'x' }],
     });
-    assert.strictEqual(mixedResult.isError, true);
-    assert.strictEqual(await readFile(mixedFile, 'utf-8'), 'mixed\r\nlf\n');
+    // Mixed endings have no exact match; the whitespace-tolerant retry applies it once.
+    assert.notStrictEqual(mixedResult.isError, true);
+    assert.strictEqual(await readFile(mixedFile, 'utf-8'), 'x\n');
   });
 
   it('oldText typed with CRLF matches an all-CRLF file', async () => {
@@ -568,13 +630,12 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFx\r\nb\r\n');
   });
 
-  it('a BOM-led oldText that matches only deeper in a BOM file is unmatched', async () => {
+  it('a BOM-led oldText that matches only deeper in a BOM file falls back without a second BOM', async () => {
     const before = '\uFEFFa\nb\nc\nd\nx\n';
     const file = await writeTestFile(root, 'bom/deep.txt', before);
     const result = await edit({ path: file, edits: [{ oldText: '\uFEFFx', newText: '\uFEFFy' }] });
-    assert.strictEqual(result.isError, true);
-    assert.match(result.text ?? '', /no match for oldText/);
-    assert.strictEqual(await readFile(file, 'utf-8'), before);
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(await readFile(file, 'utf-8'), '\uFEFFa\nb\nc\nd\ny\n');
   });
 
   it("dryRun reports the file's own modified time", async () => {
@@ -635,10 +696,10 @@ describe('edit body', () => {
   it('a live no-match quotes the closest lines of the file', async () => {
     const before = 'alpha\n  beta  gamma\ndelta\n';
     const file = await writeTestFile(root, 'closest/a.txt', before);
-    const result = await edit({ path: file, edits: [{ oldText: '  beta gamma', newText: 'x' }] });
+    const result = await edit({ path: file, edits: [{ oldText: '  beta gamna', newText: 'x' }] });
     assert.strictEqual(result.isError, true);
     const text = result.text ?? '';
-    assert.match(text, /no match for oldText " {2}beta gamma"; it must match the file exactly/);
+    assert.match(text, /no match for oldText " {2}beta gamna"; it must match the file exactly/);
     assert.match(text, /Closest text in the file \(lines 1-3 of 3\):/);
     assert.match(text, /^2: {3}beta {2}gamma$/m);
     assert.strictEqual(await readFile(file, 'utf-8'), before);

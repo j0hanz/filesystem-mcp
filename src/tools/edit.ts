@@ -80,7 +80,7 @@ const EditFileInputSchema = z
       'Write nothing; return a unified diff per file. An unmatched oldText is reported instead of failing; an ambiguous one still fails',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match',
+      'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match. Tried automatically when the exact text has no match',
     ),
   })
   .superRefine((value, ctx) => {
@@ -135,6 +135,7 @@ type EditFileValue = Omit<WrittenFileMeta, 'resourceLink'> & {
   linesRemoved?: number;
   diff?: string;
   unmatchedEdits?: string[];
+  whitespaceMatches?: number;
 };
 
 interface TextRange {
@@ -146,6 +147,7 @@ interface EditResult {
   content: string;
   appliedEdits: number;
   unmatchedEdits: string[];
+  whitespaceMatches: number;
   firstUnmatched?: { oldText: string; content: string };
   linesAdded?: number;
   linesRemoved?: number;
@@ -550,6 +552,7 @@ async function applyEdits(
   const tick = createYielder(signal);
   let newContent = content;
   let appliedEdits = 0;
+  let whitespaceMatches = 0;
   const unmatchedEdits: string[] = [];
   let firstUnmatched: { oldText: string; content: string } | undefined;
 
@@ -565,16 +568,31 @@ async function applyEdits(
     }
     // The Mark rule (GLOSSARY): the Text view decides when a leading U+FEFF is the file's mark.
     const typed = view.accept(edit.oldText);
-    const landing = await view.locate(
-      async (needle) => {
-        const text = needle(typed);
-        const hit = await findEditMatches(newContent, text, ignoreWhitespace, tick, signal);
-        return hit.first
-          ? { value: { found: hit, first: hit.first, oldText: text }, start: hit.first.startIndex }
-          : undefined;
-      },
-      [typed],
-    );
+    const locate = (flex: boolean) =>
+      view.locate(
+        async (needle) => {
+          const text = needle(typed);
+          const hit = await findEditMatches(newContent, text, flex, tick, signal);
+          return hit.first
+            ? {
+                value: { found: hit, first: hit.first, oldText: text },
+                start: hit.first.startIndex,
+              }
+            : undefined;
+        },
+        [typed],
+      );
+    let landing = await locate(ignoreWhitespace);
+    // Retry a miss once ignoring whitespace; only a single tolerant match applies.
+    let flexible = ignoreWhitespace;
+    if (!landing && !ignoreWhitespace) {
+      const retry = await locate(true);
+      if (retry?.value.found.count === 1) {
+        landing = retry;
+        flexible = true;
+        whitespaceMatches += 1;
+      }
+    }
     if (!landing) {
       firstUnmatched ??= { oldText: typed, content: newContent };
       unmatchedEdits.push(edit.oldText);
@@ -589,7 +607,7 @@ async function applyEdits(
 
     const end = first.startIndex + first.length;
     // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
-    const replacement = ignoreWhitespace
+    const replacement = flexible
       ? reindentNewText(
           newText,
           oldText,
@@ -605,6 +623,7 @@ async function applyEdits(
     content: newContent,
     appliedEdits,
     unmatchedEdits,
+    whitespaceMatches,
     ...(firstUnmatched ? { firstUnmatched } : {}),
   };
 }
@@ -675,6 +694,9 @@ async function editOnce(
       ...(editResult.unmatchedEdits.length > 0
         ? { unmatchedEdits: editResult.unmatchedEdits }
         : {}),
+      ...(editResult.whitespaceMatches > 0
+        ? { whitespaceMatches: editResult.whitespaceMatches }
+        : {}),
       ...(editResult.diff ? { diff: editResult.diff } : {}),
     },
     ...(resourceLink ? { resourceLink } : {}),
@@ -705,8 +727,11 @@ function formatEditSummary(
     }
     const added = v.linesAdded ?? 0;
     const removed = v.linesRemoved ?? 0;
-    if (added === 0 && removed === 0) return `${basename(v.path)} (no change)`;
-    return `${basename(v.path)} +${String(added)} -${String(removed)}`;
+    const flex = v.whitespaceMatches
+      ? ` (${String(v.whitespaceMatches)} matched ignoring whitespace)`
+      : '';
+    if (added === 0 && removed === 0) return `${basename(v.path)} (no change)${flex}`;
+    return `${basename(v.path)} +${String(added)} -${String(removed)}${flex}`;
   });
 
   const failed = results.filter((r) => 'error' in r).length;
@@ -731,6 +756,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     'Do not use it for every match of a pattern; use `replace_text` instead. ' +
     'To apply a unified diff, use `patch`; for a new file or a whole rewrite, use `create`. ' +
     'Each file is all or nothing: an unmatched or ambiguous oldText writes nothing to that file, and other files still run; dryRun reports unmatched text instead of failing. ' +
+    'An oldText with no exact match is retried ignoring indentation and spacing and applied only if that matches once; the summary says so. ' +
     'Missing, binary, non-UTF-8, and over-size-cap (default 10 MiB) files fail. ' +
     'Returns one summary line per file (+added -removed, NO MATCH, or FAILED); a dry run appends unified diffs. ' +
     'With undo enabled, live runs add an undo id for `undo`, valid 30 minutes.',
