@@ -8,6 +8,9 @@ interface Grams {
   size: number;
 }
 
+const splitLines = (text: string): string[] =>
+  text === '' ? [] : (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
+
 /** A line's character bigrams with all whitespace removed. */
 function lineGrams(line: string): Grams {
   const text = line.replace(/\s+/gu, '').toLowerCase();
@@ -17,14 +20,12 @@ function lineGrams(line: string): Grams {
     const gram = text.slice(i, i + 2);
     grams.set(gram, (grams.get(gram) ?? 0) + 1);
   }
-  let size = 0;
-  for (const count of grams.values()) size += count;
-  return { grams, size };
+  return { grams, size: text.length > 1 ? text.length - 1 : text.length };
 }
 
-/** Dice similarity: 1 for two blank lines, 0 for nothing shared. */
+/** Dice similarity, or 0 when either line is blank. */
 function similarity(a: Grams, b: Grams): number {
-  if (a.size + b.size === 0) return 1;
+  if (a.size === 0 || b.size === 0) return 0;
   let shared = 0;
   for (const [gram, count] of a.grams) shared += Math.min(count, b.grams.get(gram) ?? 0);
   return (2 * shared) / (a.size + b.size);
@@ -52,10 +53,7 @@ function firstDifference(
   if (differs === -1) {
     differs = oldLines.findIndex((line, j) => line !== (fileLines[best + j] ?? ''));
   }
-  if (differs === -1 && trailingNewlineMismatch) {
-    return `oldText line ${oldLines.length + 1} ("") runs past the end of the file, which ends at line ${lineCount}.`;
-  }
-  const index = differs === -1 ? 0 : differs;
+  const index = differs !== -1 ? differs : trailingNewlineMismatch ? oldLines.length : 0;
   const oldDiff = cutLine(oldLines[index] ?? '');
   return best + index >= lineCount
     ? `oldText line ${index + 1} (${JSON.stringify(oldDiff)}) runs past the end of the file, which ends at line ${lineCount}.`
@@ -67,25 +65,19 @@ function firstDifference(
  * bounded diagnostic block with 1-based line numbers and the first differing line.
  */
 export function closestLines(content: string, oldText: string): string {
-  const fileLines = content.split('\n');
-  const lineCount =
-    content === '' ? 0 : content.endsWith('\n') ? fileLines.length - 1 : fileLines.length;
+  const fileLines = splitLines(content);
+  const lineCount = fileLines.length;
   if (lineCount === 0) return 'The file is empty.';
 
-  const oldLines =
-    oldText === ''
-      ? []
-      : oldText.endsWith('\n')
-        ? oldText.slice(0, -1).split('\n')
-        : oldText.split('\n');
+  const oldLines = splitLines(oldText);
   const oldGrams = oldLines.map(lineGrams);
   let perLineWork = 0;
   for (const g of oldGrams) perLineWork += g.size + 1;
-  if (fileLines.length * perLineWork > WORK_LIMIT) {
+  if (content.length + lineCount * perLineWork > WORK_LIMIT) {
     return `The file has ${lineCount} lines, too many to search for the closest text. Read the file and copy oldText from it exactly.`;
   }
 
-  const fileGrams = fileLines.slice(0, lineCount).map(lineGrams);
+  const fileGrams = fileLines.map(lineGrams);
   let best = 0;
   let bestScore = 0;
   for (let i = 0; i < lineCount; i++) {

@@ -82,4 +82,31 @@ describe('closestLines', () => {
     assert.ok(out.includes('  oldText: "    return 2;"'));
     assert.ok(out.includes('  file:    "  return 2;"'));
   });
+
+  it('does not treat blank lines as a match', () => {
+    assert.match(
+      closestLines('alpha\n\nbeta\n', 'zzzz\n\nwwww'),
+      /No line of the file resembles oldText/,
+    );
+    const withBlankHeader = [
+      '// header',
+      '',
+      '// run()',
+      'const a = 1;',
+      'const b = 2;',
+      'const c = 3;',
+      'const d = 4;',
+      'const e = 5;',
+      'function target() {',
+      '  run();',
+      '}',
+    ].join('\n');
+    const out = closestLines(withBlankHeader, 'function target() {\n\n  run_typo();');
+    assert.match(out, /^9: function target\(\) \{$/m);
+  });
+
+  it('skips the search when the file characters alone pass the work limit', () => {
+    const hugeLine = `${'abcd'.repeat(2_500_001)}\n`;
+    assert.match(closestLines(hugeLine, 'xyz'), /too many to search for the closest text/);
+  });
 });
