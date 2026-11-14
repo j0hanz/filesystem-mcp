@@ -68,8 +68,8 @@ describe('edit body', () => {
 
     assert.notStrictEqual(resA.isError, true);
     assert.notStrictEqual(resB.isError, true);
-    assert.strictEqual(await readFile(fileA, 'utf-8'), 'LINE1\nLINE2\n');
-    assert.strictEqual(await readFile(fileB, 'utf-8'), 'LINE1\nLINE2\n');
+    assert.strictEqual(await readFile(fileA, 'utf-8'), 'LINE1\nline2\n');
+    assert.strictEqual(await readFile(fileB, 'utf-8'), 'LINE1\nline2\n');
   });
 
   it('concurrent edit and appendFile across two hard links keep both changes', async (t) => {
@@ -630,6 +630,47 @@ describe('edit body', () => {
     // A real edit fails the file instead, and must still say which oldText missed.
     const applied = await edit({ path: file, edits: [{ oldText: 'gamma', newText: 'x' }] });
     assert.match(applied.text ?? '', /no match for oldText "gamma"/);
+  });
+
+  it('a live no-match quotes the closest lines of the file', async () => {
+    const before = 'alpha\n  beta  gamma\ndelta\n';
+    const file = await writeTestFile(root, 'closest/a.txt', before);
+    const result = await edit({ path: file, edits: [{ oldText: '  beta gamma', newText: 'x' }] });
+    assert.strictEqual(result.isError, true);
+    const text = result.text ?? '';
+    assert.match(text, /no match for oldText " {2}beta gamma"; it must match the file exactly/);
+    assert.match(text, /Closest text in the file \(lines 1-3 of 3\):/);
+    assert.match(text, /^2: {3}beta {2}gamma$/m);
+    assert.strictEqual(await readFile(file, 'utf-8'), before);
+  });
+
+  it('the closest lines come from the text as earlier edits left it', async () => {
+    const file = await writeTestFile(root, 'closest/b.txt', 'one\ntwo\nthree\n');
+    const result = await edit({
+      path: file,
+      edits: [
+        { oldText: 'two', newText: 'TWO' },
+        { oldText: 'twoo', newText: 'x' },
+      ],
+    });
+    assert.match(result.text ?? '', /^2: TWO$/m);
+  });
+
+  it('an all-CRLF file is quoted without carriage returns', async () => {
+    const file = await writeTestFile(root, 'closest/c.txt', 'one\r\ntwo\r\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'twoo', newText: 'x' }] });
+    assert.ok(!(result.text ?? '').includes('\r'));
+  });
+
+  it('a dry run still reports NO MATCH without the window', async () => {
+    const file = await writeTestFile(root, 'closest/d.txt', 'one\n');
+    const result = await edit({
+      path: file,
+      dryRun: true,
+      edits: [{ oldText: 'onee', newText: 'x' }],
+    });
+    assert.ok((result.text ?? '').includes('NO MATCH "onee"'));
+    assert.ok(!(result.text ?? '').includes('Closest text'));
   });
 
   // RE2 reports offsets in code points; JS strings index in UTF-16 code units,
