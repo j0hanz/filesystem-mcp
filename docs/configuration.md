@@ -317,6 +317,10 @@ The server enforces these safety rules:
 - Every client of one HTTP server shares its undo journal: any client can
   list and revert another client's changes. Run one server per user when
   that matters.
+- With an API key, the client that holds the key answers access-grant
+  prompts itself. When the server listens beyond `127.0.0.1`, set
+  `--root-boundary` so a leaked key cannot add folders outside it. The
+  server logs a warning when it starts without one.
 - Listening on any other address requires an API key of at least 16
   characters (`FS_API_KEY`). Clients send it as
   `Authorization: Bearer <key>`.

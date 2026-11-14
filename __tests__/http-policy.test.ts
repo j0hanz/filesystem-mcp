@@ -857,10 +857,53 @@ describe('keyless bind rate limiting', () => {
     );
     try {
       assert.ok(!lines.some((line) => line.includes('No API key set')));
+      assert.ok(!lines.some((line) => line.includes('no root boundary')));
     } finally {
       await httpServer[Symbol.asyncDispose]();
       await cleanupTestRoot(dir);
     }
+  });
+
+  it('warns once at startup on a non-loopback host with no root boundary', async (t) => {
+    await withEnv({ FS_ROOT_BOUNDARY: undefined, FS_ALLOWED_HOSTS: '0.0.0.0' }, async () => {
+      const dir = await createTestRoot();
+      const lines: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+      const httpServer = await startHttpServer(
+        0,
+        { cliAllowedDirs: [dir] },
+        { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+      );
+      try {
+        assert.strictEqual(lines.filter((line) => line.includes('no root boundary')).length, 1);
+      } finally {
+        await httpServer[Symbol.asyncDispose]();
+        await cleanupTestRoot(dir);
+      }
+    });
+  });
+
+  it('does not warn on a non-loopback host when a root boundary is set', async (t) => {
+    const dir = await createTestRoot();
+    await withEnv({ FS_ROOT_BOUNDARY: dir, FS_ALLOWED_HOSTS: '0.0.0.0' }, async () => {
+      const lines: string[] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+      const httpServer = await startHttpServer(
+        0,
+        { cliAllowedDirs: [dir] },
+        { apiKey: TEST_API_KEY, httpHost: '0.0.0.0' },
+      );
+      try {
+        assert.ok(!lines.some((line) => line.includes('no root boundary')));
+      } finally {
+        await httpServer[Symbol.asyncDispose]();
+        await cleanupTestRoot(dir);
+      }
+    });
   });
 });
 

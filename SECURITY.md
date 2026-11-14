@@ -45,6 +45,11 @@ The server promises that, with its default settings:
 - over HTTP, the API key, Host, and Origin checks cannot be bypassed;
 - no input can crash or hang the server.
 
+Over HTTP, "the user's confirmation" is given by the client that sent the
+request: the server cannot tell a person from a program. Whoever holds the
+API key can approve its own access grants, so a network-facing server should
+set `--root-boundary`.
+
 A way to break any of these is a vulnerability. Things the operator chose,
 such as `--allow-sensitive`, `--allow`, `FS_ALLOW_UNRESTRICTED_HOSTS`, or
 allowing a folder that holds secrets, are not.

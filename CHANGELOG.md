@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP**: the server logs a warning when it listens beyond loopback with no root boundary, since a client holding the API key can then approve its own access grants.
+
 ### Security
 
 - **Writes**: when saving a file's old bytes for undo finds that a parent folder was swapped for a link out of the allowed roots, the write now fails with `ACCESS_DENIED`; before, the refusal was logged and the write went ahead.
