@@ -24,7 +24,9 @@ import { ErrorCode, formatUnknownErrorMessage, isFsError } from './core/errors.t
 import {
   decodeFileUriPath,
   encodeFileUriPath,
+  extractFileUrlPath,
   extractPath,
+  FILE_URL_TEMPLATE,
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
@@ -162,6 +164,70 @@ function createInstructionsResource(options: ResourceRegistrationOptions): Resou
   };
 }
 
+/** Shared read body of the canonical file template and its file:// alias. */
+async function readWorkspaceFile(
+  options: ResourceRegistrationOptions,
+  uri: URL,
+  rawPath: string | undefined,
+  ctx: ServerContext,
+): Promise<ReadResourceResult> {
+  if (rawPath === undefined) {
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      'Malformed file URI: not a local path or not valid percent-encoding',
+    );
+  }
+  const fs = new GuardedFileSystem(options.pathGuard);
+  const readResult = await fs.read(rawPath, {
+    binary: 'raw',
+    signal: ctx.mcpReq.signal,
+    // Text encodes to at least its own bytes and base64 to 4/3 of them, so
+    // a file over stdio's limit is refused once classified, before its body
+    // is read. One past the file size limit is left to read, whose refusal
+    // names that limit: HTTP would not serve it either.
+    beforeBody: ({ stats, kind }) => {
+      if (options.transport !== 'stdio' || stats.size > getMaxTextFileSize()) return;
+      const floor = readFloorOver(options.transport, stats.size, kind !== 'text');
+      if (floor !== undefined) throw refuseResourceRead(floor, true);
+    },
+  });
+  // UTF-16 and other non-UTF-8 text are binary here: served as bytes, never lossy text.
+  const isBinary = readResult.kind !== 'text';
+  if (isBinary && options.transport === 'stdio') {
+    // The body may have grown past what beforeBody saw.
+    const floor = readFloorOver(options.transport, readResult.content.length, true);
+    if (floor !== undefined) throw refuseResourceRead(floor, true);
+  }
+
+  return {
+    contents: [
+      {
+        uri: uri.href,
+        mimeType: readResult.mimeType || 'application/octet-stream',
+        ...(isBinary
+          ? { blob: readResult.content.toString('base64') }
+          : { text: readResult.content.toString('utf-8') }),
+      },
+    ],
+  };
+}
+
+function createFileUrlResource(options: ResourceRegistrationOptions): ResourceContract {
+  return {
+    name: 'filesystem-mcp-file-url',
+    title: 'Workspace File (file URL)',
+    description:
+      'Read a workspace file by its file:// URL. Read-only alias of filesystem-mcp://file/; subscribe on that scheme.',
+    uriTemplate: FILE_URL_TEMPLATE,
+    annotations: { audience: ['assistant'], priority: 0.8 },
+    cacheHint: { cacheScope: options.cacheScope ?? 'public', ttlMs: 5_000 },
+    async read(uri, _variables, ctx: ServerContext) {
+      ctx.mcpReq.signal.throwIfAborted();
+      return readWorkspaceFile(options, uri, extractFileUrlPath(uri.href), ctx);
+    },
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // filesystem
 // ═══════════════════════════════════════════════════════════════
@@ -220,46 +286,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       // no fallback to it here, or the two branches would validate different
       // strings. extractPath only fails past the template match on undecodable
       // percent-encoding, which is the caller's malformed URI.
-      const rawPath = extractPath(uri.href);
-      if (rawPath === undefined) {
-        throw new ProtocolError(
-          ProtocolErrorCode.InvalidParams,
-          'Malformed file URI: path is not valid percent-encoding',
-        );
-      }
-      const fs = new GuardedFileSystem(options.pathGuard);
-      const readResult = await fs.read(rawPath, {
-        binary: 'raw',
-        signal: ctx.mcpReq.signal,
-        // Text encodes to at least its own bytes and base64 to 4/3 of them, so
-        // a file over stdio's limit is refused once classified, before its body
-        // is read. One past the file size limit is left to read, whose refusal
-        // names that limit: HTTP would not serve it either.
-        beforeBody: ({ stats, kind }) => {
-          if (options.transport !== 'stdio' || stats.size > getMaxTextFileSize()) return;
-          const floor = readFloorOver(options.transport, stats.size, kind !== 'text');
-          if (floor !== undefined) throw refuseResourceRead(floor, true);
-        },
-      });
-      // UTF-16 and other non-UTF-8 text are binary here: served as bytes, never lossy text.
-      const isBinary = readResult.kind !== 'text';
-      if (isBinary && options.transport === 'stdio') {
-        // The body may have grown past what beforeBody saw.
-        const floor = readFloorOver(options.transport, readResult.content.length, true);
-        if (floor !== undefined) throw refuseResourceRead(floor, true);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: readResult.mimeType || 'application/octet-stream',
-            ...(isBinary
-              ? { blob: readResult.content.toString('base64') }
-              : { text: readResult.content.toString('utf-8') }),
-          },
-        ],
-      };
+      return readWorkspaceFile(options, uri, extractPath(uri.href), ctx);
     },
 
     complete: {
@@ -446,11 +473,12 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
 // wire its subscribe handlers from the same list it registers.
 export function getResourceContracts(
   options: ResourceRegistrationOptions,
-): readonly [ResourceContract, ResourceContract, SubscribableContract] {
+): readonly [ResourceContract, ResourceContract, SubscribableContract, ResourceContract] {
   return [
     createInstructionsResource(options),
     createResultResource(options),
     createFilesystemResource(options),
+    createFileUrlResource(options),
   ];
 }
 

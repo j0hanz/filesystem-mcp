@@ -1,6 +1,7 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { getMaxTextFileSize } from './config.ts';
 import { countLines } from './fmt.ts';
@@ -89,6 +90,25 @@ export function extractPath(uri: string): string | undefined {
   const url = URL.parse(uri);
   if (url?.protocol !== 'filesystem-mcp:' || url.host !== 'file') return undefined;
   return decodeFileUriPath(url.pathname.slice(1));
+}
+
+/** Read-only alias template: a client can build it from any path a tool returned. */
+export const FILE_URL_TEMPLATE = 'file://{+path}';
+
+/**
+ * The local path of a `file:` URL with an empty or `localhost` host. Any other
+ * host (UNC on Windows) is refused before conversion: fileURLToPath would turn
+ * it into a network path. Also `undefined` for a URL fileURLToPath rejects.
+ */
+export function extractFileUrlPath(uri: string): string | undefined {
+  const url = URL.parse(uri);
+  if (url?.protocol !== 'file:') return undefined;
+  if (url.hostname !== '' && url.hostname !== 'localhost') return undefined;
+  try {
+    return fileURLToPath(url);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface WrittenFileMeta {

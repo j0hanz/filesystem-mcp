@@ -1003,6 +1003,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
         ],
         "priority": 0.8
       }
+    },
+    {
+      "name": "filesystem-mcp-file-url",
+      "title": "Workspace File (file URL)",
+      "uriTemplate": "file://{+path}",
+      "description": "Read a workspace file by its file:// URL. Read-only alias of filesystem-mcp://file/; subscribe on that scheme.",
+      "annotations": {
+        "audience": [
+          "assistant"
+        ],
+        "priority": 0.8
+      }
     }
   ],
   "help": {
@@ -1534,6 +1546,18 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "title": "Workspace File",
       "uriTemplate": "filesystem-mcp://file/{+path}",
       "description": "Read a file from the workspace. Subscribe to get updates when the file changes.",
+      "annotations": {
+        "audience": [
+          "assistant"
+        ],
+        "priority": 0.8
+      }
+    },
+    {
+      "name": "filesystem-mcp-file-url",
+      "title": "Workspace File (file URL)",
+      "uriTemplate": "file://{+path}",
+      "description": "Read a workspace file by its file:// URL. Read-only alias of filesystem-mcp://file/; subscribe on that scheme.",
       "annotations": {
         "audience": [
           "assistant"

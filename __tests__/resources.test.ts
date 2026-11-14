@@ -13,12 +13,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import {
   buildFileResourceUri,
   encodeFileUriPath,
+  extractFileUrlPath,
   extractPath,
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from '../src/core/file-uri.ts';
@@ -1026,6 +1028,32 @@ describe('MCP Resources', () => {
       assert.strictEqual(fileContent.uri, uri);
       assert.ok('text' in fileContent);
       assert.strictEqual(fileContent.text, 'client resource read');
+    });
+
+    it('reads a file by its file:// URL', async () => {
+      const file = await writeTestFile(clientTmpDir, 'fileurl.txt', 'hello');
+      const uri = pathToFileURL(file).href;
+      const { contents } = await harness.client.readResource({ uri });
+      assert.equal(contents[0]?.uri, uri);
+      assert.equal((contents[0] as { text: string }).text, 'hello');
+    });
+
+    it('refuses a file URL outside the roots like any other read', async () => {
+      const uri = pathToFileURL(join(tmpdir(), 'outside-x.txt')).href;
+      await assert.rejects(harness.client.readResource({ uri }));
+    });
+
+    it('refuses a file URL with a host or bad encoding as InvalidParams', async () => {
+      for (const uri of ['file://server/share/a.txt', 'file:///a%ZZ']) {
+        await assert.rejects(
+          harness.client.readResource({ uri }),
+          (err) => (err as { code?: number }).code === -32602,
+        );
+      }
+    });
+
+    it('extractFileUrlPath ignores the canonical scheme', () => {
+      assert.equal(extractFileUrlPath('filesystem-mcp://file/a.txt'), undefined);
     });
 
     it('client.readResource() on a missing workspace file rejects as resource-not-found', async () => {
