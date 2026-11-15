@@ -66,6 +66,27 @@ describe('find_files body', () => {
       ...(signal ? { signal } : {}),
     });
 
+  it('exclude leaves out a folder by name', async () => {
+    await writeTestFile(root, 'src/a.ts', 'needle');
+    await writeTestFile(root, 'vendor/b.ts', 'needle');
+    const { structured } = await find({ path: root, pattern: '*.ts', exclude: ['vendor'] });
+    assert.deepStrictEqual(
+      structured.results.map((r) => r.path),
+      ['src/a.ts'],
+    );
+  });
+
+  it('rejects a cursor when exclude changed', async () => {
+    for (const d of ['src', 'vendor', 'lib']) await writeTestFile(root, `${d}/a.ts`, 'x');
+    const first = await find({ path: root, pattern: '*.ts', maxResults: 1, exclude: ['vendor'] });
+    const cursor = first.structured.nextCursor;
+    assert.ok(cursor);
+    await assert.rejects(
+      find({ path: root, pattern: '*.ts', maxResults: 1, exclude: ['src'], cursor }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, 'Invalid cursor'),
+    );
+  });
+
   it('a trailing globstar keeps sensitive and ignored dotfiles out', async () => {
     await writeTestFile(root, '.gitignore', '*.log\n');
     await writeTestFile(root, 'a/hooks/.env', 'SECRET=1\n');

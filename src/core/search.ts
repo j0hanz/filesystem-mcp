@@ -39,6 +39,7 @@ export interface SearchContentOptions {
   maxResults?: number;
   filePattern?: string;
   skipIgnored?: boolean;
+  exclude?: readonly string[];
   includeHidden?: boolean;
   maxDepth?: number;
   /** Lines of context to carry either side of each match; 0 (default) carries none. */
@@ -225,6 +226,7 @@ export async function searchContent(
         includeHidden: Boolean(options.includeHidden),
         includeIgnored: !options.skipIgnored,
         onlyFiles: true,
+        ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
         ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
         concurrency: PARALLEL_CONCURRENCY,
         cap: maxResults,

@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { toPosixPath } from '../src/core/path-utils.ts';
+import { IS_CASE_INSENSITIVE_FS, toPosixPath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import type { ScanEntry, ScanOptions, ScanScope } from '../src/core/scan.ts';
 import { probeDirectory, resolveScanScope, scan, ScanSkip } from '../src/core/scan.ts';
@@ -661,6 +661,85 @@ describe('scan', () => {
       explicitFile: file,
     });
     assert.deepEqual(await resolveScanScope(empty, fs, { allowFile: false }), { root: empty });
+  });
+
+  describe('exclude', () => {
+    const tree = async (): Promise<void> =>
+      files('src/a.ts', 'src/a.test.ts', 'vendor/lib/b.ts', 'pkg/vendor/c.ts', 'docs/build/d.ts');
+    const walkScope = async (
+      scope: ScanScope,
+      overrides: Partial<ScanOptions<string>>,
+    ): Promise<string[]> => {
+      const out = await scan(
+        scope,
+        base({ includeHidden: false, includeIgnored: true, ...overrides }),
+        byPath,
+      );
+      return out.results.map((p) => toPosixPath(relative(scope.root, p))).toSorted();
+    };
+    const walk = (overrides: Partial<ScanOptions<string>>): Promise<string[]> =>
+      tree().then(() => walkScope({ root }, overrides));
+
+    it('without a slash drops a name at any depth, with its subtree', async () => {
+      assert.deepEqual(await walk({ exclude: ['vendor'] }), [
+        'docs/build/d.ts',
+        'src/a.test.ts',
+        'src/a.ts',
+      ]);
+    });
+
+    it('with a slash matches the path relative to the scope', async () => {
+      assert.deepEqual(await walk({ exclude: ['docs/build'] }), [
+        'pkg/vendor/c.ts',
+        'src/a.test.ts',
+        'src/a.ts',
+        'vendor/lib/b.ts',
+      ]);
+    });
+
+    it('drops matching files', async () => {
+      const kept = await walk({ exclude: ['*.test.ts'] });
+      assert.equal(kept.includes('src/a.test.ts'), false);
+      assert.equal(kept.includes('src/a.ts'), true);
+    });
+
+    it('an excluded folder is not counted as an ignore-rule folder', async () => {
+      await tree();
+      const outcome = await scan(
+        { root },
+        base({ includeHidden: false, includeIgnored: false, exclude: ['vendor'] }),
+        byPath,
+      );
+      // docs/build is a default-named folder, so only vendor must stay unreported.
+      const reported = [outcome.excludedDirs, outcome.ignoredDirs].flatMap((d) => d?.first ?? []);
+      assert.ok(reported.every((p) => !p.includes('vendor')));
+    });
+
+    it('a trailing slash or leading ./ still matches', async () => {
+      assert.deepEqual(await walk({ exclude: ['./docs/build/', 'vendor/'] }), [
+        'src/a.test.ts',
+        'src/a.ts',
+      ]);
+    });
+
+    it(
+      'matches case-insensitively where the filesystem does',
+      { skip: !IS_CASE_INSENSITIVE_FS },
+      async () => {
+        const kept = await walk({ exclude: ['VENDOR'] });
+        assert.ok(kept.every((p) => !p.includes('vendor')));
+      },
+    );
+
+    it('a named file is scanned even when exclude matches it', async () => {
+      await tree();
+      const scope = await resolveScanScope(
+        join(root, 'src/a.test.ts'),
+        new GuardedFileSystem(guard),
+        { allowFile: true },
+      );
+      assert.deepEqual(await walkScope(scope, { exclude: ['*.test.ts'] }), ['a.test.ts']);
+    });
   });
 });
 

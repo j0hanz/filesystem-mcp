@@ -137,4 +137,44 @@ describe('swap after validation', () => {
       await rename(parked, dir).catch(() => {});
     }
   });
+
+  // Without /proc, an ancestor swapped for the open and lstat, then back before realpath,
+  // must still be caught: only the chdir/getcwd pin sees the directory actually entered.
+  it(
+    'refuses a double swap when /proc is unreadable',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await mkdir(join(root, 'dir'), { recursive: true });
+      await writeFile(join(root, 'dir', 'note.txt'), 'inside');
+      await writeFile(join(outside, 'note.txt'), 'TOP_SECRET');
+      try {
+        mock.method(fsPromises, 'readlink', async () => {
+          throw new Error('no procfs');
+        });
+        let armed = false;
+        swapBeforeOpen(join(root, 'dir', 'note.txt'), async () => {
+          await rename(join(root, 'dir'), join(base, 'dir.real'));
+          await trySymlink(outside, join(root, 'dir'), () => {});
+          armed = true;
+        });
+        const realRealpath = fsPromises.realpath.bind(fsPromises);
+        mock.method(fsPromises, 'realpath', (async (p: string) => {
+          if (armed) {
+            armed = false;
+            await unlink(join(root, 'dir'));
+            await rename(join(base, 'dir.real'), join(root, 'dir'));
+          }
+          return realRealpath(p);
+        }) as typeof fsPromises.realpath);
+        syncBuiltinESMExports();
+        await assert.rejects(
+          fs.read(join(root, 'dir', 'note.txt')),
+          (err) => isFsError(err) && err.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 });

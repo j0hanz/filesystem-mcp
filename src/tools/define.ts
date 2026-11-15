@@ -551,6 +551,7 @@ export function defineTool<I extends z.ZodType, O extends object>(
   // Filesystem tools are closed-world; only mutating tools are destructive.
   const publishedAnnotations: ToolAnnotations = {
     readOnlyHint: def.readOnlyHint,
+    idempotentHint: def.readOnlyHint,
     openWorldHint: false,
     ...(def.readOnlyHint ? {} : { destructiveHint: true }),
   };

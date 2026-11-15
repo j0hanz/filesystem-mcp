@@ -25,6 +25,7 @@ import {
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { isMainThread } from 'node:worker_threads';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
@@ -47,12 +48,14 @@ import { detectMimeType, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import {
+  IS_WINDOWS,
   isPathInsideDirectory,
   isSamePath,
   normalizePath,
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
+import { lstatPinned } from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -487,6 +490,10 @@ export class GuardedFileSystem {
    * On platforms without O_NOFOLLOW (Windows) or without procfs (macOS, Windows),
    * verify that the opened handle matches the path on disk and has not been
    * swapped for a symlink or a file outside the allowed roots (TOCTOU).
+   * Linux reaches this method only when /proc/self/fd is unreadable.
+   * Off Windows on the main thread, the lstat is pinned (chdir, then getcwd) to the
+   * directory the kernel actually enters, so an ancestor swapped for a symlink during the
+   * open and back before the realpath below is still refused.
    */
   async #verifyOpenedHandle(
     handle: FileHandle,
@@ -496,7 +503,11 @@ export class GuardedFileSystem {
     // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
     let linkStat: BigIntStats;
     try {
-      linkStat = await fsLstat(validPath, { bigint: true });
+      // process.chdir throws in a worker; on Windows the cwd is a string and proves nothing.
+      linkStat =
+        !IS_WINDOWS && isMainThread
+          ? lstatPinned(validPath)
+          : await fsLstat(validPath, { bigint: true });
     } catch (error) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,

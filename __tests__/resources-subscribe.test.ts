@@ -288,4 +288,30 @@ describe('Resource subscription guards', () => {
     await waitFor(() => received !== undefined, 300);
     assert.strictEqual(received, undefined, 'no watcher may be attached to a refused file');
   });
+
+  it('a revoked declared root sends no more change notices', async () => {
+    const declared = join(top, 'declared');
+    await mkdir(declared, { recursive: true });
+    const filePath = join(declared, 'w.txt');
+    await writeFile(filePath, 'a');
+    const uri = buildFileResourceUri(filePath);
+    const guard = pair.serverCtx.pathGuard;
+    assert.equal(await guard.replaceWorkspaceRoots([declared]), 1);
+    try {
+      await pair.client.subscribeResource({ uri });
+      await waitForResourceUpdate(pair.client, uri, () => writeFile(filePath, 'b'));
+
+      await guard.replaceWorkspaceRoots([]);
+      let received: string | undefined;
+      pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
+        received = (n.params as { uri: string }).uri;
+      });
+      await writeFile(filePath, 'c');
+      await waitFor(() => received !== undefined, 300);
+      assert.strictEqual(received, undefined, 'no notice after the root is revoked');
+      await pair.client.unsubscribeResource({ uri });
+    } finally {
+      await guard.replaceWorkspaceRoots([]);
+    }
+  });
 });

@@ -10,6 +10,7 @@ import { type ExcludedDirs, scan, type ScanScope, type StoppedReason } from '../
 import {
   CursorSchema,
   defaultFalseBoolean,
+  ExcludeGlobs,
   IncludeHidden,
   IncludeIgnored,
   mapOptionalPath,
@@ -42,6 +43,7 @@ interface RenderOptions {
 interface CollectOptions extends RenderOptions {
   maxDepth: number;
   includeHidden: boolean;
+  exclude?: readonly string[];
   includeIgnored: boolean;
   signal: AbortSignal;
   pathGuard: PathGuard;
@@ -109,6 +111,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
       pattern: '**/*',
       baseNameMatch: false,
       includeHidden: options.includeHidden,
+      ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
       includeIgnored: options.includeIgnored,
       onlyFiles: false,
       // ListInputSchema.maxDepth is 1-based (1 = top-level only); scan is
@@ -283,6 +286,7 @@ const ListInputSchema = z.strictObject({
     .default(DEFAULT_TREE_ENTRIES)
     .describe('Entries per page; changing it keeps a cursor valid'),
   includeHidden: IncludeHidden,
+  exclude: ExcludeGlobs,
   includeIgnored: IncludeIgnored.describe(
     'Include .gitignore matches and build and tool folders (node_modules, .git, dist, build, out, tmp, coverage)',
   ),
@@ -340,6 +344,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     'List a directory inside the roots as a name tree, walking up to maxDepth levels. Use when you need to see what a folder holds. ' +
     'Do not use it to find files by name or glob; use `find_files` instead, `read` or `search_text` for contents, `stat` for one path. ' +
     'Skips hidden entries, .gitignore matches, and build and tool folders unless includeHidden or includeIgnored is set, naming the ignore-rule folders it hid. ' +
+    'exclude leaves out more names or paths. ' +
     'Folders at maxDepth are shown, but their contents are not listed or counted. ' +
     'At most 20,000 entries are kept. ' +
     'A timeout returns a partial result with stoppedReason. ' +
@@ -371,6 +376,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
           ...renderOpts,
           maxDepth: args.maxDepth,
           includeHidden: args.includeHidden,
+          ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
           includeIgnored: args.includeIgnored,
           signal: ctx.signal,
           pathGuard: ctx.fs.pathGuard,

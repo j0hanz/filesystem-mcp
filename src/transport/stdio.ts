@@ -78,12 +78,17 @@ function cancelledRequestId(message: unknown): string | number | null {
  * Legacy-era only: push-style `roots/list` is deprecated (SEP-2577) and throws
  * on a 2026-07-28 connection, where clients pass paths as tool arguments and
  * the access-grant round-trip covers out-of-root paths instead. Every root
- * still passes `applyGrant`'s boundary and unsafe-path guards, so a client
+ * still passes the guard's boundary and unsafe-path checks, so a client
  * cannot root-declare its way into $HOME or past FS_ROOT_BOUNDARY — a refused
  * root is skipped and its paths fail closed at validateAccess like any other.
+ * The client's latest answer replaces its earlier declared roots (ADR-018);
+ * a failed `roots/list`, or an answer `isCurrent` reports stale, changes nothing.
  * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
  */
-export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise<number> {
+export async function seedRootsFromClient(
+  ctx: FilesystemServerContext,
+  isCurrent: () => boolean = () => true,
+): Promise<number> {
   let roots: readonly { uri: string }[];
   try {
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy-era-only; the modern era never reaches the hooks that call this.
@@ -94,23 +99,26 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
     Logger.debug('[Stdio] roots/list unavailable', { error: formatUnknownErrorMessage(err) });
     return 0;
   }
-  let granted = 0;
+  if (!isCurrent()) return 0; // a newer roots/list superseded this answer
+  const dirs: string[] = [];
   for (const root of roots) {
-    let dir: string;
     try {
-      dir = fileURLToPath(root.uri);
+      dirs.push(fileURLToPath(root.uri));
     } catch {
       continue; // not a file:// root
     }
-    try {
-      if (await ctx.pathGuard.applyGrant(dir, 'workspace')) granted += 1;
-      else Logger.debug('[Stdio] client root refused by grant policy', { dir });
-    } catch (err: unknown) {
-      Logger.debug('[Stdio] client root grant failed', {
-        dir,
-        error: formatUnknownErrorMessage(err),
-      });
-    }
+  }
+  let granted: number;
+  try {
+    granted = await ctx.pathGuard.replaceWorkspaceRoots(dirs, isCurrent);
+  } catch (err: unknown) {
+    Logger.debug('[Stdio] client roots replace failed', { error: formatUnknownErrorMessage(err) });
+    return 0;
+  }
+  if (granted < dirs.length) {
+    Logger.debug('[Stdio] client root refused by grant policy', {
+      refused: dirs.length - granted,
+    });
   }
   // No list-changed notification follows a grant. Allowed roots were once listed
   // as concrete resources, and are not any more: the file template's `list()`
@@ -144,6 +152,8 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
 export function startServer(options: ServerOptions, _config?: RuntimeConfig): StdioServerHandle {
   let closed = false;
   let activeCtx: FilesystemServerContext | undefined;
+  // Per-connection roots/list sequence: only the latest answer applies (ADR-018).
+  let rootsSeq = 0;
   // One state for the connection, outliving any instance built for it. The
   // store reads `activeCtx` when it fires, like `sink` below, so it never pins
   // a disposed instance. The guard and the registry (shared with the resource
@@ -182,15 +192,13 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
     if (era === 'legacy') {
       // Fires when the client's `notifications/initialized` lands. Safe to own:
       // the SDK's only touchpoint is its own initialized handler reading it.
-      c.mcp.server.oninitialized = () => {
-        c.pathGuard.holdUntil(seedRootsFromClient(c));
+      const seed = (): void => {
+        const seq = ++rootsSeq;
+        c.pathGuard.holdUntil(seedRootsFromClient(c, () => seq === rootsSeq));
       };
-      // Re-list and grant anything new; tool calls wait for the re-list. Grants
-      // are session-additive (R8): a root the client withdrew is not revoked
-      // mid-session.
-      c.mcp.server.setNotificationHandler('notifications/roots/list_changed', () => {
-        c.pathGuard.holdUntil(seedRootsFromClient(c));
-      });
+      c.mcp.server.oninitialized = seed;
+      // Re-list; tool calls wait for it. Declared roots follow the client's latest answer (ADR-018).
+      c.mcp.server.setNotificationHandler('notifications/roots/list_changed', seed);
     }
     return c.mcp;
   };
