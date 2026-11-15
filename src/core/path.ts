@@ -15,7 +15,12 @@ import {
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { runExclusive, withAbort } from './concurrency.ts';
-import { getAllowCwdWalk, getAllowMissingRoots, getRootBoundary } from './config.ts';
+import {
+  getAllowCwdWalk,
+  getAllowMissingRoots,
+  getRootBoundary,
+  getToolTimeoutMs,
+} from './config.ts';
 import {
   classifyCauseChain,
   ErrorCode,
@@ -60,6 +65,11 @@ import { ROOTS_HOLD_MS, ROOTS_TIMEOUT_MS } from './util.ts';
 
 /** Links followed, or respelling rounds run, before a path is refused (Linux ELOOP's 40). */
 const MAX_SYMLINK_HOPS = 40;
+
+/** Races only validation, never a commit, so a hung mount ends at the tool timeout. */
+function boundedValidation<T>(pending: Promise<T>): Promise<T> {
+  return withAbort(pending, AbortSignal.timeout(getToolTimeoutMs()));
+}
 
 /** What a move, copy or rename does: see `PathGuard.resolveTransferDestination`. */
 export type TransferKind = 'distinct' | 'respelling' | 'self';
@@ -1547,13 +1557,13 @@ export class PathGuard {
     return matches[0];
   }
 
-  async validatePathForWrite(requestedPath: string): Promise<string> {
-    return this.#validatePathForWrite(requestedPath, false);
+  validatePathForWrite(requestedPath: string): Promise<string> {
+    return boundedValidation(this.#validatePathForWrite(requestedPath, false));
   }
 
   /** Checks mapped transfer entries without changing the existing treatment of sensitive child names. */
-  async validateTransferPathForWrite(requestedPath: string): Promise<string> {
-    return this.#validatePathForWrite(requestedPath, true);
+  validateTransferPathForWrite(requestedPath: string): Promise<string> {
+    return boundedValidation(this.#validatePathForWrite(requestedPath, true));
   }
 
   async #validatePathForWrite(requestedPath: string, allowSensitive: boolean): Promise<string> {
@@ -1632,14 +1642,21 @@ export class PathGuard {
     return entries;
   }
 
-  async validatePathForDelete(
+  /**
+   * `allowReadOnly` skips the read-only-dir refusal. Callers reach it only
+   * through GuardedFileSystem's `probe` kind (the read-only-probe rule in
+   * `GUARD_REGIME`, src/core/fs.ts): everything else — containment, symlink
+   * resolution, the sensitive denylist — still applies.
+   */
+  validatePathForDelete(
     requestedPath: string,
-    /**
-     * `allowReadOnly` skips the read-only-dir refusal. Callers reach it only
-     * through GuardedFileSystem's `probe` kind (the read-only-probe rule in
-     * `GUARD_REGIME`, src/core/fs.ts): everything else — containment, symlink
-     * resolution, the sensitive denylist — still applies.
-     */
+    opts?: { allowReadOnly?: boolean },
+  ): Promise<string> {
+    return boundedValidation(this.#validatePathForDelete(requestedPath, opts));
+  }
+
+  async #validatePathForDelete(
+    requestedPath: string,
     opts?: { allowReadOnly?: boolean },
   ): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =

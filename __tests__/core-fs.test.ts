@@ -20,13 +20,20 @@ import fsPromises, {
 import type { FileHandle } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { getMaxTextFileSize } from '../src/core/config.ts';
-import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
+import {
+  classifyCauseChain,
+  ErrorCode,
+  FsError,
+  isFsError,
+  isNodeError,
+  Problem,
+} from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import {
   atomicTempPath,
@@ -2260,6 +2267,38 @@ describe('GuardedFileSystem.countEntries', () => {
         name: 'TimeoutError',
       });
       assert.ok(performance.now() - started < 2000);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a write whose validation stalls ends at the tool timeout', async (t) => {
+    const dir = join(root, 'stalled');
+    await mkdir(dir);
+    const originalRealpath = fsPromises.realpath.bind(fsPromises);
+    const stalledDir = normalizePath(dir);
+    // Only <root>/stalled and what is under it hangs; every other realpath passes through.
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) => {
+      const p = String(path);
+      return p === stalledDir || p.startsWith(stalledDir + sep)
+        ? new Promise<never>(() => {})
+        : originalRealpath(path);
+    });
+    syncBuiltinESMExports();
+    try {
+      await withEnv({ FS_TOOL_TIMEOUT_MS: '1000' }, async () => {
+        const started = Date.now();
+        await assert.rejects(
+          fs.writeFile(join(dir, 'a.txt'), 'x'),
+          (e) => classifyCauseChain(e).code === ErrorCode.TIMEOUT,
+        );
+        assert.ok(Date.now() - started < 3000);
+        await assert.rejects(
+          fs.rm(join(dir, 'a.txt')),
+          (e) => classifyCauseChain(e).code === ErrorCode.TIMEOUT,
+        );
+      });
     } finally {
       t.mock.restoreAll();
       syncBuiltinESMExports();

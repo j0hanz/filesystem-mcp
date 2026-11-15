@@ -36,6 +36,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     'Returns ---/+++ headers (basenames) and @@ hunks; identical files give headers only.',
   input: DiffInputSchema,
   readOnlyHint: true,
+  deadline: true,
   progress: (args) => ({
     label: 'Diff',
     subject: basename(args.a),
