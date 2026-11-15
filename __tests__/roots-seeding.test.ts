@@ -147,6 +147,15 @@ describe('Client roots follow the latest roots/list (ADR-018)', () => {
     await serverCtx.pathGuard.validateExistingPath(join(c, 'f.txt'));
   });
 
+  it('never revokes a user grant the client once declared', async () => {
+    assert.equal(await serverCtx.pathGuard.applyGrant(c), true);
+    declared = [c];
+    assert.equal(await seedRootsFromClient(serverCtx), 1);
+    declared = [];
+    await seedRootsFromClient(serverCtx);
+    await serverCtx.pathGuard.validateExistingPath(join(c, 'f.txt'));
+  });
+
   it('keeps roots when roots/list fails', async () => {
     declared = [a];
     await seedRootsFromClient(serverCtx);

@@ -14,9 +14,9 @@ This path is legacy-era only. [ADR-002](002-legacy-protocol-paths-sunset.md) alr
 ## Decision
 
 - **Declared roots follow the client.** `PathGuard.replaceWorkspaceRoots(dirs)` makes the declared set exactly the roots of the latest answer that pass the unsafe-path and `FS_ROOT_BOUNDARY` checks. A declared root missing from the answer is revoked. An empty answer revokes every declared root.
-- **Startup roots and prompted grants are never revoked.** Startup roots (CLI args, env, cwd) are the recomputed baseline, so a roots answer cannot touch them. A grant the user approved through the access prompt stays unless the client names it as a root. A named grant is promoted to a declared root, as `applyGrant(dir, 'workspace')` did, and then follows later answers.
+- **Startup roots and prompted grants are never revoked.** Startup roots (CLI args, env, cwd) are the recomputed baseline, so a roots answer cannot touch them. A grant the user approved through the access prompt is never revoked. If the client names it as a root, it stays an access grant and is not promoted, so a later answer that omits it cannot revoke it. It still counts as allowed for that answer.
 - **One recompute per answer, under the mutation lock.** A failed recompute rolls back to the previous view.
-- **A failed or stale answer changes nothing.** A `roots/list` that throws or times out returns before any replace. `startServer` numbers each seed per connection, and an answer that arrives after a newer request was sent is discarded.
+- **A failed or stale answer changes nothing.** A `roots/list` that throws or times out returns before any replace. `startServer` numbers each seed per connection, and an answer superseded by a newer request is discarded. The check runs again inside the lock, so an older answer that reaches the lock after a newer one has applied also changes nothing.
 
 ## Considered options
 

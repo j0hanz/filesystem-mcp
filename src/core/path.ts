@@ -821,13 +821,17 @@ export class PathGuard {
    * Make the client's latest declared workspace roots authoritative (ADR-018).
    * The declared set becomes exactly those of `dirs` that pass the unsafe-path
    * and boundary guards; a declared root missing from `dirs` is revoked. A
-   * user-approved access grant not named in `dirs` is kept, and one that is
-   * named is promoted to a workspace root as `applyGrant(dir, 'workspace')`
-   * does. Startup roots live in the baseline and are never touched. Resolves
+   * user-approved access grant is never revoked: one the client names stays
+   * an access grant (not promoted), so a later omission cannot revoke it.
+   * `isCurrent` is re-checked under the lock: a superseded answer applies
+   * nothing and resolves to 0. Startup roots live in the baseline and are never touched. Resolves
    * to the number of `dirs` now inside the allowed set.
    * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
    */
-  async replaceWorkspaceRoots(dirs: readonly string[]): Promise<number> {
+  async replaceWorkspaceRoots(
+    dirs: readonly string[],
+    isCurrent: () => boolean = () => true,
+  ): Promise<number> {
     const accepted: string[] = [];
     for (const dir of dirs) {
       if ((await this.isUnsafeGrantTarget(dir)) || !(await this.isWithinBoundary(dir))) continue;
@@ -835,17 +839,16 @@ export class PathGuard {
       if (!accepted.some((kept) => isSamePath(kept, normalized))) accepted.push(normalized);
     }
     return runExclusive(this, async () => {
+      if (!isCurrent()) return 0;
       const previous = this.grantedDirectories;
-      const previousAccess = this.accessGrants;
-      const named = (grant: string): boolean => accepted.some((dir) => isSamePath(dir, grant));
-      this.accessGrants = previousAccess.filter((grant) => !named(grant));
-      this.grantedDirectories = [...this.accessGrants, ...accepted];
+      const access = this.accessGrants;
+      const declared = accepted.filter((dir) => !access.some((grant) => isSamePath(grant, dir)));
+      this.grantedDirectories = [...access, ...declared];
       try {
         await this.recomputeAllowedDirectories();
       } catch (error) {
         // A failed recompute leaves the guard with its previous, consistent view.
         this.grantedDirectories = previous;
-        this.accessGrants = previousAccess;
         throw error;
       }
       const allowed = this.getAllowedDirectories();

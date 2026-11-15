@@ -557,7 +557,7 @@ describe('PathGuard.replaceWorkspaceRoots (ADR-018)', () => {
     for (const d of created.splice(0)) await cleanupTestRoot(d);
   });
 
-  it('refuses unsafe roots, revokes undeclared ones, keeps and promotes access grants', async () => {
+  it('refuses unsafe roots, revokes undeclared ones, never revokes access grants', async () => {
     const [start, declared, approved] = [
       await mkDir(created),
       await mkDir(created),
@@ -577,9 +577,24 @@ describe('PathGuard.replaceWorkspaceRoots (ADR-018)', () => {
     assert.ok(containsPath(allowed, start), 'startup root kept');
     assert.ok(containsPath(allowed, approved), 'access grant kept');
 
-    // Named access grant is promoted; withdrawing it afterwards revokes it.
+    // A named access grant stays a user grant: a later omission never revokes it.
     assert.equal(await guard.replaceWorkspaceRoots([approved]), 1);
     assert.equal(await guard.replaceWorkspaceRoots([]), 0);
-    assert.ok(!containsPath(guard.getAllowedDirectories(), approved));
+    assert.ok(containsPath(guard.getAllowedDirectories(), approved));
+  });
+
+  it('a superseded answer that reaches the lock after a newer one applies nothing', async () => {
+    const old = await mkDir(created);
+    const guard = new PathGuard({ cliAllowedDirs: [] });
+    await guard.recomputeAllowedDirectories();
+    let seq = 1;
+    // A filters `old` (awaits) before taking the lock; B has nothing to filter,
+    // so B takes the lock first and A arrives after B has completed.
+    const a = guard.replaceWorkspaceRoots([old], () => seq === 1);
+    seq = 2;
+    const b = guard.replaceWorkspaceRoots([], () => seq === 2);
+    assert.equal(await b, 0);
+    assert.equal(await a, 0);
+    assert.ok(!containsPath(guard.getAllowedDirectories(), old));
   });
 });

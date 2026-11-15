@@ -110,7 +110,7 @@ export async function seedRootsFromClient(
   }
   let granted: number;
   try {
-    granted = await ctx.pathGuard.replaceWorkspaceRoots(dirs);
+    granted = await ctx.pathGuard.replaceWorkspaceRoots(dirs, isCurrent);
   } catch (err: unknown) {
     Logger.debug('[Stdio] client roots replace failed', { error: formatUnknownErrorMessage(err) });
     return 0;
