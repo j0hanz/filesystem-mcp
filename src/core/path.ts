@@ -356,10 +356,13 @@ let confineWarned = false;
  * Linux with procfs; elsewhere it reads the directory by path, so the swap
  * window stays there, like the read path's non-Linux residual. Residuals: the
  * directory walker behind list and the search tools (core/glob.ts) still
- * resolves each entry by path, as the count does for a symlinked entry;
- * write paths that resolve a parent by name
- * (`rename`, `mkdir`, `rm`, `cp`) would need openat()-relative-to-dirfd, which
- * Node lacks; non-Linux skips the fd re-check.
+ * resolves each entry by path, as the count does for a symlinked entry.
+ * Name-based mutations run anchored (ADR-019): the whole-file write commit,
+ * `mkdir`, single-entry delete and move borrow the validated directory as the
+ * working directory and check getcwd, on POSIX main thread only. Recursive
+ * delete, copy, Windows and worker threads still resolve the parent by name,
+ * which would need openat()-relative-to-dirfd that Node lacks; non-Linux skips
+ * the fd re-check.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;

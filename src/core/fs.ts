@@ -68,7 +68,7 @@ import {
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { CAN_PIN, inPinnedDirectory, lstatPinned, mkdirPinned } from './pinned.ts';
+import { CAN_PIN, inPinnedDirectory, lstatPinned, mkdirPinned, renamePinned } from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -1242,7 +1242,8 @@ export class GuardedFileSystem {
         }
       }
       try {
-        await this.#rawRename(validOld, validNew);
+        if (CAN_PIN && this.#rawRename === fsRename) renamePinned(validOld, validNew);
+        else await this.#rawRename(validOld, validNew);
       } catch (error: unknown) {
         rethrowIfAborted(error);
         if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;

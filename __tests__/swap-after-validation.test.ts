@@ -264,4 +264,38 @@ describe('swap after validation', () => {
         assert.ok((await stat(join(outside, 'empty'))).isDirectory());
     });
   }
+
+  for (const [name, swapSide, file] of [
+    ['a destination parent swapped before a move is refused and the source stays', 'to', 'a.txt'],
+    [
+      'a source parent swapped before a move is refused and outside is untouched',
+      'from',
+      'victim.txt',
+    ],
+  ] as const) {
+    it(name, { skip: process.platform === 'win32' }, async () => {
+      const dirs = { from: join(root, `mv-${swapSide}-from`), to: join(root, `mv-${swapSide}-to`) };
+      await mkdir(dirs.from);
+      await mkdir(dirs.to);
+      await writeFile(join(dirs.from, file), 'data');
+      const outsideBefore = await readdir(outside);
+      const swapped = dirs[swapSide];
+      swapBeforeChdir(swapped, () => {
+        renameSync(swapped, `${swapped}-real`);
+        symlinkSync(outside, swapped);
+      });
+      try {
+        await assert.rejects(
+          fs.rename(join(dirs.from, file), join(dirs.to, file)),
+          (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      const sourceDir = swapSide === 'from' ? `${dirs.from}-real` : dirs.from;
+      assert.equal(await readFile(join(sourceDir, file), 'utf8'), 'data');
+      assert.deepEqual(await readdir(outside), outsideBefore);
+      assert.equal(await readFile(join(outside, 'victim.txt'), 'utf8'), 'TOP_SECRET');
+    });
+  }
 });

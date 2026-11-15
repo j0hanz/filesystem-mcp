@@ -1,8 +1,9 @@
-import { type BigIntStats, lstatSync, mkdirSync, statSync } from 'node:fs';
-import { basename, dirname, parse } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { type BigIntStats, lstatSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { basename, dirname, join, parse } from 'node:path';
 import { isMainThread } from 'node:worker_threads';
 
-import { ErrorCode, FsError } from './errors.ts';
+import { ErrorCode, FsError, isFsError } from './errors.ts';
 import { IS_WINDOWS } from './path-utils.ts';
 
 const DARWIN_DATA_VOLUME = '/System/Volumes/Data';
@@ -106,4 +107,66 @@ export function mkdirPinned(directory: string): void {
       current = cwd;
     }
   });
+}
+
+function stagingName(): string {
+  return `.mcp-${randomBytes(8).toString('hex')}.moving`;
+}
+
+/**
+ * Moves `validOld` to `validNew` with each rename anchored to one validated directory. Node has no
+ * renameat, so the side not anchored is named by a fresh staging name and the entry's identity is
+ * checked after it crosses. On failure the source goes back to its own name and the error is
+ * rethrown with its code (EXDEV reaches the caller's cross-device fallback).
+ */
+// Port of renameIntoDirectory and returnStaged, upstream src/filesystem/pinned-directory.ts @ e1dc4b18dbb948921da37f3d4224a628730b43b0
+export function renamePinned(validOld: string, validNew: string): void {
+  const sourceDir = dirname(validOld);
+  const destDir = dirname(validNew);
+  const first = stagingName();
+  const second = stagingName();
+  const identity = inPinnedDirectory(sourceDir, () => {
+    renameSync(basename(validOld), first);
+    try {
+      const { dev, ino } = lstatSync(first, { bigint: true });
+      return { dev, ino };
+    } catch (error) {
+      renameSync(first, basename(validOld));
+      throw error;
+    }
+  });
+  let crossed = false as boolean; // set inside the anchored callback
+  try {
+    inPinnedDirectory(destDir, () => {
+      renameSync(join(sourceDir, first), second);
+      crossed = true;
+      const moved = lstatSync(second, { bigint: true });
+      if (moved.dev !== identity.dev || moved.ino !== identity.ino) throw swapped(destDir);
+      renameSync(second, basename(validNew));
+    });
+  } catch (error) {
+    let left = crossed
+      ? { name: second, directory: destDir }
+      : { name: first, directory: sourceDir };
+    try {
+      if (crossed) {
+        inPinnedDirectory(destDir, () => {
+          renameSync(second, join(sourceDir, first));
+        });
+        left = { name: first, directory: sourceDir };
+      }
+      inPinnedDirectory(sourceDir, () => {
+        renameSync(first, basename(validOld));
+      });
+    } catch {
+      const message = `${(error as Error).message}. The entry being moved could not be put back at ${validOld} and was left as ${left.name} in ${left.directory}`;
+      throw new FsError(
+        isFsError(error) ? error.problem.code : ErrorCode.IO_ERROR,
+        message,
+        validOld,
+        error,
+      );
+    }
+    throw error;
+  }
 }

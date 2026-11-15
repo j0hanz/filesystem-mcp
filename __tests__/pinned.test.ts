@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   lstat,
   mkdir,
+  readdir,
+  readFile,
   realpath,
   rename,
   rm,
@@ -19,6 +21,7 @@ import {
   isSameDirectory,
   lstatPinned,
   mkdirPinned,
+  renamePinned,
 } from '../src/core/pinned.ts';
 import { cleanupTestRoot, createTestRoot, trySymlink } from './helpers.ts';
 
@@ -158,5 +161,22 @@ describe('inPinnedDirectory', posixOnly, () => {
   it('mkdirPinned fails EEXIST on a file in the way', async () => {
     await writeFile(join(root, 'file'), '');
     assert.throws(() => mkdirPinned(join(root, 'file', 'x')), { code: 'EEXIST' });
+  });
+
+  it('renamePinned moves an entry between directories and leaves no staging name', async () => {
+    await mkdir(join(root, 'from'));
+    await mkdir(join(root, 'to'));
+    await writeFile(join(root, 'from', 'a.txt'), 'data');
+    renamePinned(join(root, 'from', 'a.txt'), join(root, 'to', 'b.txt'));
+    assert.equal(await readFile(join(root, 'to', 'b.txt'), 'utf8'), 'data');
+    assert.deepEqual(await readdir(join(root, 'from')), []);
+    assert.deepEqual(await readdir(join(root, 'to')), ['b.txt']);
+  });
+
+  it('renamePinned puts the source back when the destination directory is missing', async () => {
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'a.txt'), 'data');
+    assert.throws(() => renamePinned(join(root, 'src', 'a.txt'), join(root, 'nope', 'a.txt')));
+    assert.deepEqual(await readdir(join(root, 'src')), ['a.txt']);
   });
 });
