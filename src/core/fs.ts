@@ -1,7 +1,18 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import { constants, existsSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fchownSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
@@ -26,7 +37,6 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isMainThread } from 'node:worker_threads';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
@@ -56,7 +66,7 @@ import {
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { lstatPinned } from './pinned.ts';
+import { CAN_PIN, inPinnedDirectory, lstatPinned } from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -504,11 +514,7 @@ export class GuardedFileSystem {
     // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
     let linkStat: BigIntStats;
     try {
-      // process.chdir throws in a worker; on Windows the cwd is a string and proves nothing.
-      linkStat =
-        !IS_WINDOWS && isMainThread
-          ? lstatPinned(validPath)
-          : await fsLstat(validPath, { bigint: true });
+      linkStat = CAN_PIN ? lstatPinned(validPath) : await fsLstat(validPath, { bigint: true });
     } catch (error) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -1366,24 +1372,30 @@ export class GuardedFileSystem {
       // Validation ran before the lock wait and the capture read: a parent swapped
       // for a link since then would carry the temp file and the rename outside.
       await this.#assertParentStillWritable(validPath, filePath);
+      // ADR-019: an injected rename keeps the path-based route, so its tests still see the call.
+      const anchored = CAN_PIN && this.#rawRename === fsRename;
       let blocked: boolean;
       try {
         signal?.throwIfAborted();
-        // Create the temp file already narrowed to the target's mode: a 0600
-        // file's new bytes must never sit at 0644 while the write is in flight.
-        // `wx` fails on a name collision instead of overwriting; the chmod below
-        // still restores bits the umask masked off at creation.
-        await fsWriteFile(tempPath, content, {
-          signal,
-          flag: 'wx',
-          // The rename publishes these bytes, so they must reach the disk first: a
-          // crash in between could otherwise leave the name on an empty file.
-          flush: true,
-          ...(mode !== undefined ? { mode } : {}),
-        });
-        await keepOwner(tempPath, existingStats);
-        if (mode !== undefined) {
-          await fsChmod(tempPath, mode);
+        if (anchored) {
+          writeTempAnchored(validPath, tempPath, content, mode, existingStats);
+        } else {
+          // Create the temp file already narrowed to the target's mode: a 0600
+          // file's new bytes must never sit at 0644 while the write is in flight.
+          // `wx` fails on a name collision instead of overwriting; the chmod below
+          // still restores bits the umask masked off at creation.
+          await fsWriteFile(tempPath, content, {
+            signal,
+            flag: 'wx',
+            // The rename publishes these bytes, so they must reach the disk first: a
+            // crash in between could otherwise leave the name on an empty file.
+            flush: true,
+            ...(mode !== undefined ? { mode } : {}),
+          });
+          await keepOwner(tempPath, existingStats);
+          if (mode !== undefined) {
+            await fsChmod(tempPath, mode);
+          }
         }
         // Last cancellation point. The rename IS the commit: once it starts the
         // target may already be replaced, so it is never raced against the
@@ -1392,7 +1404,8 @@ export class GuardedFileSystem {
         signal?.throwIfAborted();
         blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
       } catch (error) {
-        await this.#dropTemp(tempPath, error);
+        if (anchored) dropTempAnchored(validPath, tempPath, error);
+        else await this.#dropTemp(tempPath, error);
         throw error;
       }
       if (blocked) {
@@ -1420,6 +1433,13 @@ export class GuardedFileSystem {
     validPath: string,
     existing: Stats | undefined,
   ): Promise<'renamed' | 'blocked'> {
+    if (CAN_PIN && this.#rawRename === fsRename) {
+      // Both names sit in one directory, so one anchor covers both sides.
+      inPinnedDirectory(dirname(validPath), () => {
+        renameSync(basename(tempPath), basename(validPath));
+      });
+      return 'renamed';
+    }
     for (let attempt = 0; ; attempt++) {
       try {
         await this.#rawRename(tempPath, validPath);
@@ -2311,6 +2331,69 @@ export async function keepOwner(
     await lchown(tempPath, existing.uid, existing.gid);
   } catch (error) {
     Logger.debug(`Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`);
+  }
+}
+
+/**
+ * The anchored temp write (ADR-019): create, fill, sync and narrow the temp file by base name
+ * inside its validated directory, all through one descriptor. Synchronous: the anchor borrows
+ * the process-wide working directory. A failed temp file is unlinked inside the same anchor.
+ */
+function writeTempAnchored(
+  validPath: string,
+  tempPath: string,
+  content: string | Buffer,
+  mode: number | undefined,
+  existing: Pick<Stats, 'uid' | 'gid'> | undefined,
+): void {
+  const tempName = basename(tempPath);
+  inPinnedDirectory(dirname(validPath), () => {
+    // `wx` fails on a name collision instead of overwriting.
+    const fd = openSync(tempName, 'wx', mode ?? 0o666);
+    try {
+      try {
+        writeFileSync(fd, content);
+        // The rename publishes these bytes, so they must reach the disk first.
+        fsyncSync(fd);
+        // keepOwner's rule, through the descriptor: best effort, POSIX only.
+        if (existing !== undefined && process.getuid !== undefined) {
+          try {
+            fchownSync(fd, existing.uid, existing.gid);
+          } catch (error) {
+            Logger.debug(
+              `Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`,
+            );
+          }
+        }
+        // Restores bits the umask masked off at creation.
+        if (mode !== undefined) fchmodSync(fd, mode);
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      try {
+        unlinkSync(tempName);
+      } catch (cleanupError) {
+        Logger.warn(
+          `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
+        );
+      }
+      throw error;
+    }
+  });
+}
+
+/** Drops a temp file left by a failed anchored commit, by base name inside its directory. */
+function dropTempAnchored(validPath: string, tempPath: string, cause: unknown): void {
+  try {
+    inPinnedDirectory(dirname(validPath), () => {
+      unlinkSync(basename(tempPath));
+    });
+  } catch (cleanupError) {
+    if (isNotFoundErrno(cleanupError)) return;
+    Logger.warn(
+      `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(cause)}): ${formatUnknownErrorMessage(cleanupError)}`,
+    );
   }
 }
 

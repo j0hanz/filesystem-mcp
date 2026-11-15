@@ -1,7 +1,9 @@
 import { type BigIntStats, lstatSync } from 'node:fs';
 import { basename, dirname, parse } from 'node:path';
+import { isMainThread } from 'node:worker_threads';
 
 import { ErrorCode, FsError } from './errors.ts';
+import { IS_WINDOWS } from './path-utils.ts';
 
 const DARWIN_DATA_VOLUME = '/System/Volumes/Data';
 
@@ -19,14 +21,17 @@ export function isSameDirectory(
   return cwd === directory;
 }
 
+/** process.chdir throws in a worker; on Windows the working directory is a string and proves nothing. */
+export const CAN_PIN = !IS_WINDOWS && isMainThread;
+
 /**
- * lstat of `validPath` with its directory pinned: chdir into it and read getcwd back, since the
- * kernel reports the directory actually entered, not the string given. Fully synchronous: the
- * working directory is process-wide, so no other request may run while it is changed.
+ * Runs `action` with `directory` as the working directory, after reading getcwd back: the kernel
+ * reports the directory actually entered, not the string given (ADR-019). `action` must be
+ * synchronous: the working directory is process-wide, so no other request may run while it is
+ * borrowed. The previous working directory is restored, or the root when it is gone.
  */
-export function lstatPinned(validPath: string): BigIntStats {
-  const directory = dirname(validPath);
-  const root = parse(validPath).root;
+export function inPinnedDirectory<T>(directory: string, action: () => T): T {
+  const root = parse(directory).root;
   let saved: string;
   try {
     saved = process.cwd();
@@ -39,10 +44,10 @@ export function lstatPinned(validPath: string): BigIntStats {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
         'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
-        validPath,
+        directory,
       );
     }
-    return lstatSync(basename(validPath), { bigint: true });
+    return action();
   } finally {
     try {
       process.chdir(saved);
@@ -54,4 +59,11 @@ export function lstatPinned(validPath: string): BigIntStats {
       }
     }
   }
+}
+
+/** lstat of `validPath` with its directory pinned. */
+export function lstatPinned(validPath: string): BigIntStats {
+  return inPinnedDirectory(dirname(validPath), () =>
+    lstatSync(basename(validPath), { bigint: true }),
+  );
 }

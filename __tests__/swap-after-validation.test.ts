@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import fsPromises, { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { renameSync, symlinkSync } from 'node:fs';
+import fsPromises, { mkdir, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { after, before, describe, it, mock } from 'node:test';
@@ -26,6 +27,19 @@ function swapBeforeOpen(targetPath: string, swap: () => Promise<void>): void {
     return await originalOpen(path, flags, mode);
   }) as typeof fsPromises.open);
   syncBuiltinESMExports();
+}
+
+/** Runs `swap` once, immediately before the first `process.chdir` into `directory`; restore with `mock.restoreAll()`. */
+function swapBeforeChdir(directory: string, swap: () => void): void {
+  let swapped = false;
+  const originalChdir = process.chdir.bind(process);
+  mock.method(process, 'chdir', (target: string) => {
+    if (!swapped && isSamePath(target, directory)) {
+      swapped = true;
+      swap();
+    }
+    originalChdir(target);
+  });
 }
 
 describe('swap after validation', () => {
@@ -175,6 +189,30 @@ describe('swap after validation', () => {
         mock.restoreAll();
         syncBuiltinESMExports();
       }
+    },
+  );
+
+  it(
+    'a parent swapped before the write commit is refused and nothing lands outside',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = join(root, 'commitdir');
+      await mkdir(dir);
+      const outsideBefore = await readdir(outside);
+      swapBeforeChdir(dir, () => {
+        renameSync(dir, join(root, 'commitdir-real'));
+        symlinkSync(outside, dir);
+      });
+      try {
+        await assert.rejects(
+          fs.writeFile(join(dir, 'new.txt'), 'payload'),
+          (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      // Earlier tests leave their own files there; this write must add nothing.
+      assert.deepEqual(await readdir(outside), outsideBefore);
     },
   );
 });

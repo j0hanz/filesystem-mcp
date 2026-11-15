@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { appendFileSync, constants } from 'node:fs';
+import fsSync, { appendFileSync, constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
@@ -47,6 +47,7 @@ import {
 } from '../src/core/fs.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
+import { CAN_PIN } from '../src/core/pinned.ts';
 import { searchContent } from '../src/core/search.ts';
 import { type RestoreStep, UndoJournal } from '../src/core/undo.ts';
 import { MIB } from '../src/core/util.ts';
@@ -970,6 +971,19 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('writeFile flushes the temp file before renaming it', async (t) => {
       const filePath = await writeTestFile(tmpDir, 'flushed.txt', 'old\n');
+      // The anchored commit (ADR-019) syncs its descriptor; the path-based one asks writeFile to flush.
+      if (CAN_PIN) {
+        const syncs = t.mock.method(fsSync, 'fsyncSync');
+        syncBuiltinESMExports();
+        try {
+          await fs.writeFile(filePath, 'new\n');
+        } finally {
+          syncs.mock.restore();
+          syncBuiltinESMExports();
+        }
+        assert.strictEqual(syncs.mock.callCount(), 1);
+        return;
+      }
       const writes = t.mock.method(fsPromises, 'writeFile');
       syncBuiltinESMExports();
       try {
@@ -1129,15 +1143,24 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('TC-FUNC-047e: an abort before the rename leaves the target untouched', async () => {
       const filePath = await writeTestFile(tmpDir, 'commit_precheck.txt', 'old\n');
       const controller = new AbortController();
-      const originalWriteFile = fsPromises.writeFile;
-      mock.method(
-        fsPromises,
-        'writeFile',
-        async (...args: Parameters<typeof fsPromises.writeFile>): Promise<void> => {
-          await originalWriteFile(...args);
+      if (CAN_PIN) {
+        // The anchored commit (ADR-019) writes the temp file synchronously.
+        const originalWriteFileSync = fsSync.writeFileSync;
+        mock.method(fsSync, 'writeFileSync', (...args: Parameters<typeof fsSync.writeFileSync>) => {
+          originalWriteFileSync(...args);
           controller.abort(new Error('abort before commit'));
-        },
-      );
+        });
+      } else {
+        const originalWriteFile = fsPromises.writeFile;
+        mock.method(
+          fsPromises,
+          'writeFile',
+          async (...args: Parameters<typeof fsPromises.writeFile>): Promise<void> => {
+            await originalWriteFile(...args);
+            controller.abort(new Error('abort before commit'));
+          },
+        );
+      }
       syncBuiltinESMExports();
       try {
         await assert.rejects(

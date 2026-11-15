@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, rename, rmdir, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, realpath, rename, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { join, parse } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
-import { isSameDirectory, lstatPinned } from '../src/core/pinned.ts';
-import { cleanupTestRoot, createTestRoot } from './helpers.ts';
+import { inPinnedDirectory, isSameDirectory, lstatPinned } from '../src/core/pinned.ts';
+import { cleanupTestRoot, createTestRoot, trySymlink } from './helpers.ts';
 
 const posixOnly = { skip: process.platform === 'win32' };
 
@@ -71,5 +71,67 @@ describe('pinned identity check', () => {
       assert.throws(() => lstatPinned(join(realRoot, 'dir', 'a.txt')));
       assert.equal(process.cwd(), before);
     });
+  });
+});
+
+describe('inPinnedDirectory', posixOnly, () => {
+  let root: string;
+  let outside: string;
+
+  before(async () => {
+    // A realpath: macOS temp directories sit behind a link.
+    root = await realpath(await createTestRoot());
+    outside = await realpath(await createTestRoot());
+  });
+
+  after(async () => {
+    if (root) await cleanupTestRoot(root);
+    if (outside) await cleanupTestRoot(outside);
+  });
+
+  it('inPinnedDirectory returns the action result and restores the working directory', () => {
+    const before = process.cwd();
+    assert.equal(
+      inPinnedDirectory(root, () => process.cwd()),
+      root,
+    );
+    assert.equal(process.cwd(), before);
+  });
+
+  it('inPinnedDirectory restores the working directory after a throw', () => {
+    const before = process.cwd();
+    assert.throws(
+      () =>
+        inPinnedDirectory(root, () => {
+          throw new Error('boom');
+        }),
+      /boom/,
+    );
+    assert.equal(process.cwd(), before);
+  });
+
+  it('inPinnedDirectory refuses a directory that is a link elsewhere', async (t) => {
+    const link = join(root, 'link');
+    if (!(await trySymlink(outside, link, () => t.skip('symlinks unavailable')))) return;
+    assert.throws(
+      () => inPinnedDirectory(link, () => 'ran'),
+      (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
+    );
+  });
+
+  it('inPinnedDirectory works when the server working directory was deleted', async () => {
+    const before = process.cwd();
+    const doomed = join(root, 'doomed');
+    await mkdir(doomed);
+    process.chdir(doomed);
+    await rm(doomed, { recursive: true });
+    try {
+      assert.equal(
+        inPinnedDirectory(root, () => 'ran'),
+        'ran',
+      );
+    } finally {
+      process.chdir(before);
+    }
   });
 });
