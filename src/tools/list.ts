@@ -3,7 +3,7 @@ import { basename, posix } from 'node:path';
 import * as z from 'zod/v4';
 
 import { ErrorCode } from '../core/errors.ts';
-import { formatByteSize, formatCount } from '../core/fmt.ts';
+import { formatByteSize, formatCount, hiddenLine } from '../core/fmt.ts';
 import { type EntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { type ExcludedDirs, scan, type ScanScope, type StoppedReason } from '../core/scan.ts';
@@ -61,6 +61,7 @@ export interface CollectResult {
   /** Directories at the depth limit, whose contents the walk did not reach. */
   unexpandedDirectories: number;
   ignoredDirs?: ExcludedDirs;
+  hiddenEntries?: ExcludedDirs;
 }
 
 function parentOfRelative(relativePath: string): string {
@@ -165,6 +166,7 @@ async function collect(scope: ScanScope, options: CollectOptions): Promise<Colle
     ...(outcome.stoppedReason ? { stoppedReason: outcome.stoppedReason } : {}),
     unexpandedDirectories,
     ...(outcome.ignoredDirs ? { ignoredDirs: outcome.ignoredDirs } : {}),
+    ...(outcome.hiddenEntries ? { hiddenEntries: outcome.hiddenEntries } : {}),
   };
 }
 
@@ -313,6 +315,7 @@ interface ListPageMetadata {
   readonly stoppedReason?: StoppedReason;
   readonly unexpandedDirectories: number;
   readonly ignoredDirs?: ExcludedDirs;
+  readonly hiddenEntries?: ExcludedDirs;
 }
 
 function listPageMetadata(path: string, result: CollectResult): ListPageMetadata {
@@ -327,6 +330,7 @@ function listPageMetadata(path: string, result: CollectResult): ListPageMetadata
     ...(stoppedReason ? { stoppedReason } : {}),
     unexpandedDirectories: result.unexpandedDirectories,
     ...(result.ignoredDirs ? { ignoredDirs: result.ignoredDirs } : {}),
+    ...(result.hiddenEntries ? { hiddenEntries: result.hiddenEntries } : {}),
   };
 }
 
@@ -365,6 +369,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       ...keptNote(metadata),
       ...depthNote(args.maxDepth, metadata.unexpandedDirectories),
       ...ignoredNote(metadata.ignoredDirs),
+      ...hiddenLine(metadata.hiddenEntries),
     ];
     return await pagedScan({
       tool: 'list',

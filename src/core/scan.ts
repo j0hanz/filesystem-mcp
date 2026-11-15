@@ -1,4 +1,4 @@
-import { lstat, opendir, realpath } from 'node:fs/promises';
+import { lstat, opendir, readdir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
@@ -138,6 +138,8 @@ export interface ScanOutcome<R> {
   readonly excludedDirs?: ExcludedDirs;
   /** Every folder the ignore rules hid; absent when none. A hidden folder counts only under includeHidden. */
   readonly ignoredDirs?: ExcludedDirs;
+  /** Non-sensitive dot entries directly in the scope root, sorted; absent under includeHidden or when none. */
+  readonly hiddenEntries?: ExcludedDirs;
 }
 
 /**
@@ -406,6 +408,9 @@ export async function scan<R>(
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
+  const hiddenEntries = options.includeHidden
+    ? undefined
+    : await countHidden(scope.root, pathGuard);
   const stoppedReason: StoppedReason | undefined = cut
     ? 'timeout'
     : (capped ?? (keep !== undefined && scanned > keep ? capReason : undefined));
@@ -418,7 +423,20 @@ export async function scan<R>(
     ...(stoppedReason ? { stoppedReason } : {}),
     ...(excludedTotal > 0 ? { excludedDirs: { total: excludedTotal, first: excludedFirst } } : {}),
     ...(ignoredTotal > 0 ? { ignoredDirs: { total: ignoredTotal, first: ignoredFirst } } : {}),
+    ...(hiddenEntries ? { hiddenEntries } : {}),
   };
+}
+
+/** fs.glob never asks `exclude` about dot entries, so one readdir counts them. A sensitive name is never counted. */
+async function countHidden(root: string, pathGuard: PathGuard): Promise<ExcludedDirs | undefined> {
+  try {
+    const names = (await readdir(root))
+      .filter((name) => name.startsWith('.') && !pathGuard.isSensitive(join(root, name)))
+      .sort();
+    return names.length > 0 ? { total: names.length, first: names.slice(0, 5) } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

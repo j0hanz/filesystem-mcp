@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { formatCount, truncateProgressPattern } from '../core/fmt.ts';
+import { formatCount, hiddenLine, truncateProgressPattern } from '../core/fmt.ts';
 import { type ExcludedDirs, scan, type ScanOutcome, type StoppedReason } from '../core/scan.ts';
 import {
   CursorSchema,
@@ -82,6 +82,7 @@ interface SearchFilesPageMetadata {
   truncated: boolean;
   skippedInaccessible: number;
   excludedDirs?: ExcludedDirs;
+  hiddenEntries?: ExcludedDirs;
   stoppedReason?: StoppedReason;
 }
 
@@ -169,6 +170,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
             skippedInaccessible: scanned.skippedInaccessible,
             ...(stoppedReason ? { stoppedReason } : {}),
             ...(scanned.excludedDirs ? { excludedDirs: scanned.excludedDirs } : {}),
+            ...(scanned.hiddenEntries ? { hiddenEntries: scanned.hiddenEntries } : {}),
           } satisfies SearchFilesPageMetadata,
           truncated: stoppedReason !== undefined,
         };
@@ -185,6 +187,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         stoppedReason: metadata.stoppedReason,
         skippedInaccessible: metadata.skippedInaccessible,
         excludedDirs: metadata.excludedDirs,
+        notes: hiddenLine(metadata.hiddenEntries),
       }),
       render: ({ page, metadata, trailer }) => {
         const structured: SearchFilesOutput = {
