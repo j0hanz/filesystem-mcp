@@ -1239,12 +1239,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('a failed rename leaves the target untouched and removes the temp file', async () => {
       const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
-      mock.method(fsPromises, 'rename', async (): Promise<void> => {
-        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      const failing = new GuardedFileSystem(ctx.pathGuard, undefined, {
+        rename: () => Promise.reject(Object.assign(new Error('EIO: fake'), { code: 'EIO' })),
       });
       syncBuiltinESMExports();
       try {
-        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+        await assert.rejects(failing.writeFile(filePath, 'new\n'), /EIO/);
       } finally {
         mock.restoreAll();
         syncBuiltinESMExports();
@@ -1262,15 +1262,15 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       t.mock.method(console, 'error', (...args: unknown[]) => {
         logged.push(args.map(String).join(' '));
       });
-      mock.method(fsPromises, 'rename', async (): Promise<void> => {
-        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      const failing = new GuardedFileSystem(ctx.pathGuard, undefined, {
+        rename: () => Promise.reject(Object.assign(new Error('EIO: fake'), { code: 'EIO' })),
       });
       mock.method(fsPromises, 'unlink', async (): Promise<void> => {
         throw Object.assign(new Error('EBUSY: resource busy or locked, unlink'), { code: 'EBUSY' });
       });
       syncBuiltinESMExports();
       try {
-        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+        await assert.rejects(failing.writeFile(filePath, 'new\n'), /EIO/);
       } finally {
         mock.restoreAll();
         syncBuiltinESMExports();
@@ -3214,4 +3214,77 @@ describe('GuardedFileSystem.read binary policy', () => {
       syncBuiltinESMExports();
     }
   });
+});
+
+describe('GuardedFileSystem.writeFile rename refusals', () => {
+  let root: string;
+  let guard: Awaited<ReturnType<typeof makeGuard>>;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const eperm = (): Promise<never> =>
+    Promise.reject(Object.assign(new Error('EPERM: fake'), { code: 'EPERM' }));
+
+  it('retries a rename Windows refused once', { skip: process.platform !== 'win32' }, async () => {
+    let calls = 0;
+    const flaky = new GuardedFileSystem(guard, undefined, {
+      rename: (a, b) => (++calls === 1 ? eperm() : rename(a, b)),
+    });
+    const file = join(root, 'held.txt');
+    await writeFile(file, 'old');
+    await flaky.writeFile(file, 'new');
+    assert.equal(await readFile(file, 'utf8'), 'new');
+    assert.equal(calls, 2);
+  });
+
+  it(
+    'writes in place when Windows keeps refusing the rename',
+    { skip: process.platform !== 'win32' },
+    async () => {
+      const blocked = new GuardedFileSystem(guard, undefined, { rename: eperm });
+      const dir = join(root, 'blocked');
+      await mkdir(dir);
+      const file = join(dir, 'held.txt');
+      await writeFile(file, 'old');
+      const before = (await lstat(file, { bigint: true })).ino;
+      await blocked.writeFile(file, 'new');
+      assert.equal(await readFile(file, 'utf8'), 'new');
+      assert.equal((await lstat(file, { bigint: true })).ino, before);
+      assert.deepEqual(await readdir(dir), ['held.txt']); // no temp file left
+    },
+  );
+
+  it(
+    'a refused rename of a new file fails and leaves no temp file',
+    { skip: process.platform !== 'win32' },
+    async () => {
+      const blocked = new GuardedFileSystem(guard, undefined, { rename: eperm });
+      const dir = join(root, 'blocked-new');
+      await mkdir(dir);
+      await assert.rejects(blocked.writeFile(join(dir, 'new.txt'), 'x'), { code: 'EPERM' });
+      assert.deepEqual(await readdir(dir), []);
+    },
+  );
+
+  it(
+    'does not retry a refused rename off Windows',
+    { skip: process.platform === 'win32' },
+    async () => {
+      let calls = 0;
+      const refused = new GuardedFileSystem(guard, undefined, {
+        rename: () => (calls++, eperm()),
+      });
+      const file = join(root, 'posix.txt');
+      await writeFile(file, 'old');
+      await assert.rejects(refused.writeFile(file, 'new'), { code: 'EPERM' });
+      assert.equal(calls, 1);
+    },
+  );
 });

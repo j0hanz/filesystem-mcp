@@ -25,6 +25,7 @@ import {
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { isMainThread } from 'node:worker_threads';
 
 import { runExclusive, withAbort } from './concurrency.ts';
@@ -1360,30 +1361,12 @@ export class GuardedFileSystem {
     };
 
     if (inPlace) {
-      // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
-      signal?.throwIfAborted();
-      await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
-      await this.#assertFdWithinRoots(handle, filePath);
-      // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
-      signal?.throwIfAborted();
-      try {
-        // Before the bytes: a restored secret must not sit readable at the copy's mode.
-        if (options.mode !== undefined) await handle.chmod(options.mode);
-        // No signal on the write: once truncated, an abort would leave the file empty.
-        await handle.truncate(0);
-        await handle.writeFile(content);
-        await handle.sync();
-      } catch (error) {
-        // The old bytes are gone, so this exit reports.
-        own.abandon('the write failed part-way');
-        own.changed();
-        throw error;
-      }
-      recordWrite();
+      await this.#writeInPlace(validPath, filePath, content, options, own, recordWrite);
     } else {
       // Validation ran before the lock wait and the capture read: a parent swapped
       // for a link since then would carry the temp file and the rename outside.
       await this.#assertParentStillWritable(validPath, filePath);
+      let blocked: boolean;
       try {
         signal?.throwIfAborted();
         // Create the temp file already narrowed to the target's mode: a 0600
@@ -1407,19 +1390,81 @@ export class GuardedFileSystem {
         // signal — a withAbort race would report a finished write as failed, and
         // a client retry would apply it twice (same reasoning as appendFile).
         signal?.throwIfAborted();
-        await fsRename(tempPath, validPath);
+        blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
       } catch (error) {
-        try {
-          await fsUnlink(tempPath);
-        } catch (cleanupError) {
-          Logger.warn(
-            `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
-          );
-        }
+        await this.#dropTemp(tempPath, error);
         throw error;
       }
-      recordWrite();
+      if (blocked) {
+        await this.#dropTemp(tempPath);
+        await this.#writeInPlace(validPath, filePath, content, options, own, recordWrite);
+      } else {
+        recordWrite();
+      }
     }
+  }
+
+  async #dropTemp(tempPath: string, cause?: unknown): Promise<void> {
+    try {
+      await fsUnlink(tempPath);
+    } catch (cleanupError) {
+      Logger.warn(
+        `Failed to clean up temp file ${tempPath}${cause === undefined ? '' : ` after write error (${formatUnknownErrorMessage(cause)})`}: ${formatUnknownErrorMessage(cleanupError)}`,
+      );
+    }
+  }
+
+  /** Windows refuses a rename over a file another process holds open: retry, then report 'blocked' so the caller writes in place. */
+  async #renameIntoPlace(
+    tempPath: string,
+    validPath: string,
+    existing: Stats | undefined,
+  ): Promise<'renamed' | 'blocked'> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.#rawRename(tempPath, validPath);
+        return 'renamed';
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (!IS_WINDOWS || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw error;
+        if (attempt >= RM_RETRY.maxRetries) {
+          if (existing?.isFile()) return 'blocked';
+          throw error;
+        }
+        await sleep(RM_RETRY.retryDelay);
+      }
+    }
+  }
+
+  async #writeInPlace(
+    validPath: string,
+    filePath: string,
+    content: string | Buffer,
+    options: { signal?: AbortSignal | undefined; mode?: number | undefined },
+    own: PathCapture,
+    recordWrite: () => void,
+  ): Promise<void> {
+    const { signal } = options;
+    // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
+    signal?.throwIfAborted();
+    await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+    await this.#assertFdWithinRoots(handle, filePath);
+    // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
+    signal?.throwIfAborted();
+    try {
+      // Before the bytes: a restored secret must not sit readable at the copy's mode.
+      if (options.mode !== undefined) await handle.chmod(options.mode);
+      // No signal on the write: once truncated, an abort would leave the file empty.
+      await handle.truncate(0);
+      await handle.writeFile(content);
+      await handle.sync();
+    } catch (error) {
+      // The old bytes are gone, so this exit reports.
+      own.abandon('the write failed part-way');
+      own.changed();
+      throw error;
+    }
+    recordWrite();
   }
 
   /**
