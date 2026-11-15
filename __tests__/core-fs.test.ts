@@ -501,6 +501,34 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
     });
 
+    it('writeFile refuses a directory target and leaves no temp file', async () => {
+      const dir = join(tmpDir, 'is-a-dir');
+      await mkdir(dir);
+      await assert.rejects(
+        fs.writeFile(dir, 'x'),
+        (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+      );
+      assert.deepEqual(
+        await readdir(dirname(dir)).then((n) => n.filter((x) => x.includes('is-a-dir'))),
+        ['is-a-dir'],
+      );
+    });
+
+    it(
+      'writeFile refuses a FIFO and leaves it a FIFO',
+      { skip: process.platform === 'win32' },
+      async () => {
+        const { spawnSync } = await import('node:child_process');
+        const fifo = join(tmpDir, 'pipe');
+        assert.strictEqual(spawnSync('mkfifo', [fifo]).status, 0);
+        await assert.rejects(
+          fs.writeFile(fifo, 'x'),
+          (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+        );
+        assert.ok((await lstat(fifo)).isFIFO());
+      },
+    );
+
     it('TC-FUNC-011b: writeFile over a hardlinked file updates every link in place', async (t) => {
       const filePath = await writeTestFile(
         tmpDir,

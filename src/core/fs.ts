@@ -1302,15 +1302,8 @@ export class GuardedFileSystem {
       // shortcut: an outside process swapping in another linked inode between the two looks writes it unlocked; retry under the new key if that matters.
       relock = inPlace && !relocked;
       // Undo capture: save the bytes about to be overwritten. A write over a
-      // non-regular entry (FIFO, socket) cannot be undone — the remove record
-      // would delete the replacement and report restored while the original
-      // entry is gone — so the capture refuses instead of lying.
       if (own.recording && !relock) {
-        if (!existing.isFile()) {
-          own.abandon('cannot capture a write over a non-regular file');
-        } else {
-          saved = await saveOld(own, this, validPath, existing);
-        }
+        saved = await saveOld(own, this, validPath, existing);
       }
     } catch (error) {
       // A refusal from the capture's verified read (a parent swapped for a link) is not a stat failure: stop the write.
@@ -1339,6 +1332,10 @@ export class GuardedFileSystem {
         );
         own.abandon('could not read the old content');
       }
+    }
+    // Same refusal as planCreate. Outside the catch: the catch swallows every error but two.
+    if (existingStats && !existingStats.isFile()) {
+      throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', filePath);
     }
     if (relock) {
       return withInodeLock(inodeKey, () =>
