@@ -1018,6 +1018,21 @@ export class PathGuard {
         }
       }
 
+      // Runs after the ancestor check, so a dangling link out of the roots is still ACCESS_DENIED.
+      const isDanglingLink = await lstat(normalizedRequested).then(
+        (stats) => stats.isSymbolicLink(),
+        () => false,
+      );
+      if (isDanglingLink) {
+        throw new FsError(
+          ErrorCode.NOT_FOUND,
+          'Broken symbolic link: its target does not exist',
+          requestedPath,
+          error,
+          'Delete the link, or create its target.',
+        );
+      }
+
       throw new FsError(ErrorCode.NOT_FOUND, 'Path not found', requestedPath, error);
     }
 

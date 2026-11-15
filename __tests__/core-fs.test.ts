@@ -873,6 +873,43 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
     });
 
+    it('names a dangling link instead of calling it missing', async (t) => {
+      const link = join(tmpDir, 'dangling');
+      if (
+        !(await trySymlink(
+          join(tmpDir, 'gone.txt'),
+          link,
+          () => t.skip('symlinks unavailable'),
+          'file',
+        ))
+      )
+        return;
+      await assert.rejects(
+        fs.read(link),
+        (e) =>
+          isFsError(e) &&
+          e.code === ErrorCode.NOT_FOUND &&
+          e.message.includes('Broken symbolic link: its target does not exist'),
+      );
+    });
+
+    it('still denies a dangling link that points outside the roots', async (t) => {
+      const link = join(tmpDir, 'escaping');
+      if (
+        !(await trySymlink(
+          join(dirname(tmpDir), 'outside-missing.txt'),
+          link,
+          () => t.skip('symlinks unavailable'),
+          'file',
+        ))
+      )
+        return;
+      await assert.rejects(
+        fs.read(link),
+        (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
+      );
+    });
+
     it('TC-FUNC-052a: countFileLines matches countLines across the buffer boundary', async () => {
       // >64 KiB so the counter crosses its read-buffer boundary, with the
       // final line left unterminated to exercise the last-byte rule.
