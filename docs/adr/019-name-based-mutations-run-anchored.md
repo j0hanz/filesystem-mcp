@@ -12,7 +12,7 @@ Reads already close this gap with `lstatPinned` in [`src/core/pinned.ts`](../../
 ## Decision
 
 - **On POSIX, on the main thread (`CAN_PIN`), a name-based mutation runs anchored.** `inPinnedDirectory(directory, action)` enters the validated directory, confirms where the kernel put it, runs `action` on base names, and restores the previous working directory (or the root, when that one is gone). A directory that resolves elsewhere is refused with `ACCESS_DENIED`.
-- **Scope.** The whole-file write commit: temp file create, write, sync, owner, mode and rename (this ADR). `mkdir` and single-entry delete follow, then move.
+- **Scope.** The whole-file write commit: temp file create, write, sync, owner, mode and rename (this ADR). Recursive `mkdir` and single-entry delete follow, then move. Plain `mkdir` stays path-based; `rm` falls back to the path-based delete when lstat finds no entry.
 - **Every anchored section is synchronous.** The working directory is process-wide, so no other request may run while it is borrowed. No `await` inside an anchor.
 - **An injected raw rename keeps the path-based route**, so tests that inject one still see the call.
 

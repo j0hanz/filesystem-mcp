@@ -1316,7 +1316,7 @@ export class GuardedFileSystem {
       // truncate between them. Taken once: the second look, under the lock, does not retry.
       // shortcut: an outside process swapping in another linked inode between the two looks writes it unlocked; retry under the new key if that matters.
       relock = inPlace && !relocked;
-      // Undo capture: save the bytes about to be overwritten. A write over a
+      // Undo capture: save the bytes about to be overwritten.
       // Only a regular file is captured: a FIFO read would block, and the refusal below throws before any write.
       if (own.recording && !relock && existing.isFile()) {
         saved = await saveOld(own, this, validPath, existing);

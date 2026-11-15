@@ -99,7 +99,7 @@ Each part maps to one piece of the MCP client API:
   changed file matching either, renames included, is the model's own write
   and starts no turn. A file someone else changed while the turn ran gets its
   own turn right after.
-- **The gate.** A tool is gated when its `annotations.destructiveHint` is set,
+- **The gate.** A tool is gated when its `annotations.destructiveHint` is true,
   and previewed when its `inputSchema` has a `dryRun` property. No tool names
   are hardcoded. `--yes` skips only this gate.
 - **Server confirmations.** The client declares `elicitation: { form: {} }`

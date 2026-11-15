@@ -19,6 +19,7 @@ import { after, before, describe, it } from 'node:test';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import {
   inPinnedDirectory,
+  isMkdirStep,
   isSameDirectory,
   isSecondLink,
   lstatPinned,
@@ -202,5 +203,17 @@ describe('isSecondLink', () => {
   it('a different inode or a missing destination is not a no-op', () => {
     assert.equal(isSecondLink(entry, { dev: 1n, ino: 8n }, false), false);
     assert.equal(isSecondLink(entry, undefined, false), false);
+  });
+});
+
+describe('isMkdirStep', () => {
+  it('accepts a Data-prefixed cwd on darwin only', () => {
+    const cwd = '/System/Volumes/Data/Users/a/new';
+    assert.equal(isMkdirStep(cwd, '/Users/a', 'new', 'darwin'), true);
+    assert.equal(isMkdirStep(cwd, '/Users/a', 'new', 'linux'), false);
+  });
+  it('folds the base name and refuses another one', () => {
+    assert.equal(isMkdirStep('/r/é', '/r', 'é', 'linux'), true);
+    assert.equal(isMkdirStep('/r/other', '/r', 'new', 'linux'), false);
   });
 });

@@ -358,8 +358,8 @@ let confineWarned = false;
  * directory walker behind list and the search tools (core/glob.ts) still
  * resolves each entry by path, as the count does for a symlinked entry.
  * Name-based mutations run anchored (ADR-019): the whole-file write commit,
- * `mkdir`, single-entry delete and move borrow the validated directory as the
- * working directory and check getcwd, on POSIX main thread only. Recursive
+ * recursive `mkdir`, single-entry delete and move borrow the validated directory as the
+ * working directory and check getcwd, on POSIX main thread only (plain `mkdir` stays path-based; `rm` falls back to the path-based delete when lstat finds no entry). Recursive
  * delete, copy, Windows and worker threads still resolve the parent by name,
  * which would need openat()-relative-to-dirfd that Node lacks; non-Linux skips
  * the fd re-check.

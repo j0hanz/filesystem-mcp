@@ -70,7 +70,7 @@ Each part maps to one piece of the MCP client API:
   resolve inside the workspace.
 - **Tool discovery.** `client.listTools()` is passed to the model unchanged:
   `name`, `description` and `inputSchema` become an OpenAI `function` tool.
-- **The gate.** A tool is gated when its `annotations.destructiveHint` is set,
+- **The gate.** A tool is gated when its `annotations.destructiveHint` is true,
   and previewed when its `inputSchema` has a `dryRun` property. No tool names
   are hardcoded. The preview is the same `callTool` with `dryRun: true`.
 - **Server confirmations.** The client declares `elicitation: { form: {} }`

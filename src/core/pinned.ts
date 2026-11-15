@@ -71,6 +71,19 @@ export function lstatPinned(validPath: string): BigIntStats {
   );
 }
 
+/** True when getcwd `cwd` is the component `name` made under `current` (NFC-folded, Data prefix tolerated). */
+export function isMkdirStep(
+  cwd: string,
+  current: string,
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    isSameDirectory(dirname(cwd), current, platform) &&
+    basename(cwd).normalize('NFC') === name.normalize('NFC')
+  );
+}
+
 /**
  * `mkdir -p` of `directory` in one borrowed working directory: enters the deepest existing
  * ancestor, then creates and enters each missing component, checking getcwd after every step.
@@ -101,9 +114,7 @@ export function mkdirPinned(directory: string): void {
         throw exists ?? error; // a non-directory in the way
       }
       const cwd = process.cwd();
-      if (dirname(cwd) !== current || basename(cwd).normalize('NFC') !== name.normalize('NFC')) {
-        throw swapped(directory);
-      }
+      if (!isMkdirStep(cwd, current, name)) throw swapped(directory);
       current = cwd;
     }
   });
@@ -113,12 +124,6 @@ function stagingName(): string {
   return `.mcp-${randomBytes(8).toString('hex')}.moving`;
 }
 
-/**
- * Moves `validOld` to `validNew` with each rename anchored to one validated directory. Node has no
- * renameat, so the side not anchored is named by a fresh staging name and the entry's identity is
- * checked after it crosses. On failure the source goes back to its own name and the error is
- * rethrown with its code (EXDEV reaches the caller's cross-device fallback).
- */
 /**
  * True when `dest` is another hard link of `source`'s inode, where POSIX rename does nothing. A
  * respelling (case or Unicode form) is the same entry on a folding filesystem and must still move.
@@ -131,6 +136,14 @@ export function isSecondLink(
   return !respelling && dest?.dev === source.dev && dest.ino === source.ino;
 }
 
+/**
+ * Moves `validOld` to `validNew` with each rename anchored to one validated directory. Node has no
+ * renameat, so the side not anchored is named by a fresh staging name and the entry's identity is
+ * checked after it crosses. On failure the source goes back to its own name and the error is
+ * rethrown with its code (EXDEV reaches the caller's cross-device fallback). `respelling` marks a
+ * move onto another spelling of the same entry (case or Unicode form), which must still move
+ * rather than count as a second hard link.
+ */
 // Port of renameIntoDirectory and returnStaged, upstream src/filesystem/pinned-directory.ts @ e1dc4b18dbb948921da37f3d4224a628730b43b0
 export function renamePinned(validOld: string, validNew: string, respelling = false): void {
   const sourceDir = dirname(validOld);
