@@ -518,11 +518,30 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       'writeFile refuses a FIFO and leaves it a FIFO',
       { skip: process.platform === 'win32' },
       async () => {
-        const { spawnSync } = await import('node:child_process');
         const fifo = join(tmpDir, 'pipe');
+        const { spawnSync } = await import('node:child_process');
         assert.strictEqual(spawnSync('mkfifo', [fifo]).status, 0);
         await assert.rejects(
           fs.writeFile(fifo, 'x'),
+          (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+        );
+        assert.ok((await lstat(fifo)).isFIFO());
+      },
+    );
+
+    it(
+      'writeFile refuses a FIFO promptly through an undo capture and leaves it a FIFO',
+      { skip: process.platform === 'win32' },
+      async () => {
+        const fifo = join(tmpDir, 'pipe-recorded');
+        const { spawnSync } = await import('node:child_process');
+        assert.strictEqual(spawnSync('mkfifo', [fifo]).status, 0);
+        const tracked = new GuardedFileSystem(
+          ctx.pathGuard,
+          new UndoJournal(1024 * 1024).beginCapture(),
+        );
+        await assert.rejects(
+          failIfPendingAfter(tracked.writeFile(fifo, 'x'), 2000),
           (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
         );
         assert.ok((await lstat(fifo)).isFIFO());
