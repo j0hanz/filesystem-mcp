@@ -50,6 +50,39 @@ describe('edit body', () => {
   const edit = async (args: EditArgs, options: Partial<ToolBodyOptions> = {}): Promise<EditRun> =>
     (await runToolBodyResult(EDIT, args, { fs, ...options })) as EditRun;
 
+  it('a live edit with returnDiff appends the diff', async () => {
+    const file = join(root, 'a.txt');
+    await writeFile(file, 'one\ntwo\n');
+    const result = await edit({
+      path: file,
+      edits: [{ oldText: 'two', newText: 'TWO' }],
+      returnDiff: true,
+    });
+    assert.match(result.text ?? '', /\n@@ /);
+    assert.match(result.text ?? '', /\n-two\n\+TWO\n/);
+    assert.equal(await readFile(file, 'utf8'), 'one\nTWO\n');
+  });
+
+  it('a live edit without returnDiff prints the summary line only', async () => {
+    const file = join(root, 'b.txt');
+    await writeFile(file, 'one\n');
+    const result = await edit({ path: file, edits: [{ oldText: 'one', newText: 'ONE' }] });
+    assert.doesNotMatch(result.text ?? '', /@@/);
+  });
+
+  it('a live returnDiff cuts an oversize diff at 20 KB', async () => {
+    const file = join(root, 'c.txt');
+    await writeFile(file, 'x\n');
+    const big = 'y'.repeat(30 * 1024);
+    const result = await edit({
+      path: file,
+      edits: [{ oldText: 'x', newText: big }],
+      returnDiff: true,
+    });
+    assert.match(result.text ?? '', /\/\/ diff cut at 20 KB; read the file for the rest\./);
+    assert.ok((result.text ?? '').length < 22 * 1024);
+  });
+
   it('concurrent edit across two hard links preserves both edits without deadlock', async (t) => {
     const fileA = await writeTestFile(root, 'hl-edit-a.txt', 'line1\nline2\n');
     const fileB = join(root, 'hl-edit-b.txt');

@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { closestLines } from '../core/closest-lines.ts';
+import { MAX_DIFF_SIZE } from '../core/diff-budget.ts';
 import { unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
@@ -78,6 +79,9 @@ const EditFileInputSchema = z
       .describe('Batch mode: one entry per file, each with its own edits'),
     dryRun: defaultFalseBoolean(
       'Write nothing; return a unified diff per file. An unmatched oldText is reported instead of failing; an ambiguous one still fails',
+    ),
+    returnDiff: defaultFalseBoolean(
+      'Include the unified diff in a live run. Cut at 20 KB per file.',
     ),
     ignoreWhitespace: defaultFalseBoolean(
       'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match. Tried automatically when the exact text has no match',
@@ -635,7 +639,7 @@ async function applyEdits(
 async function editOnce(
   filePath: string,
   edits: z.infer<typeof EditSpecSchema>[],
-  options: { dryRun: boolean; ignoreWhitespace: boolean },
+  options: { dryRun: boolean; ignoreWhitespace: boolean; returnDiff: boolean },
   ctx: ToolCtx,
 ): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
   const done = await rewriteFile(
@@ -679,7 +683,15 @@ async function editOnce(
     editResult.linesAdded = patch.linesAdded;
     editResult.linesRemoved = patch.linesRemoved;
   }
-  if (options.dryRun && patch !== undefined) editResult.diff = patch.text;
+  if (patch !== undefined && (options.dryRun || options.returnDiff)) {
+    // A dry run is the preview the caller asked for and keeps its full diff; a live run is capped.
+    editResult.diff =
+      options.dryRun || patch.text.length <= MAX_DIFF_SIZE
+        ? patch.text
+        : `${patch.text.slice(0, MAX_DIFF_SIZE)}
+// diff cut at ${String(MAX_DIFF_SIZE / 1024)} KB; read the file for the rest.
+`;
+  }
   if (done.written) {
     ctx.log(
       'info',
@@ -746,7 +758,7 @@ function formatEditSummary(
   const failed = results.filter((r) => 'error' in r).length;
   const ok = results.length - failed;
   const ratio = failed > 0 ? ` (${String(ok)}/${String(results.length)} ok)` : '';
-  // Only a dry run carries a diff, and it is the preview the caller asked for:
+  // Only a dry run or returnDiff carries a diff, the preview the caller asked for:
   // the structured value ships under `_meta`, which clients do not show the model.
   // A no-op edit still yields a header-only diff; it previews nothing.
   const diffs = results
@@ -767,7 +779,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     'Each file is all or nothing: an unmatched or ambiguous oldText writes nothing to that file, and other files still run; dryRun reports unmatched text instead of failing. ' +
     'An oldText with no exact match is retried ignoring indentation and spacing and applied only if that matches once; the summary says so. ' +
     'Missing, binary, non-UTF-8, and over-size-cap (default 10 MiB) files fail. ' +
-    'Returns one summary line per file (+added -removed, NO MATCH, or FAILED); a dry run appends unified diffs. ' +
+    'Returns one summary line per file (+added -removed, NO MATCH, or FAILED); a dry run or returnDiff appends unified diffs. ' +
     'With undo enabled, live runs add an undo id for `undo`, valid 30 minutes.',
   input: EditFileInputSchema,
   readOnlyHint: false,
