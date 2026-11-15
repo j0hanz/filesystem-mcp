@@ -17,6 +17,7 @@ import { after, before, describe, it, mock } from 'node:test';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { isSamePath } from '../src/core/path-utils.ts';
+import { renamePinned } from '../src/core/pinned.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import { cleanupTestRoot, createTestRoot, createTestServer, trySymlink } from './helpers.ts';
 
@@ -298,4 +299,38 @@ describe('swap after validation', () => {
       assert.equal(await readFile(join(outside, 'victim.txt'), 'utf8'), 'TOP_SECRET');
     });
   }
+
+  it(
+    'a source parent swapped before a failed move is sent back keeps the entry out of outside',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const from = join(root, 'sb-from');
+      const to = join(root, 'sb-to');
+      await mkdir(from);
+      await mkdir(join(to, 'a.txt'), { recursive: true });
+      await writeFile(join(to, 'a.txt', 'keep'), '');
+      await writeFile(join(from, 'a.txt'), 'data');
+      const outsideBefore = await readdir(outside);
+      // Swap before the third chdir into either directory: the send-back after step 3 fails.
+      let entries = 0;
+      const originalChdir = process.chdir.bind(process);
+      mock.method(process, 'chdir', (target: string) => {
+        if (isSamePath(target, from) || isSamePath(target, to)) {
+          entries += 1;
+          if (entries === 3) {
+            renameSync(from, `${from}-real`);
+            symlinkSync(outside, from);
+          }
+        }
+        originalChdir(target);
+      });
+      try {
+        assert.throws(() => renamePinned(join(from, 'a.txt'), join(to, 'a.txt')));
+      } finally {
+        mock.restoreAll();
+      }
+      assert.deepEqual(await readdir(outside), outsideBefore);
+      assert.equal(await readFile(join(outside, 'victim.txt'), 'utf8'), 'TOP_SECRET');
+    },
+  );
 });

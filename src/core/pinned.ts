@@ -126,6 +126,10 @@ export function renamePinned(validOld: string, validNew: string): void {
   const first = stagingName();
   const second = stagingName();
   const identity = inPinnedDirectory(sourceDir, () => {
+    const source = lstatSync(basename(validOld), { bigint: true });
+    const dest = lstatSync(validNew, { bigint: true, throwIfNoEntry: false });
+    // Hard links to one inode: POSIX rename does nothing, and so must we.
+    if (dest?.dev === source.dev && dest.ino === source.ino) return undefined;
     renameSync(basename(validOld), first);
     try {
       const { dev, ino } = lstatSync(first, { bigint: true });
@@ -135,6 +139,7 @@ export function renamePinned(validOld: string, validNew: string): void {
       throw error;
     }
   });
+  if (identity === undefined) return;
   let crossed = false as boolean; // set inside the anchored callback
   try {
     inPinnedDirectory(destDir, () => {
@@ -149,17 +154,22 @@ export function renamePinned(validOld: string, validNew: string): void {
       ? { name: second, directory: destDir }
       : { name: first, directory: sourceDir };
     try {
-      if (crossed) {
-        inPinnedDirectory(destDir, () => {
-          renameSync(second, join(sourceDir, first));
-        });
-        left = { name: first, directory: sourceDir };
-      }
+      // Deviation from upstream: the send-back is anchored at the source directory and checks
+      // identity, so a source directory swapped since step 1 cannot receive the entry.
       inPinnedDirectory(sourceDir, () => {
+        if (crossed) {
+          renameSync(join(destDir, second), first);
+          const back = lstatSync(first, { bigint: true });
+          if (back.dev !== identity.dev || back.ino !== identity.ino) {
+            renameSync(first, join(destDir, second));
+            throw swapped(sourceDir);
+          }
+          left = { name: first, directory: sourceDir };
+        }
         renameSync(first, basename(validOld));
       });
     } catch {
-      const message = `${(error as Error).message}. The entry being moved could not be put back at ${validOld} and was left as ${left.name} in ${left.directory}`;
+      const message = `${error instanceof Error ? error.message : String(error)}. The entry being moved could not be put back at ${validOld} and was left as ${left.name} in ${left.directory}`;
       throw new FsError(
         isFsError(error) ? error.problem.code : ErrorCode.IO_ERROR,
         message,

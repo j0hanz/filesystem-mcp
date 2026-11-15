@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { linkSync } from 'node:fs';
 import {
   lstat,
   mkdir,
@@ -178,5 +179,13 @@ describe('inPinnedDirectory', posixOnly, () => {
     await writeFile(join(root, 'src', 'a.txt'), 'data');
     assert.throws(() => renamePinned(join(root, 'src', 'a.txt'), join(root, 'nope', 'a.txt')));
     assert.deepEqual(await readdir(join(root, 'src')), ['a.txt']);
+  });
+
+  it('renamePinned onto a hard link of the same inode does nothing, as rename does', async () => {
+    await mkdir(join(root, 'hl'));
+    await writeFile(join(root, 'hl', 'a.txt'), 'data');
+    linkSync(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
+    renamePinned(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
+    assert.deepEqual((await readdir(join(root, 'hl'))).sort(), ['a.txt', 'b.txt']);
   });
 });
