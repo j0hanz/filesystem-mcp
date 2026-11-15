@@ -553,7 +553,7 @@ export function defineTool<I extends z.ZodType, O extends object>(
     readOnlyHint: def.readOnlyHint,
     idempotentHint: def.readOnlyHint,
     openWorldHint: false,
-    ...(def.readOnlyHint ? {} : { destructiveHint: true }),
+    destructiveHint: !def.readOnlyHint,
   };
 
   const toolDefShape = {
