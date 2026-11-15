@@ -46,6 +46,7 @@ describe('list body', () => {
 
   it('names the hidden entries a default listing skipped', async () => {
     await mkdir(join(root, '.github'));
+    await mkdir(join(root, '.git')); // skipped even under includeHidden, so never promised
     await writeFile(join(root, '.editorconfig'), '');
     await writeFile(join(root, '.env'), 'SECRET=1');
     await writeFile(join(root, 'a.txt'), '');
