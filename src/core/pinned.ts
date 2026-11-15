@@ -99,10 +99,10 @@ function inPinnedDirectory<T>(directory: string, action: () => T): T {
 }
 
 /** lstat of `validPath`, pinned to its directory where supported. */
-export function lstatPinned(validPath: string): Promise<BigIntStats> {
+export async function lstatPinned(validPath: string): Promise<BigIntStats> {
   if (!CAN_PIN) return fsLstat(validPath, { bigint: true });
-  return Promise.resolve(
-    inPinnedDirectory(dirname(validPath), () => lstatSync(basename(validPath), { bigint: true })),
+  return inPinnedDirectory(dirname(validPath), () =>
+    lstatSync(basename(validPath), { bigint: true }),
   );
 }
 

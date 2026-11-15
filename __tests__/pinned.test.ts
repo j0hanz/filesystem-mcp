@@ -195,17 +195,24 @@ describe('anchored mutations', () => {
   it(
     'renamePinned onto a hard link of the same inode is a no-op unless respelling is set',
     posixOnly,
-    async () => {
-      await mkdir(join(root, 'hl'));
-      await writeFile(join(root, 'hl', 'a.txt'), 'data');
-      linkSync(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
-      await renamePinned(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
-      assert.deepEqual((await readdir(join(root, 'hl'))).sort(), ['a.txt', 'b.txt']);
+    async (t) => {
+      const hl = join(root, 'hl');
+      await mkdir(hl);
+      await writeFile(join(hl, 'a.txt'), 'data');
+      linkSync(join(hl, 'a.txt'), join(hl, 'b.txt'));
+      await renamePinned(join(hl, 'a.txt'), join(hl, 'b.txt'));
+      assert.deepEqual((await readdir(hl)).sort(), ['a.txt', 'b.txt']);
 
-      await renamePinned(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'), {
-        respelling: true,
-      });
-      assert.deepEqual(await readdir(join(root, 'hl')), ['b.txt']);
+      const chdirSpy = t.mock.method(process, 'chdir');
+      try {
+        await renamePinned(join(hl, 'a.txt'), join(hl, 'a.txt'), {
+          respelling: true,
+        });
+        assert.equal(chdirSpy.mock.callCount(), 4);
+      } finally {
+        t.mock.restoreAll();
+      }
+      assert.deepEqual((await readdir(hl)).sort(), ['a.txt', 'b.txt']);
     },
   );
 
