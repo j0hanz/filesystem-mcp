@@ -170,8 +170,8 @@ describe('Write-path and root guards (issue #200)', () => {
       // Two entries folding to the same unicodeMatchKey, neither the typed
       // spelling: a directory scan on the outside dir would refuse as
       // ambiguous and list names that are outside the roots.
-      await writeFile(join(outside, 'café\u00a0file.txt'), 'a');
-      await writeFile(join(outside, 'café\u202ffile.txt'), 'a');
+      await writeFile(join(outside, 'café file.txt'), 'a');
+      await writeFile(join(outside, 'café file.txt'), 'a');
       const requested = join(linkPath, 'café file.txt');
       const assertNotOutside = (error: unknown): boolean => {
         assert.ok(
