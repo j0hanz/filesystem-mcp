@@ -46,8 +46,7 @@ import {
   UNKNOWN_IDENTITY,
 } from '../src/core/fs.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
-import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
-import { CAN_PIN } from '../src/core/pinned.ts';
+import { IS_WINDOWS, isSamePath, normalizePath } from '../src/core/path-utils.ts';
 import { searchContent } from '../src/core/search.ts';
 import { type RestoreStep, UndoJournal } from '../src/core/undo.ts';
 import { MIB } from '../src/core/util.ts';
@@ -971,8 +970,8 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('writeFile flushes the temp file before renaming it', async (t) => {
       const filePath = await writeTestFile(tmpDir, 'flushed.txt', 'old\n');
-      // The anchored commit (ADR-019) syncs its descriptor; the path-based one asks writeFile to flush.
-      if (CAN_PIN) {
+      // The anchored commit (ADR-019) syncs its descriptor on POSIX; Windows asks writeFile to flush.
+      if (!IS_WINDOWS) {
         const syncs = t.mock.method(fsSync, 'fsync');
         syncBuiltinESMExports();
         try {
@@ -1143,7 +1142,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('TC-FUNC-047e: an abort before the rename leaves the target untouched', async () => {
       const filePath = await writeTestFile(tmpDir, 'commit_precheck.txt', 'old\n');
       const controller = new AbortController();
-      if (CAN_PIN) {
+      if (!IS_WINDOWS) {
         // The anchored commit (ADR-019) writes the temp file through its descriptor.
         const originalWriteFile = fsSync.writeFile;
         mock.method(
