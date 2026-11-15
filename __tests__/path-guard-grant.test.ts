@@ -71,6 +71,30 @@ describe('PathGuard grant round-trip', () => {
     assert.deepStrictEqual(grants, []);
   });
 
+  it('confine-roots refuses a client root and a grant outside the startup roots', async () => {
+    const outside = await mkDir(createdDirs);
+    await withEnv({ FS_CONFINE_ROOTS: 'true' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+      assert.equal(await guard.replaceWorkspaceRoots([outside]), 0);
+      assert.equal(guard.isInsideAllowed(join(outside, 'a.txt')), false);
+      assert.equal(await guard.applyGrant(outside), false);
+      await fsPromises.mkdir(join(root, 'sub'));
+      assert.equal(await guard.replaceWorkspaceRoots([join(root, 'sub')]), 1);
+      assert.equal(await guard.applyGrant(join(root, 'sub')), true);
+      assert.equal(guard.isInsideAllowed(join(root, 'other.txt')), true); // startup root not narrowed
+    });
+  });
+
+  it('confine-roots changes nothing with no startup root', async () => {
+    const outside = await mkDir(createdDirs);
+    await withEnv({ FS_CONFINE_ROOTS: 'true' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [] });
+      await guard.recomputeAllowedDirectories();
+      assert.equal(await guard.replaceWorkspaceRoots([outside]), 1);
+    });
+  });
+
   it('TC-PG-002: within FS_ROOT_BOUNDARY, precheckAccess offers the ancestor and applyGrant extends access', async () => {
     const boundary = tmpdir();
     const outOfRoot = await mkDir(createdDirs);

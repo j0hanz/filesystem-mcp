@@ -10,6 +10,7 @@ import {
   cli,
   getAllowCwd,
   getAllowMissingRoots,
+  getConfineRoots,
   getMaxTextFileSize,
   getRootBoundary,
   getToolTimeoutMs,
@@ -173,6 +174,7 @@ const CLI_PARSER_CONFIG = {
     deny: { type: 'string', multiple: true },
     allow: { type: 'string', multiple: true },
     'allow-missing-roots': { type: 'boolean', default: false },
+    'confine-roots': { type: 'boolean', default: false },
   },
   strict: true,
   allowPositionals: true,
@@ -229,6 +231,7 @@ export async function parseArgs(): Promise<{
     if (v['walk-cwd']) cli.allowCwdWalk = true;
     if (v['allow-cwd']) cli.allowCwd = true;
     if (v['allow-missing-roots']) cli.allowMissingRoots = true;
+    if (v['confine-roots']) cli.confineRoots = true;
     const patternList = (entries: readonly string[] | undefined): readonly string[] => [
       ...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean)),
     ];
@@ -351,6 +354,7 @@ export async function runPrintConfig(
       ...describeSensitivePolicy(),
       rootBoundary: getRootBoundary() ?? null,
       allowMissingRoots: getAllowMissingRoots(),
+      confineRoots: getConfineRoots(),
     },
   };
 

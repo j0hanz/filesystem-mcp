@@ -18,6 +18,7 @@ import { runExclusive, withAbort } from './concurrency.ts';
 import {
   getAllowCwdWalk,
   getAllowMissingRoots,
+  getConfineRoots,
   getRootBoundary,
   getToolTimeoutMs,
 } from './config.ts';
@@ -342,6 +343,9 @@ export async function resolveAllowedDirectoriesState(
 
 /** How a walked entry rules: usable, hidden by the denylist, or out of reach. */
 export type EntryVerdict = 'ok' | 'sensitive' | 'inaccessible';
+
+/** The no-startup-root warning is logged once per process. */
+let confineWarned = false;
 
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
@@ -1902,6 +1906,23 @@ export class PathGuard {
         .kept;
     }
 
+    // --confine-roots: grants answer to the startup roots, never narrowing them.
+    let grantBounds = boundaries;
+    if (getConfineRoots()) {
+      if (baseline.length === 0) {
+        if (!confineWarned) {
+          confineWarned = true;
+          Logger.warn('--confine-roots has no effect without a startup root');
+        }
+      } else {
+        grantBounds = (await resolveRootSpellings(baseline, signal)).flatMap(
+          (entry) => entry.spellings,
+        );
+        grantsToInclude = (await partitionRootsWithin(this.grantedDirectories, grantBounds, signal))
+          .kept;
+      }
+    }
+
     const combined = [...baseline, ...grantsToInclude];
     // Read-only dirs (--read-only-root / FS_READ_ONLY_DIRS): CLI values and
     // the environment are unioned, like the allowed roots, and realpathed so
@@ -1969,7 +1990,7 @@ export class PathGuard {
     // Commit boundaries and the allowed set together, after every await has
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
-    this.rootBoundaries = boundaries;
+    this.rootBoundaries = grantBounds;
     this.readOnlyDirsState = readOnlyCombined;
     this.readOnlySpellings = [...readOnlySpellings];
     this.initialize(nextState, combined, bases);

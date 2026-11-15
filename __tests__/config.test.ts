@@ -8,6 +8,7 @@ import {
   getAllowCwdWalk,
   getAllowMissingRoots,
   getAllowSensitive,
+  getConfineRoots,
   getLogLevel,
   getMaxTextFileSize,
   getRootBoundary,
@@ -177,6 +178,7 @@ describe('Setting: root boundary', () => {
 
 const BOOLEAN_SETTINGS = [
   ['allow missing roots', 'FS_ALLOW_MISSING_ROOTS', 'allowMissingRoots', getAllowMissingRoots],
+  ['confine roots', 'FS_CONFINE_ROOTS', 'confineRoots', getConfineRoots],
   ['allow sensitive', 'FS_ALLOW_SENSITIVE', 'allowSensitive', getAllowSensitive],
   ['cwd walk', 'FS_ALLOW_CWD_WALK', 'allowCwdWalk', getAllowCwdWalk],
 ] as const;
