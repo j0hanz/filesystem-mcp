@@ -513,6 +513,11 @@ export class PathGuard {
     return isPathWithinAllowedDirectoriesSync(normalizePath(path), this.readOnlySpellings);
   }
 
+  /** True when `path` is inside the currently allowed directories. Containment only, no fs access. */
+  isInsideAllowed(path: string): boolean {
+    return isPathWithinAllowedDirectoriesSync(normalizePath(path), this.getAllowedDirectories());
+  }
+
   isSensitive(filePath: string): boolean {
     return this.sensitive.isSensitive(filePath);
   }
