@@ -15,7 +15,13 @@ import {
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { runExclusive, withAbort } from './concurrency.ts';
-import { getAllowCwdWalk, getAllowMissingRoots, getRootBoundary } from './config.ts';
+import {
+  getAllowCwdWalk,
+  getAllowMissingRoots,
+  getConfineRoots,
+  getRootBoundary,
+  getToolTimeoutMs,
+} from './config.ts';
 import {
   classifyCauseChain,
   ErrorCode,
@@ -60,6 +66,11 @@ import { ROOTS_HOLD_MS, ROOTS_TIMEOUT_MS } from './util.ts';
 
 /** Links followed, or respelling rounds run, before a path is refused (Linux ELOOP's 40). */
 const MAX_SYMLINK_HOPS = 40;
+
+/** Races only validation, never a commit, so a hung mount ends at the tool timeout. */
+function boundedValidation<T>(pending: Promise<T>): Promise<T> {
+  return withAbort(pending, AbortSignal.timeout(getToolTimeoutMs()));
+}
 
 /** What a move, copy or rename does: see `PathGuard.resolveTransferDestination`. */
 export type TransferKind = 'distinct' | 'respelling' | 'self';
@@ -333,6 +344,9 @@ export async function resolveAllowedDirectoriesState(
 /** How a walked entry rules: usable, hidden by the denylist, or out of reach. */
 export type EntryVerdict = 'ok' | 'sensitive' | 'inaccessible';
 
+/** The no-startup-root warning is logged once per process. */
+let confineWarned = false;
+
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
  * later syscall, so a symlink swapped in between could redirect it. Reads and
@@ -342,10 +356,13 @@ export type EntryVerdict = 'ok' | 'sensitive' | 'inaccessible';
  * Linux with procfs; elsewhere it reads the directory by path, so the swap
  * window stays there, like the read path's non-Linux residual. Residuals: the
  * directory walker behind list and the search tools (core/glob.ts) still
- * resolves each entry by path, as the count does for a symlinked entry;
- * write paths that resolve a parent by name
- * (`rename`, `mkdir`, `rm`, `cp`) would need openat()-relative-to-dirfd, which
- * Node lacks; non-Linux skips the fd re-check.
+ * resolves each entry by path, as the count does for a symlinked entry.
+ * Name-based mutations run anchored (ADR-019): the whole-file write commit,
+ * recursive `mkdir`, single-entry delete and move borrow the validated directory as the
+ * working directory and check getcwd, on POSIX main thread only (plain `mkdir` stays path-based; `rm` falls back to the path-based delete when lstat finds no entry). Recursive
+ * delete, copy, Windows and worker threads still resolve the parent by name,
+ * which would need openat()-relative-to-dirfd that Node lacks; non-Linux skips
+ * the fd re-check.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;
@@ -1018,6 +1035,21 @@ export class PathGuard {
         }
       }
 
+      // Runs after the ancestor check, so a dangling link out of the roots is still ACCESS_DENIED.
+      const isDanglingLink = await lstat(normalizedRequested).then(
+        (stats) => stats.isSymbolicLink(),
+        () => false,
+      );
+      if (isDanglingLink) {
+        throw new FsError(
+          ErrorCode.NOT_FOUND,
+          'Broken symbolic link: its target does not exist',
+          requestedPath,
+          error,
+          'Delete the link, or create its target.',
+        );
+      }
+
       throw new FsError(ErrorCode.NOT_FOUND, 'Path not found', requestedPath, error);
     }
 
@@ -1532,13 +1564,13 @@ export class PathGuard {
     return matches[0];
   }
 
-  async validatePathForWrite(requestedPath: string): Promise<string> {
-    return this.#validatePathForWrite(requestedPath, false);
+  validatePathForWrite(requestedPath: string): Promise<string> {
+    return boundedValidation(this.#validatePathForWrite(requestedPath, false));
   }
 
   /** Checks mapped transfer entries without changing the existing treatment of sensitive child names. */
-  async validateTransferPathForWrite(requestedPath: string): Promise<string> {
-    return this.#validatePathForWrite(requestedPath, true);
+  validateTransferPathForWrite(requestedPath: string): Promise<string> {
+    return boundedValidation(this.#validatePathForWrite(requestedPath, true));
   }
 
   async #validatePathForWrite(requestedPath: string, allowSensitive: boolean): Promise<string> {
@@ -1617,14 +1649,21 @@ export class PathGuard {
     return entries;
   }
 
-  async validatePathForDelete(
+  /**
+   * `allowReadOnly` skips the read-only-dir refusal. Callers reach it only
+   * through GuardedFileSystem's `probe` kind (the read-only-probe rule in
+   * `GUARD_REGIME`, src/core/fs.ts): everything else — containment, symlink
+   * resolution, the sensitive denylist — still applies.
+   */
+  validatePathForDelete(
     requestedPath: string,
-    /**
-     * `allowReadOnly` skips the read-only-dir refusal. Callers reach it only
-     * through GuardedFileSystem's `probe` kind (the read-only-probe rule in
-     * `GUARD_REGIME`, src/core/fs.ts): everything else — containment, symlink
-     * resolution, the sensitive denylist — still applies.
-     */
+    opts?: { allowReadOnly?: boolean },
+  ): Promise<string> {
+    return boundedValidation(this.#validatePathForDelete(requestedPath, opts));
+  }
+
+  async #validatePathForDelete(
+    requestedPath: string,
     opts?: { allowReadOnly?: boolean },
   ): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
@@ -1870,6 +1909,23 @@ export class PathGuard {
         .kept;
     }
 
+    // --confine-roots: grants answer to the startup roots, never narrowing them.
+    let grantBounds = boundaries;
+    if (getConfineRoots()) {
+      if (baseline.length === 0) {
+        if (!confineWarned) {
+          confineWarned = true;
+          Logger.warn('--confine-roots has no effect without a startup root');
+        }
+      } else {
+        grantBounds = (await resolveRootSpellings(baseline, signal)).flatMap(
+          (entry) => entry.spellings,
+        );
+        grantsToInclude = (await partitionRootsWithin(this.grantedDirectories, grantBounds, signal))
+          .kept;
+      }
+    }
+
     const combined = [...baseline, ...grantsToInclude];
     // Read-only dirs (--read-only-root / FS_READ_ONLY_DIRS): CLI values and
     // the environment are unioned, like the allowed roots, and realpathed so
@@ -1937,7 +1993,7 @@ export class PathGuard {
     // Commit boundaries and the allowed set together, after every await has
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
-    this.rootBoundaries = boundaries;
+    this.rootBoundaries = grantBounds;
     this.readOnlyDirsState = readOnlyCombined;
     this.readOnlySpellings = [...readOnlySpellings];
     this.initialize(nextState, combined, bases);

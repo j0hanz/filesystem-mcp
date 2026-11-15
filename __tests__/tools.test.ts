@@ -992,7 +992,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           readOnlyHint,
           idempotentHint: readOnlyHint,
           openWorldHint: false,
-          ...(readOnlyHint ? {} : { destructiveHint: true }),
+          destructiveHint: !readOnlyHint,
         },
         tool.name,
       );
@@ -1092,8 +1092,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // hardLinks; measured 31715 / 15709.
     // Raised 2026-11-15 to 32050 full and 15900 read-only: every tool publishes
     // idempotentHint; measured 32030 / ~15863.
-    const BUDGET_CHARS = 32_050;
-    const BUDGET_CHARS_READ_ONLY = 15_900;
+    // Raised 2026-11-15 to 32198 full and 16031 read-only: read-only tools publish
+    // destructiveHint false; measured 32198 / 16031.
+    const BUDGET_CHARS = 32_339;
+    const BUDGET_CHARS_READ_ONLY = 16_031;
 
     const full = await createTestClientPair([tmpDir]);
     try {

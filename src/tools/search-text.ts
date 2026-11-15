@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import { formatCount, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
+import { formatCount, hiddenLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { ResultPaths } from '../core/path.ts';
 import type { ExcludedDirs, StoppedReason } from '../core/scan.ts';
 import {
@@ -261,6 +261,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           skippedBinary: skips.skippedBinary,
           skippedInaccessible: skips.skippedInaccessible,
           excludedDirs: skips.excludedDirs,
+          notes: hiddenLine(metadata.hiddenEntries),
         };
       },
       render: ({ page, metadata, offset, trailer, nextCursor, resourceUri }) => {

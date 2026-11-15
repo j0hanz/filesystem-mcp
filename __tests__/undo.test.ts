@@ -725,7 +725,7 @@ describe('UndoCapture via GuardedFileSystem', () => {
     await import('node:fs/promises').then((m) => m.chmod(file, 0o644));
   });
 
-  it('POSIX only: overwriting a FIFO abandons the capture', async (t) => {
+  it('POSIX only: overwriting a FIFO is refused and records nothing', async (t) => {
     if (process.platform === 'win32') {
       t.skip('POSIX only');
       return;
@@ -739,11 +739,9 @@ describe('UndoCapture via GuardedFileSystem', () => {
     }
     const cap = capture();
     const fs = makeFs(cap);
-    await fs.writeFile(fifo, 'replacement');
-    assert.strictEqual(
-      cap.unavailableReason(),
-      'pipe.fifo: cannot capture a write over a non-regular file',
-    );
+    await assert.rejects(fs.writeFile(fifo, 'replacement'), fsErrorMatcher(ErrorCode.NOT_FILE));
+    assert.ok((await lstat(fifo)).isFIFO());
+    assert.deepStrictEqual(cap.records, []);
   });
 
   it('win32 only: deleting a directory link whose target is gone abandons', async (t) => {

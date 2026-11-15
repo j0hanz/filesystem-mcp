@@ -1,7 +1,20 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import { constants, existsSync } from 'node:fs';
+import {
+  close as closeFd,
+  constants,
+  existsSync,
+  fchmod as fchmodFd,
+  fchown as fchownFd,
+  fsync as fsyncFd,
+  lstatSync,
+  openSync,
+  renameSync,
+  rmdirSync,
+  unlinkSync,
+  writeFile as writeFd,
+} from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
@@ -25,7 +38,8 @@ import {
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { isMainThread } from 'node:worker_threads';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
@@ -55,7 +69,7 @@ import {
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { lstatPinned } from './pinned.ts';
+import { CAN_PIN, inPinnedDirectory, lstatPinned, mkdirPinned, renamePinned } from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -503,11 +517,7 @@ export class GuardedFileSystem {
     // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
     let linkStat: BigIntStats;
     try {
-      // process.chdir throws in a worker; on Windows the cwd is a string and proves nothing.
-      linkStat =
-        !IS_WINDOWS && isMainThread
-          ? lstatPinned(validPath)
-          : await fsLstat(validPath, { bigint: true });
+      linkStat = CAN_PIN ? lstatPinned(validPath) : await fsLstat(validPath, { bigint: true });
     } catch (error) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -758,7 +768,11 @@ export class GuardedFileSystem {
     // create (each one currently absent), outermost first.
     await this.#forMutation(validPath, async (own) => {
       const created = own.recording ? await plannedMkdirChain(own, validPath) : [];
-      await fsMkdir(validPath, options);
+      if (CAN_PIN && typeof options === 'object' && options?.recursive === true) {
+        mkdirPinned(validPath);
+      } else {
+        await fsMkdir(validPath, options);
+      }
       own.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
       own.changed();
     });
@@ -1229,7 +1243,9 @@ export class GuardedFileSystem {
         }
       }
       try {
-        await this.#rawRename(validOld, validNew);
+        if (CAN_PIN && this.#rawRename === fsRename)
+          renamePinned(validOld, validNew, plan.respelling);
+        else await this.#rawRename(validOld, validNew);
       } catch (error: unknown) {
         rethrowIfAborted(error);
         if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
@@ -1301,16 +1317,10 @@ export class GuardedFileSystem {
       // truncate between them. Taken once: the second look, under the lock, does not retry.
       // shortcut: an outside process swapping in another linked inode between the two looks writes it unlocked; retry under the new key if that matters.
       relock = inPlace && !relocked;
-      // Undo capture: save the bytes about to be overwritten. A write over a
-      // non-regular entry (FIFO, socket) cannot be undone — the remove record
-      // would delete the replacement and report restored while the original
-      // entry is gone — so the capture refuses instead of lying.
-      if (own.recording && !relock) {
-        if (!existing.isFile()) {
-          own.abandon('cannot capture a write over a non-regular file');
-        } else {
-          saved = await saveOld(own, this, validPath, existing);
-        }
+      // Undo capture: save the bytes about to be overwritten.
+      // Only a regular file is captured: a FIFO read would block, and the refusal below throws before any write.
+      if (own.recording && !relock && existing.isFile()) {
+        saved = await saveOld(own, this, validPath, existing);
       }
     } catch (error) {
       // A refusal from the capture's verified read (a parent swapped for a link) is not a stat failure: stop the write.
@@ -1340,6 +1350,10 @@ export class GuardedFileSystem {
         own.abandon('could not read the old content');
       }
     }
+    // Same refusal as planCreate. Outside the catch: the catch swallows every error but two.
+    if (existingStats && !existingStats.isFile()) {
+      throw new FsError(ErrorCode.NOT_FILE, 'Not a regular file', filePath);
+    }
     if (relock) {
       return withInodeLock(inodeKey, () =>
         this.#writeValid(validPath, filePath, content, options, own, true),
@@ -1362,66 +1376,125 @@ export class GuardedFileSystem {
     };
 
     if (inPlace) {
-      // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
-      signal?.throwIfAborted();
-      await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
-      await this.#assertFdWithinRoots(handle, filePath);
-      // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
-      signal?.throwIfAborted();
-      try {
-        // Before the bytes: a restored secret must not sit readable at the copy's mode.
-        if (options.mode !== undefined) await handle.chmod(options.mode);
-        // No signal on the write: once truncated, an abort would leave the file empty.
-        await handle.truncate(0);
-        await handle.writeFile(content);
-        await handle.sync();
-      } catch (error) {
-        // The old bytes are gone, so this exit reports.
-        own.abandon('the write failed part-way');
-        own.changed();
-        throw error;
-      }
-      recordWrite();
+      await this.#writeInPlace(validPath, filePath, content, options, own, recordWrite);
     } else {
       // Validation ran before the lock wait and the capture read: a parent swapped
       // for a link since then would carry the temp file and the rename outside.
       await this.#assertParentStillWritable(validPath, filePath);
+      // ADR-019: an injected rename keeps the path-based route, so its tests still see the call.
+      const anchored = CAN_PIN && this.#rawRename === fsRename;
+      let blocked: boolean;
       try {
         signal?.throwIfAborted();
-        // Create the temp file already narrowed to the target's mode: a 0600
-        // file's new bytes must never sit at 0644 while the write is in flight.
-        // `wx` fails on a name collision instead of overwriting; the chmod below
-        // still restores bits the umask masked off at creation.
-        await fsWriteFile(tempPath, content, {
-          signal,
-          flag: 'wx',
-          // The rename publishes these bytes, so they must reach the disk first: a
-          // crash in between could otherwise leave the name on an empty file.
-          flush: true,
-          ...(mode !== undefined ? { mode } : {}),
-        });
-        await keepOwner(tempPath, existingStats);
-        if (mode !== undefined) {
-          await fsChmod(tempPath, mode);
+        if (anchored) {
+          await writeTempAnchored(validPath, tempPath, content, mode, existingStats);
+        } else {
+          // Create the temp file already narrowed to the target's mode: a 0600
+          // file's new bytes must never sit at 0644 while the write is in flight.
+          // `wx` fails on a name collision instead of overwriting; the chmod below
+          // still restores bits the umask masked off at creation.
+          await fsWriteFile(tempPath, content, {
+            signal,
+            flag: 'wx',
+            // The rename publishes these bytes, so they must reach the disk first: a
+            // crash in between could otherwise leave the name on an empty file.
+            flush: true,
+            ...(mode !== undefined ? { mode } : {}),
+          });
+          await keepOwner(tempPath, existingStats);
+          if (mode !== undefined) {
+            await fsChmod(tempPath, mode);
+          }
         }
         // Last cancellation point. The rename IS the commit: once it starts the
         // target may already be replaced, so it is never raced against the
         // signal — a withAbort race would report a finished write as failed, and
         // a client retry would apply it twice (same reasoning as appendFile).
         signal?.throwIfAborted();
-        await fsRename(tempPath, validPath);
-      } catch (error) {
-        try {
-          await fsUnlink(tempPath);
-        } catch (cleanupError) {
-          Logger.warn(
-            `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
-          );
+        if (anchored) {
+          // Both names sit in one directory, so one anchor covers both sides.
+          inPinnedDirectory(dirname(validPath), () => {
+            renameSync(basename(tempPath), basename(validPath));
+          });
+          blocked = false;
+        } else {
+          blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
         }
+      } catch (error) {
+        if (anchored) dropTempAnchored(validPath, tempPath, error);
+        else await this.#dropTemp(tempPath, error);
         throw error;
       }
-      recordWrite();
+      if (blocked) {
+        await this.#dropTemp(tempPath);
+        await this.#writeInPlace(validPath, filePath, content, options, own, recordWrite);
+      } else {
+        recordWrite();
+      }
     }
+  }
+
+  async #dropTemp(tempPath: string, cause?: unknown): Promise<void> {
+    try {
+      await fsUnlink(tempPath);
+    } catch (cleanupError) {
+      Logger.warn(
+        `Failed to clean up temp file ${tempPath}${cause === undefined ? '' : ` after write error (${formatUnknownErrorMessage(cause)})`}: ${formatUnknownErrorMessage(cleanupError)}`,
+      );
+    }
+  }
+
+  /** Windows refuses a rename over a file another process holds open: retry, then report 'blocked' so the caller writes in place. */
+  async #renameIntoPlace(
+    tempPath: string,
+    validPath: string,
+    existing: Stats | undefined,
+  ): Promise<'renamed' | 'blocked'> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.#rawRename(tempPath, validPath);
+        return 'renamed';
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (!IS_WINDOWS || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw error;
+        if (attempt >= RM_RETRY.maxRetries) {
+          if (existing?.isFile()) return 'blocked';
+          throw error;
+        }
+        await sleep(RM_RETRY.retryDelay);
+      }
+    }
+  }
+
+  async #writeInPlace(
+    validPath: string,
+    filePath: string,
+    content: string | Buffer,
+    options: { signal?: AbortSignal | undefined; mode?: number | undefined },
+    own: PathCapture,
+    recordWrite: () => void,
+  ): Promise<void> {
+    const { signal } = options;
+    // shortcut: in-place write is not crash-atomic; a rename would give this path a new inode and strand the other links on the old bytes.
+    signal?.throwIfAborted();
+    await using handle = await fsOpen(validPath, WRITE_NOFOLLOW);
+    await this.#assertFdWithinRoots(handle, filePath);
+    // The last cancellation point, outside the try: an abort here wrote nothing, so the undo capture stays usable.
+    signal?.throwIfAborted();
+    try {
+      // Before the bytes: a restored secret must not sit readable at the copy's mode.
+      if (options.mode !== undefined) await handle.chmod(options.mode);
+      // No signal on the write: once truncated, an abort would leave the file empty.
+      await handle.truncate(0);
+      await handle.writeFile(content);
+      await handle.sync();
+    } catch (error) {
+      // The old bytes are gone, so this exit reports.
+      own.abandon('the write failed part-way');
+      own.changed();
+      throw error;
+    }
+    recordWrite();
   }
 
   /**
@@ -1648,6 +1721,19 @@ export class GuardedFileSystem {
       // where nothing is gone, and no undo id is offered for a delete that never ran.
       signal?.throwIfAborted();
       own.changed();
+      // A directory keeps the path-based rm (ADR-019's stated residual).
+      if (CAN_PIN && lstatSync(validPath, { throwIfNoEntry: false })?.isDirectory() === false) {
+        inPinnedDirectory(dirname(validPath), () => {
+          try {
+            unlinkSync(basename(validPath));
+          } catch (error) {
+            if (!(options?.force === true && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
+              throw error;
+            }
+          }
+        });
+        return;
+      }
       await fsRm(validPath, { ...options, ...RM_RETRY });
     });
   }
@@ -1658,7 +1744,13 @@ export class GuardedFileSystem {
       const before = own.recording
         ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
         : undefined;
-      await fsRmdir(validPath, options);
+      if (CAN_PIN) {
+        inPinnedDirectory(dirname(validPath), () => {
+          rmdirSync(basename(validPath));
+        });
+      } else {
+        await fsRmdir(validPath, options);
+      }
       own.push({
         op: 'mkdir',
         path: validPath,
@@ -2268,6 +2360,57 @@ export async function keepOwner(
     await lchown(tempPath, existing.uid, existing.gid);
   } catch (error) {
     Logger.debug(`Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`);
+  }
+}
+
+/**
+ * The anchored temp write (ADR-019): only the open borrows the working directory. The descriptor
+ * names the inode, so filling, syncing and narrowing it run async and never block the event loop.
+ * A failed temp file is left for the caller's dropTempAnchored.
+ */
+async function writeTempAnchored(
+  validPath: string,
+  tempPath: string,
+  content: string | Buffer,
+  mode: number | undefined,
+  existing: Pick<Stats, 'uid' | 'gid'> | undefined,
+): Promise<void> {
+  // `wx` fails on a name collision instead of overwriting.
+  const fd = inPinnedDirectory(dirname(validPath), () =>
+    openSync(basename(tempPath), 'wx', mode ?? 0o666),
+  );
+  try {
+    await promisify(writeFd)(fd, content);
+    // The rename publishes these bytes, so they must reach the disk first.
+    await promisify(fsyncFd)(fd);
+    // keepOwner's rule, through the descriptor: best effort, POSIX only.
+    if (existing !== undefined && process.getuid !== undefined) {
+      try {
+        await promisify(fchownFd)(fd, existing.uid, existing.gid);
+      } catch (error) {
+        Logger.debug(
+          `Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`,
+        );
+      }
+    }
+    // Restores bits the umask masked off at creation.
+    if (mode !== undefined) await promisify(fchmodFd)(fd, mode);
+  } finally {
+    await promisify(closeFd)(fd);
+  }
+}
+
+/** Drops a temp file left by a failed anchored commit, by base name inside its directory. */
+function dropTempAnchored(validPath: string, tempPath: string, cause: unknown): void {
+  try {
+    inPinnedDirectory(dirname(validPath), () => {
+      unlinkSync(basename(tempPath));
+    });
+  } catch (cleanupError) {
+    if (isNotFoundErrno(cleanupError)) return;
+    Logger.warn(
+      `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(cause)}): ${formatUnknownErrorMessage(cleanupError)}`,
+    );
   }
 }
 

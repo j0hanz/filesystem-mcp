@@ -161,6 +161,16 @@ export function excludedLine(
   return `// skipped ${formatCount(excluded.total, 'folder')} by default name (${excluded.first.join(', ')}${more}); ${advice(excluded.total !== 1)}.`;
 }
 
+/** `// hid N hidden entries at the top level (...); pass includeHidden: true ...`, or []. */
+export function hiddenLine(hidden: ExcludedDirs | undefined): string[] {
+  if (!hidden) return [];
+  const rest = hidden.total - hidden.first.length;
+  const more = rest > 0 ? `, +${String(rest)} more` : '';
+  return [
+    `// hid ${formatCount(hidden.total, 'hidden entry', 'hidden entries')} at the top level (${hidden.first.join(', ')}${more}); pass includeHidden: true to include ${hidden.total === 1 ? 'it' : 'them'}.`,
+  ];
+}
+
 export function pageTrailer(
   p: SkipCounts & {
     offset: number;

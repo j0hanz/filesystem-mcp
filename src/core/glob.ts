@@ -779,6 +779,6 @@ const DEFAULT_EXCLUDED_KEYS: ReadonlySet<string> = new Set(
 );
 
 // ASCII fold only: toLowerCase would equate U+212A (Kelvin) with k, hiding `.svelte-kit` spelled with it.
-function isDefaultExcludedName(name: string): boolean {
+export function isDefaultExcludedName(name: string): boolean {
   return DEFAULT_EXCLUDED_KEYS.has(normalizeCaseForComparison(name));
 }

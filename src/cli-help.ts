@@ -76,6 +76,10 @@ const OPTIONS_HELP: HelpRow[] = [
     flags: '--allow-missing-roots',
     desc: 'Start even if configured allowed directories do not exist (env: FS_ALLOW_MISSING_ROOTS)',
   },
+  {
+    flags: '--confine-roots',
+    desc: 'Keep client roots and approved grants inside the startup roots (env: FS_CONFINE_ROOTS)',
+  },
 ];
 
 const ENV_HELP: HelpRow[] = [
@@ -119,6 +123,10 @@ const ENV_HELP: HelpRow[] = [
   {
     flags: 'FS_ALLOW_MISSING_ROOTS',
     desc: 'Start even if configured allowed directories do not exist ("true" or "1" enables this)',
+  },
+  {
+    flags: 'FS_CONFINE_ROOTS',
+    desc: 'Keep client roots and approved grants inside the startup roots ("true" or "1" enables this)',
   },
   { flags: 'FS_READ_ONLY', desc: 'Disable write tools ("true" or "1" enables this)' },
   {

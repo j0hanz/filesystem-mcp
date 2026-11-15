@@ -5,6 +5,7 @@
 // that leaves the roots, where a missing ancestor check would answer with the
 // ambiguity error instead of ACCESS_DENIED.
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
 import type { PathLike } from 'node:fs';
 import fsPromises, { link, readFile, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -18,6 +19,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
+import { CAN_PIN } from '../src/core/pinned.ts';
 import { SensitiveMatcher } from '../src/core/sensitive.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -241,18 +243,31 @@ describe('Write-path and root guards (issue #200)', () => {
       const target = await writeTestFile(tmpDir, 'owner-kept.txt', 'old\n');
       const existing = await stat(target);
       const calls: { path: string; uid: number; gid: number }[] = [];
-      const originalLchown = fsPromises.lchown.bind(fsPromises);
-      t.mock.method(fsPromises, 'lchown', (path: PathLike, uid: number, gid: number) => {
-        calls.push({ path: String(path), uid, gid });
-        return originalLchown(path, uid, gid);
-      });
+      if (CAN_PIN) {
+        // The anchored commit (ADR-019) changes the owner through the temp file's descriptor.
+        const originalFchown = fsSync.fchown.bind(fsSync);
+        t.mock.method(
+          fsSync,
+          'fchown',
+          (fd: number, uid: number, gid: number, cb: fsSync.NoParamCallback) => {
+            calls.push({ path: `fd:${fd}`, uid, gid });
+            originalFchown(fd, uid, gid, cb);
+          },
+        );
+      } else {
+        const originalLchown = fsPromises.lchown.bind(fsPromises);
+        t.mock.method(fsPromises, 'lchown', (path: PathLike, uid: number, gid: number) => {
+          calls.push({ path: String(path), uid, gid });
+          return originalLchown(path, uid, gid);
+        });
+      }
       syncBuiltinESMExports();
       try {
         await fs.writeFile(target, 'new\n');
-        assert.equal(calls.length, 1, `expected one lchown call, got ${JSON.stringify(calls)}`);
+        assert.equal(calls.length, 1, `expected one owner change, got ${JSON.stringify(calls)}`);
         assert.equal(calls[0]?.uid, existing.uid);
         assert.equal(calls[0]?.gid, existing.gid);
-        assert.ok(calls[0]?.path.endsWith('.tmp'), calls[0]?.path);
+        if (!CAN_PIN) assert.ok(calls[0]?.path.endsWith('.tmp'), calls[0]?.path);
         assert.strictEqual(await readFile(target, 'utf8'), 'new\n');
       } finally {
         t.mock.restoreAll();

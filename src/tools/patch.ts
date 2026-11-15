@@ -76,6 +76,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
     'Returns path, linesAdded, linesRemoved, size, lineCount, mimeType, kind, modified, resourceUri when linkable, and an undo id for `undo` (30 minutes) or undoUnavailable; dryRun adds the resulting diff.',
   input: PatchInputSchema,
   readOnlyHint: false,
+  deadline: true,
   progress: (args) => ({
     label: args.dryRun ? 'Patch [dry run]' : 'Patch',
     subject: basename(args.path),

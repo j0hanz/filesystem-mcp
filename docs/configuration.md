@@ -48,6 +48,12 @@ project, so pass the folder instead.
 source. The server skips a folder outside it at startup with a warning, and
 refuses requests to add a folder outside it.
 
+`--confine-roots` (or `FS_CONFINE_ROOTS`) keeps client-declared roots and
+approved access grants inside the startup roots (folders from arguments,
+`FS_ALLOWED_DIRS` and `--allow-cwd`). One outside them is refused; one inside is
+accepted as usual. It never narrows the startup roots. With no startup root it
+changes nothing, and the server logs a warning once.
+
 Approved folders last until the server stops. Removing a folder from your
 editor does not remove access in the running session. Over HTTP, a folder
 approved for one client is open to every client of that server.
@@ -195,6 +201,7 @@ exceptions:
 | `--allow-cwd`                | off         | Add the current working folder.                                                                                                                     |
 | `--walk-cwd`                 | off         | Walk up from the current folder to the project root, then add it. Implies `--allow-cwd`.                                                            |
 | `--allow-missing-roots`      | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                                                  |
+| `--confine-roots`            | off         | Keep client roots and approved grants inside the startup roots. Env: `FS_CONFINE_ROOTS`.                                                            |
 | `--root-boundary <path>`     |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                                       |
 | `--max-file-size <bytes>`    | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.                               |
 | `--tool-timeout <ms>`        | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                                |
@@ -218,6 +225,7 @@ These variables control folders and access:
 | `FS_ALLOWED_DIRS`        | Allowed folders, `:`-separated (macOS, Linux) or `;`-separated (Windows).                                     |
 | `FS_ALLOW_CWD_WALK`      | Same as `--walk-cwd`.                                                                                         |
 | `FS_ALLOW_MISSING_ROOTS` | Same as `--allow-missing-roots`.                                                                              |
+| `FS_CONFINE_ROOTS`       | Same as `--confine-roots`.                                                                                    |
 | `FS_ROOT_BOUNDARY`       | Same as `--root-boundary`.                                                                                    |
 | `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.                                              |
 | `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.                                       |

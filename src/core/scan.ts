@@ -1,10 +1,10 @@
-import { lstat, opendir, realpath } from 'node:fs/promises';
+import { lstat, opendir, readdir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { withAbort } from './concurrency.ts';
 import { ErrorCode, formatUnknownErrorMessage, FsError } from './errors.ts';
 import { type GuardedFileSystem, refusalOf, type TextVerdict } from './fs.ts';
-import { globEntries } from './glob.ts';
+import { globEntries, isDefaultExcludedName } from './glob.ts';
 import { Logger } from './observability.ts';
 import type { EntryType } from './path-utils.ts';
 import { normalizePath, resolveEntryType } from './path-utils.ts';
@@ -138,6 +138,8 @@ export interface ScanOutcome<R> {
   readonly excludedDirs?: ExcludedDirs;
   /** Every folder the ignore rules hid; absent when none. A hidden folder counts only under includeHidden. */
   readonly ignoredDirs?: ExcludedDirs;
+  /** Non-sensitive dot entries directly in the scope root, sorted; absent under includeHidden or when none. */
+  readonly hiddenEntries?: ExcludedDirs;
 }
 
 /**
@@ -406,6 +408,11 @@ export async function scan<R>(
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
+  // A cut scan skips the count: its readdir is not bounded by the scan's deadline.
+  const hiddenEntries =
+    options.includeHidden || cut
+      ? undefined
+      : await countHidden(scope.root, pathGuard, !options.includeIgnored);
   const stoppedReason: StoppedReason | undefined = cut
     ? 'timeout'
     : (capped ?? (keep !== undefined && scanned > keep ? capReason : undefined));
@@ -418,7 +425,32 @@ export async function scan<R>(
     ...(stoppedReason ? { stoppedReason } : {}),
     ...(excludedTotal > 0 ? { excludedDirs: { total: excludedTotal, first: excludedFirst } } : {}),
     ...(ignoredTotal > 0 ? { ignoredDirs: { total: ignoredTotal, first: ignoredFirst } } : {}),
+    ...(hiddenEntries ? { hiddenEntries } : {}),
   };
+}
+
+/**
+ * fs.glob never asks `exclude` about dot entries, so one readdir counts them. A sensitive name is
+ * never counted, nor a default-excluded one (`.git`) that includeHidden would still skip.
+ */
+async function countHidden(
+  root: string,
+  pathGuard: PathGuard,
+  skipIgnored: boolean,
+): Promise<ExcludedDirs | undefined> {
+  try {
+    const names = (await readdir(root))
+      .filter(
+        (name) =>
+          name.startsWith('.') &&
+          !pathGuard.isSensitive(join(root, name)) &&
+          !(skipIgnored && isDefaultExcludedName(name)),
+      )
+      .sort();
+    return names.length > 0 ? { total: names.length, first: names.slice(0, 5) } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

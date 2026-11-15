@@ -40,6 +40,8 @@ export interface CliOverrides {
   allowCwd?: boolean;
   /** `--allow-missing-roots` */
   allowMissingRoots?: boolean;
+  /** `--confine-roots` */
+  confineRoots?: boolean;
   /** `--deny` entries (merged with FS_DENYLIST by the reader) */
   denyPatterns?: readonly string[];
   /** `--allow` entries (merged with FS_ALLOWLIST by the reader; relieve built-ins only) */
@@ -185,6 +187,11 @@ export function getAllowMissingRoots(): boolean {
     cli.allowMissingRoots ??
     parseTrueEnvFlag(process.env['FS_ALLOW_MISSING_ROOTS'], 'FS_ALLOW_MISSING_ROOTS')
   );
+}
+
+/** Whether client roots and approved grants must stay inside the startup roots (`--confine-roots`, `FS_CONFINE_ROOTS`). */
+export function getConfineRoots(): boolean {
+  return cli.confineRoots ?? parseTrueEnvFlag(process.env['FS_CONFINE_ROOTS'], 'FS_CONFINE_ROOTS');
 }
 
 /** Whether built-in sensitive-file patterns are suppressed (`--allow-sensitive`, `FS_ALLOW_SENSITIVE`). */

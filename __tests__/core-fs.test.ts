@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { appendFileSync, constants } from 'node:fs';
+import fsSync, { appendFileSync, constants } from 'node:fs';
 import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
@@ -20,13 +20,20 @@ import fsPromises, {
 import type { FileHandle } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { getMaxTextFileSize } from '../src/core/config.ts';
-import { ErrorCode, FsError, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
+import {
+  classifyCauseChain,
+  ErrorCode,
+  FsError,
+  isFsError,
+  isNodeError,
+  Problem,
+} from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import {
   atomicTempPath,
@@ -40,6 +47,7 @@ import {
 } from '../src/core/fs.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from '../src/core/outbound.ts';
 import { isSamePath, normalizePath } from '../src/core/path-utils.ts';
+import { CAN_PIN } from '../src/core/pinned.ts';
 import { searchContent } from '../src/core/search.ts';
 import { type RestoreStep, UndoJournal } from '../src/core/undo.ts';
 import { MIB } from '../src/core/util.ts';
@@ -501,6 +509,53 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(overwrittenRead.content.toString('utf-8'), 'overwritten content');
     });
 
+    it('writeFile refuses a directory target and leaves no temp file', async () => {
+      const dir = join(tmpDir, 'is-a-dir');
+      await mkdir(dir);
+      await assert.rejects(
+        fs.writeFile(dir, 'x'),
+        (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+      );
+      assert.deepEqual(
+        await readdir(dirname(dir)).then((n) => n.filter((x) => x.includes('is-a-dir'))),
+        ['is-a-dir'],
+      );
+    });
+
+    it(
+      'writeFile refuses a FIFO and leaves it a FIFO',
+      { skip: process.platform === 'win32' },
+      async () => {
+        const fifo = join(tmpDir, 'pipe');
+        const { spawnSync } = await import('node:child_process');
+        assert.strictEqual(spawnSync('mkfifo', [fifo]).status, 0);
+        await assert.rejects(
+          fs.writeFile(fifo, 'x'),
+          (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+        );
+        assert.ok((await lstat(fifo)).isFIFO());
+      },
+    );
+
+    it(
+      'writeFile refuses a FIFO promptly through an undo capture and leaves it a FIFO',
+      { skip: process.platform === 'win32' },
+      async () => {
+        const fifo = join(tmpDir, 'pipe-recorded');
+        const { spawnSync } = await import('node:child_process');
+        assert.strictEqual(spawnSync('mkfifo', [fifo]).status, 0);
+        const tracked = new GuardedFileSystem(
+          ctx.pathGuard,
+          new UndoJournal(1024 * 1024).beginCapture(),
+        );
+        await assert.rejects(
+          failIfPendingAfter(tracked.writeFile(fifo, 'x'), 2000),
+          (e) => isFsError(e) && e.code === ErrorCode.NOT_FILE,
+        );
+        assert.ok((await lstat(fifo)).isFIFO());
+      },
+    );
+
     it('TC-FUNC-011b: writeFile over a hardlinked file updates every link in place', async (t) => {
       const filePath = await writeTestFile(
         tmpDir,
@@ -826,6 +881,43 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
     });
 
+    it('names a dangling link instead of calling it missing', async (t) => {
+      const link = join(tmpDir, 'dangling');
+      if (
+        !(await trySymlink(
+          join(tmpDir, 'gone.txt'),
+          link,
+          () => t.skip('symlinks unavailable'),
+          'file',
+        ))
+      )
+        return;
+      await assert.rejects(
+        fs.read(link),
+        (e) =>
+          isFsError(e) &&
+          e.code === ErrorCode.NOT_FOUND &&
+          e.message.includes('Broken symbolic link: its target does not exist'),
+      );
+    });
+
+    it('still denies a dangling link that points outside the roots', async (t) => {
+      const link = join(tmpDir, 'escaping');
+      if (
+        !(await trySymlink(
+          join(dirname(tmpDir), 'outside-missing.txt'),
+          link,
+          () => t.skip('symlinks unavailable'),
+          'file',
+        ))
+      )
+        return;
+      await assert.rejects(
+        fs.read(link),
+        (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
+      );
+    });
+
     it('TC-FUNC-052a: countFileLines matches countLines across the buffer boundary', async () => {
       // >64 KiB so the counter crosses its read-buffer boundary, with the
       // final line left unterminated to exercise the last-byte rule.
@@ -879,6 +971,19 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('writeFile flushes the temp file before renaming it', async (t) => {
       const filePath = await writeTestFile(tmpDir, 'flushed.txt', 'old\n');
+      // The anchored commit (ADR-019) syncs its descriptor; the path-based one asks writeFile to flush.
+      if (CAN_PIN) {
+        const syncs = t.mock.method(fsSync, 'fsync');
+        syncBuiltinESMExports();
+        try {
+          await fs.writeFile(filePath, 'new\n');
+        } finally {
+          syncs.mock.restore();
+          syncBuiltinESMExports();
+        }
+        assert.strictEqual(syncs.mock.callCount(), 1);
+        return;
+      }
       const writes = t.mock.method(fsPromises, 'writeFile');
       syncBuiltinESMExports();
       try {
@@ -1038,15 +1143,30 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     it('TC-FUNC-047e: an abort before the rename leaves the target untouched', async () => {
       const filePath = await writeTestFile(tmpDir, 'commit_precheck.txt', 'old\n');
       const controller = new AbortController();
-      const originalWriteFile = fsPromises.writeFile;
-      mock.method(
-        fsPromises,
-        'writeFile',
-        async (...args: Parameters<typeof fsPromises.writeFile>): Promise<void> => {
-          await originalWriteFile(...args);
-          controller.abort(new Error('abort before commit'));
-        },
-      );
+      if (CAN_PIN) {
+        // The anchored commit (ADR-019) writes the temp file through its descriptor.
+        const originalWriteFile = fsSync.writeFile;
+        mock.method(
+          fsSync,
+          'writeFile',
+          (fd: number, data: string | Buffer, cb: fsSync.NoParamCallback) => {
+            originalWriteFile(fd, data, (error) => {
+              controller.abort(new Error('abort before commit'));
+              cb(error);
+            });
+          },
+        );
+      } else {
+        const originalWriteFile = fsPromises.writeFile;
+        mock.method(
+          fsPromises,
+          'writeFile',
+          async (...args: Parameters<typeof fsPromises.writeFile>): Promise<void> => {
+            await originalWriteFile(...args);
+            controller.abort(new Error('abort before commit'));
+          },
+        );
+      }
       syncBuiltinESMExports();
       try {
         await assert.rejects(
@@ -1148,12 +1268,12 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('a failed rename leaves the target untouched and removes the temp file', async () => {
       const filePath = await writeTestFile(tmpDir, 'rename_fail.txt', 'old\n');
-      mock.method(fsPromises, 'rename', async (): Promise<void> => {
-        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      const failing = new GuardedFileSystem(ctx.pathGuard, undefined, {
+        rename: () => Promise.reject(Object.assign(new Error('EIO: fake'), { code: 'EIO' })),
       });
       syncBuiltinESMExports();
       try {
-        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+        await assert.rejects(failing.writeFile(filePath, 'new\n'), /EIO/);
       } finally {
         mock.restoreAll();
         syncBuiltinESMExports();
@@ -1171,15 +1291,15 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       t.mock.method(console, 'error', (...args: unknown[]) => {
         logged.push(args.map(String).join(' '));
       });
-      mock.method(fsPromises, 'rename', async (): Promise<void> => {
-        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      const failing = new GuardedFileSystem(ctx.pathGuard, undefined, {
+        rename: () => Promise.reject(Object.assign(new Error('EIO: fake'), { code: 'EIO' })),
       });
       mock.method(fsPromises, 'unlink', async (): Promise<void> => {
         throw Object.assign(new Error('EBUSY: resource busy or locked, unlink'), { code: 'EBUSY' });
       });
       syncBuiltinESMExports();
       try {
-        await assert.rejects(fs.writeFile(filePath, 'new\n'), /EPERM/);
+        await assert.rejects(failing.writeFile(filePath, 'new\n'), /EIO/);
       } finally {
         mock.restoreAll();
         syncBuiltinESMExports();
@@ -2182,6 +2302,38 @@ describe('GuardedFileSystem.countEntries', () => {
     }
   });
 
+  it('a write whose validation stalls ends at the tool timeout', async (t) => {
+    const dir = join(root, 'stalled');
+    await mkdir(dir);
+    const originalRealpath = fsPromises.realpath.bind(fsPromises);
+    const stalledDir = normalizePath(dir);
+    // Only <root>/stalled and what is under it hangs; every other realpath passes through.
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) => {
+      const p = String(path);
+      return p === stalledDir || p.startsWith(stalledDir + sep)
+        ? new Promise<never>(() => {})
+        : originalRealpath(path);
+    });
+    syncBuiltinESMExports();
+    try {
+      await withEnv({ FS_TOOL_TIMEOUT_MS: '1000' }, async () => {
+        const started = Date.now();
+        await assert.rejects(
+          fs.writeFile(join(dir, 'a.txt'), 'x'),
+          (e) => classifyCauseChain(e).code === ErrorCode.TIMEOUT,
+        );
+        assert.ok(Date.now() - started < 3000);
+        await assert.rejects(
+          fs.rm(join(dir, 'a.txt')),
+          (e) => classifyCauseChain(e).code === ErrorCode.TIMEOUT,
+        );
+      });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('a stalled read is closed only after it settles, without holding the deadline', async (t) => {
     const dir = join(root, 'stalled-close');
     await mkdir(dir);
@@ -3091,4 +3243,77 @@ describe('GuardedFileSystem.read binary policy', () => {
       syncBuiltinESMExports();
     }
   });
+});
+
+describe('GuardedFileSystem.writeFile rename refusals', () => {
+  let root: string;
+  let guard: Awaited<ReturnType<typeof makeGuard>>;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  const eperm = (): Promise<never> =>
+    Promise.reject(Object.assign(new Error('EPERM: fake'), { code: 'EPERM' }));
+
+  it('retries a rename Windows refused once', { skip: process.platform !== 'win32' }, async () => {
+    let calls = 0;
+    const flaky = new GuardedFileSystem(guard, undefined, {
+      rename: (a, b) => (++calls === 1 ? eperm() : rename(a, b)),
+    });
+    const file = join(root, 'held.txt');
+    await writeFile(file, 'old');
+    await flaky.writeFile(file, 'new');
+    assert.equal(await readFile(file, 'utf8'), 'new');
+    assert.equal(calls, 2);
+  });
+
+  it(
+    'writes in place when Windows keeps refusing the rename',
+    { skip: process.platform !== 'win32' },
+    async () => {
+      const blocked = new GuardedFileSystem(guard, undefined, { rename: eperm });
+      const dir = join(root, 'blocked');
+      await mkdir(dir);
+      const file = join(dir, 'held.txt');
+      await writeFile(file, 'old');
+      const before = (await lstat(file, { bigint: true })).ino;
+      await blocked.writeFile(file, 'new');
+      assert.equal(await readFile(file, 'utf8'), 'new');
+      assert.equal((await lstat(file, { bigint: true })).ino, before);
+      assert.deepEqual(await readdir(dir), ['held.txt']); // no temp file left
+    },
+  );
+
+  it(
+    'a refused rename of a new file fails and leaves no temp file',
+    { skip: process.platform !== 'win32' },
+    async () => {
+      const blocked = new GuardedFileSystem(guard, undefined, { rename: eperm });
+      const dir = join(root, 'blocked-new');
+      await mkdir(dir);
+      await assert.rejects(blocked.writeFile(join(dir, 'new.txt'), 'x'), { code: 'EPERM' });
+      assert.deepEqual(await readdir(dir), []);
+    },
+  );
+
+  it(
+    'does not retry a refused rename off Windows',
+    { skip: process.platform === 'win32' },
+    async () => {
+      let calls = 0;
+      const refused = new GuardedFileSystem(guard, undefined, {
+        rename: () => (calls++, eperm()),
+      });
+      const file = join(root, 'posix.txt');
+      await writeFile(file, 'old');
+      await assert.rejects(refused.writeFile(file, 'new'), { code: 'EPERM' });
+      assert.equal(calls, 1);
+    },
+  );
 });

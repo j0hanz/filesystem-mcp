@@ -68,6 +68,7 @@ export interface SearchContentOutcome {
     skippedBinary: number;
     stoppedReason?: StoppedReason;
     excludedDirs?: ExcludedDirs;
+    hiddenEntries?: ExcludedDirs;
   };
 }
 
@@ -267,6 +268,7 @@ export async function searchContent(
         skippedBinary,
         ...(stoppedReason ? { stoppedReason } : {}),
         ...(outcome.excludedDirs ? { excludedDirs: outcome.excludedDirs } : {}),
+        ...(outcome.hiddenEntries ? { hiddenEntries: outcome.hiddenEntries } : {}),
       },
     };
   } finally {

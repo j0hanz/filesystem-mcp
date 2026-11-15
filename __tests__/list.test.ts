@@ -44,6 +44,29 @@ describe('list body', () => {
   const list = (args: ListArgs, options: Partial<ToolBodyOptions> = {}) =>
     runToolBodyResult(LIST, args, { guard, pageStore, resourceStore, ...options });
 
+  it('names the hidden entries a default listing skipped', async () => {
+    await mkdir(join(root, '.github'));
+    await mkdir(join(root, '.git')); // skipped even under includeHidden, so never promised
+    await writeFile(join(root, '.editorconfig'), '');
+    await writeFile(join(root, '.env'), 'SECRET=1');
+    await writeFile(join(root, 'a.txt'), '');
+    const result = await list({});
+    assert.match(
+      result.text ?? '',
+      /\/\/ hid 2 hidden entries at the top level \(\.editorconfig, \.github\); pass includeHidden: true to include them\./,
+    );
+    assert.doesNotMatch(result.text ?? '', /\.env\b/);
+  });
+
+  it('prints no hidden note with includeHidden or with nothing hidden', async () => {
+    await writeFile(join(root, 'a.txt'), '');
+    const none = await list({});
+    assert.doesNotMatch(none.text ?? '', /\/\/ hid \d+ hidden/);
+    await writeFile(join(root, '.editorconfig'), '');
+    const shown = await list({ includeHidden: true });
+    assert.doesNotMatch(shown.text ?? '', /\/\/ hid \d+ hidden/);
+  });
+
   it('exclude leaves a folder out of the tree', async () => {
     await writeTestFile(root, 'src/a.ts', 'needle');
     await writeTestFile(root, 'vendor/b.ts', 'needle');
@@ -259,7 +282,9 @@ describe('list body', () => {
       await writeTestFile(root, file, 'x');
     }
     const noteOf = (text: string | undefined) =>
-      (text ?? '').split('\n').find((line) => line.startsWith('// hid ')) ?? '';
+      (text ?? '')
+        .split('\n')
+        .find((line) => line.startsWith('// hid ') && line.includes('ignored folder')) ?? '';
 
     const hidden = await list({ path: root, includeHidden: true });
     const note = noteOf(hidden.text);

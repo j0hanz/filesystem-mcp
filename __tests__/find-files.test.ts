@@ -66,6 +66,20 @@ describe('find_files body', () => {
       ...(signal ? { signal } : {}),
     });
 
+  it('names the hidden entries it skipped', async () => {
+    await writeTestFile(root, '.github/ci.yml', 'x');
+    await writeTestFile(root, 'a.yml', 'x');
+    const { structured, text } = await find({ path: root, pattern: '*.yml' });
+    assert.deepStrictEqual(
+      structured.results.map((r) => r.path),
+      ['a.yml'],
+    );
+    assert.match(
+      text ?? '',
+      /\/\/ hid 1 hidden entry at the top level \(\.github\); pass includeHidden: true to include it\./,
+    );
+  });
+
   it('exclude leaves out a folder by name', async () => {
     await writeTestFile(root, 'src/a.ts', 'needle');
     await writeTestFile(root, 'vendor/b.ts', 'needle');
