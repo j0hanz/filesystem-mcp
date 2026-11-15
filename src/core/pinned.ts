@@ -26,7 +26,13 @@ export function isSameDirectory(
  */
 export function lstatPinned(validPath: string): BigIntStats {
   const directory = dirname(validPath);
-  const saved = process.cwd();
+  const root = parse(validPath).root;
+  let saved: string;
+  try {
+    saved = process.cwd();
+  } catch {
+    saved = root; // the server's own cwd was deleted
+  }
   try {
     process.chdir(directory);
     if (!isSameDirectory(process.cwd(), directory)) {
@@ -41,7 +47,11 @@ export function lstatPinned(validPath: string): BigIntStats {
     try {
       process.chdir(saved);
     } catch {
-      process.chdir(parse(validPath).root);
+      try {
+        process.chdir(root);
+      } catch {
+        // the original error, if any, must win over a failed restore
+      }
     }
   }
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, rename, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, rename, rmdir, symlink, writeFile } from 'node:fs/promises';
+import { join, parse } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
@@ -36,6 +36,21 @@ describe('pinned identity check', () => {
   it('lstatPinned returns the entry of the validated directory', posixOnly, async () => {
     const file = join(realRoot, 'dir', 'a.txt');
     assert.equal(lstatPinned(file).ino, (await lstat(file, { bigint: true })).ino);
+  });
+
+  it('survives a deleted working directory and falls back to the root', posixOnly, async () => {
+    const original = process.cwd();
+    const gone = join(base, 'gone');
+    await mkdir(gone);
+    try {
+      process.chdir(gone);
+      await rmdir(gone);
+      const file = join(realRoot, 'dir', 'a.txt');
+      assert.equal(lstatPinned(file).ino, (await lstat(file, { bigint: true })).ino);
+      assert.equal(process.cwd(), parse(file).root);
+    } finally {
+      process.chdir(original);
+    }
   });
 
   describe('after the directory is swapped for a symlink', posixOnly, () => {

@@ -490,6 +490,7 @@ export class GuardedFileSystem {
    * On platforms without O_NOFOLLOW (Windows) or without procfs (macOS, Windows),
    * verify that the opened handle matches the path on disk and has not been
    * swapped for a symlink or a file outside the allowed roots (TOCTOU).
+   * Linux reaches this method only when /proc/self/fd is unreadable.
    * Off Windows on the main thread, the lstat is pinned (chdir, then getcwd) to the
    * directory the kernel actually enters, so an ancestor swapped for a symlink during the
    * open and back before the realpath below is still refused.
