@@ -824,8 +824,9 @@ export class PathGuard {
    * user-approved access grant is never revoked: one the client names stays
    * an access grant (not promoted), so a later omission cannot revoke it.
    * `isCurrent` is re-checked under the lock: a superseded answer applies
-   * nothing and resolves to 0. Startup roots live in the baseline and are never touched. Resolves
-   * to the number of `dirs` now inside the allowed set.
+   * nothing and resolves to 0. Startup roots live in the baseline and are
+   * never touched. Resolves to the number of `dirs` now inside the allowed
+   * set.
    * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
    */
   async replaceWorkspaceRoots(

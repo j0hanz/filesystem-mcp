@@ -275,6 +275,7 @@ describe('edit body', () => {
     );
     assert.equal(isError, true);
     assert.match(text ?? '', /no match for oldText/);
+    assert.match(text ?? '', /matched 2 times ignoring whitespace/);
     assert.equal(await readFile(file, 'utf8'), body);
   });
 

@@ -149,6 +149,8 @@ interface EditResult {
   unmatchedEdits: string[];
   whitespaceMatches: number;
   firstUnmatched?: { oldText: string; content: string };
+  /** Match counts of unmatched edits whose whitespace-tolerant retry hit more than once. */
+  ambiguousFlex?: number[];
   linesAdded?: number;
   linesRemoved?: number;
   diff?: string;
@@ -555,6 +557,7 @@ async function applyEdits(
   let whitespaceMatches = 0;
   const unmatchedEdits: string[] = [];
   let firstUnmatched: { oldText: string; content: string } | undefined;
+  const ambiguousFlex: number[] = [];
 
   for (const [index, edit] of edits.entries()) {
     if (await tick()) signal?.throwIfAborted();
@@ -591,7 +594,7 @@ async function applyEdits(
         landing = retry;
         flexible = true;
         whitespaceMatches += 1;
-      }
+      } else if (retry) ambiguousFlex.push(retry.value.found.count);
     }
     if (!landing) {
       firstUnmatched ??= { oldText: typed, content: newContent };
@@ -625,6 +628,7 @@ async function applyEdits(
     unmatchedEdits,
     whitespaceMatches,
     ...(firstUnmatched ? { firstUnmatched } : {}),
+    ...(ambiguousFlex.length > 0 ? { ambiguousFlex } : {}),
   };
 }
 
@@ -648,12 +652,17 @@ async function editOnce(
       if (!options.dryRun && result.unmatchedEdits.length > 0) {
         const first = result.firstUnmatched;
         const window = first ? `\n\n${closestLines(first.content, first.oldText)}` : '';
+        const many = (result.ambiguousFlex ?? [])
+          .map(
+            (n) => `; one matched ${String(n)} times ignoring whitespace, add context to pick one`,
+          )
+          .join('');
         throw new FsError(
           ErrorCode.INVALID_INPUT,
           `no match for oldText ${joinRoster(
             result.unmatchedEdits.map((t) => JSON.stringify(truncateProgressPattern(t))),
             ', ',
-          )}; it must match the file exactly${window}`,
+          )}; it must match the file exactly${many}${window}`,
           filePath,
         );
       }

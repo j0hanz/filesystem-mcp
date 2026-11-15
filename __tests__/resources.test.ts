@@ -1044,11 +1044,33 @@ describe('MCP Resources', () => {
     });
 
     it('refuses a file URL with a host or bad encoding as InvalidParams', async () => {
-      for (const uri of ['file://server/share/a.txt', 'file:///a%ZZ']) {
+      for (const uri of [
+        'file://server/share/a.txt',
+        'file:///a%ZZ',
+        'file:////server/share/a.txt',
+        'file:///%5C%5Cserver%5Cshare',
+      ]) {
         await assert.rejects(
           harness.client.readResource({ uri }),
           (err) => (err as { code?: number }).code === -32602,
         );
+      }
+    });
+
+    it('refuses a file URL under a declared root once it is revoked', async () => {
+      const declared = await createTestRoot();
+      try {
+        const file = await writeTestFile(declared, 'declared.txt', 'declared');
+        const uri = pathToFileURL(file).href;
+        const { pathGuard } = harness.serverCtx;
+        await pathGuard.replaceWorkspaceRoots([declared]);
+        const { contents } = await harness.client.readResource({ uri });
+        assert.equal((contents[0] as { text: string }).text, 'declared');
+        await pathGuard.replaceWorkspaceRoots([]);
+        await assert.rejects(harness.client.readResource({ uri }));
+      } finally {
+        await harness.serverCtx.pathGuard.replaceWorkspaceRoots([]);
+        await cleanupTestRoot(declared);
       }
     });
 
