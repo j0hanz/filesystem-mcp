@@ -1,26 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import {
-  close as closeFd,
-  constants,
-  existsSync,
-  fchmod as fchmodFd,
-  fchown as fchownFd,
-  fsync as fsyncFd,
-  lstatSync,
-  openSync,
-  renameSync,
-  rmdirSync,
-  unlinkSync,
-  writeFile as writeFd,
-} from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
-  chmod as fsChmod,
   cp as fsCp,
-  lchown as fsLchown,
   lstat as fsLstat,
   mkdir as fsMkdir,
   open as fsOpen,
@@ -30,16 +15,12 @@ import {
   realpath as fsRealpath,
   rename as fsRename,
   rm as fsRm,
-  rmdir as fsRmdir,
   stat as fsStat,
   symlink as fsSymlink,
   unlink as fsUnlink,
   utimes as fsUtimes,
-  writeFile as fsWriteFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
-import { promisify } from 'node:util';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
@@ -62,14 +43,21 @@ import { detectMimeType, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import {
-  IS_WINDOWS,
   isPathInsideDirectory,
   isSamePath,
   normalizePath,
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { CAN_PIN, inPinnedDirectory, lstatPinned, mkdirPinned, renamePinned } from './pinned.ts';
+import {
+  keepOwner,
+  lstatPinned,
+  mkdirPinned,
+  renamePinned,
+  rmdirPinned,
+  rmPinned,
+  writeStagedPinned,
+} from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -96,6 +84,8 @@ import {
 } from './undo.ts';
 import type { SavedFile, UndoCapture, UndoRecord } from './undo.ts';
 import { sha256Hex } from './util.ts';
+
+export { keepOwner };
 
 export type { Stats };
 
@@ -517,7 +507,7 @@ export class GuardedFileSystem {
     // bigint: NTFS file IDs exceed 2^53, and rounded numbers can make two files look the same.
     let linkStat: BigIntStats;
     try {
-      linkStat = CAN_PIN ? lstatPinned(validPath) : await fsLstat(validPath, { bigint: true });
+      linkStat = await lstatPinned(validPath);
     } catch (error) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -768,11 +758,7 @@ export class GuardedFileSystem {
     // create (each one currently absent), outermost first.
     await this.#forMutation(validPath, async (own) => {
       const created = own.recording ? await plannedMkdirChain(own, validPath) : [];
-      if (CAN_PIN && typeof options === 'object' && options?.recursive === true) {
-        mkdirPinned(validPath);
-      } else {
-        await fsMkdir(validPath, options);
-      }
+      await mkdirPinned(validPath, options);
       own.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
       own.changed();
     });
@@ -1243,9 +1229,10 @@ export class GuardedFileSystem {
         }
       }
       try {
-        if (CAN_PIN && this.#rawRename === fsRename)
-          renamePinned(validOld, validNew, plan.respelling);
-        else await this.#rawRename(validOld, validNew);
+        await renamePinned(validOld, validNew, {
+          respelling: plan.respelling,
+          rawRename: this.#rawRename,
+        });
       } catch (error: unknown) {
         rethrowIfAborted(error);
         if (!crossDevice || !isNodeError(error) || error.code !== 'EXDEV') throw error;
@@ -1381,87 +1368,16 @@ export class GuardedFileSystem {
       // Validation ran before the lock wait and the capture read: a parent swapped
       // for a link since then would carry the temp file and the rename outside.
       await this.#assertParentStillWritable(validPath, filePath);
-      // ADR-019: an injected rename keeps the path-based route, so its tests still see the call.
-      const anchored = CAN_PIN && this.#rawRename === fsRename;
-      let blocked: boolean;
-      try {
-        signal?.throwIfAborted();
-        if (anchored) {
-          await writeTempAnchored(validPath, tempPath, content, mode, existingStats);
-        } else {
-          // Create the temp file already narrowed to the target's mode: a 0600
-          // file's new bytes must never sit at 0644 while the write is in flight.
-          // `wx` fails on a name collision instead of overwriting; the chmod below
-          // still restores bits the umask masked off at creation.
-          await fsWriteFile(tempPath, content, {
-            signal,
-            flag: 'wx',
-            // The rename publishes these bytes, so they must reach the disk first: a
-            // crash in between could otherwise leave the name on an empty file.
-            flush: true,
-            ...(mode !== undefined ? { mode } : {}),
-          });
-          await keepOwner(tempPath, existingStats);
-          if (mode !== undefined) {
-            await fsChmod(tempPath, mode);
-          }
-        }
-        // Last cancellation point. The rename IS the commit: once it starts the
-        // target may already be replaced, so it is never raced against the
-        // signal — a withAbort race would report a finished write as failed, and
-        // a client retry would apply it twice (same reasoning as appendFile).
-        signal?.throwIfAborted();
-        if (anchored) {
-          // Both names sit in one directory, so one anchor covers both sides.
-          inPinnedDirectory(dirname(validPath), () => {
-            renameSync(basename(tempPath), basename(validPath));
-          });
-          blocked = false;
-        } else {
-          blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
-        }
-      } catch (error) {
-        if (anchored) dropTempAnchored(validPath, tempPath, error);
-        else await this.#dropTemp(tempPath, error);
-        throw error;
-      }
-      if (blocked) {
-        await this.#dropTemp(tempPath);
+      const outcome = await writeStagedPinned(validPath, tempPath, content, {
+        mode,
+        existingStats,
+        signal,
+        rawRename: this.#rawRename,
+      });
+      if (outcome === 'blocked') {
         await this.#writeInPlace(validPath, filePath, content, options, own, recordWrite);
       } else {
         recordWrite();
-      }
-    }
-  }
-
-  async #dropTemp(tempPath: string, cause?: unknown): Promise<void> {
-    try {
-      await fsUnlink(tempPath);
-    } catch (cleanupError) {
-      Logger.warn(
-        `Failed to clean up temp file ${tempPath}${cause === undefined ? '' : ` after write error (${formatUnknownErrorMessage(cause)})`}: ${formatUnknownErrorMessage(cleanupError)}`,
-      );
-    }
-  }
-
-  /** Windows refuses a rename over a file another process holds open: retry, then report 'blocked' so the caller writes in place. */
-  async #renameIntoPlace(
-    tempPath: string,
-    validPath: string,
-    existing: Stats | undefined,
-  ): Promise<'renamed' | 'blocked'> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await this.#rawRename(tempPath, validPath);
-        return 'renamed';
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException | undefined)?.code;
-        if (!IS_WINDOWS || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw error;
-        if (attempt >= RM_RETRY.maxRetries) {
-          if (existing?.isFile()) return 'blocked';
-          throw error;
-        }
-        await sleep(RM_RETRY.retryDelay);
       }
     }
   }
@@ -1721,36 +1637,17 @@ export class GuardedFileSystem {
       // where nothing is gone, and no undo id is offered for a delete that never ran.
       signal?.throwIfAborted();
       own.changed();
-      // A directory keeps the path-based rm (ADR-019's stated residual).
-      if (CAN_PIN && lstatSync(validPath, { throwIfNoEntry: false })?.isDirectory() === false) {
-        inPinnedDirectory(dirname(validPath), () => {
-          try {
-            unlinkSync(basename(validPath));
-          } catch (error) {
-            if (!(options?.force === true && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
-              throw error;
-            }
-          }
-        });
-        return;
-      }
-      await fsRm(validPath, { ...options, ...RM_RETRY });
+      await rmPinned(validPath, { ...options, ...RM_RETRY });
     });
   }
 
-  async rmdir(filePath: string, options?: Parameters<typeof fsRmdir>[1]): Promise<void> {
+  async rmdir(filePath: string, options?: Parameters<typeof rmdirPinned>[1]): Promise<void> {
     const validPath = await this.#guard('delete', filePath);
     await this.#forMutation(validPath, async (own) => {
       const before = own.recording
         ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
         : undefined;
-      if (CAN_PIN) {
-        inPinnedDirectory(dirname(validPath), () => {
-          rmdirSync(basename(validPath));
-        });
-      } else {
-        await fsRmdir(validPath, options);
-      }
+      await rmdirPinned(validPath, options);
       own.push({
         op: 'mkdir',
         path: validPath,
@@ -2336,81 +2233,6 @@ export class GuardedFileSystem {
         );
       });
     }
-  }
-}
-
-/**
- * Give a temp file the owner of the file it will replace: the rename swaps in a
- * new inode, which otherwise belongs to whoever runs the server. Best effort,
- * because only root can give a file away, and a refused write would be worse
- * than a changed owner. POSIX only: Windows has no `process.getuid`.
- * shortcut: POSIX ACLs, extended attributes and Windows ACLs are still lost; copy them if a client reports it.
- */
-export async function keepOwner(
-  tempPath: string,
-  existing: Pick<Stats, 'uid' | 'gid'> | undefined,
-  lchown: typeof fsLchown = fsLchown,
-): Promise<void> {
-  if (existing === undefined || process.getuid === undefined) return;
-  // No same-owner shortcut: a temp file can take its group from a setgid
-  // directory, so matching the process's ids proves nothing.
-  try {
-    // lchown: the temp file's directory may be writable by others, so a symlink
-    // swapped in must not redirect the ownership change.
-    await lchown(tempPath, existing.uid, existing.gid);
-  } catch (error) {
-    Logger.debug(`Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`);
-  }
-}
-
-/**
- * The anchored temp write (ADR-019): only the open borrows the working directory. The descriptor
- * names the inode, so filling, syncing and narrowing it run async and never block the event loop.
- * A failed temp file is left for the caller's dropTempAnchored.
- */
-async function writeTempAnchored(
-  validPath: string,
-  tempPath: string,
-  content: string | Buffer,
-  mode: number | undefined,
-  existing: Pick<Stats, 'uid' | 'gid'> | undefined,
-): Promise<void> {
-  // `wx` fails on a name collision instead of overwriting.
-  const fd = inPinnedDirectory(dirname(validPath), () =>
-    openSync(basename(tempPath), 'wx', mode ?? 0o666),
-  );
-  try {
-    await promisify(writeFd)(fd, content);
-    // The rename publishes these bytes, so they must reach the disk first.
-    await promisify(fsyncFd)(fd);
-    // keepOwner's rule, through the descriptor: best effort, POSIX only.
-    if (existing !== undefined && process.getuid !== undefined) {
-      try {
-        await promisify(fchownFd)(fd, existing.uid, existing.gid);
-      } catch (error) {
-        Logger.debug(
-          `Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`,
-        );
-      }
-    }
-    // Restores bits the umask masked off at creation.
-    if (mode !== undefined) await promisify(fchmodFd)(fd, mode);
-  } finally {
-    await promisify(closeFd)(fd);
-  }
-}
-
-/** Drops a temp file left by a failed anchored commit, by base name inside its directory. */
-function dropTempAnchored(validPath: string, tempPath: string, cause: unknown): void {
-  try {
-    inPinnedDirectory(dirname(validPath), () => {
-      unlinkSync(basename(tempPath));
-    });
-  } catch (cleanupError) {
-    if (isNotFoundErrno(cleanupError)) return;
-    Logger.warn(
-      `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(cause)}): ${formatUnknownErrorMessage(cleanupError)}`,
-    );
   }
 }
 
