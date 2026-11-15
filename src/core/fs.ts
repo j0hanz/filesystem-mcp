@@ -8,8 +8,10 @@ import {
   fchmodSync,
   fchownSync,
   fsyncSync,
+  lstatSync,
   openSync,
   renameSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -66,7 +68,7 @@ import {
   resolveEntryType,
 } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { CAN_PIN, inPinnedDirectory, lstatPinned } from './pinned.ts';
+import { CAN_PIN, inPinnedDirectory, lstatPinned, mkdirPinned } from './pinned.ts';
 import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
@@ -765,7 +767,11 @@ export class GuardedFileSystem {
     // create (each one currently absent), outermost first.
     await this.#forMutation(validPath, async (own) => {
       const created = own.recording ? await plannedMkdirChain(own, validPath) : [];
-      await fsMkdir(validPath, options);
+      if (CAN_PIN && typeof options === 'object' && options?.recursive === true) {
+        mkdirPinned(validPath);
+      } else {
+        await fsMkdir(validPath, options);
+      }
       own.push(...created.map((path): UndoRecord => ({ op: 'rmdir', path })));
       own.changed();
     });
@@ -1711,6 +1717,19 @@ export class GuardedFileSystem {
       // where nothing is gone, and no undo id is offered for a delete that never ran.
       signal?.throwIfAborted();
       own.changed();
+      // A directory keeps the path-based rm (ADR-019's stated residual).
+      if (CAN_PIN && lstatSync(validPath, { throwIfNoEntry: false })?.isDirectory() === false) {
+        inPinnedDirectory(dirname(validPath), () => {
+          try {
+            unlinkSync(basename(validPath));
+          } catch (error) {
+            if (!(options?.force === true && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
+              throw error;
+            }
+          }
+        });
+        return;
+      }
       await fsRm(validPath, { ...options, ...RM_RETRY });
     });
   }
@@ -1721,7 +1740,13 @@ export class GuardedFileSystem {
       const before = own.recording
         ? await fsLstat(validPath, { bigint: true }).catch(() => undefined)
         : undefined;
-      await fsRmdir(validPath, options);
+      if (CAN_PIN) {
+        inPinnedDirectory(dirname(validPath), () => {
+          rmdirSync(basename(validPath));
+        });
+      } else {
+        await fsRmdir(validPath, options);
+      }
       own.push({
         op: 'mkdir',
         path: validPath,

@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, realpath, rename, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join, parse } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
-import { inPinnedDirectory, isSameDirectory, lstatPinned } from '../src/core/pinned.ts';
+import {
+  inPinnedDirectory,
+  isSameDirectory,
+  lstatPinned,
+  mkdirPinned,
+} from '../src/core/pinned.ts';
 import { cleanupTestRoot, createTestRoot, trySymlink } from './helpers.ts';
 
 const posixOnly = { skip: process.platform === 'win32' };
@@ -133,5 +148,15 @@ describe('inPinnedDirectory', posixOnly, () => {
     } finally {
       process.chdir(before);
     }
+  });
+  it('mkdirPinned creates the missing chain and accepts an existing directory', async () => {
+    mkdirPinned(join(root, 'a', 'b', 'c'));
+    mkdirPinned(join(root, 'a', 'b', 'c'));
+    assert.ok((await stat(join(root, 'a', 'b', 'c'))).isDirectory());
+  });
+
+  it('mkdirPinned fails EEXIST on a file in the way', async () => {
+    await writeFile(join(root, 'file'), '');
+    assert.throws(() => mkdirPinned(join(root, 'file', 'x')), { code: 'EEXIST' });
   });
 });

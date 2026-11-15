@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { renameSync, symlinkSync } from 'node:fs';
-import fsPromises, { mkdir, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import fsPromises, {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { after, before, describe, it, mock } from 'node:test';
@@ -215,4 +224,44 @@ describe('swap after validation', () => {
       assert.deepEqual(await readdir(outside), outsideBefore);
     },
   );
+  for (const [name, setup, act] of [
+    [
+      'mkdir -p into a directory swapped before the anchor enters it',
+      async (_dir: string) => {},
+      (dir: string) => fs.mkdir(join(dir, 'made'), { recursive: true }),
+    ],
+    [
+      'rm of a file whose directory is swapped before the anchor enters it',
+      async (dir: string) => writeFile(join(dir, 'victim.txt'), 'in-root'),
+      (dir: string) => fs.rm(join(dir, 'victim.txt')),
+    ],
+    [
+      'rmdir in a directory swapped before the anchor enters it',
+      async (dir: string) => {
+        await mkdir(join(dir, 'empty'));
+        await mkdir(join(outside, 'empty'), { recursive: true });
+      },
+      (dir: string) => fs.rmdir(join(dir, 'empty')),
+    ],
+  ] as const) {
+    it(name, { skip: process.platform === 'win32' }, async () => {
+      const dir = join(root, `swap-${name.split(' ')[0]}`);
+      await mkdir(dir);
+      await setup(dir);
+      const outsideBefore = await readdir(outside);
+      swapBeforeChdir(dir, () => {
+        renameSync(dir, `${dir}-real`);
+        symlinkSync(outside, dir);
+      });
+      try {
+        await assert.rejects(act(dir), (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED);
+      } finally {
+        mock.restoreAll();
+      }
+      assert.deepEqual(await readdir(outside), outsideBefore);
+      assert.equal(await readFile(join(outside, 'victim.txt'), 'utf8'), 'TOP_SECRET');
+      if (outsideBefore.includes('empty'))
+        assert.ok((await stat(join(outside, 'empty'))).isDirectory());
+    });
+  }
 });
