@@ -5,7 +5,7 @@ import * as assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -91,5 +91,84 @@ describe('Client roots seeding (legacy era)', () => {
     } finally {
       await cleanupTestRoot(late);
     }
+  });
+});
+
+describe('Client roots follow the latest roots/list (ADR-018)', () => {
+  let a: string;
+  let b: string;
+  let c: string;
+  let declared: string[];
+  let failing: boolean;
+  let serverCtx: FilesystemServerContext;
+  let client: Client;
+
+  const connect = async (startup: string[]): Promise<void> => {
+    serverCtx = await createTestServer(startup);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 'roots-test', version: '1.0.0' }, { capabilities: { roots: {} } });
+    client.setRequestHandler('roots/list', () => {
+      if (failing) throw new Error('roots/list failed');
+      return { roots: declared.map((dir) => ({ uri: pathToFileURL(dir).href })) };
+    });
+    await Promise.all([client.connect(clientTransport), serverCtx.mcp.connect(serverTransport)]);
+  };
+
+  beforeEach(async () => {
+    [a, b, c] = await Promise.all([createTestRoot(), createTestRoot(), createTestRoot()]);
+    await Promise.all([a, b, c].map((dir) => writeFile(join(dir, 'f.txt'), 'x')));
+    declared = [];
+    failing = false;
+    await connect([]);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await serverCtx.mcp.close();
+    await Promise.all([a, b, c].map((dir) => cleanupTestRoot(dir)));
+  });
+
+  it('revokes a root the client no longer declares', async () => {
+    declared = [a, b];
+    assert.equal(await seedRootsFromClient(serverCtx), 2);
+    declared = [a];
+    assert.equal(await seedRootsFromClient(serverCtx), 1);
+    await serverCtx.pathGuard.validateExistingPath(join(a, 'f.txt'));
+    await assert.rejects(serverCtx.pathGuard.validateExistingPath(join(b, 'f.txt')));
+  });
+
+  it('revokes every declared root on an empty list, keeping user-approved grants', async () => {
+    declared = [a];
+    await seedRootsFromClient(serverCtx);
+    assert.equal(await serverCtx.pathGuard.applyGrant(c), true);
+    declared = [];
+    assert.equal(await seedRootsFromClient(serverCtx), 0);
+    await assert.rejects(serverCtx.pathGuard.validateExistingPath(join(a, 'f.txt')));
+    await serverCtx.pathGuard.validateExistingPath(join(c, 'f.txt'));
+  });
+
+  it('keeps roots when roots/list fails', async () => {
+    declared = [a];
+    await seedRootsFromClient(serverCtx);
+    failing = true;
+    assert.equal(await seedRootsFromClient(serverCtx), 0);
+    await serverCtx.pathGuard.validateExistingPath(join(a, 'f.txt'));
+  });
+
+  it('discards a stale answer', async () => {
+    declared = [a];
+    await seedRootsFromClient(serverCtx);
+    declared = [];
+    assert.equal(await seedRootsFromClient(serverCtx, () => false), 0);
+    await serverCtx.pathGuard.validateExistingPath(join(a, 'f.txt'));
+  });
+
+  it('never revokes a startup root', async () => {
+    await client.close();
+    await serverCtx.mcp.close();
+    await connect([a]);
+    declared = [];
+    await seedRootsFromClient(serverCtx);
+    await serverCtx.pathGuard.validateExistingPath(join(a, 'f.txt'));
   });
 });

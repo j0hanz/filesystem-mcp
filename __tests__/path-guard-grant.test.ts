@@ -550,3 +550,36 @@ describe('Write/Delete PathGuard', () => {
     }
   });
 });
+
+describe('PathGuard.replaceWorkspaceRoots (ADR-018)', () => {
+  const created: string[] = [];
+  afterEach(async () => {
+    for (const d of created.splice(0)) await cleanupTestRoot(d);
+  });
+
+  it('refuses unsafe roots, revokes undeclared ones, keeps and promotes access grants', async () => {
+    const [start, declared, approved] = [
+      await mkDir(created),
+      await mkDir(created),
+      await mkDir(created),
+    ];
+    const guard = new PathGuard({ cliAllowedDirs: [start] });
+    await guard.recomputeAllowedDirectories();
+    assert.equal(await guard.applyGrant(approved), true);
+
+    assert.equal(await guard.replaceWorkspaceRoots([declared, homedir()]), 1);
+    assert.ok(containsPath(guard.getAllowedDirectories(), declared));
+    assert.ok(!containsPath(guard.getAllowedDirectories(), homedir()));
+
+    assert.equal(await guard.replaceWorkspaceRoots([]), 0);
+    const allowed = guard.getAllowedDirectories();
+    assert.ok(!containsPath(allowed, declared), 'withdrawn declared root revoked');
+    assert.ok(containsPath(allowed, start), 'startup root kept');
+    assert.ok(containsPath(allowed, approved), 'access grant kept');
+
+    // Named access grant is promoted; withdrawing it afterwards revokes it.
+    assert.equal(await guard.replaceWorkspaceRoots([approved]), 1);
+    assert.equal(await guard.replaceWorkspaceRoots([]), 0);
+    assert.ok(!containsPath(guard.getAllowedDirectories(), approved));
+  });
+});

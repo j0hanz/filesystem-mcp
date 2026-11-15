@@ -817,6 +817,46 @@ export class PathGuard {
     });
   }
 
+  /**
+   * Make the client's latest declared workspace roots authoritative (ADR-018).
+   * The declared set becomes exactly those of `dirs` that pass the unsafe-path
+   * and boundary guards; a declared root missing from `dirs` is revoked. A
+   * user-approved access grant not named in `dirs` is kept, and one that is
+   * named is promoted to a workspace root as `applyGrant(dir, 'workspace')`
+   * does. Startup roots live in the baseline and are never touched. Resolves
+   * to the number of `dirs` now inside the allowed set.
+   * sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
+   */
+  async replaceWorkspaceRoots(dirs: readonly string[]): Promise<number> {
+    const accepted: string[] = [];
+    for (const dir of dirs) {
+      if ((await this.isUnsafeGrantTarget(dir)) || !(await this.isWithinBoundary(dir))) continue;
+      const normalized = normalizePath(dir);
+      if (!accepted.some((kept) => isSamePath(kept, normalized))) accepted.push(normalized);
+    }
+    return runExclusive(this, async () => {
+      const previous = this.grantedDirectories;
+      const previousAccess = this.accessGrants;
+      const named = (grant: string): boolean => accepted.some((dir) => isSamePath(dir, grant));
+      this.accessGrants = previousAccess.filter((grant) => !named(grant));
+      this.grantedDirectories = [...this.accessGrants, ...accepted];
+      try {
+        await this.recomputeAllowedDirectories();
+      } catch (error) {
+        // A failed recompute leaves the guard with its previous, consistent view.
+        this.grantedDirectories = previous;
+        this.accessGrants = previousAccess;
+        throw error;
+      }
+      const allowed = this.getAllowedDirectories();
+      let count = 0;
+      for (const dir of dirs) {
+        if (await isPathWithinAllowedDirectories(normalizePath(dir), allowed)) count += 1;
+      }
+      return count;
+    });
+  }
+
   // One boundary rule for startup roots and grants: a missing target is
   // projected through its nearest existing ancestor, an unresolvable one is
   // refused. No boundary configured means no constraint; partitionRootsWithin
