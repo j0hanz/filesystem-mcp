@@ -24,3 +24,7 @@ Three paged scanning tools (`list`, `find_files`, `search_text`) duplicated the 
 - `list`, `find_files`, and `search_text` share one paging/scope/trailer invariant, fixing `search_text`'s double `resolvePathOrRoot` call.
 - `core/schema.ts` no longer depends on directory traversal code in `core/glob.ts`, and `tools/patch.ts` no longer depends on `core/search.ts`.
 - No wire schema or tool description changes; `__tests__/contract.test.ts` stays unchanged.
+
+## Addendum: Fold `core/glob.ts` into `core/scan.ts`
+
+`src/core/scan.ts` was the sole production consumer of `src/core/glob.ts`. Keeping the directory walk, `.gitignore` loader, and pattern case-folding in a separate module required exporting walk primitives (`globEntries`, `GlobEntriesOptions`, `GlobEntry`, `foldPatternCase`, `isDefaultExcludedName`) and threading `onDirectory`/`onExcludedDir`/`onIgnoredDir` callbacks across the boundary only for `scan()` to receive them. `core/glob.ts` has been removed and folded directly into `src/core/scan.ts` as non-exported internals feeding `scan()`'s probe queue and excluded/ignored directory counters directly, leaving `scan()`, `resolveScanScope()`, `probeDirectory()`, and `ScanSkip`/`skipOf()` as the module's sole runtime exports.

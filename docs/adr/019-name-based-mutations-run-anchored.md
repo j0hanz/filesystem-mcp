@@ -26,3 +26,7 @@ Reads already close this gap with `lstatPinned` in [`src/core/pinned.ts`](../../
 - A parent swapped between validation and the write commit makes the write fail with `ACCESS_DENIED`, and nothing lands outside the roots.
 - The anchored write blocks the event loop only for the open and the rename. The bytes and the flush run async through the descriptor, so a slow disk or hung mount does not stall other requests.
 - `__tests__/pinned.test.ts` covers the anchor; `__tests__/swap-after-validation.test.ts` covers the swapped commit and defines the `swapBeforeChdir` seam later tasks reuse.
+
+## Addendum: Internalize platform fallback in `core/pinned.ts`
+
+`core/pinned.ts` now owns the `CAN_PIN` capability check and unpinned `node:fs/promises` fallbacks behind its public boundary, rather than leaking capability checks (`CAN_PIN`, `inPinnedDirectory`, `isSameDirectory`, `isMkdirStep`, `isSecondLink`) into `GuardedFileSystem`. It exports only the six anchored operations (`lstatPinned`, `mkdirPinned`, `renamePinned`, `rmPinned`, `rmdirPinned`, `writeStagedPinned`) plus `keepOwner` and their option types, so `GuardedFileSystem` makes a single call per filesystem operation without platform branches.

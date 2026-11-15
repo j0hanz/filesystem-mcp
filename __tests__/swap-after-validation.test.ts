@@ -325,7 +325,7 @@ describe('swap after validation', () => {
         originalChdir(target);
       });
       try {
-        assert.throws(() => renamePinned(join(from, 'a.txt'), join(to, 'a.txt')));
+        await assert.rejects(() => renamePinned(join(from, 'a.txt'), join(to, 'a.txt')));
       } finally {
         mock.restoreAll();
       }

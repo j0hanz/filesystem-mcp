@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { linkSync } from 'node:fs';
-import {
+import fsPromises, {
   lstat,
   mkdir,
   readdir,
@@ -13,18 +13,18 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import { join, parse } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+import { basename, dirname, join, parse } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import {
-  inPinnedDirectory,
-  isMkdirStep,
-  isSameDirectory,
-  isSecondLink,
   lstatPinned,
   mkdirPinned,
   renamePinned,
+  rmdirPinned,
+  rmPinned,
+  writeStagedPinned,
 } from '../src/core/pinned.ts';
 import { cleanupTestRoot, createTestRoot, trySymlink } from './helpers.ts';
 
@@ -47,16 +47,9 @@ describe('pinned identity check', () => {
     if (base) await cleanupTestRoot(base);
   });
 
-  it('isSameDirectory is exact off macOS and folds the Data volume on it', () => {
-    assert.equal(isSameDirectory('/a/b', '/a/b', 'linux'), true);
-    assert.equal(isSameDirectory('/a/B', '/a/b', 'linux'), false);
-    assert.equal(isSameDirectory('/System/Volumes/Data/Users/x', '/Users/x', 'darwin'), true);
-    assert.equal(isSameDirectory('/System/Volumes/Data/Users/x', '/Users/x', 'linux'), false);
-  });
-
-  it('lstatPinned returns the entry of the validated directory', posixOnly, async () => {
+  it('lstatPinned returns the entry of the validated directory', async () => {
     const file = join(realRoot, 'dir', 'a.txt');
-    assert.equal(lstatPinned(file).ino, (await lstat(file, { bigint: true })).ino);
+    assert.equal((await lstatPinned(file)).ino, (await lstat(file, { bigint: true })).ino);
   });
 
   it('survives a deleted working directory and falls back to the root', posixOnly, async () => {
@@ -67,7 +60,7 @@ describe('pinned identity check', () => {
       process.chdir(gone);
       await rmdir(gone);
       const file = join(realRoot, 'dir', 'a.txt');
-      assert.equal(lstatPinned(file).ino, (await lstat(file, { bigint: true })).ino);
+      assert.equal((await lstatPinned(file)).ino, (await lstat(file, { bigint: true })).ino);
       assert.equal(process.cwd(), parse(file).root);
     } finally {
       process.chdir(original);
@@ -80,22 +73,22 @@ describe('pinned identity check', () => {
       await symlink(join(base, 'outside'), join(realRoot, 'dir'));
     });
 
-    it('lstatPinned refuses a directory that is now a symlink elsewhere', () => {
-      assert.throws(
+    it('lstatPinned refuses a directory that is now a symlink elsewhere', async () => {
+      await assert.rejects(
         () => lstatPinned(join(realRoot, 'dir', 'a.txt')),
         (err) => isFsError(err) && err.code === ErrorCode.ACCESS_DENIED,
       );
     });
 
-    it('restores the working directory after a refusal', () => {
-      const before = process.cwd();
-      assert.throws(() => lstatPinned(join(realRoot, 'dir', 'a.txt')));
-      assert.equal(process.cwd(), before);
+    it('restores the working directory after a refusal', async () => {
+      const beforeCwd = process.cwd();
+      await assert.rejects(() => lstatPinned(join(realRoot, 'dir', 'a.txt')));
+      assert.equal(process.cwd(), beforeCwd);
     });
   });
 });
 
-describe('inPinnedDirectory', posixOnly, () => {
+describe('anchored mutations', () => {
   let root: string;
   let outside: string;
 
@@ -110,110 +103,193 @@ describe('inPinnedDirectory', posixOnly, () => {
     if (outside) await cleanupTestRoot(outside);
   });
 
-  it('inPinnedDirectory returns the action result and restores the working directory', () => {
-    const before = process.cwd();
-    assert.equal(
-      inPinnedDirectory(root, () => process.cwd()),
-      root,
-    );
-    assert.equal(process.cwd(), before);
+  it('mkdirPinned creates the missing chain and accepts an existing directory', async () => {
+    await mkdirPinned(join(root, 'a', 'b', 'c'), { recursive: true });
+    await mkdirPinned(join(root, 'a', 'b', 'c'), { recursive: true });
+    assert.ok((await stat(join(root, 'a', 'b', 'c'))).isDirectory());
   });
 
-  it('inPinnedDirectory restores the working directory after a throw', () => {
-    const before = process.cwd();
-    assert.throws(
-      () =>
-        inPinnedDirectory(root, () => {
-          throw new Error('boom');
-        }),
-      /boom/,
-    );
-    assert.equal(process.cwd(), before);
+  it('mkdirPinned handles Unicode normalization across missing components', async (t) => {
+    if (process.platform !== 'win32') {
+      const realCwd = process.cwd.bind(process);
+      t.mock.method(process, 'cwd', () => {
+        const current = realCwd();
+        return basename(current).normalize('NFC') === '\u00e9'
+          ? join(dirname(current), 'e\u0301')
+          : current;
+      });
+    }
+    try {
+      await mkdirPinned(join(root, 'uni', '\u00e9'), { recursive: true });
+      assert.ok((await stat(join(root, 'uni', '\u00e9'))).isDirectory());
+    } finally {
+      t.mock.restoreAll();
+    }
   });
 
-  it('inPinnedDirectory refuses a directory that is a link elsewhere', async (t) => {
-    const link = join(root, 'link');
+  it('mkdirPinned fails on a file in the way', async () => {
+    await writeFile(join(root, 'file'), '');
+    await assert.rejects(() => mkdirPinned(join(root, 'file', 'x'), { recursive: true }), {
+      code: process.platform === 'win32' ? 'ENOTDIR' : 'EEXIST',
+    });
+  });
+
+  it('mkdirPinned refuses entering an existing symlink directory', posixOnly, async (t) => {
+    const link = join(root, 'dir-link');
     if (!(await trySymlink(outside, link, () => t.skip('symlinks unavailable')))) return;
-    assert.throws(
-      () => inPinnedDirectory(link, () => 'ran'),
+    await assert.rejects(
+      () => mkdirPinned(join(link, 'child'), { recursive: true }),
       (e) => isFsError(e) && e.code === ErrorCode.ACCESS_DENIED,
     );
   });
 
-  it('inPinnedDirectory works when the server working directory was deleted', async () => {
-    const before = process.cwd();
+  it('mkdirPinned works when the server working directory was deleted', posixOnly, async () => {
+    const beforeCwd = process.cwd();
     const doomed = join(root, 'doomed');
     await mkdir(doomed);
     process.chdir(doomed);
     await rm(doomed, { recursive: true });
     try {
-      assert.equal(
-        inPinnedDirectory(root, () => 'ran'),
-        'ran',
-      );
+      await mkdirPinned(join(root, 'after-doomed', 'leaf'), { recursive: true });
+      assert.ok((await stat(join(root, 'after-doomed', 'leaf'))).isDirectory());
     } finally {
-      process.chdir(before);
+      process.chdir(beforeCwd);
     }
-  });
-  it('mkdirPinned creates the missing chain and accepts an existing directory', async () => {
-    mkdirPinned(join(root, 'a', 'b', 'c'));
-    mkdirPinned(join(root, 'a', 'b', 'c'));
-    assert.ok((await stat(join(root, 'a', 'b', 'c'))).isDirectory());
-  });
-
-  it('mkdirPinned fails EEXIST on a file in the way', async () => {
-    await writeFile(join(root, 'file'), '');
-    assert.throws(() => mkdirPinned(join(root, 'file', 'x')), { code: 'EEXIST' });
   });
 
   it('renamePinned moves an entry between directories and leaves no staging name', async () => {
     await mkdir(join(root, 'from'));
     await mkdir(join(root, 'to'));
     await writeFile(join(root, 'from', 'a.txt'), 'data');
-    renamePinned(join(root, 'from', 'a.txt'), join(root, 'to', 'b.txt'));
+    await renamePinned(join(root, 'from', 'a.txt'), join(root, 'to', 'b.txt'));
     assert.equal(await readFile(join(root, 'to', 'b.txt'), 'utf8'), 'data');
     assert.deepEqual(await readdir(join(root, 'from')), []);
     assert.deepEqual(await readdir(join(root, 'to')), ['b.txt']);
   });
 
+  it('renamePinned uses custom rawRename when supplied', async () => {
+    const calls: [string, string][] = [];
+    const customRename = async (oldPath: string, newPath: string): Promise<void> => {
+      calls.push([oldPath, newPath]);
+      await rename(oldPath, newPath);
+    };
+    await mkdir(join(root, 'raw-from'));
+    await mkdir(join(root, 'raw-to'));
+    const from = join(root, 'raw-from', 'a.txt');
+    const to = join(root, 'raw-to', 'b.txt');
+    await writeFile(from, 'raw');
+    await renamePinned(from, to, { rawRename: customRename as typeof rename });
+    assert.deepEqual(calls, [[from, to]]);
+    assert.equal(await readFile(to, 'utf8'), 'raw');
+  });
+
   it('renamePinned puts the source back when the destination directory is missing', async () => {
     await mkdir(join(root, 'src'));
     await writeFile(join(root, 'src', 'a.txt'), 'data');
-    assert.throws(() => renamePinned(join(root, 'src', 'a.txt'), join(root, 'nope', 'a.txt')));
+    await assert.rejects(() =>
+      renamePinned(join(root, 'src', 'a.txt'), join(root, 'nope', 'a.txt')),
+    );
     assert.deepEqual(await readdir(join(root, 'src')), ['a.txt']);
   });
 
-  it('renamePinned onto a hard link of the same inode does nothing, as rename does', async () => {
-    await mkdir(join(root, 'hl'));
-    await writeFile(join(root, 'hl', 'a.txt'), 'data');
-    linkSync(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
-    renamePinned(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
-    assert.deepEqual((await readdir(join(root, 'hl'))).sort(), ['a.txt', 'b.txt']);
-  });
-});
+  it(
+    'renamePinned onto a hard link of the same inode is a no-op unless respelling is set',
+    posixOnly,
+    async (t) => {
+      const hl = join(root, 'hl');
+      await mkdir(hl);
+      await writeFile(join(hl, 'a.txt'), 'data');
+      linkSync(join(hl, 'a.txt'), join(hl, 'b.txt'));
+      await renamePinned(join(hl, 'a.txt'), join(hl, 'b.txt'));
+      assert.deepEqual((await readdir(hl)).sort(), ['a.txt', 'b.txt']);
 
-describe('isSecondLink', () => {
-  const entry = { dev: 1n, ino: 7n };
-  it('a second hard link of the same inode is a no-op rename', () => {
-    assert.equal(isSecondLink(entry, { dev: 1n, ino: 7n }, false), true);
-  });
-  it('a respelling of the same entry is not a no-op, even on one inode', () => {
-    assert.equal(isSecondLink(entry, { dev: 1n, ino: 7n }, true), false);
-  });
-  it('a different inode or a missing destination is not a no-op', () => {
-    assert.equal(isSecondLink(entry, { dev: 1n, ino: 8n }, false), false);
-    assert.equal(isSecondLink(entry, undefined, false), false);
-  });
-});
+      const chdirSpy = t.mock.method(process, 'chdir');
+      try {
+        await renamePinned(join(hl, 'a.txt'), join(hl, 'a.txt'), {
+          respelling: true,
+        });
+        assert.equal(chdirSpy.mock.callCount(), 4);
+      } finally {
+        t.mock.restoreAll();
+      }
+      assert.deepEqual((await readdir(hl)).sort(), ['a.txt', 'b.txt']);
+    },
+  );
 
-describe('isMkdirStep', () => {
-  it('accepts a Data-prefixed cwd on darwin only', () => {
-    const cwd = '/System/Volumes/Data/Users/a/new';
-    assert.equal(isMkdirStep(cwd, '/Users/a', 'new', 'darwin'), true);
-    assert.equal(isMkdirStep(cwd, '/Users/a', 'new', 'linux'), false);
+  it('rmPinned removes files, honors force, and falls back to recursive rm on directories', async () => {
+    const file = join(root, 'rm-target.txt');
+    await writeFile(file, 'bye');
+    await rmPinned(file);
+    await assert.rejects(() => stat(file), { code: 'ENOENT' });
+
+    await rmPinned(join(root, 'missing-rm.txt'), { force: true });
+    await assert.rejects(() => rmPinned(join(root, 'missing-rm.txt')), { code: 'ENOENT' });
+
+    const dir = join(root, 'rm-tree');
+    await mkdir(join(dir, 'sub'), { recursive: true });
+    await writeFile(join(dir, 'sub', 'x.txt'), 'x');
+    await rmPinned(dir, { recursive: true });
+    await assert.rejects(() => stat(dir), { code: 'ENOENT' });
   });
-  it('folds the base name and refuses another one', () => {
-    assert.equal(isMkdirStep('/r/é', '/r', 'é', 'linux'), true);
-    assert.equal(isMkdirStep('/r/other', '/r', 'new', 'linux'), false);
+
+  it('rmdirPinned removes an empty directory and refuses a non-empty one', async () => {
+    const empty = join(root, 'empty-dir');
+    await mkdir(empty);
+    await rmdirPinned(empty);
+    await assert.rejects(() => stat(empty), { code: 'ENOENT' });
+
+    const nonEmpty = join(root, 'non-empty-dir');
+    await mkdir(nonEmpty);
+    await writeFile(join(nonEmpty, 'keep.txt'), 'k');
+    await assert.rejects(() => rmdirPinned(nonEmpty));
+  });
+
+  it('writeStagedPinned commits atomically and cleans up temp files on abort or error', async (t) => {
+    const target = join(root, 'staged.txt');
+    const temp = join(root, 'staged.txt.111111111111.tmp');
+    await writeFile(target, 'old');
+    const existingStats = await stat(target);
+
+    const outcome = await writeStagedPinned(target, temp, 'new-content', {
+      existingStats,
+      mode: 0o600,
+    });
+    assert.equal(outcome, 'renamed');
+    assert.equal(await readFile(target, 'utf8'), 'new-content');
+    await assert.rejects(() => stat(temp), { code: 'ENOENT' });
+
+    const abortedTemp = join(root, 'staged.txt.222222222222.tmp');
+    const chdirSpy = t.mock.method(process, 'chdir');
+    const unlinkSpy = t.mock.method(fsPromises, 'unlink');
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        () =>
+          writeStagedPinned(target, abortedTemp, 'never', {
+            signal: AbortSignal.abort(new Error('cancelled')),
+          }),
+        /cancelled/,
+      );
+      assert.equal(chdirSpy.mock.callCount(), 0);
+      assert.equal(unlinkSpy.mock.callCount(), 0);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+    assert.equal(await readFile(target, 'utf8'), 'new-content');
+    await assert.rejects(() => stat(abortedTemp), { code: 'ENOENT' });
+
+    const failTemp = join(root, 'staged.txt.333333333333.tmp');
+    await assert.rejects(
+      () =>
+        writeStagedPinned(target, failTemp, 'never', {
+          rawRename: (async () => {
+            throw Object.assign(new Error('rename failed'), { code: 'EIO' });
+          }) as unknown as typeof rename,
+        }),
+      /rename failed/,
+    );
+    assert.equal(await readFile(target, 'utf8'), 'new-content');
+    await assert.rejects(() => stat(failTemp), { code: 'ENOENT' });
   });
 });

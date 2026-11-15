@@ -10,7 +10,6 @@ import type { TestContext } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { globEntries } from '../src/core/glob.ts';
 import { Logger } from '../src/core/observability.ts';
 import { suggestPaths } from '../src/core/path-completer.ts';
 import { findProjectRoot } from '../src/core/path-discovery.ts';
@@ -22,6 +21,7 @@ import {
   normalizePath,
 } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
+import { scan } from '../src/core/scan.ts';
 import { snapshotTree, UndoJournal } from '../src/core/undo.ts';
 import { FIND_FILES, LIST } from '../src/tools/index.ts';
 import { seedRootsFromClient } from '../src/transport/stdio.ts';
@@ -483,11 +483,20 @@ describe(
     });
 
     const drain = async (pattern: string): Promise<string[]> => {
-      const paths: string[] = [];
-      for await (const entry of globEntries({ cwd: root, pattern, pathGuard: guard })) {
-        paths.push(entry.path);
-      }
-      return paths;
+      const outcome = await scan(
+        { root },
+        {
+          pathGuard: guard,
+          pattern,
+          baseNameMatch: false,
+          includeHidden: false,
+          includeIgnored: true,
+          onlyFiles: true,
+          concurrency: 4,
+        },
+        (entry) => Promise.resolve(entry.path),
+      );
+      return [...outcome.results];
     };
 
     for (const pattern of [
@@ -522,10 +531,22 @@ describe(
       const skip = () => t.skip('symlink creation not permitted');
       if (!(await trySymlink(target, join(cwd, '123'), skip))) return;
       if (!(await trySymlink(target, join(cwd, 'a', '123'), skip))) return;
+      const pathGuard = await makeGuard([cwd, target]);
       const walk = async (pattern: string): Promise<string[]> => {
-        const paths: string[] = [];
-        for await (const entry of globEntries({ cwd, pattern })) paths.push(entry.path);
-        return paths;
+        const outcome = await scan(
+          { root: cwd },
+          {
+            pathGuard,
+            pattern,
+            baseNameMatch: false,
+            includeHidden: false,
+            includeIgnored: true,
+            onlyFiles: true,
+            concurrency: 4,
+          },
+          (entry) => Promise.resolve(entry.path),
+        );
+        return [...outcome.results];
       };
       for (const pattern of ['123/x.txt', '{123,x}/*', '*/123/*', '*/{123,x}/*']) {
         assert.deepEqual(await walk(pattern), [], pattern);

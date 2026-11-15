@@ -17,9 +17,8 @@ import type { TestContext } from 'node:test';
 import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { Logger } from '../src/core/observability.ts';
-import { normalizePath } from '../src/core/path-utils.ts';
+import { IS_WINDOWS, normalizePath } from '../src/core/path-utils.ts';
 import { PathGuard } from '../src/core/path.ts';
-import { CAN_PIN } from '../src/core/pinned.ts';
 import { SensitiveMatcher } from '../src/core/sensitive.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
@@ -243,7 +242,7 @@ describe('Write-path and root guards (issue #200)', () => {
       const target = await writeTestFile(tmpDir, 'owner-kept.txt', 'old\n');
       const existing = await stat(target);
       const calls: { path: string; uid: number; gid: number }[] = [];
-      if (CAN_PIN) {
+      if (!IS_WINDOWS) {
         // The anchored commit (ADR-019) changes the owner through the temp file's descriptor.
         const originalFchown = fsSync.fchown.bind(fsSync);
         t.mock.method(
@@ -267,7 +266,7 @@ describe('Write-path and root guards (issue #200)', () => {
         assert.equal(calls.length, 1, `expected one owner change, got ${JSON.stringify(calls)}`);
         assert.equal(calls[0]?.uid, existing.uid);
         assert.equal(calls[0]?.gid, existing.gid);
-        if (!CAN_PIN) assert.ok(calls[0]?.path.endsWith('.tmp'), calls[0]?.path);
+        if (IS_WINDOWS) assert.ok(calls[0]?.path.endsWith('.tmp'), calls[0]?.path);
         assert.strictEqual(await readFile(target, 'utf8'), 'new\n');
       } finally {
         t.mock.restoreAll();
