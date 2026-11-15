@@ -1242,7 +1242,8 @@ export class GuardedFileSystem {
         }
       }
       try {
-        if (CAN_PIN && this.#rawRename === fsRename) renamePinned(validOld, validNew);
+        if (CAN_PIN && this.#rawRename === fsRename)
+          renamePinned(validOld, validNew, plan.respelling);
         else await this.#rawRename(validOld, validNew);
       } catch (error: unknown) {
         rethrowIfAborted(error);

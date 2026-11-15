@@ -20,6 +20,7 @@ import { ErrorCode, isFsError } from '../src/core/errors.ts';
 import {
   inPinnedDirectory,
   isSameDirectory,
+  isSecondLink,
   lstatPinned,
   mkdirPinned,
   renamePinned,
@@ -187,5 +188,19 @@ describe('inPinnedDirectory', posixOnly, () => {
     linkSync(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
     renamePinned(join(root, 'hl', 'a.txt'), join(root, 'hl', 'b.txt'));
     assert.deepEqual((await readdir(join(root, 'hl'))).sort(), ['a.txt', 'b.txt']);
+  });
+});
+
+describe('isSecondLink', () => {
+  const entry = { dev: 1n, ino: 7n };
+  it('a second hard link of the same inode is a no-op rename', () => {
+    assert.equal(isSecondLink(entry, { dev: 1n, ino: 7n }, false), true);
+  });
+  it('a respelling of the same entry is not a no-op, even on one inode', () => {
+    assert.equal(isSecondLink(entry, { dev: 1n, ino: 7n }, true), false);
+  });
+  it('a different inode or a missing destination is not a no-op', () => {
+    assert.equal(isSecondLink(entry, { dev: 1n, ino: 8n }, false), false);
+    assert.equal(isSecondLink(entry, undefined, false), false);
   });
 });

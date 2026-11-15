@@ -119,8 +119,20 @@ function stagingName(): string {
  * checked after it crosses. On failure the source goes back to its own name and the error is
  * rethrown with its code (EXDEV reaches the caller's cross-device fallback).
  */
+/**
+ * True when `dest` is another hard link of `source`'s inode, where POSIX rename does nothing. A
+ * respelling (case or Unicode form) is the same entry on a folding filesystem and must still move.
+ */
+export function isSecondLink(
+  source: { dev: bigint; ino: bigint },
+  dest: { dev: bigint; ino: bigint } | undefined,
+  respelling: boolean,
+): boolean {
+  return !respelling && dest?.dev === source.dev && dest.ino === source.ino;
+}
+
 // Port of renameIntoDirectory and returnStaged, upstream src/filesystem/pinned-directory.ts @ e1dc4b18dbb948921da37f3d4224a628730b43b0
-export function renamePinned(validOld: string, validNew: string): void {
+export function renamePinned(validOld: string, validNew: string, respelling = false): void {
   const sourceDir = dirname(validOld);
   const destDir = dirname(validNew);
   const first = stagingName();
@@ -128,8 +140,7 @@ export function renamePinned(validOld: string, validNew: string): void {
   const identity = inPinnedDirectory(sourceDir, () => {
     const source = lstatSync(basename(validOld), { bigint: true });
     const dest = lstatSync(validNew, { bigint: true, throwIfNoEntry: false });
-    // Hard links to one inode: POSIX rename does nothing, and so must we.
-    if (dest?.dev === source.dev && dest.ino === source.ino) return undefined;
+    if (isSecondLink(source, dest, respelling)) return undefined;
     renameSync(basename(validOld), first);
     try {
       const { dev, ino } = lstatSync(first, { bigint: true });
@@ -161,7 +172,11 @@ export function renamePinned(validOld: string, validNew: string): void {
           renameSync(join(destDir, second), first);
           const back = lstatSync(first, { bigint: true });
           if (back.dev !== identity.dev || back.ino !== identity.ino) {
-            renameSync(first, join(destDir, second));
+            try {
+              renameSync(first, join(destDir, second));
+            } catch {
+              left = { name: first, directory: sourceDir };
+            }
             throw swapped(sourceDir);
           }
           left = { name: first, directory: sourceDir };
