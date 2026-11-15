@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { foldPatternCase, globEntries, type GlobEntriesOptions } from '../src/core/glob.ts';
 import { IS_CASE_INSENSITIVE_FS, IS_WINDOWS } from '../src/core/path-utils.ts';
+import type { PathGuard } from '../src/core/path.ts';
+import { scan, type ScanOutcome } from '../src/core/scan.ts';
 import { isSafeGlobSyntax } from '../src/core/schema.ts';
 import {
   cleanupTestRoot,
@@ -15,14 +17,44 @@ import {
   trySymlink,
 } from './helpers.ts';
 
+interface WalkTestOptions {
+  cwd: string;
+  pattern: string;
+  includeHidden?: boolean;
+  baseNameMatch?: boolean;
+  maxDepth?: number;
+  onlyFiles?: boolean;
+  skipIgnored?: boolean;
+  ignoreCeiling?: string;
+  pathGuard?: PathGuard;
+  signal?: AbortSignal;
+}
+
+async function runWalk(options: WalkTestOptions): Promise<ScanOutcome<string>> {
+  const pathGuard = options.pathGuard ?? (await makeGuard([options.ignoreCeiling ?? options.cwd]));
+  return scan(
+    { root: options.cwd },
+    {
+      pathGuard,
+      pattern: options.pattern,
+      baseNameMatch: options.baseNameMatch ?? false,
+      includeHidden: options.includeHidden ?? false,
+      includeIgnored: !(options.skipIgnored ?? false),
+      onlyFiles: options.onlyFiles ?? true,
+      ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      concurrency: 4,
+    },
+    async (entry) => {
+      const rel = relative(options.cwd, entry.path).replaceAll('\\', '/');
+      return entry.type === 'directory' ? `${rel}/` : rel;
+    },
+  );
+}
+
 /** Walk and return root-relative POSIX paths, sorted, directories with a trailing `/`. */
-async function walk(options: GlobEntriesOptions): Promise<string[]> {
-  const out: string[] = [];
-  for await (const entry of globEntries(options)) {
-    const rel = relative(options.cwd, entry.path).replaceAll('\\', '/');
-    out.push(entry.dirent.isDirectory() ? `${rel}/` : rel);
-  }
-  return out.sort();
+async function walk(options: WalkTestOptions): Promise<string[]> {
+  return [...(await runWalk(options)).results].sort();
 }
 
 /**
@@ -49,27 +81,25 @@ async function withCollidingCwd(fn: (root: string) => Promise<void>): Promise<vo
   }
 }
 
-describe('globEntries', () => {
+describe('scan walk', () => {
   // fs.glob takes no signal, so a walk that yields nothing never reaches a
-  // per-entry abort check. The walk must stop itself and say why, never end as
-  // if it had swept the whole tree: move's protection walk reads "ended" as
-  // "nothing protected inside".
+  // per-entry abort check. The walk must stop itself and report timeout,
+  // never end as if it had swept the whole tree.
   for (const skipIgnored of [false, true]) {
-    it(`an aborted walk throws its reason instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
+    it(`an aborted walk stops as timeout instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
       const root = await createTestRoot();
       try {
         for (let i = 0; i < 20; i++)
           await mkdir(join(root, `d${String(i)}`, 'inner'), { recursive: true });
         const reason = new Error('deadline');
-        await assert.rejects(
-          walk({
-            cwd: root,
-            pattern: '**/*.nomatch',
-            skipIgnored,
-            signal: AbortSignal.abort(reason),
-          }),
-          (err: unknown) => err === reason,
-        );
+        const outcome = await runWalk({
+          cwd: root,
+          pattern: '**/*.nomatch',
+          skipIgnored,
+          signal: AbortSignal.abort(reason),
+        });
+        assert.strictEqual(outcome.stoppedReason, 'timeout');
+        assert.deepStrictEqual(outcome.results, []);
       } finally {
         await cleanupTestRoot(root);
       }
@@ -77,28 +107,27 @@ describe('globEntries', () => {
   }
 
   for (const skipIgnored of [false, true]) {
-    it(`a timed-out walk throws TimeoutError instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
+    it(`a timed-out walk stops as timeout instead of ending as complete (skipIgnored: ${String(skipIgnored)})`, async () => {
       const root = await createTestRoot();
       try {
         await mkdir(join(root, 'sub'), { recursive: true });
         await writeFile(join(root, '.gitignore'), '*.log\n');
         const timeoutErr = new DOMException('timed out', 'TimeoutError');
-        await assert.rejects(
-          walk({
-            cwd: root,
-            pattern: '**/*.nomatch',
-            skipIgnored,
-            signal: AbortSignal.abort(timeoutErr),
-          }),
-          (err: unknown) => err === timeoutErr,
-        );
+        const outcome = await runWalk({
+          cwd: root,
+          pattern: '**/*.nomatch',
+          skipIgnored,
+          signal: AbortSignal.abort(timeoutErr),
+        });
+        assert.strictEqual(outcome.stoppedReason, 'timeout');
+        assert.deepStrictEqual(outcome.results, []);
       } finally {
         await cleanupTestRoot(root);
       }
     });
   }
 
-  it('globEntries matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
+  it('scan walk matches literal and wildcard segments case-insensitively on a case-insensitive filesystem', async () => {
     const root = await createTestRoot();
     try {
       await writeFile(join(root, 'Upper.TXT'), 'x');
@@ -126,17 +155,27 @@ describe('globEntries', () => {
     }
   });
 
-  it('foldPatternCase leaves brace ranges and class contents alone', () => {
-    const folded = (pattern: string): string => foldPatternCase(pattern);
-    if (IS_CASE_INSENSITIVE_FS) {
-      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.[tT][xX][tT]');
-      assert.strictEqual(folded('{a,b}x'), '{[aA],[bB]}[xX]');
-      assert.strictEqual(folded('[]a]b'), '[]a][bB]');
-      assert.strictEqual(folded('[!]a]b'), '[!]a][bB]');
-      assert.strictEqual(folded('[a-c]x'), '[a-c][xX]');
-      assert.strictEqual(folded('{1..3}a1_'), '{1..3}[aA][11][__]');
-    } else {
-      assert.strictEqual(folded('{a..c}.txt'), '{a..c}.txt');
+  it('case folding leaves brace ranges and class contents alone', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const name of ['b.TXT', 'AX', ']B', 'xB', 'cZ', '2A1_']) {
+        await writeFile(join(root, name), 'x');
+      }
+      if (IS_CASE_INSENSITIVE_FS) {
+        await writeFile(join(root, 'other.txt'), 'x');
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '{a..c}.txt' }), ['b.TXT']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '{a,b}x' }), ['AX']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '[]a]b' }), [']B']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '[!]a]b' }), ['xB']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '[a-c]z' }), ['cZ']);
+        assert.deepStrictEqual(await walk({ cwd: root, pattern: '{1..3}a1_' }), ['2A1_']);
+      } else {
+        for (const pattern of ['{a..c}.txt', '{a,b}x', '[]a]b', '[!]a]b', '[a-c]z', '{1..3}a1_']) {
+          assert.deepStrictEqual(await walk({ cwd: root, pattern }), [], pattern);
+        }
+      }
+    } finally {
+      await cleanupTestRoot(root);
     }
   });
 
@@ -145,19 +184,18 @@ describe('globEntries', () => {
       t.skip('case folding applies on a case-insensitive filesystem');
       return;
     }
-    assert.strictEqual(foldPatternCase('[abc.txt'), '[[][aA][bB][cC].[tT][xX][tT]');
     const root = await createTestRoot();
     try {
       await writeFile(join(root, 'abc.txt'), 'x');
       let named = true;
       try {
-        await writeFile(join(root, '[abc.txt'), 'x');
+        await writeFile(join(root, '[ABC.TXT'), 'x');
       } catch {
         named = false;
       }
       assert.deepStrictEqual(
         await walk({ cwd: root, pattern: '[abc.txt' }),
-        named ? ['[abc.txt'] : [],
+        named ? ['[ABC.TXT'] : [],
       );
     } finally {
       await cleanupTestRoot(root);
@@ -432,7 +470,6 @@ describe('globEntries', () => {
               includeHidden,
               baseNameMatch: true,
               onlyFiles: false,
-              suppressErrors: true,
             });
             const escaped = seen.filter((rel) => rel.startsWith('..') || isAbsolute(rel));
             assert.deepStrictEqual(escaped, [], `${pattern} (skipIgnored: ${String(skipIgnored)})`);
@@ -606,7 +643,7 @@ describe('globEntries', () => {
   });
 });
 
-describe('globEntries characterization', () => {
+describe('scan walk characterization', () => {
   const FILES = [
     'a.txt',
     'keep.log',
@@ -1079,14 +1116,9 @@ describe('globEntries characterization', () => {
         await mkdir(dirname(join(root, file)), { recursive: true });
         await writeFile(join(root, file), 'x');
       }
-      const paths: string[] = [];
-      for await (const entry of globEntries({
-        cwd: root,
-        pattern: '**/*',
-        includeHidden: true,
-      })) {
-        paths.push(relative(root, entry.path).replaceAll('\\', '/'));
-      }
+      const paths = [
+        ...(await runWalk({ cwd: root, pattern: '**/*', includeHidden: true })).results,
+      ];
       assert.strictEqual(new Set(paths).size, paths.length);
       assert.deepStrictEqual(paths.sort(), [
         '.b.txt',
@@ -1101,49 +1133,66 @@ describe('globEntries characterization', () => {
   });
 
   for (const includeHidden of [false, true]) {
-    it(`onDirectory reports each descended dir once, whatever the pattern (includeHidden: ${String(includeHidden)})`, async () => {
+    it(`scan probes each descended dir once, whatever the pattern (includeHidden: ${String(includeHidden)})`, async (t) => {
       const root = await createTestRoot();
+      const reported: string[] = [];
+      const realOpendir = fsPromises.opendir;
+      t.mock.method(fsPromises, 'opendir', (path: string) => {
+        reported.push(path);
+        return realOpendir(path);
+      });
+      syncBuiltinESMExports();
       try {
         await mkdir(join(root, 'a', 'b'), { recursive: true });
         await mkdir(join(root, 'c'));
         await writeFile(join(root, 'a', 'b', 'f.ts'), 'x');
         await writeFile(join(root, 'c', 'h.txt'), 'x');
-        const reported: string[] = [];
         const files = await walk({
           cwd: root,
           pattern: '*.ts',
           baseNameMatch: true,
           includeHidden,
-          onDirectory: (dir) => reported.push(dir),
         });
         assert.deepStrictEqual(files, ['a/b/f.ts']);
         assert.strictEqual(new Set(reported).size, reported.length);
-        assert.deepStrictEqual(reported.sort(), ['a', 'a/b', 'c'].map((d) => join(root, d)).sort());
+        assert.deepStrictEqual(
+          reported.sort(),
+          [root, join(root, 'a'), join(root, 'a', 'b'), join(root, 'c')].sort(),
+        );
       } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
         await cleanupTestRoot(root);
       }
     });
   }
 
-  it('onDirectory skips pruned dirs', async () => {
+  it('scan skips probing pruned dirs', async (t) => {
     const root = await createTestRoot();
+    const reported = new Set<string>();
+    const realOpendir = fsPromises.opendir;
+    t.mock.method(fsPromises, 'opendir', (path: string) => {
+      reported.add(relative(root, path).replaceAll('\\', '/'));
+      return realOpendir(path);
+    });
+    syncBuiltinESMExports();
     try {
       for (const file of ['node_modules/x/y.ts', 'vault.key/k.txt', 'deep/1/2/z.ts']) {
         await mkdir(dirname(join(root, file)), { recursive: true });
         await writeFile(join(root, file), 'x');
       }
-      const reported = new Set<string>();
       await walk({
         cwd: root,
         pattern: '**/*',
         skipIgnored: true,
         pathGuard: await makeGuard([root]),
         maxDepth: 1,
-        onDirectory: (dir) => reported.add(relative(root, dir).replaceAll('\\', '/')),
       });
       // deep/1 sits at the bound: the walk yields none of its contents.
-      assert.deepStrictEqual([...reported].sort(), ['deep']);
+      assert.deepStrictEqual([...reported].sort(), ['', 'deep']);
     } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
       await cleanupTestRoot(root);
     }
   });
