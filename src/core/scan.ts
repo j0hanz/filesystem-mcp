@@ -408,9 +408,9 @@ export async function scan<R>(
 
   if (fatal !== undefined) throw fatal.error as Error;
   if (walkError !== undefined) throw walkError as Error;
-  const hiddenEntries = options.includeHidden
-    ? undefined
-    : await countHidden(scope.root, pathGuard);
+  // A cut scan skips the count: its readdir is not bounded by the scan's deadline.
+  const hiddenEntries =
+    options.includeHidden || cut ? undefined : await countHidden(scope.root, pathGuard);
   const stoppedReason: StoppedReason | undefined = cut
     ? 'timeout'
     : (capped ?? (keep !== undefined && scanned > keep ? capReason : undefined));

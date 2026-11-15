@@ -2,18 +2,18 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import {
-  closeSync,
+  close as closeFd,
   constants,
   existsSync,
-  fchmodSync,
-  fchownSync,
-  fsyncSync,
+  fchmod as fchmodFd,
+  fchown as fchownFd,
+  fsync as fsyncFd,
   lstatSync,
   openSync,
   renameSync,
   rmdirSync,
   unlinkSync,
-  writeFileSync,
+  writeFile as writeFd,
 } from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
@@ -39,6 +39,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
@@ -1386,7 +1387,7 @@ export class GuardedFileSystem {
       try {
         signal?.throwIfAborted();
         if (anchored) {
-          writeTempAnchored(validPath, tempPath, content, mode, existingStats);
+          await writeTempAnchored(validPath, tempPath, content, mode, existingStats);
         } else {
           // Create the temp file already narrowed to the target's mode: a 0600
           // file's new bytes must never sit at 0644 while the write is in flight.
@@ -1410,7 +1411,15 @@ export class GuardedFileSystem {
         // signal — a withAbort race would report a finished write as failed, and
         // a client retry would apply it twice (same reasoning as appendFile).
         signal?.throwIfAborted();
-        blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
+        if (anchored) {
+          // Both names sit in one directory, so one anchor covers both sides.
+          inPinnedDirectory(dirname(validPath), () => {
+            renameSync(basename(tempPath), basename(validPath));
+          });
+          blocked = false;
+        } else {
+          blocked = (await this.#renameIntoPlace(tempPath, validPath, existingStats)) === 'blocked';
+        }
       } catch (error) {
         if (anchored) dropTempAnchored(validPath, tempPath, error);
         else await this.#dropTemp(tempPath, error);
@@ -1441,13 +1450,6 @@ export class GuardedFileSystem {
     validPath: string,
     existing: Stats | undefined,
   ): Promise<'renamed' | 'blocked'> {
-    if (CAN_PIN && this.#rawRename === fsRename) {
-      // Both names sit in one directory, so one anchor covers both sides.
-      inPinnedDirectory(dirname(validPath), () => {
-        renameSync(basename(tempPath), basename(validPath));
-      });
-      return 'renamed';
-    }
     for (let attempt = 0; ; attempt++) {
       try {
         await this.#rawRename(tempPath, validPath);
@@ -2362,52 +2364,40 @@ export async function keepOwner(
 }
 
 /**
- * The anchored temp write (ADR-019): create, fill, sync and narrow the temp file by base name
- * inside its validated directory, all through one descriptor. Synchronous: the anchor borrows
- * the process-wide working directory. A failed temp file is unlinked inside the same anchor.
+ * The anchored temp write (ADR-019): only the open borrows the working directory. The descriptor
+ * names the inode, so filling, syncing and narrowing it run async and never block the event loop.
+ * A failed temp file is left for the caller's dropTempAnchored.
  */
-function writeTempAnchored(
+async function writeTempAnchored(
   validPath: string,
   tempPath: string,
   content: string | Buffer,
   mode: number | undefined,
   existing: Pick<Stats, 'uid' | 'gid'> | undefined,
-): void {
-  const tempName = basename(tempPath);
-  inPinnedDirectory(dirname(validPath), () => {
-    // `wx` fails on a name collision instead of overwriting.
-    const fd = openSync(tempName, 'wx', mode ?? 0o666);
-    try {
+): Promise<void> {
+  // `wx` fails on a name collision instead of overwriting.
+  const fd = inPinnedDirectory(dirname(validPath), () =>
+    openSync(basename(tempPath), 'wx', mode ?? 0o666),
+  );
+  try {
+    await promisify(writeFd)(fd, content);
+    // The rename publishes these bytes, so they must reach the disk first.
+    await promisify(fsyncFd)(fd);
+    // keepOwner's rule, through the descriptor: best effort, POSIX only.
+    if (existing !== undefined && process.getuid !== undefined) {
       try {
-        writeFileSync(fd, content);
-        // The rename publishes these bytes, so they must reach the disk first.
-        fsyncSync(fd);
-        // keepOwner's rule, through the descriptor: best effort, POSIX only.
-        if (existing !== undefined && process.getuid !== undefined) {
-          try {
-            fchownSync(fd, existing.uid, existing.gid);
-          } catch (error) {
-            Logger.debug(
-              `Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`,
-            );
-          }
-        }
-        // Restores bits the umask masked off at creation.
-        if (mode !== undefined) fchmodSync(fd, mode);
-      } finally {
-        closeSync(fd);
-      }
-    } catch (error) {
-      try {
-        unlinkSync(tempName);
-      } catch (cleanupError) {
-        Logger.warn(
-          `Failed to clean up temp file ${tempPath} after write error (${formatUnknownErrorMessage(error)}): ${formatUnknownErrorMessage(cleanupError)}`,
+        await promisify(fchownFd)(fd, existing.uid, existing.gid);
+      } catch (error) {
+        Logger.debug(
+          `Could not keep the owner of ${tempPath}: ${formatUnknownErrorMessage(error)}`,
         );
       }
-      throw error;
     }
-  });
+    // Restores bits the umask masked off at creation.
+    if (mode !== undefined) await promisify(fchmodFd)(fd, mode);
+  } finally {
+    await promisify(closeFd)(fd);
+  }
 }
 
 /** Drops a temp file left by a failed anchored commit, by base name inside its directory. */

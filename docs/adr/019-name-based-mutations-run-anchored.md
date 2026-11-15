@@ -12,7 +12,7 @@ Reads already close this gap with `lstatPinned` in [`src/core/pinned.ts`](../../
 ## Decision
 
 - **On POSIX, on the main thread (`CAN_PIN`), a name-based mutation runs anchored.** `inPinnedDirectory(directory, action)` enters the validated directory, confirms where the kernel put it, runs `action` on base names, and restores the previous working directory (or the root, when that one is gone). A directory that resolves elsewhere is refused with `ACCESS_DENIED`.
-- **Scope.** The whole-file write commit: temp file create, write, sync, owner, mode and rename (this ADR). Recursive `mkdir` and single-entry delete follow, then move. Plain `mkdir` stays path-based; `rm` falls back to the path-based delete when lstat finds no entry.
+- **Scope.** The whole-file write commit: the temp file create and the rename are anchored; the write, sync, owner and mode go through the descriptor the anchored open returned (this ADR). Recursive `mkdir` and single-entry delete follow, then move. Plain `mkdir` stays path-based; `rm` falls back to the path-based delete when lstat finds no entry.
 - **Every anchored section is synchronous.** The working directory is process-wide, so no other request may run while it is borrowed. No `await` inside an anchor.
 - **An injected raw rename keeps the path-based route**, so tests that inject one still see the call.
 
@@ -24,5 +24,5 @@ Reads already close this gap with `lstatPinned` in [`src/core/pinned.ts`](../../
 ## Consequences
 
 - A parent swapped between validation and the write commit makes the write fail with `ACCESS_DENIED`, and nothing lands outside the roots.
-- The anchored write blocks the event loop for the length of one file write. Large writes pay that cost on POSIX.
+- The anchored write blocks the event loop only for the open and the rename. The bytes and the flush run async through the descriptor, so a slow disk or hung mount does not stall other requests.
 - `__tests__/pinned.test.ts` covers the anchor; `__tests__/swap-after-validation.test.ts` covers the swapped commit and defines the `swapBeforeChdir` seam later tasks reuse.

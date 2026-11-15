@@ -245,11 +245,15 @@ describe('Write-path and root guards (issue #200)', () => {
       const calls: { path: string; uid: number; gid: number }[] = [];
       if (CAN_PIN) {
         // The anchored commit (ADR-019) changes the owner through the temp file's descriptor.
-        const originalFchown = fsSync.fchownSync.bind(fsSync);
-        t.mock.method(fsSync, 'fchownSync', (fd: number, uid: number, gid: number) => {
-          calls.push({ path: `fd:${fd}`, uid, gid });
-          originalFchown(fd, uid, gid);
-        });
+        const originalFchown = fsSync.fchown.bind(fsSync);
+        t.mock.method(
+          fsSync,
+          'fchown',
+          (fd: number, uid: number, gid: number, cb: fsSync.NoParamCallback) => {
+            calls.push({ path: `fd:${fd}`, uid, gid });
+            originalFchown(fd, uid, gid, cb);
+          },
+        );
       } else {
         const originalLchown = fsPromises.lchown.bind(fsPromises);
         t.mock.method(fsPromises, 'lchown', (path: PathLike, uid: number, gid: number) => {

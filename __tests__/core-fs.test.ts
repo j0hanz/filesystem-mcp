@@ -973,7 +973,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeTestFile(tmpDir, 'flushed.txt', 'old\n');
       // The anchored commit (ADR-019) syncs its descriptor; the path-based one asks writeFile to flush.
       if (CAN_PIN) {
-        const syncs = t.mock.method(fsSync, 'fsyncSync');
+        const syncs = t.mock.method(fsSync, 'fsync');
         syncBuiltinESMExports();
         try {
           await fs.writeFile(filePath, 'new\n');
@@ -1144,12 +1144,18 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const filePath = await writeTestFile(tmpDir, 'commit_precheck.txt', 'old\n');
       const controller = new AbortController();
       if (CAN_PIN) {
-        // The anchored commit (ADR-019) writes the temp file synchronously.
-        const originalWriteFileSync = fsSync.writeFileSync;
-        mock.method(fsSync, 'writeFileSync', (...args: Parameters<typeof fsSync.writeFileSync>) => {
-          originalWriteFileSync(...args);
-          controller.abort(new Error('abort before commit'));
-        });
+        // The anchored commit (ADR-019) writes the temp file through its descriptor.
+        const originalWriteFile = fsSync.writeFile;
+        mock.method(
+          fsSync,
+          'writeFile',
+          (fd: number, data: string | Buffer, cb: fsSync.NoParamCallback) => {
+            originalWriteFile(fd, data, (error) => {
+              controller.abort(new Error('abort before commit'));
+              cb(error);
+            });
+          },
+        );
       } else {
         const originalWriteFile = fsPromises.writeFile;
         mock.method(
