@@ -211,7 +211,7 @@ describe('stat body', () => {
       assert.strictEqual((await statOne(path, { guard })).lineCount, undefined, path);
     }
     const { structured } = await stat({ path: secret }, { guard });
-    assert.strictEqual(valueOf(structured.results[0])?.lineCount, undefined);
+    assert.strictEqual(errorOf(structured.results[0])?.code, 'ACCESS_DENIED');
   });
 
   it('counts lines for 20 paths and for none of 21', async () => {

@@ -432,6 +432,13 @@ describe('read body', () => {
       assert.ok(odd.text?.startsWith('hi'));
     });
 
+    it('a batch charges a UTF-16 file by its decoded size', async () => {
+      // 400,000 bytes as UTF-16, 600,000 as UTF-8: over the batch budget only once decoded.
+      const file = await put('cjk.txt', le('中'.repeat(200_000)));
+      const result = await read({ paths: [file] }, { guard });
+      assert.strictEqual(errorOf(result.structured.results[0])?.code, 'TOO_LARGE');
+    });
+
     it('without a BOM it stays a binary refusal', async () => {
       const result = await read(
         { path: await put('nobom.txt', Buffer.from('hello\n', 'utf16le')) },
@@ -714,6 +721,18 @@ describe('read body', () => {
         assert.ok(value?.linesRead !== undefined && value.linesRead < 2000);
         assert.ok(value.linesRead * 1000 <= 256 * 1024, String(value.linesRead));
         assert.match(result.text ?? '', /^\/\/ truncated: file is 2000000 bytes/m);
+      });
+    });
+
+    it('stops the head before a line too long for it, keeping the lines above', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const body = 'a\nb\n' + 'z'.repeat(300 * 1024) + '\n' + line.repeat(10_000);
+        const file = await writeTestFile(root, 'oversize/long-third.txt', body);
+        const result = await read({ path: file }, { guard });
+        assert.strictEqual(result.isError, false);
+        const value = valueOf(result.structured.results[0]);
+        assert.strictEqual(value?.linesRead, 2);
+        assert.strictEqual(value.continuation?.args.startLine, 3);
       });
     });
 

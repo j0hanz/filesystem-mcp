@@ -29,6 +29,32 @@ describe('PageSnapshotStore', () => {
     assert.throws(() => store.read(id, KEY), stale);
   });
 
+  it('reading a snapshot does not schedule a timer per read', (t) => {
+    const timers = t.mock.method(globalThis, 'setTimeout');
+    const store = new PageSnapshotStore();
+    const id = store.create({ queryKey: KEY, items: ['a'] });
+    for (let i = 0; i < 100; i++) store.read(id, KEY);
+    assert.ok(timers.mock.callCount() <= 2, String(timers.mock.callCount()));
+  });
+
+  it('a refreshed snapshot still expires once reads stop', (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const store = new PageSnapshotStore();
+    const id = store.create({ queryKey: KEY, items: ['a'] });
+    t.mock.timers.tick(200_000);
+    store.read(id, KEY);
+    t.mock.timers.tick(300_001);
+    assert.throws(() => store.read(id, KEY), stale);
+  });
+
+  it('weighs a snapshot by its own weight when given one', () => {
+    const store = new PageSnapshotStore();
+    const older = store.create({ queryKey: KEY, items: ['x'], weight: 150_000 });
+    const newer = store.create({ queryKey: KEY, items: ['y'], weight: 100_000 });
+    assert.throws(() => store.read(older, KEY), stale);
+    assert.deepStrictEqual(store.read(newer, KEY).items, ['y']);
+  });
+
   it('evicts the least recently used snapshot past 200,000 items', () => {
     const store = new PageSnapshotStore();
     const older = store.create({ queryKey: KEY, items: new Array<number>(150_000).fill(0) });

@@ -46,6 +46,15 @@ describe('search_text body', () => {
   const search = (args: SearchArgs, options: Partial<ToolBodyOptions> = {}) =>
     runToolBodyResult(SEARCH_TEXT, args, { guard, pageStore, resourceStore, ...options });
 
+  it('weighs a snapshot by its matches and their context lines', async (t) => {
+    const create = t.mock.method(PageSnapshotStore.prototype, 'create');
+    await writeTestFile(root, 'weight/a.txt', 'hit\nx\nhit\nx\nhit\n');
+    await search({ path: join(root, 'weight'), searchPattern: 'hit', context: 1, maxResults: 1 });
+    assert.strictEqual(create.mock.callCount(), 1);
+    // 3 matches + 0/1 + 1/1 + 1/0 context lines.
+    assert.strictEqual(create.mock.calls[0]?.arguments[0].weight, 7);
+  });
+
   it('exclude leaves a folder out of the search', async () => {
     await writeTestFile(root, 'src/a.ts', 'needle\n');
     await writeTestFile(root, 'vendor/b.ts', 'needle\n');

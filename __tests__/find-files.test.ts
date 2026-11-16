@@ -82,6 +82,14 @@ describe('find_files body', () => {
     await writeTestFile(dir, 'config', 'x');
     assert.doesNotMatch((await find({ path: dir, pattern: '*.md' })).text ?? '', /has no wildcard/);
     assert.doesNotMatch(
+      (await find({ path: dir, pattern: '@(none)' })).text ?? '',
+      /has no wildcard/,
+    );
+    assert.doesNotMatch(
+      (await find({ path: dir, pattern: 'src/none' })).text ?? '',
+      /has no wildcard/,
+    );
+    assert.doesNotMatch(
       (await find({ path: dir, pattern: 'config' })).text ?? '',
       /has no wildcard/,
     );

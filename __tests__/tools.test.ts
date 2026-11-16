@@ -1146,8 +1146,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // decodes BOM-marked UTF-16; measured 32640 / 16332.
     // Raised 2026-11-16 to 32700 full (read-only unchanged): the oversize head
     // names its 256 KiB cap; measured 32656 / 16348.
-    const BUDGET_CHARS = 32_700;
-    const BUDGET_CHARS_READ_ONLY = 16_350;
+    // Raised 2026-11-16 to 32750 full and 16450 read-only: read says UTF-16
+    // past the size limit fails TOO_LARGE; measured 32717 / 16409.
+    const BUDGET_CHARS = 32_750;
+    const BUDGET_CHARS_READ_ONLY = 16_450;
 
     const full = await createTestClientPair([tmpDir]);
     try {

@@ -256,7 +256,23 @@ async function readRangeContent(
 
   try {
     for (;;) {
-      const { value: line, done } = await iterator.next();
+      let next: Awaited<ReturnType<typeof iterator.next>>;
+      try {
+        next = await iterator.next();
+      } catch (error) {
+        // A line too long to return ends a partial read; the lines above it still come back.
+        if (
+          lines.length > 0 &&
+          !options.hardCap &&
+          isFsError(error) &&
+          error.code === ErrorCode.TOO_LARGE
+        ) {
+          hasMoreLines = true;
+          break;
+        }
+        throw error;
+      }
+      const { value: line, done } = next;
       if (done) {
         break;
       }

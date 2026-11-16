@@ -80,7 +80,9 @@ function bareWordHint(pattern: string, metadata: SearchFilesPageMetadata): strin
   if (
     metadata.matched !== 0 ||
     metadata.stoppedReason !== undefined ||
-    /[*?[\]{}!]/.test(pattern)
+    /[*?[\]{}!()]/.test(pattern) ||
+    // A path pattern would get a hint wrapping the whole path in stars.
+    pattern.includes('/')
   ) {
     return [];
   }
