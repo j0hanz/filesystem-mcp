@@ -10,8 +10,31 @@ describe('PageSnapshotStore', () => {
   it('a refused cursor names both ways it goes stale and the remedy', () => {
     assert.strictEqual(
       invalidCursor().message,
-      'Invalid cursor: a page expires after 60 seconds, and a cursor works only with the query that made it. Request the first page without a cursor.',
+      'Invalid cursor: a page expires 300 seconds after its last read, and a cursor works only with the query that made it. Request the first page without a cursor.',
     );
+  });
+
+  const KEY = '{"method":"list","path":"k"}';
+  const stale = fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/);
+
+  it('a read keeps a snapshot alive; an unread one expires after 300 s', (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const store = new PageSnapshotStore();
+    const id = store.create({ queryKey: KEY, items: ['a'] });
+    t.mock.timers.tick(299_000);
+    assert.deepStrictEqual(store.read(id, KEY).items, ['a']);
+    t.mock.timers.tick(299_000);
+    assert.deepStrictEqual(store.read(id, KEY).items, ['a']);
+    t.mock.timers.tick(300_001);
+    assert.throws(() => store.read(id, KEY), stale);
+  });
+
+  it('evicts the least recently used snapshot past 200,000 items', () => {
+    const store = new PageSnapshotStore();
+    const older = store.create({ queryKey: KEY, items: new Array<number>(150_000).fill(0) });
+    const newer = store.create({ queryKey: KEY, items: new Array<number>(100_000).fill(0) });
+    assert.throws(() => store.read(older, KEY), stale);
+    assert.strictEqual(store.read(newer, KEY).items.length, 100_000);
   });
 
   it('stores pages, rejects old and malformed cursors, and checks query keys', async () => {
@@ -106,7 +129,7 @@ describe('PageSnapshotStore', () => {
     assert.deepStrictEqual(store.read(first, queryKey).items, ['a']);
     assert.deepStrictEqual(store.read(third, queryKey).items, ['c']);
 
-    now = 60_000;
+    now = 300_000;
     assert.throws(
       () => store.read(first, queryKey),
       fsErrorMatcher(ErrorCode.INVALID_INPUT, /Request the first page without a cursor/),

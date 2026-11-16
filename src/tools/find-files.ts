@@ -125,7 +125,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'Matches files; type: "directory" or "any" also matches directories, printed with a trailing /. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
     'exclude leaves out more names or paths. ' +
     'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
-    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). ' +
+    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires about 5 min after its last page, then search again without it). ' +
     'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
     'Paths are relative to root when unambiguous, otherwise absolute.',
   input: SearchFilesInputSchema,

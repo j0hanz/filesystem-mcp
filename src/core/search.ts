@@ -17,7 +17,7 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
 /**
  * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
  * that references its parent, so a kept line would otherwise pin the whole
- * file's text for as long as the match list lives (60 s in the page store).
+ * file's text for as long as the match list lives (5 min after the last read in the page store).
  */
 const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
 

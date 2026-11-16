@@ -18,12 +18,15 @@ class TtlLru<V> {
   readonly #maxEntries: number;
   readonly #maxWeight: number;
   readonly #ttlMs: number;
+  readonly #sliding: boolean;
   #weight = 0;
 
-  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number }) {
+  /** `sliding`: each `get` of a live entry restarts its TTL. */
+  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number; sliding?: boolean }) {
     this.#maxEntries = opts.maxEntries;
     this.#maxWeight = opts.maxWeight ?? Number.POSITIVE_INFINITY;
     this.#ttlMs = opts.ttlMs;
+    this.#sliding = opts.sliding ?? false;
   }
 
   /** Drop every expired entry; true when at least one went. */
@@ -46,6 +49,10 @@ class TtlLru<V> {
     }
     this.#byKey.delete(key);
     this.#byKey.set(key, entry);
+    if (this.#sliding) {
+      entry.expiresAt = Date.now() + this.#ttlMs;
+      setTimeout(() => this.prune(), this.#ttlMs + 1).unref();
+    }
     return entry.value;
   }
 
@@ -277,28 +284,33 @@ export interface PageSnapshot<T = unknown, M = unknown> {
 export function invalidCursor(): FsError {
   return new FsError(
     ErrorCode.INVALID_INPUT,
-    `Invalid cursor: a page expires after ${String(ENTRY_TTL_MS / 1000)} seconds, and a cursor works only with the query that made it. Request the first page without a cursor.`,
+    `Invalid cursor: a page expires ${String(SNAPSHOT_TTL_MS / 1000)} seconds after its last read, and a cursor works only with the query that made it. Request the first page without a cursor.`,
   );
 }
 
 const MAX_SNAPSHOTS = 32;
+const MAX_SNAPSHOT_ITEMS = 200_000;
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Short-lived snapshots of a completed query's full result set, so later pages
  * slice a stored array instead of re-scanning and re-sorting the filesystem.
  *
- * ponytail: bounded by snapshot count and TTL, not by bytes — MAX_SNAPSHOTS x
- * 20,000 `list` entries or MAX_SNAPSHOTS x 10,000 `search_text` matches, each
- * match retaining up to 20 more line strings at `context: 10`, order of a few
- * hundred MB held for 60s, and the HTTP leg shares one store so any caller can
- * drive it. If that shows up as memory pressure, pass a byte weight to `set`
- * the way `ResourceStore` does.
+ * Bounded by MAX_SNAPSHOTS (32) snapshots and MAX_SNAPSHOT_ITEMS (200,000)
+ * items across all of them, least recently used evicted first; a snapshot
+ * expires SNAPSHOT_TTL_MS (5 min) after its last read. Items are counted, not
+ * bytes: a `search_text` match can retain up to 20 more line strings at
+ * `context: 10`, and the HTTP leg shares one store so any caller can drive it.
+ * If that shows up as memory pressure, pass a byte weight to `set` the way
+ * `ResourceStore` does.
  */
 export class PageSnapshotStore {
   // Not readonly: a call view (`forCall`) shares its store's snapshots.
   #byId = new TtlLru<PageSnapshot & { queryKey: string }>({
     maxEntries: MAX_SNAPSHOTS,
-    ttlMs: ENTRY_TTL_MS,
+    maxWeight: MAX_SNAPSHOT_ITEMS,
+    ttlMs: SNAPSHOT_TTL_MS,
+    sliding: true,
   });
   /** A call view's own snapshots; `undefined` on the store itself. */
   #createdIds: string[] | undefined;
@@ -321,11 +333,15 @@ export class PageSnapshotStore {
 
   create(params: { queryKey: string; items: readonly unknown[]; metadata?: unknown }): string {
     const snapshotId = randomUUID();
-    this.#byId.set(snapshotId, {
-      queryKey: params.queryKey,
-      items: params.items,
-      metadata: params.metadata,
-    });
+    this.#byId.set(
+      snapshotId,
+      {
+        queryKey: params.queryKey,
+        items: params.items,
+        metadata: params.metadata,
+      },
+      params.items.length,
+    );
     this.#createdIds?.push(snapshotId);
     return snapshotId;
   }
