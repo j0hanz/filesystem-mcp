@@ -793,7 +793,7 @@ describe('wrapped inputResponses over the modern wire', () => {
         requestState: requestState2,
       });
       assert.notStrictEqual(third.result?.['resultType'], 'input_required');
-      assert.strictEqual(third.result?.['isError'], true, JSON.stringify(third));
+      assert.notStrictEqual(third.result?.['isError'], true, JSON.stringify(third));
       // The refusal wording lives in the per-path failure and may or may not
       // be echoed in the text block; match the whole result.
       assert.match(JSON.stringify(third.result), /wrapped result/);

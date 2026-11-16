@@ -716,7 +716,7 @@ describe('create body', () => {
       { confirm: () => ({ action: 'decline' }) },
     );
 
-    assert.strictEqual(result.isError, true, 'one file, one refusal: a total failure');
+    assert.notStrictEqual(result.isError, true, 'a decline is an answer, not a failure');
     const failures = result.structured.failures ?? [];
     assert.strictEqual(failures.length, 1);
     assert.strictEqual(failures[0]?.error.code, 'CANCELLED');

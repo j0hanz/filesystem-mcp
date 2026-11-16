@@ -7,7 +7,13 @@ import * as z from 'zod/v4';
 
 import { getMaxTextFileSize } from '../core/config.ts';
 import { confirm } from '../core/confirmation.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  FsError,
+  isRefusal,
+  Problem,
+} from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
@@ -234,7 +240,14 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // paths and dropped every per-file size, line count and error the caller
     // asked `create` for. Supplying no text makes this a data tool, so
     // `define.ts` renders the JSON and keeps it in `structuredContent`.
-    return { structured, resources: links, isError: isTotalFailure(summary) };
+    // A refusal is an answer the model can report; only a real failure is an
+    // error. Directories never take a confirmation, so only file rows can be
+    // refusals — but a directory failure is still a hard failure, so both
+    // lists are scanned for one.
+    const isError =
+      isTotalFailure(summary) &&
+      [...dirBatch.results, ...batch.results].some((r) => 'error' in r && !isRefusal(r.error));
+    return { structured, resources: links, isError };
   },
   progress: (args) => {
     const files = args.files ?? [];

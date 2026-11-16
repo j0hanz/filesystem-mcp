@@ -6,7 +6,13 @@ import { basename, dirname } from 'node:path';
 import * as z from 'zod/v4';
 
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import { DELETE_ERRNOS, DELETE_ERRNOS_NO_CONFIRM, ErrorCode, Problem } from '../core/errors.ts';
+import {
+  DELETE_ERRNOS,
+  DELETE_ERRNOS_NO_CONFIRM,
+  ErrorCode,
+  isRefusal,
+  Problem,
+} from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import {
   type DeletePlan,
@@ -261,7 +267,10 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
     // without saying which two, so a partial failure was unreadable without
     // parsing the structured half.
     const { failed, total } = structured.summary;
-    const isError = isTotalFailure(structured.summary);
+    // A refusal is an answer the model can report; only a real failure is an error.
+    const isError =
+      isTotalFailure(structured.summary) &&
+      structured.results.some((r) => 'error' in r && !isRefusal(r.error));
     // A lone failure carries its reason in the text. "delete: . FAILED (0/1 ok)"
     // made the model re-read structuredContent to learn it was ACCESS_DENIED;
     // with one path there is no ambiguity about which message applies.

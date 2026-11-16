@@ -483,6 +483,7 @@ describe('Pending confirmation outcomes', () => {
               assert.ok(!(await tool.applied(root)), 'skipped change must not apply');
             } else {
               assert.match(text, tool.refused);
+              assert.notStrictEqual(result.isError, true, text);
               assert.ok(!(await tool.applied(root)), 'refused change must not apply');
             }
           } finally {

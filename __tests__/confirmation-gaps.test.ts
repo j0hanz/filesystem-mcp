@@ -143,7 +143,8 @@ describe('Confirmation gaps', () => {
           arguments: { moves: [{ source, destination }] },
         });
         assert.strictEqual(prompts(), 2);
-        assert.strictEqual(result.isError, true);
+        // A refusal (CANCELLED) is an answer the model can report, not an error.
+        assert.notStrictEqual(result.isError, true);
         assert.match(firstTextBlock(result).text ?? '', /replaced again while the prompt was open/);
         assert.strictEqual(await readFile(destination, 'utf8'), 'SWAP2');
         assert.strictEqual(await exists(source), true);

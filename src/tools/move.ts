@@ -7,7 +7,7 @@ import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
 import { confirm, type Confirmed } from '../core/confirmation.ts';
-import { ErrorCode, FsError, type Problem, rethrowIfAborted } from '../core/errors.ts';
+import { ErrorCode, FsError, isRefusal, type Problem, rethrowIfAborted } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
@@ -429,8 +429,9 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
       },
       text: buildSummary(op, results, failures, skipped),
       // Every requested pair failed: no move, no copy, no user-chosen skip - the
-      // call did nothing. A skip is work the caller asked for, so it counts.
-      isError: failures.length > 0 && results.length + skipped.length === 0,
+      // call did nothing. A skip is work the caller asked for, so it counts. A
+      // refusal is an answer the model can report, so it does not fail the call.
+      isError: failures.some((f) => !isRefusal(f.error)) && results.length + skipped.length === 0,
     };
   },
 });

@@ -61,6 +61,15 @@ export const Problem = {
   },
 } as const;
 
+/**
+ * A CANCELLED problem is the user's refusal — or a race guard after an
+ * approval — so nothing happened and nothing broke; it is an answer, not a
+ * failure.
+ */
+export function isRefusal(problem: Problem): boolean {
+  return problem.code === ErrorCode.CANCELLED;
+}
+
 /** One path's outcome: either a value or the Problem that stopped it. */
 export type PerPathResult<T> = { path: string; value: T } | { path: string; error: Problem };
 
