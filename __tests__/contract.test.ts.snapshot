@@ -363,7 +363,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -784,7 +784,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -886,7 +886,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1177,7 +1177,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1375,7 +1375,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "maximum": 100
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }
@@ -1477,7 +1477,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             ]
           },
           "cursor": {
-            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It expires after ~60s; if rejected, retry without a cursor.",
+            "description": "Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.",
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$"
           }

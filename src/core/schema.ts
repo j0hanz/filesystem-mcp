@@ -459,7 +459,7 @@ export const CursorSchema = base64urlCursor
   .optional()
   .describe(
     'Opaque pagination cursor. Pass it unchanged for the next page. Pages come from one snapshot ' +
-      'taken on the first call. It expires after ~60s; if rejected, retry without a cursor.',
+      'taken on the first call. It lasts 5 min past its last page; on refusal, retry without it.',
   );
 
 /**
