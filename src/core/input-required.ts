@@ -13,6 +13,7 @@
 // only proves the state was not tampered — it cannot see the current args);
 // delete/move/copy/create ask again via `confirmation.ts` instead.
 import type {
+  AuthInfo,
   ClientCapabilities,
   InputRequest,
   InputRequiredResult,
@@ -129,20 +130,35 @@ function configuredRequestStateKey(): Uint8Array | undefined {
 }
 
 /**
+ * The authenticated principal a sealed round binds to: the token's user
+ * subject when the verifier stamps it into `authInfo.extra.sub` (a static API
+ * key has none), else the OAuth client id. `clientId` alone identifies the
+ * client, not the person: two users behind one client must not share
+ * confirmations.
+ */
+export function roundCallerOf(authInfo: AuthInfo | undefined): string | undefined {
+  const sub = authInfo?.extra?.['sub'];
+  if (typeof sub === 'string' && sub !== '') return sub;
+  return authInfo?.clientId;
+}
+
+/**
  * What a minted `requestState` is bound to: the JSON-RPC method of the
- * request that minted it and the authenticated caller (`ctx.http` is absent
- * on stdio, so the caller part is empty there and constant across rounds).
- * The SDK stores an HMAC tag of this value in the token and refuses an echo
- * whose context yields a different value.
+ * request that minted it and the authenticated caller — the user subject
+ * when the verifier provides one, else the HTTP client id (`ctx.http` is
+ * absent on stdio, so the caller part is empty there and constant across
+ * rounds). The SDK stores an HMAC tag of this value in the token and
+ * refuses an echo whose context yields a different value.
  */
 function requestStateBinding(ctx: ServerContext): string {
-  return `${ctx.mcpReq.method}\0${ctx.http?.authInfo?.clientId ?? ''}`;
+  return `${ctx.mcpReq.method}\0${roundCallerOf(ctx.http?.authInfo) ?? ''}`;
 }
 
 /**
  * The Round bind: the two request facts a minted `requestState` is sealed to,
  * and all of the request context a tool body sees. `caller` is the
- * authenticated HTTP client id, absent on stdio.
+ * authenticated user's subject when the verifier stamps `authInfo.extra.sub`,
+ * else the OAuth client id; absent on stdio.
  */
 export interface RoundBind {
   readonly method: string;
@@ -151,7 +167,7 @@ export interface RoundBind {
 
 /** The Round bind of a live request context. */
 export function roundBindOf(ctx: ServerContext): RoundBind {
-  const caller = ctx.http?.authInfo?.clientId;
+  const caller = roundCallerOf(ctx.http?.authInfo);
   return { method: ctx.mcpReq.method, ...(caller === undefined ? {} : { caller }) };
 }
 

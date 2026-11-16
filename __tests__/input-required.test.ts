@@ -23,6 +23,7 @@ import {
   readAcceptedMultiChoice,
   requestStateCodec,
   type RoundBind,
+  roundCallerOf,
 } from '../src/core/input-required.ts';
 import { createServer } from '../src/server.ts';
 import {
@@ -185,6 +186,31 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(same.op, 'delete');
     await assert.rejects(() => requestStateCodec.verify(wire, bindContext('tools/call', 'other')));
     await assert.rejects(() => requestStateCodec.verify(wire, bindContext()));
+  });
+
+  it('2f. binds to the user subject when the verifier provides one', async () => {
+    const httpBind = (sub: string | undefined, clientId: string): ServerContext =>
+      ({
+        mcpReq: { method: 'tools/call' },
+        http: { authInfo: { clientId, ...(sub === undefined ? {} : { extra: { sub } }) } },
+      }) as unknown as ServerContext;
+
+    const wire = await requestStateCodec.mint(
+      { op: 'delete', paths: ['/a'] },
+      httpBind('user-a', 'client-1'),
+    );
+    // The subject, not the OAuth client, is who the round belongs to.
+    await requestStateCodec.verify(wire, httpBind('user-a', 'client-2'));
+    await assert.rejects(() => requestStateCodec.verify(wire, httpBind('user-b', 'client-1')));
+  });
+
+  it('2g. roundCallerOf falls back to clientId when no subject was stamped', () => {
+    const auth = (extra?: Record<string, unknown>) =>
+      ({ clientId: 'c', scopes: [], token: 't', ...(extra ? { extra } : {}) }) as never;
+    assert.strictEqual(roundCallerOf(auth()), 'c');
+    assert.strictEqual(roundCallerOf(auth({ sub: '' })), 'c');
+    assert.strictEqual(roundCallerOf(auth({ sub: 'u' })), 'u');
+    assert.strictEqual(roundCallerOf(undefined), undefined);
   });
 
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
