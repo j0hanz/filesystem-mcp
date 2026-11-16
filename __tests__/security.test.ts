@@ -724,6 +724,17 @@ describe('Security (P0)', () => {
         '.config/gcloud/credentials.db',
         'terraform.tfstate',
         'x.tfstate.backup',
+        'terraform.tfvars',
+        'prod.auto.tfvars',
+        'prod.tfvars.json',
+        '.dev.vars',
+        '.dev.vars.staging',
+        '.my.cnf',
+        // Where the same tools keep their credentials on Windows.
+        'C:/Users/u/AppData/Roaming/gcloud/credentials.db',
+        'C:/Users/u/AppData/Roaming/gcloud/legacy_credentials/a/adc.json',
+        'C:/Users/u/AppData/Roaming/GitHub CLI/hosts.yml',
+        'C:/Users/u/AppData/Roaming/terraform.d/credentials.tfrc.json',
       ];
       for (const name of denied) {
         assert.strictEqual(matcher.isSensitive(name), true, `${name} must be denied`);
@@ -743,9 +754,25 @@ describe('Security (P0)', () => {
         '.config/gh/config.yml',
         'azure/x',
         'tfstate.md',
+        'tfvars.md',
+        'dev.vars',
+        'my.cnf',
+        'gcloud/credentials.db',
+        'C:/Users/u/AppData/Roaming/GitHub CLI/config.yml',
+        'C:/Users/u/AppData/Roaming/terraform.d/plugins/x',
       ];
       for (const name of allowed) {
         assert.strictEqual(matcher.isSensitive(name), false, `${name} must stay readable`);
+      }
+    });
+
+    it('a verdict is the same when asked again, also past what the matcher remembers', () => {
+      const matcher = new SensitiveMatcher();
+      for (let round = 0; round < 2; round++) {
+        for (let i = 0; i < 5000; i++) {
+          assert.strictEqual(matcher.isSensitive(`/r/d${String(i)}/.env`), true);
+          assert.strictEqual(matcher.isSensitive(`/r/d${String(i)}/readme.md`), false);
+        }
       }
     });
 
@@ -793,6 +820,15 @@ describe('Security (P0)', () => {
         '.config/gcloud/**': '/home/u/.config/gcloud/credentials.db',
         '*.tfstate': '/r/terraform.tfstate',
         '*.tfstate.*': '/r/terraform.tfstate.backup',
+        '*.tfvars': '/r/terraform.tfvars',
+        '*.tfvars.json': '/r/prod.tfvars.json',
+        '.dev.vars': '/r/.dev.vars',
+        '.dev.vars.*': '/r/.dev.vars.staging',
+        '.my.cnf': '/home/u/.my.cnf',
+        'AppData/Roaming/gcloud/**': '/u/AppData/Roaming/gcloud/credentials.db',
+        'AppData/Roaming/GitHub CLI/hosts.yml': '/u/AppData/Roaming/GitHub CLI/hosts.yml',
+        'AppData/Roaming/terraform.d/credentials*':
+          '/u/AppData/Roaming/terraform.d/credentials.tfrc.json',
         '*.pem': '/r/server.pem',
         '*.key': '/r/server.key',
         '*.p12': '/r/cert.p12',

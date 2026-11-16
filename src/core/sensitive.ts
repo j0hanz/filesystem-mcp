@@ -309,8 +309,17 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   '.config/gh/hosts.yml',
   '.azure/**',
   '.config/gcloud/**',
+  // Where gcloud, gh and Terraform keep the same credentials on Windows.
+  'AppData/Roaming/gcloud/**',
+  'AppData/Roaming/GitHub CLI/hosts.yml',
+  'AppData/Roaming/terraform.d/credentials*',
   '*.tfstate',
   '*.tfstate.*',
+  '*.tfvars',
+  '*.tfvars.json',
+  '.dev.vars',
+  '.dev.vars.*',
+  '.my.cnf',
   '*.pem',
   '*.key',
   '*.p12',
@@ -411,6 +420,8 @@ export function describeSensitivePolicy(): {
 
 const EMPTY_PATTERN_SET: CompiledPatternSet = toPatternSet([]);
 
+const MAX_REMEMBERED_VERDICTS = 4096;
+
 export class SensitiveMatcher {
   private readonly builtin: CompiledPatternSet;
   private readonly operator: CompiledPatternSet;
@@ -432,7 +443,24 @@ export class SensitiveMatcher {
     }
   }
 
+  /**
+   * Verdicts by path as asked. The patterns never change after construction,
+   * and one validation asks about the same spelling several times (requested,
+   * normalized, resolved), which was a quarter of a large search's CPU time.
+   */
+  private readonly verdicts = new Map<string, boolean>();
+
   isSensitive(filePath: string): boolean {
+    const known = this.verdicts.get(filePath);
+    if (known !== undefined) return known;
+    const verdict = this.judge(filePath);
+    // Emptied when full: a walk asks again within a few entries, not thousands.
+    if (this.verdicts.size >= MAX_REMEMBERED_VERDICTS) this.verdicts.clear();
+    this.verdicts.set(filePath, verdict);
+    return verdict;
+  }
+
+  private judge(filePath: string): boolean {
     const pathToCheck = IS_WINDOWS ? stripAlternateDataStreams(filePath) : filePath;
     const rawPath = normalizeForMatch(pathToCheck);
     const foldedPath = foldForMatch(rawPath);

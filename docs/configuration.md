@@ -66,13 +66,26 @@ add these folders, even if you say yes:
 - the filesystem root (`/`, `C:\`) and your home folder itself, or any folder
   that contains it (subfolders such as `~/code/app` are fine);
 - system folders: `/usr`, `/etc`, `/bin`, `/sbin`, `/System`, `/proc`, `/sys`,
-  `/dev`, `/boot`, and on Windows
+  `/dev`, `/boot`, the container secret mounts `/run/secrets` and
+  `/var/run/secrets` (so `/run` and `/var`, which contain them, are refused
+  too), and on Windows
   `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData`;
 - credential folders in your home: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
   `~/.docker`, `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, and any folder
   that contains one, such as `~/.config`. Existing folders under `~/.config` are
   fine, but one that does not exist yet is refused: its nearest existing folder
-  is `~/.config`.
+  is `~/.config`;
+- the same tools' folders on Windows, `AppData\Roaming\gcloud`,
+  `AppData\Roaming\GitHub CLI` and `AppData\Roaming\terraform.d`, and the macOS
+  keychains in `~/Library/Keychains`;
+- browser profiles: Chrome, Edge and Firefox under `AppData` on Windows, Chrome
+  and Firefox under `~/Library/Application Support` on macOS, and
+  `~/.config/google-chrome` and `~/.mozilla` on Linux. A folder that contains
+  one, such as `AppData\Roaming`, is refused too; `AppData\Local\Temp` is fine.
+
+When an approval request is for a folder you did not name, it also names the
+path that was asked for: a file is approved through its folder, and a path that
+does not exist yet through its nearest existing folder.
 
 Symlinks are resolved first, so a link that points at one of these folders is
 refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
@@ -104,13 +117,13 @@ as `\\wsl.localhost\Ubuntu\...` count as shares too.
 By default, the server blocks these names inside every allowed folder, for
 reading, writing, searching, and listing:
 
-| Kind                  | Patterns                                                                                                                                                                                                                                                                                       |
-| :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Environment files     | `.env`, `.env.*`, `.envrc`                                                                                                                                                                                                                                                                     |
-| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`, `.htpasswd`                                                                                                                                                    |
-| Cloud and tools       | `.aws/**`, `.kube/**`, `.terraform.d/credentials*`, `.cargo/credentials*`, `.vault-token`, `.docker/config.json`, `.dockercfg`, `.s3cfg`, `application_default_credentials.json`, `.mcpregistry_*_token`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `*.tfstate`, `*.tfstate.*` |
-| Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`, `*.ppk`, `*.jks`, `*.keystore`, `*.p8`                                                                                                                                                                                                   |
-| SSH and GPG           | `.ssh/**`, `.gnupg/**`, `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                                                                                                                                                   |
+| Kind                  | Patterns                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Environment files     | `.env`, `.env.*`, `.envrc`                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Package and git creds | `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `.git/config`, `.git/modules/**/config`, `.yarnrc.yml`, `.htpasswd`                                                                                                                                                                                                                                                                                                                                         |
+| Cloud and tools       | `.aws/**`, `.kube/**`, `.terraform.d/credentials*`, `.cargo/credentials*`, `.vault-token`, `.docker/config.json`, `.dockercfg`, `.s3cfg`, `application_default_credentials.json`, `.mcpregistry_*_token`, `.config/gh/hosts.yml`, `.azure/**`, `.config/gcloud/**`, `AppData/Roaming/gcloud/**`, `AppData/Roaming/GitHub CLI/hosts.yml`, `AppData/Roaming/terraform.d/credentials*`, `*.tfstate`, `*.tfstate.*`, `*.tfvars`, `*.tfvars.json`, `.dev.vars`, `.dev.vars.*`, `.my.cnf` |
+| Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`, `*.ppk`, `*.jks`, `*.keystore`, `*.p8`                                                                                                                                                                                                                                                                                                                                                                                        |
+| SSH and GPG           | `.ssh/**`, `.gnupg/**`, `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Matching ignores case, so `.ENV` is blocked too. It also ignores Unicode
 spelling: a pattern blocks a name stored decomposed (NFD) or with a

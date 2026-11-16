@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { normalizePath } from '../src/core/path-utils.ts';
 import { MAX_TOOL_INPUT_ELEMENTS } from '../src/core/util.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.ts';
@@ -743,6 +744,46 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           await eh.close();
         }
       });
+    } finally {
+      await cleanupTestRoot(parentDir);
+    }
+  });
+
+  it('a grant prompt names the path asked for when the granted folder is not that path', async () => {
+    const parentDir = await createTestRoot();
+    const rootDir = join(parentDir, 'root');
+    const outsideA = join(parentDir, 'outsideA');
+    const outsideB = join(parentDir, 'outsideB');
+    await mkdir(rootDir, { recursive: true });
+    await mkdir(outsideA, { recursive: true });
+    await mkdir(outsideB, { recursive: true });
+    // Missing, so the grant offered is its nearest existing folder.
+    const missing = join(outsideA, 'no-such-dir', 'deep.txt');
+    const fileB = join(outsideB, 'b.txt');
+    await writeFile(fileB, 'B');
+    const prompts: string[] = [];
+
+    try {
+      await withBoundary(parentDir, async () => {
+        const eh = await createElicitationClientPair([rootDir], (req: unknown) => {
+          prompts.push((req as { params: { message: string } }).params.message);
+          return { action: 'decline' as const };
+        });
+        try {
+          await eh.client.callTool({ name: 'read', arguments: { path: missing } });
+          await eh.client.callTool({ name: 'list', arguments: { path: outsideA } });
+          await eh.client.callTool({ name: 'read', arguments: { paths: [missing, fileB] } });
+        } finally {
+          await eh.close();
+        }
+      });
+      const dirA = normalizePath(outsideA);
+      assert.deepStrictEqual(prompts, [
+        `Grant filesystem access to "${dirA}"? Needed for "${normalizePath(missing)}".`,
+        // The folder itself was asked for: nothing more to say.
+        `Grant filesystem access to "${dirA}"?`,
+        `Grant filesystem access to these directories? Select the ones to allow. "${dirA}" is needed for "${normalizePath(missing)}"; "${normalizePath(outsideB)}" is needed for "${normalizePath(fileB)}".`,
+      ]);
     } finally {
       await cleanupTestRoot(parentDir);
     }
