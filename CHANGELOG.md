@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] - 2026-11-16
+
+Exclude globs, directory search, UTF-16 reads, a truncated head for
+oversized reads, and writes, moves and deletes anchored to the folder they
+validated. Before upgrading, read Security if your client withdraws roots
+during a session, reads Terraform, browser or cloud-CLI credential files, or
+uses Windows paths that end in a dot or space; read Changed if you match
+`TOO_LARGE` or `BINARY_FILE` from `read`, write over directories or FIFOs,
+pass `~\` paths on Linux or macOS, rely on `edit` reporting NO MATCH for
+whitespace-only differences, or hold page cursors.
+
+### Security
+
+- **Roots**: each `roots/list` answer now replaces the roots the client declared instead of adding to them, so a root the client withdraws is revoked. Startup roots and user-approved access grants are never revoked. A failed or superseded `roots/list` changes nothing.
+- **Resources**: a subscription stops sending `resources/updated` for files under a root that was revoked; before, the root was checked only when the subscription started.
+- **Sensitive files**: Terraform variable files (`*.tfvars`, `*.tfvars.json`), `.dev.vars`, `.my.cnf`, the gcloud, GitHub CLI and Terraform credential folders under `AppData/Roaming`, macOS keychains, Chrome and Edge browser profiles, and the container secret mounts `/run/secrets` and `/var/run/secrets` are now refused; before, they could be read or granted.
+- **Paths**: on Windows, a path component that ends in a dot or space is refused below a root, since Windows would open a different name. Superscript device names such as `COM¹` are recognised as devices.
+- **Writes**: on POSIX, a whole-file write, a recursive mkdir and a single-entry delete run anchored to their validated folder; a parent swapped for a link after validation fails with `ACCESS_DENIED` and nothing lands outside the roots.
+- **move**: a move stages the entry in its validated source folder, crosses to the validated destination folder and checks the entry's identity there. A failed move sends the entry back anchored at the source folder, so a swapped source folder cannot receive it.
+- **Reads**: off Linux, the check that an opened file is still the validated one runs inside the validated folder, so an ancestor swapped to a link and back between checks is caught.
+
+### Added
+
+- **Roots**: `--confine-roots` (`FS_CONFINE_ROOTS`) keeps client-declared roots and approved access grants inside the startup roots.
+- **Resources**: workspace files can be read by `file://` URL through a read-only alias template; hosts other than `localhost` and undecodable URLs fail with `InvalidParams`. Subscriptions stay on `filesystem-mcp://file/`.
+- **list, find_files, search_text, replace_text**: `exclude` globs leave out entries and everything under a matching folder before the walk reads them. A pattern without `/` matches a name at any depth; with `/` it matches the path relative to `path`. Matching folds case and ignores a leading `./` and a trailing `/`.
+- **find_files**: `type: "directory"` or `"any"` also matches directories; directory results end in `/`. A bare word that matches nothing gets a hint to add wildcards.
+- **edit**: `returnDiff` includes the unified diff in a live run, cut at 20 KB per file.
+- **edit**: an unmatched `oldText` quotes the closest lines of the file, and notes when the whitespace-tolerant retry matched more than once.
+- **read**: UTF-16 text with a byte-order mark is returned decoded, with `encoding` set. The write tools still refuse it.
+- **search_text**: UTF-16 files with a byte-order mark are searched.
+- **stat**: `lineCount` for text files up to 256 KiB, in calls of up to 20 paths, and `hardLinks` for a file with other names.
+- **Tools**: read-only tools publish `idempotentHint: true` and `destructiveHint: false`; mutating tools publish `idempotentHint: false`.
+- **Scans**: a walk says which hidden entries it skipped.
+
+### Changed
+
+- **read**: a single-path whole read past the size limit now returns its first 2000 lines (up to 256 KiB) with continuation args; before, it failed with `TOO_LARGE`. A batch file still fails `TOO_LARGE`, and so does a UTF-16 file past the limit in every mode. A line too long for a partial read ends it, keeping the lines above.
+- **read**: a UTF-16 file with a byte-order mark is now decoded as text; before, it was treated as binary.
+- **edit**: an `oldText` with no exact match is retried ignoring indentation and spacing, and applied when that matches once; the summary says so. Before, it reported NO MATCH.
+- **Writes**: a whole-file write over a directory, FIFO or other non-regular file now fails with `NOT_FILE` before any temporary file is created; before, a directory gave a raw `EPERM` and a FIFO was replaced.
+- **Paths**: a `~\` prefix expands to the home folder only on Windows; on Linux and macOS it is now a literal name.
+- **Paging**: cursors from `list`, `find_files` and `search_text` last 5 minutes after their last page; before, they expired about 60 seconds after the first call. Snapshots are capped by item count.
+- **Paths**: path arguments may be relative to a root; the tool descriptions now say so.
+- **Paths**: a broken symbolic link reports `NOT_FOUND` with `Broken symbolic link: its target does not exist` instead of `Path not found`.
+
+### Fixed
+
+- **search_text**: a snapshot heavier than the cache cap, such as 10,000 matches at context 10, is kept; before, it was dropped and page 2 failed with `Invalid cursor`.
+- **stdio**: tool calls from clients that send `roots/list` wait until the client's roots are seeded; before, an early call could be refused.
+- **Writes**: a large write or a hung mount no longer stalls other requests; the write, fsync, owner and mode run asynchronously, so the tool timeout can still fire. Write and delete validation is also bounded by the tool timeout.
+- **Writes**: on Windows, a rename blocked by another process is retried, then the file is written in place.
+- **Writes**: a write over a FIFO is refused before the undo capture opens it, so it can no longer block.
+- **move**: on a case-folding filesystem, a respelled name that resolves to the source's own inode is now moved; before, the move was skipped and reported success. A rename onto a hard link of the same inode does nothing, as POSIX `rename` does.
+- **mkdir**: a macOS working directory with the `/System/Volumes/Data` prefix no longer refuses the first new folder.
+- **Reads**: verified reads off Linux keep working when the server's working directory was deleted.
+- **Paths**: a Windows root folder whose own name ends in a dot is usable; only components below the root are checked.
+- **Scans**: the hidden-entry note no longer counts default-excluded names such as `.git` unless `includeIgnored` is set, since `includeHidden` does not bring them back. A scan cut short by its deadline skips the hidden-entry count.
+- **Scans**: large Windows searches no longer repeat link and sensitive-file checks for every file.
+- **find_files**: directory searches filter before scanning.
+- **stat**: line counting is bounded by time, and the oversized read head by bytes.
+
 ## [2.21.0] - 2026-11-14
 
 Eight path, swap and logging fixes, a bound on HTTP request bytes, and
