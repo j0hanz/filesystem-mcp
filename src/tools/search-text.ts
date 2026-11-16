@@ -194,7 +194,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   title: 'Search Content',
   description:
     'Search file contents under the roots for literal text or an RE2 regex. Use when you need the files and lines that contain some text. ' +
-    'Do not use it to find files by name; use `find_files` instead, or `replace_text` to change every match. ' +
+    'Do not use it to find files by name; use `find_files` instead. ' +
     'A regex may span lines; the hit is on its first line. ' +
     'Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
     'Lines over 1000 chars are clipped around the match. ' +
