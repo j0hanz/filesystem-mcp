@@ -213,6 +213,20 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(roundCallerOf(undefined), undefined);
   });
 
+  it('2h. seals a round for an hour of think time', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] }, bindContext());
+    // Token layout: "v1." + base64url(JSON {p, exp, b}) + "." + base64url(mac).
+    const body = JSON.parse(
+      Buffer.from(wire.slice(3, wire.lastIndexOf('.')), 'base64url').toString('utf8'),
+    ) as { exp: number };
+    const seconds = body.exp - Math.floor(Date.now() / 1000);
+    assert.ok(
+      seconds > 3590 && seconds <= 3600,
+      `exp was ${String(seconds)}s away, expected ~3600`,
+    );
+    await requestStateCodec.verify(wire, bindContext());
+  });
+
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
     const result = await pendingRoundTrip(
       { requestState: undefined, roundBind: ROUND_BIND },

@@ -192,6 +192,10 @@ export function bindContextOf(bind: RoundBind): ServerContext {
 export const requestStateCodec: RequestStateCodec<PendingState> =
   createRequestStateCodec<PendingState>({
     key: configuredRequestStateKey() ?? randomBytes(32),
+    // An hour, not the SDK's ten minutes: a 1000-path delete mints one form per
+    // path, and an expired seal answers with a raw -32602 the model cannot
+    // read. Re-mints on reprompt/reissue restart the clock.
+    ttlSeconds: 3600,
     bind: requestStateBinding,
   });
 
