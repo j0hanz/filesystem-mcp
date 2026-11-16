@@ -498,6 +498,49 @@ export class PathGuard {
   }
 
   /**
+   * One key per path, in order; equal keys name one Entry (ADR-021). Unicode
+   * form and spaces always fold; letter case folds only where the directory
+   * holding the entry does, judged at its nearest existing ancestor inside a
+   * root. No directory outside the roots is read: there, and when nothing up
+   * to the root can be read, the platform rule decides.
+   */
+  async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
+    const roots = this.getAllowedDirectories();
+    const rules = new Map<string, Promise<boolean>>();
+    const platformRule = !IS_CASE_INSENSITIVE_FS;
+    const judge = async (dir: string): Promise<boolean> => {
+      const root = roots.find((r) => isPathInsideDirectory(r, dir));
+      if (root === undefined) return platformRule;
+      for (let at = dir; ; at = dirname(at)) {
+        signal?.throwIfAborted();
+        try {
+          const real = await realpath(at);
+          return await isDirectoryCaseSensitive(real, await readdir(real));
+        } catch {
+          // Missing or unreadable: the parent decides.
+        }
+        if (isSamePath(at, root) || dirname(at) === at) return platformRule;
+      }
+    };
+    const caseSensitiveAt = (dir: string): Promise<boolean> => {
+      let rule = rules.get(dir);
+      if (rule === undefined) {
+        rule = judge(dir);
+        rules.set(dir, rule);
+      }
+      return rule;
+    };
+    return Promise.all(
+      paths.map(async (path) => {
+        const resolved = normalizePath(resolve(path));
+        return (await caseSensitiveAt(dirname(resolved)))
+          ? unicodeMatchKeyExactCase(resolved)
+          : unicodeMatchKey(resolved);
+      }),
+    );
+  }
+
+  /**
    * The allowed directory that contains `resolvedPath` — the longest match,
    * so a nested root wins over its parent — or `undefined` when none does.
    * Walks use it as the `.gitignore` ceiling: rules above an allowed root are
