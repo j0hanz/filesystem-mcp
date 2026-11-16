@@ -129,6 +129,7 @@ interface ReadPerPathValue {
   endLine?: number;
   contentHash?: string;
   encoding?: Utf16Encoding;
+  lossy?: true;
 }
 
 type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
@@ -137,7 +138,6 @@ const READ_TOOL_LABEL = 'Read';
 
 function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOptions {
   const base = {
-    decodeUtf16: true,
     ...(signal ? { signal } : {}),
     ...(args.paths !== undefined && hasLineRange(args)
       ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true }
@@ -329,6 +329,7 @@ function buildPerPathReadValue(
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
     ...(result.encoding !== undefined ? { encoding: result.encoding } : {}),
+    ...(result.lossy ? { lossy: true } : {}),
     ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
@@ -422,6 +423,10 @@ function readTrailer(v: PerPathReadValue): string[] {
   if (v.encoding !== undefined) {
     lines.push(
       `// decoded from ${v.encoding.toUpperCase()}: edit, patch, replace_text and diff refuse this file`,
+    );
+  } else if (v.lossy) {
+    lines.push(
+      '// not UTF-8, shown with U+FFFD: edit, patch, replace_text and diff refuse this file',
     );
   }
   if (v.contentHash !== undefined) {
@@ -526,6 +531,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +
     'Past the size limit: a single-path whole read returns its first 2000 lines (up to 256 KiB) with continuation args; a head or range is truncated; a batch file fails TOO_LARGE. ' +
     'UTF-16 text with a byte-order mark is returned decoded, with encoding set; past the size limit it fails TOO_LARGE in every mode. ' +
+    'Non-UTF-8 text is returned with U+FFFD and lossy: true. ' +
     'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. ' +
     'Full reads add totalLines; a tail gets no continuation.',

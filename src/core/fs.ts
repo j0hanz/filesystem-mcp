@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
@@ -39,7 +38,7 @@ import {
   rethrowIfAborted,
   unlessMissing,
 } from './errors.ts';
-import { detectMimeType, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
+import { detectMimeType, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import {
@@ -58,13 +57,13 @@ import {
   rmPinned,
   writeStagedPinned,
 } from './pinned.ts';
-import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
+import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec, TextEncoding } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
   APPEND_NOFOLLOW,
   assertFileStats,
   binaryKind,
-  decodeUtf16,
+  classifyText,
   O_NOFOLLOW,
   READ_NOFOLLOW,
   READ_NONBLOCK_NOFOLLOW,
@@ -122,8 +121,6 @@ interface ReadOptionsBase {
   readonly beforeBody?: (meta: ReadProbeMeta) => void;
   /** A whole read past `maxSize` returns this many leading lines instead of TOO_LARGE. */
   readonly oversizeHead?: number;
-  /** Return BOM-marked UTF-16 decoded instead of refusing it (any policy but `raw`). */
-  readonly decodeUtf16?: boolean;
 }
 
 export type ReadOptions = ReadOptionsBase &
@@ -145,18 +142,35 @@ export interface ReadBytesResult {
 
 export type ReadResult = ReadTextResult | ReadBytesResult;
 
+/** ADR-020: text bytes are UTF-8 (UTF-16 decoded); `lossy` marks U+FFFD replacement. */
 export type TextVerdict =
-  | { readonly kind: 'text'; readonly bytes: Buffer; readonly stats: Stats }
-  | { readonly kind: 'undecodable'; readonly bytes: Buffer; readonly stats: Stats }
-  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | {
+      readonly kind: 'text';
+      readonly bytes: Buffer;
+      readonly stats: Stats;
+      readonly encoding: TextEncoding;
+      readonly lossy: boolean;
+    }
+  | { readonly kind: 'binary'; readonly utf16: false }
   | { readonly kind: 'tooLarge'; readonly size: number };
 
 export interface ReadTextOptions {
   readonly signal?: AbortSignal | undefined;
   /** The client's spelling of the path, for errors. */
   readonly requestedPath?: string | undefined;
-  /** Return BOM-marked UTF-16 as UTF-8 text instead of a binary verdict. */
-  readonly decodeUtf16?: boolean;
+}
+
+/**
+ * The one Rewrite rule for a text verdict, undefined to rewrite it. A Rewrite
+ * writes UTF-8 back, so it refuses UTF-16 (judged before anything is decoded),
+ * lossy text and a NUL byte.
+ */
+export function rewriteSkipOf(
+  verdict: Extract<TextVerdict, { kind: 'text' }>,
+): SkipVerdict | undefined {
+  if (verdict.encoding !== 'utf-8') return { kind: 'binary', utf16: true };
+  if (verdict.lossy || verdict.bytes.includes(0)) return { kind: 'undecodable' };
+  return undefined;
 }
 
 export interface ReadNamedTextOptions {
@@ -1873,30 +1887,37 @@ export class GuardedFileSystem {
     const refusal = binaryKind(validPath, probe);
     const media = kind === 'image' || kind === 'audio';
     const policy = options.slice ? 'refuse' : (options.binary ?? 'refuse');
-    // `allow` (binary: true) still refuses UTF-16 text: the caller converts it first. Media is media whatever its encoding.
+    // Media is media whatever its encoding; UTF-16 text is decoded under every policy but `raw`.
     const bytes =
       policy === 'raw' ||
       (policy === 'media' && media) ||
       (policy === 'allow' && (media || refusal === 'binary'));
     // `raw` always takes the bytes path, so `!bytes` already excludes it.
-    const decode = !bytes && refusal === 'utf16' && options.decodeUtf16 === true;
+    const decode = !bytes && refusal === 'utf16';
     if (!bytes && !decode && refusal !== undefined) throw binaryRefusal(refusal, filePath);
     options.beforeBody?.({ validPath, stats, mimeType, kind });
     const maxSize = options.maxSize ?? getMaxTextFileSize();
 
     if (decode) {
-      const { content, encoding } = decodeUtf16(
+      // The size limit is judged on the bytes on disk (ADR-020), inside #readBounded.
+      const body = classifyText(
+        validPath,
         await this.#readBounded(handle, stats, maxSize, filePath, signal),
       );
-      const decodedBytes = Buffer.byteLength(content, 'utf8');
-      if (decodedBytes > maxSize) throw createTooLargeError(decodedBytes, maxSize, filePath);
+      // Unreachable: the probe already saw the UTF-16 mark.
+      if (body.kind !== 'text' || body.encoding === 'utf-8') throw binaryRefusal('utf16', filePath);
+      const slice = sliceText(body.bytes.toString('utf8'), options.slice ?? { kind: 'full' });
+      // A slice is lossy only when its own lines hold a replacement (ADR-020).
+      // shortcut: a literal U+FFFD in a lossy file's clean lines reads as lossy; judge raw bytes per line if that matters.
+      const lossy = body.lossy && slice.content.includes('�');
       return {
         type: 'text',
         path: validPath,
         modified: stats.mtime.toISOString(),
         fileSize: stats.size,
-        encoding,
-        ...sliceText(content, options.slice ?? { kind: 'full' }),
+        encoding: body.encoding,
+        ...(lossy ? { lossy: true as const } : {}),
+        ...slice,
       };
     }
 
@@ -2055,19 +2076,10 @@ export class GuardedFileSystem {
         else await close();
       }
     }
-    // The probe is a slice of the bytes already read: no extra syscall.
-    const binary = binaryKind(filePath, bytes.subarray(0, MIME_SAMPLE_SIZE));
-    if (binary === 'utf16' && options?.decodeUtf16) {
-      // Re-encoded so callers keep one UTF-8 path; positions are in the decoded text.
-      const text = Buffer.from(decodeUtf16(bytes).content, 'utf8');
-      if (text.length > maxFileSize) return { kind: 'tooLarge', size: text.length };
-      return { kind: 'text', bytes: text, stats };
-    }
-    if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
-    // The probe samples only the leading bytes. A caller that writes the text
-    // back must refuse any byte the decode would replace with U+FFFD.
-    if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
-    return { kind: 'text', bytes, stats };
+    // The size limit is judged on the bytes on disk, above (ADR-020).
+    const body = classifyText(filePath, bytes);
+    // Not spread: spreading would run the UTF-16 decode that waits for first use.
+    return body.kind === 'text' ? Object.assign(body, { stats }) : body;
   }
 
   /**
@@ -2080,6 +2092,8 @@ export class GuardedFileSystem {
     assertFileStats(filePath, stats);
     const verdict = await this.readText(validPath, { signal, requestedPath: filePath });
     if (verdict.kind !== 'text') throw refusalOf(verdict, filePath, options?.tool);
+    const refusal = rewriteSkipOf(verdict);
+    if (refusal !== undefined) throw refusalOf(refusal, filePath, options?.tool);
     return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
   }
 

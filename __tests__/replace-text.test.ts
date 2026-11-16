@@ -708,6 +708,17 @@ describe('replace_text body', () => {
       assert.strictEqual(swept.structured.skippedBinary, 1);
     });
 
+    it('skips a UTF-16 file as binary', async () => {
+      const dir = join(root, 'binrep_utf16');
+      const plain = await writeTestFile(dir, 'plain.txt', 'needle\n');
+      const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('needle\n', 'utf16le')]);
+      await writeFile(join(dir, 'le.txt'), le);
+      const swept = await replace({ path: dir, searchPattern: 'needle', replacement: 'pin' });
+      assert.strictEqual(swept.structured.skippedBinary, 1);
+      assert.strictEqual(await readFile(plain, 'utf-8'), 'pin\n');
+      assert.deepStrictEqual(await readFile(join(dir, 'le.txt')), le);
+    });
+
     it('refuses a named binary file without a match', async () => {
       const blob = join(root, 'binrep_named/blob.bin');
       await mkdir(dirname(blob), { recursive: true });

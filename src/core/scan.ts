@@ -19,7 +19,7 @@ import {
   isNotFoundErrno,
   rethrowIfAborted,
 } from './errors.ts';
-import { type GuardedFileSystem, refusalOf, type TextVerdict } from './fs.ts';
+import { type GuardedFileSystem, refusalOf } from './fs.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike, EntryType } from './path-utils.ts';
 import {
@@ -80,9 +80,9 @@ export class ScanSkip {
   }
 }
 
-/** A non-text content verdict as a skip; drops an undecodable file's bytes. */
-export function skipOf(verdict: Exclude<TextVerdict, { kind: 'text' }>): ScanSkip {
-  return new ScanSkip(verdict.kind === 'undecodable' ? { kind: 'undecodable' } : verdict);
+/** A non-text content verdict as a skip. */
+export function skipOf(verdict: SkipVerdict): ScanSkip {
+  return new ScanSkip(verdict);
 }
 
 export interface ScanEntry {

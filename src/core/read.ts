@@ -1,4 +1,5 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
+import { isUtf8 } from 'node:buffer';
 import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
@@ -60,6 +61,14 @@ interface PartialReadResult {
   content: string;
   linesRead: number;
   hasMoreLines: boolean;
+  /** A returned line's bytes were not UTF-8 (ADR-020: judged on the bytes read). */
+  lossy?: true;
+}
+
+/** A decoded line and whether its raw bytes were valid UTF-8. */
+interface BoundedLine {
+  readonly text: string;
+  readonly lossy: boolean;
 }
 
 export interface ReadFileResult {
@@ -79,6 +88,8 @@ export interface ReadFileResult {
   oversize?: true;
   /** Set when the text was decoded from UTF-16. */
   encoding?: Utf16Encoding;
+  /** Set when decoding replaced bytes with U+FFFD (ADR-020). */
+  lossy?: true;
 }
 
 async function readFileBufferWithLimit(
@@ -126,7 +137,7 @@ async function readFileBufferWithLimit(
   return Buffer.concat(chunks, totalSize);
 }
 
-async function peekHasMore(iterator: AsyncIterator<string>): Promise<boolean> {
+async function peekHasMore(iterator: AsyncIterator<unknown>): Promise<boolean> {
   try {
     const { done } = await iterator.next();
     return !done;
@@ -158,7 +169,7 @@ async function* readLinesBounded(
   options: ReadLimits,
   filePath: string,
   startLine: number,
-): AsyncGenerator<string, void, undefined> {
+): AsyncGenerator<BoundedLine, void, undefined> {
   options.signal?.throwIfAborted(); // see readFileBufferWithLimit
   const stream = handle.createReadStream({
     start: 0,
@@ -171,6 +182,10 @@ async function* readLinesBounded(
   const decoder = new StringDecoder('utf-8');
   let pending = '';
   let pendingBytes = 0;
+  // Raw bytes of the kept line so far, so its UTF-8 validity is judged whole, not per chunk.
+  let pendingRaw: Buffer[] = [];
+  const lossyLine = (last: Buffer): boolean =>
+    !isUtf8(pendingRaw.length === 0 ? last : Buffer.concat([...pendingRaw, last]));
   let lineNumber = 0;
 
   const tooLong = (bytes: number): FsError =>
@@ -196,10 +211,14 @@ async function* readLinesBounded(
           if (lineBytes > options.maxSize) throw tooLong(lineBytes);
           // LF ends a character sequence as well as a line. Flush incomplete
           // UTF-8 here instead of combining bytes from separate lines.
-          yield (pending + decoder.write(segment) + decoder.end()).replace(/\r$/, '');
+          yield {
+            text: (pending + decoder.write(segment) + decoder.end()).replace(/\r$/, ''),
+            lossy: lossyLine(segment),
+          };
         }
         pending = '';
         pendingBytes = 0;
+        pendingRaw = [];
         offset = nl + 1;
         nl = buffer.indexOf(LF, offset);
       }
@@ -211,6 +230,7 @@ async function* readLinesBounded(
       if (lineNumber + 1 >= startLine) {
         if (pendingBytes > options.maxSize) throw tooLong(pendingBytes);
         pending += decoder.write(rest);
+        pendingRaw.push(rest);
       }
     }
 
@@ -220,7 +240,7 @@ async function* readLinesBounded(
       lineNumber++;
       if (lineNumber >= startLine) {
         if (pendingBytes > options.maxSize) throw tooLong(pendingBytes);
-        yield pending + decoder.end();
+        yield { text: pending + decoder.end(), lossy: lossyLine(Buffer.alloc(0)) };
       }
     }
   } finally {
@@ -243,6 +263,7 @@ async function readRangeContent(
   options.signal?.throwIfAborted();
 
   const lines: string[] = [];
+  let lossy = false;
   let lineNumber = startLine - 1;
   let estimatedBytes = 0;
   const newlineBytes = Buffer.byteLength('\n', 'utf-8');
@@ -272,10 +293,11 @@ async function readRangeContent(
         }
         throw error;
       }
-      const { value: line, done } = next;
+      const { value, done } = next;
       if (done) {
         break;
       }
+      const line = value.text;
       lineNumber++;
 
       if (lineNumber > stopAt) {
@@ -294,6 +316,7 @@ async function readRangeContent(
       }
 
       lines.push(line);
+      lossy ||= value.lossy;
 
       estimatedBytes += lineBytes;
       if (estimatedBytes > options.maxSize) {
@@ -317,7 +340,19 @@ async function readRangeContent(
     content: lines.join('\n'),
     linesRead: lines.length,
     hasMoreLines,
+    ...(lossy ? { lossy: true as const } : {}),
   };
+}
+
+/** The raw bytes of the last `count` lines of `bytes`, a final LF aside. */
+function lastLinesBytes(bytes: Buffer, count: number): Buffer {
+  let end = bytes.length;
+  if (end > 0 && bytes[end - 1] === LF) end--;
+  let start = end;
+  for (let seen = 0; start > 0; start--) {
+    if (bytes[start - 1] === LF && ++seen === count) break;
+  }
+  return bytes.subarray(start, end);
 }
 
 async function readTailContent(
@@ -430,10 +465,12 @@ async function readTailContent(
   if (options.hardCap && contentBytes > options.maxSize) {
     throw createTooLargeError(contentBytes, options.maxSize, filePath);
   }
+  const lossy = lines.length > 0 && !isUtf8(lastLinesBytes(allBytes, lines.length));
   return {
     content,
     linesRead: lines.length,
     hasMoreLines,
+    ...(lossy ? { lossy: true as const } : {}),
   };
 }
 
@@ -442,10 +479,10 @@ async function readFullContent(
   maxSize: number,
   requestedPath: string,
   signal: AbortSignal | undefined,
-): Promise<{ content: string; totalLines: number }> {
+): Promise<{ content: string; totalLines: number; lossy?: true }> {
   const buffer = await readFileBufferWithLimit(handle, maxSize, requestedPath, signal);
   const content = buffer.toString('utf-8');
-  return { content, totalLines: countLines(content) };
+  return { content, totalLines: countLines(content), ...(isUtf8(buffer) ? {} : { lossy: true }) };
 }
 
 /** read's binary rule on a file's leading bytes; undefined for text. */
@@ -494,13 +531,8 @@ export async function readByMode(
           suggestion: 'Use head to preview.',
         });
       }
-      const { content, totalLines } = await readFullContent(
-        handle,
-        options.maxSize,
-        filePath,
-        options.signal,
-      );
-      return { ...base, content, totalLines, linesRead: totalLines, hasMoreLines: false };
+      const full = await readFullContent(handle, options.maxSize, filePath, options.signal);
+      return { ...base, ...full, linesRead: full.totalLines, hasMoreLines: false };
     }
     case 'head':
       return {
@@ -526,11 +558,56 @@ export async function readByMode(
 
 export type Utf16Encoding = 'utf-16le' | 'utf-16be';
 
-/** Decode BOM-marked UTF-16 (callers check {@link hasUtf16Bom} first); the BOM is dropped. */
-export function decodeUtf16(bytes: Buffer): { content: string; encoding: Utf16Encoding } {
-  const encoding: Utf16Encoding = bytes[0] === 0xff ? 'utf-16le' : 'utf-16be';
-  // Non-fatal: a trailing odd byte or a lone surrogate becomes U+FFFD instead of throwing.
-  return { content: new TextDecoder(encoding).decode(bytes), encoding };
+/**
+ * Decode BOM-marked UTF-16 (callers check {@link hasUtf16Bom} first) to UTF-8;
+ * the BOM is dropped. Strict first, so clean text decodes once; a trailing odd
+ * byte or a lone surrogate then becomes U+FFFD and marks the text lossy.
+ */
+function decodeUtf16(bytes: Buffer, encoding: Utf16Encoding): { bytes: Buffer; lossy: boolean } {
+  try {
+    return {
+      bytes: Buffer.from(new TextDecoder(encoding, { fatal: true }).decode(bytes)),
+      lossy: false,
+    };
+  } catch {
+    return { bytes: Buffer.from(new TextDecoder(encoding).decode(bytes)), lossy: true };
+  }
+}
+
+export type TextEncoding = 'utf-8' | Utf16Encoding;
+
+/** A file's text body as every reader judges it (ADR-020); text bytes are always UTF-8. */
+export type TextClass =
+  | { readonly kind: 'binary'; readonly utf16: false }
+  | {
+      readonly kind: 'text';
+      readonly bytes: Buffer;
+      readonly encoding: TextEncoding;
+      /** Decoding replaced bytes with U+FFFD. */
+      readonly lossy: boolean;
+    };
+
+/** The one text-body decision over a whole file's bytes: File class, UTF-16 decode, lossy mark. */
+export function classifyText(validPath: string, bytes: Buffer): TextClass {
+  const binary = binaryKind(validPath, bytes.subarray(0, MIME_SAMPLE_SIZE));
+  if (binary === 'binary') return { kind: 'binary', utf16: false };
+  if (binary === 'utf16') {
+    const encoding: Utf16Encoding = bytes[0] === 0xff ? 'utf-16le' : 'utf-16be';
+    // Decoded on first use: a Rewrite refuses UTF-16 by its encoding alone.
+    let decoded: { bytes: Buffer; lossy: boolean } | undefined;
+    const body = () => (decoded ??= decodeUtf16(bytes, encoding));
+    return {
+      kind: 'text',
+      encoding,
+      get bytes() {
+        return body().bytes;
+      },
+      get lossy() {
+        return body().lossy;
+      },
+    };
+  }
+  return { kind: 'text', bytes, encoding: 'utf-8', lossy: !isUtf8(bytes) };
 }
 
 /**

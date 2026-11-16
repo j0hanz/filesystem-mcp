@@ -386,9 +386,73 @@ describe('read body', () => {
     assert.strictEqual(errorOf(result.structured.results[0])?.code, 'NOT_FOUND');
   });
 
+  describe('lossy text', () => {
+    // Past the 512-byte probe: invalid UTF-8 inside it is binary by File class.
+    const head = Buffer.alloc(600, 'a');
+    const put = async (name: string, bytes: Buffer) => {
+      await mkdir(join(root, 'lossy'), { recursive: true });
+      const file = join(root, 'lossy', name);
+      await writeFile(file, bytes);
+      return file;
+    };
+
+    it('marks a whole read of non-UTF-8 text lossy', async () => {
+      const file = await put(
+        'latin1.txt',
+        Buffer.concat([head, Buffer.from('\ncaf\xe9\n', 'latin1')]),
+      );
+      const result = await read({ path: file }, { guard });
+      assert.strictEqual(result.isError, false);
+      assert.strictEqual(valueOf(result.structured.results[0])?.lossy, true);
+      assert.ok(result.text?.includes('caf�'));
+      const plain = await put('plain.txt', Buffer.from('café\n'));
+      const clean = valueOf((await read({ path: plain }, { guard })).structured.results[0]);
+      assert.ok(clean && !('lossy' in clean));
+    });
+
+    // The line reader takes 64 KiB chunks; a character split between two is still valid UTF-8.
+    it('does not mark a character split across read chunks lossy', async () => {
+      const file = await put('split.txt', Buffer.from(`${'a'.repeat(65_535)}€\nend\n`));
+      const sliced = await read({ path: file, startLine: 1, endLine: 2 }, { guard });
+      assert.strictEqual(sliced.isError, false);
+      assert.strictEqual(valueOf(sliced.structured.results[0])?.lossy, undefined);
+    });
+
+    it('judges a slice lossy on the bytes it read', async () => {
+      const file = await put(
+        'late.txt',
+        Buffer.concat([head, Buffer.from('\ncaf\xe9\n', 'latin1')]),
+      );
+      const lossyOf = async (args: Omit<Parameters<typeof read>[0], 'path'>) =>
+        valueOf((await read({ path: file, ...args }, { guard })).structured.results[0])?.lossy;
+      assert.strictEqual(await lossyOf({ head: 1 }), undefined);
+      assert.strictEqual(await lossyOf({ startLine: 2 }), true);
+      assert.strictEqual(await lossyOf({ tail: 1 }), true);
+      assert.match(
+        (await read({ path: file }, { guard })).text ?? '',
+        /^\/\/ not UTF-8, shown with U\+FFFD: edit, patch, replace_text and diff refuse this file$/m,
+      );
+    });
+  });
+
   describe('UTF-16', () => {
     const le = (text: string) =>
       Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+
+    it('judges a UTF-16 slice lossy on the lines it returned', async () => {
+      await mkdir(join(root, 'utf16'), { recursive: true });
+      const file = join(root, 'utf16', 'lone-late.txt');
+      // Line 3 holds a lone high surrogate.
+      await writeFile(
+        file,
+        Buffer.concat([le('ok\nfine\n'), Buffer.from([0x00, 0xd8]), Buffer.from('\n', 'utf16le')]),
+      );
+      const lossyOf = async (args: Omit<Parameters<typeof read>[0], 'path'>) =>
+        valueOf((await read({ path: file, ...args }, { guard })).structured.results[0])?.lossy;
+      assert.strictEqual(await lossyOf({ head: 1 }), undefined);
+      assert.strictEqual(await lossyOf({ startLine: 3 }), true);
+      assert.strictEqual(await lossyOf({}), true);
+    });
     const be = (text: string) =>
       Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
     const put = async (name: string, bytes: Buffer) => {

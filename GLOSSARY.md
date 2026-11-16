@@ -18,6 +18,9 @@ _Avoid_: target, resolved target, destination (when no move is involved)
 **Respelling**:
 A requested path that names an existing entry in another case or Unicode
 spelling; acting on it renames that entry rather than creating a second one.
+Whether case counts follows the directory that holds the entry, or its nearest
+existing ancestor when the entry or its parent is missing, never one flag for
+the whole server. A Batch treats two respellings of one entry as one item.
 _Avoid_: spelling-only rename, case rename
 
 **Self-move**:
@@ -56,9 +59,13 @@ _Avoid_: walk (the raw traversal, which relocation and undo also use), search
 
 **File class**:
 Whether an entry is treated as UTF-8 text, media (`image` or `audio`), PDF,
-UTF-16, or binary, settled once by extension and the leading 512 bytes. A `read`
-call refuses UTF-16 even with `binary: true` so the caller converts it first,
-whereas a resource read serves UTF-16 as binary bytes.
+UTF-16, or binary, settled once by extension and the leading 512 bytes. Text is
+judged in one place: UTF-16 with a byte-order mark is decoded for every reader,
+and non-UTF-8 text is lossy (shown with U+FFFD) rather than refused, so `read`,
+`stat` and a text search agree on it; a Rewrite refuses both. The size limit is
+judged on the bytes on disk, never on decoded text. A `read` call returns UTF-16
+decoded even with `binary: true`, whereas a resource read serves UTF-16 as
+binary bytes.
 _Avoid_: mime sniff, content guess
 
 **Text view**:

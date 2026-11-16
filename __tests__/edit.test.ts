@@ -187,6 +187,21 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), original);
   });
 
+  it('refuses a UTF-16 file with the UTF-16 refusal', async () => {
+    const file = join(root, 'utf16.txt');
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('a\n', 'utf16le')]);
+    await writeFile(file, bytes);
+    const result = (await runToolBodyResult(
+      EDIT,
+      { path: file, edits: [{ oldText: 'a', newText: 'b' }] },
+      { fs },
+    )) as EditRun;
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(firstError(result)?.code, 'INVALID_INPUT');
+    assert.match(firstError(result)?.message ?? '', /UTF-16 text file detected/);
+    assert.deepStrictEqual(await readFile(file), bytes);
+  });
+
   it('refuses path with edits and files in one call', async () => {
     const f = await writeTestFile(root, 'edit_both_forms.txt', 'one\n');
     const spec = [{ oldText: 'one', newText: 'two' }];

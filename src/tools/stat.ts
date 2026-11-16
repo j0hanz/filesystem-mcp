@@ -110,7 +110,8 @@ async function getSymlinkTarget(
 }
 
 // Goes through readText, so a file `read` refuses (secret, binary, too large)
-// gets no count either; any failure degrades to no lineCount.
+// gets no count either, while UTF-16 and lossy text are counted as `read`
+// shows them (ADR-020); any failure degrades to no lineCount.
 async function countTextLines(
   path: string,
   countSignal: AbortSignal,

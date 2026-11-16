@@ -765,6 +765,19 @@ describe('search_text body', () => {
     assert.strictEqual(walked.structured.skippedBinary, undefined);
   });
 
+  // ADR-020: the NUL rule judges UTF-8 bodies; a decoded UTF-16 U+0000 is text.
+  it('searches UTF-16 text that holds U+0000', async () => {
+    const dir = join(root, 'utf16_nul');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'z.txt'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('a\u0000b\nneedle\n', 'utf16le')]),
+    );
+    const walked = await search({ path: dir, searchPattern: 'needle' });
+    assert.strictEqual(walked.structured.totalMatches, 1);
+    assert.strictEqual(walked.structured.skippedBinary, undefined);
+  });
+
   it('refuses a named file with an overlong regex line, and names the line', async () => {
     const file = await writeTestFile(
       join(root, 'named_overlong'),
