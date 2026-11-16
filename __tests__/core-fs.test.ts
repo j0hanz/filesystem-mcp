@@ -2843,6 +2843,17 @@ describe('GuardedFileSystem.readText', () => {
     assert.deepEqual(await fs.readText(path), { kind: 'binary' });
   });
 
+  it('judges the UTF-16 size limit on bytes on disk', async () => {
+    // 202 bytes on disk, 300 bytes once decoded to UTF-8.
+    const path = await put(
+      'cjk16.txt',
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('あ'.repeat(100), 'utf16le')]),
+    );
+    const read = await fs.read(path, { maxSize: 250 });
+    assert.equal(read.type === 'text' && read.content, 'あ'.repeat(100));
+    await assert.rejects(fs.read(path, { maxSize: 201 }), { code: ErrorCode.TOO_LARGE });
+  });
+
   // ADR-020: one verdict for every reader. UTF-16 is decoded, non-UTF-8 is lossy text.
   it('readText verdict table', async () => {
     const bom16 = (bom: number[], text: string, le: boolean): Buffer => {
@@ -3136,15 +3147,14 @@ describe('GuardedFileSystem.read binary policy', () => {
     await cleanupTestRoot(root);
   });
 
-  it('refuse (the default) rejects binary and UTF-16 with their own refusals', async () => {
+  // ADR-020: UTF-16 is decoded under every policy but raw.
+  it('refuse (the default) rejects binary and decodes UTF-16', async () => {
     await assert.rejects(
       fs.read(await put('p.png', PNG)),
       fsErrorMatcher(ErrorCode.BINARY_FILE, /^Binary file detected\.$/),
     );
-    await assert.rejects(
-      fs.read(await put('u.txt', UTF16)),
-      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^UTF-16 text file detected/),
-    );
+    const wide = await fs.read(await put('u.txt', UTF16));
+    assert.equal(wide.type === 'text' && wide.encoding, 'utf-16le');
   });
 
   it('media returns image bytes and still refuses other binary', async () => {
@@ -3161,15 +3171,13 @@ describe('GuardedFileSystem.read binary policy', () => {
     assert.equal(text.type, 'text');
   });
 
-  it('allow returns any binary as bytes but still refuses UTF-16', async () => {
+  it('allow returns any binary as bytes but decodes UTF-16 text', async () => {
     const bin = await fs.read(await put('a.dat', 'x\0y'), { binary: 'allow' });
     assert.equal(bin.type, 'bytes');
     if (bin.type !== 'bytes') return;
     assert.deepEqual([bin.kind, bin.mimeType], ['binary', 'application/octet-stream']);
-    await assert.rejects(
-      fs.read(await put('a16.txt', UTF16), { binary: 'allow' }),
-      fsErrorMatcher(ErrorCode.INVALID_INPUT, /^UTF-16 text file detected/),
-    );
+    const wide = await fs.read(await put('a16.txt', UTF16), { binary: 'allow' });
+    assert.equal(wide.type === 'text' && wide.encoding, 'utf-16le');
   });
 
   it('allow returns a UTF-16 svg as media, as media does', async () => {

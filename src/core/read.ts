@@ -80,6 +80,8 @@ export interface ReadFileResult {
   oversize?: true;
   /** Set when the text was decoded from UTF-16. */
   encoding?: Utf16Encoding;
+  /** Set when decoding replaced bytes with U+FFFD (ADR-020). */
+  lossy?: true;
 }
 
 async function readFileBufferWithLimit(
@@ -443,10 +445,10 @@ async function readFullContent(
   maxSize: number,
   requestedPath: string,
   signal: AbortSignal | undefined,
-): Promise<{ content: string; totalLines: number }> {
+): Promise<{ content: string; totalLines: number; lossy?: true }> {
   const buffer = await readFileBufferWithLimit(handle, maxSize, requestedPath, signal);
   const content = buffer.toString('utf-8');
-  return { content, totalLines: countLines(content) };
+  return { content, totalLines: countLines(content), ...(isUtf8(buffer) ? {} : { lossy: true }) };
 }
 
 /** read's binary rule on a file's leading bytes; undefined for text. */
@@ -495,13 +497,8 @@ export async function readByMode(
           suggestion: 'Use head to preview.',
         });
       }
-      const { content, totalLines } = await readFullContent(
-        handle,
-        options.maxSize,
-        filePath,
-        options.signal,
-      );
-      return { ...base, content, totalLines, linesRead: totalLines, hasMoreLines: false };
+      const full = await readFullContent(handle, options.maxSize, filePath, options.signal);
+      return { ...base, ...full, linesRead: full.totalLines, hasMoreLines: false };
     }
     case 'head':
       return {

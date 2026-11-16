@@ -386,6 +386,31 @@ describe('read body', () => {
     assert.strictEqual(errorOf(result.structured.results[0])?.code, 'NOT_FOUND');
   });
 
+  describe('lossy text', () => {
+    // Past the 512-byte probe: invalid UTF-8 inside it is binary by File class.
+    const head = Buffer.alloc(600, 'a');
+    const put = async (name: string, bytes: Buffer) => {
+      await mkdir(join(root, 'lossy'), { recursive: true });
+      const file = join(root, 'lossy', name);
+      await writeFile(file, bytes);
+      return file;
+    };
+
+    it('marks a whole read of non-UTF-8 text lossy', async () => {
+      const file = await put(
+        'latin1.txt',
+        Buffer.concat([head, Buffer.from('\ncaf\xe9\n', 'latin1')]),
+      );
+      const result = await read({ path: file }, { guard });
+      assert.strictEqual(result.isError, false);
+      assert.strictEqual(valueOf(result.structured.results[0])?.lossy, true);
+      assert.ok(result.text?.includes('caf�'));
+      const plain = await put('plain.txt', Buffer.from('café\n'));
+      const clean = valueOf((await read({ path: plain }, { guard })).structured.results[0]);
+      assert.ok(clean && !('lossy' in clean));
+    });
+  });
+
   describe('UTF-16', () => {
     const le = (text: string) =>
       Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);

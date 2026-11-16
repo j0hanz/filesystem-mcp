@@ -64,7 +64,6 @@ import {
   assertFileStats,
   binaryKind,
   classifyText,
-  decodeUtf16,
   O_NOFOLLOW,
   READ_NOFOLLOW,
   READ_NONBLOCK_NOFOLLOW,
@@ -122,8 +121,6 @@ interface ReadOptionsBase {
   readonly beforeBody?: (meta: ReadProbeMeta) => void;
   /** A whole read past `maxSize` returns this many leading lines instead of TOO_LARGE. */
   readonly oversizeHead?: number;
-  /** Return BOM-marked UTF-16 decoded instead of refusing it (any policy but `raw`). */
-  readonly decodeUtf16?: boolean;
 }
 
 export type ReadOptions = ReadOptionsBase &
@@ -1894,30 +1891,33 @@ export class GuardedFileSystem {
     const refusal = binaryKind(validPath, probe);
     const media = kind === 'image' || kind === 'audio';
     const policy = options.slice ? 'refuse' : (options.binary ?? 'refuse');
-    // `allow` (binary: true) still refuses UTF-16 text: the caller converts it first. Media is media whatever its encoding.
+    // Media is media whatever its encoding; UTF-16 text is decoded under every policy but `raw`.
     const bytes =
       policy === 'raw' ||
       (policy === 'media' && media) ||
       (policy === 'allow' && (media || refusal === 'binary'));
     // `raw` always takes the bytes path, so `!bytes` already excludes it.
-    const decode = !bytes && refusal === 'utf16' && options.decodeUtf16 === true;
+    const decode = !bytes && refusal === 'utf16';
     if (!bytes && !decode && refusal !== undefined) throw binaryRefusal(refusal, filePath);
     options.beforeBody?.({ validPath, stats, mimeType, kind });
     const maxSize = options.maxSize ?? getMaxTextFileSize();
 
     if (decode) {
-      const { content, encoding } = decodeUtf16(
+      // The size limit is judged on the bytes on disk (ADR-020), inside #readBounded.
+      const body = classifyText(
+        validPath,
         await this.#readBounded(handle, stats, maxSize, filePath, signal),
       );
-      const decodedBytes = Buffer.byteLength(content, 'utf8');
-      if (decodedBytes > maxSize) throw createTooLargeError(decodedBytes, maxSize, filePath);
+      // Unreachable: the probe already saw the UTF-16 mark.
+      if (body.kind !== 'text' || body.encoding === 'utf-8') throw binaryRefusal('utf16', filePath);
       return {
         type: 'text',
         path: validPath,
         modified: stats.mtime.toISOString(),
         fileSize: stats.size,
-        encoding,
-        ...sliceText(content, options.slice ?? { kind: 'full' }),
+        encoding: body.encoding,
+        ...(body.lossy ? { lossy: true as const } : {}),
+        ...sliceText(body.bytes.toString('utf8'), options.slice ?? { kind: 'full' }),
       };
     }
 

@@ -63,9 +63,9 @@ UTF-16, or binary, settled once by extension and the leading 512 bytes. Text is
 judged in one place: UTF-16 with a byte-order mark is decoded for every reader,
 and non-UTF-8 text is lossy (shown with U+FFFD) rather than refused, so `read`,
 `stat` and a text search agree on it; a Rewrite refuses both. The size limit is
-judged on the bytes on disk, never on decoded text. A `read` call refuses UTF-16
-even with `binary: true` so the caller converts it first, whereas a resource
-read serves UTF-16 as binary bytes.
+judged on the bytes on disk, never on decoded text. A `read` call returns UTF-16
+decoded even with `binary: true`, whereas a resource read serves UTF-16 as
+binary bytes.
 _Avoid_: mime sniff, content guess
 
 **Text view**:

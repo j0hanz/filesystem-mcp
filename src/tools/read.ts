@@ -129,6 +129,7 @@ interface ReadPerPathValue {
   endLine?: number;
   contentHash?: string;
   encoding?: Utf16Encoding;
+  lossy?: true;
 }
 
 type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
@@ -137,7 +138,6 @@ const READ_TOOL_LABEL = 'Read';
 
 function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOptions {
   const base = {
-    decodeUtf16: true,
     ...(signal ? { signal } : {}),
     ...(args.paths !== undefined && hasLineRange(args)
       ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true }
@@ -329,6 +329,7 @@ function buildPerPathReadValue(
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
     ...(result.encoding !== undefined ? { encoding: result.encoding } : {}),
+    ...(result.lossy ? { lossy: true } : {}),
     ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
