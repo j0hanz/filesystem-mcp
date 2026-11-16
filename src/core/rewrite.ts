@@ -4,7 +4,7 @@ import { withAbort } from './concurrency.ts';
 import { getMaxTextFileSize } from './config.ts';
 import { createTooLargeError } from './errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from './file-uri.ts';
-import type { GuardedFileSystem } from './fs.ts';
+import { type GuardedFileSystem, rewriteSkipOf } from './fs.ts';
 import { type ScanSkip, skipOf } from './scan.ts';
 import { type TextView, viewText } from './text-view.ts';
 
@@ -81,6 +81,8 @@ export function rewriteEntry<T>(
 ): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
     const verdict = await request.fs.readText(request.path, { signal: request.signal });
+    const refusal = rewriteSkipOf(verdict);
+    if (refusal !== undefined) return skipOf(refusal);
     if (verdict.kind !== 'text') return skipOf(verdict);
     let view: TextView | undefined;
     const open = (): TextView => (view ??= viewText(verdict.bytes.toString('utf8')));

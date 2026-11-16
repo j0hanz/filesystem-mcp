@@ -2835,41 +2835,43 @@ describe('GuardedFileSystem.readText', () => {
   });
 
   it('readText binary by extension', async () => {
-    assert.deepEqual(await fs.readText(await put('a.png', 'plain text')), {
-      kind: 'binary',
-      utf16: false,
-    });
+    assert.deepEqual(await fs.readText(await put('a.png', 'plain text')), { kind: 'binary' });
   });
 
   it('readText binary by sample', async () => {
     const path = await put('b.txt', Buffer.from([0x61, 0x62, 0x63, 0, 0x64]));
-    assert.deepEqual(await fs.readText(path), { kind: 'binary', utf16: false });
+    assert.deepEqual(await fs.readText(path), { kind: 'binary' });
   });
 
-  it('readText UTF-16 BOM', async () => {
-    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')]);
-    assert.deepEqual(await fs.readText(await put('c.txt', bytes)), {
-      kind: 'binary',
-      utf16: true,
-    });
-  });
-
-  it('readText decodeUtf16 returns BOM-marked UTF-16 as UTF-8 text', async () => {
-    const file = await put(
-      'c16.txt',
-      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]),
-    );
-    const decoded = await fs.readText(file, { decodeUtf16: true });
-    assert.equal(decoded.kind, 'text');
-    assert.equal(decoded.kind === 'text' && decoded.bytes.toString('utf8'), 'hi\n');
-    assert.deepEqual(await fs.readText(file), { kind: 'binary', utf16: true });
-  });
-
-  it('readText undecodable past the probe', async () => {
-    const latin1 = await fs.readText(await put('d.txt', pastProbe([0xe9])));
-    assert.equal(latin1.kind, 'undecodable');
-    const nul = await fs.readText(await put('e.txt', pastProbe([0])));
-    assert.equal(nul.kind, 'undecodable');
+  // ADR-020: one verdict for every reader. UTF-16 is decoded, non-UTF-8 is lossy text.
+  it('readText verdict table', async () => {
+    const bom16 = (bom: number[], text: string, le: boolean): Buffer => {
+      const body = Buffer.from(text, 'utf16le');
+      if (!le) body.swap16();
+      return Buffer.concat([Buffer.from(bom), body]);
+    };
+    const rows: [string, Buffer, string, boolean, string | undefined][] = [
+      ['plain.txt', Buffer.from('a\n'), 'utf-8', false, 'a\n'],
+      ['bom8.txt', Buffer.from('﻿a\n'), 'utf-8', false, '﻿a\n'],
+      ['le.txt', bom16([0xff, 0xfe], 'a\n', true), 'utf-16le', false, 'a\n'],
+      ['be.txt', bom16([0xfe, 0xff], 'a\n', false), 'utf-16be', false, 'a\n'],
+      ['lone.txt', Buffer.from([0xff, 0xfe, 0x00, 0xd8]), 'utf-16le', true, '�'],
+      // Within the leading bytes, invalid UTF-8 is binary by File class; past them it is lossy.
+      ['latin1.txt', pastProbe([0xe9]), 'utf-8', true, undefined],
+      ['fffd.txt', Buffer.from('x�y'), 'utf-8', false, 'x�y'],
+      ['late-nul.txt', pastProbe([0]), 'utf-8', false, undefined],
+    ];
+    for (const [name, bytes, encoding, lossy, text] of rows) {
+      const verdict = await fs.readText(await put(name, bytes));
+      assert.equal(verdict.kind, 'text', name);
+      if (verdict.kind !== 'text') continue;
+      assert.equal(verdict.encoding, encoding, name);
+      assert.equal(verdict.lossy, lossy, name);
+      if (text !== undefined) assert.equal(verdict.bytes.toString('utf8'), text, name);
+      else assert.deepEqual(verdict.bytes, bytes, name);
+    }
+    const big = await put('big16.txt', Buffer.alloc(getMaxTextFileSize() + 1, 'a'));
+    assert.equal((await fs.readText(big)).kind, 'tooLarge');
   });
 
   it('readText too large', async () => {

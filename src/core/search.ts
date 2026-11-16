@@ -109,16 +109,13 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 
 async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  const verdict = await scanCtx.fs.readText(entryPath, {
-    signal: scanCtx.signal,
-    decodeUtf16: true,
-  });
-  if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
+  const verdict = await scanCtx.fs.readText(entryPath, { signal: scanCtx.signal });
+  if (verdict.kind !== 'text') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does
   // for `grep -I`. Other non-UTF-8 text is still searched: a lossy decode
   // only affects the bytes a pattern could not have matched anyway.
-  if (verdict.kind === 'undecodable' && buffer.includes(0)) {
+  if (buffer.includes(0)) {
     return new ScanSkip({ kind: 'binary', utf16: false });
   }
 

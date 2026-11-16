@@ -1,4 +1,5 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
+import { isUtf8 } from 'node:buffer';
 import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
@@ -531,6 +532,36 @@ export function decodeUtf16(bytes: Buffer): { content: string; encoding: Utf16En
   const encoding: Utf16Encoding = bytes[0] === 0xff ? 'utf-16le' : 'utf-16be';
   // Non-fatal: a trailing odd byte or a lone surrogate becomes U+FFFD instead of throwing.
   return { content: new TextDecoder(encoding).decode(bytes), encoding };
+}
+
+export type TextEncoding = 'utf-8' | Utf16Encoding;
+
+/** A file's text body as every reader judges it (ADR-020); text bytes are always UTF-8. */
+export type TextClass =
+  | { readonly kind: 'binary' }
+  | {
+      readonly kind: 'text';
+      readonly bytes: Buffer;
+      readonly encoding: TextEncoding;
+      /** Decoding replaced bytes with U+FFFD. */
+      readonly lossy: boolean;
+    };
+
+/** The one text-body decision over a whole file's bytes: File class, UTF-16 decode, lossy mark. */
+export function classifyText(validPath: string, bytes: Buffer): TextClass {
+  const binary = binaryKind(validPath, bytes.subarray(0, MIME_SAMPLE_SIZE));
+  if (binary === 'binary') return { kind: 'binary' };
+  if (binary === 'utf16') {
+    const { content, encoding } = decodeUtf16(bytes);
+    let lossy = false;
+    try {
+      new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    } catch {
+      lossy = true;
+    }
+    return { kind: 'text', bytes: Buffer.from(content, 'utf8'), encoding, lossy };
+  }
+  return { kind: 'text', bytes, encoding: 'utf-8', lossy: !isUtf8(bytes) };
 }
 
 /**

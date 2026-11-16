@@ -80,9 +80,11 @@ export class ScanSkip {
   }
 }
 
-/** A non-text content verdict as a skip; drops an undecodable file's bytes. */
-export function skipOf(verdict: Exclude<TextVerdict, { kind: 'text' }>): ScanSkip {
-  return new ScanSkip(verdict.kind === 'undecodable' ? { kind: 'undecodable' } : verdict);
+/** A non-text content verdict as a skip. */
+export function skipOf(verdict: SkipVerdict | Exclude<TextVerdict, { kind: 'text' }>): ScanSkip {
+  return new ScanSkip(
+    verdict.kind === 'binary' && !('utf16' in verdict) ? { kind: 'binary', utf16: false } : verdict,
+  );
 }
 
 export interface ScanEntry {

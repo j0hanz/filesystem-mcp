@@ -199,6 +199,24 @@ describe('stat body', () => {
     );
   });
 
+  it('counts lines of UTF-16 and non-UTF-8 text', async () => {
+    const dir = join(root, 'line_count_decoded');
+    await mkdir(dir, { recursive: true });
+    const le = join(dir, 'le.txt');
+    await writeFile(
+      le,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('a\nb\n', 'utf16le')]),
+    );
+    const latin1 = join(dir, 'latin1.txt');
+    // Past the 512-byte probe: earlier, invalid UTF-8 is binary by File class.
+    await writeFile(
+      latin1,
+      Buffer.concat([Buffer.alloc(600, 'a'), Buffer.from('\ncaf\xe9\n', 'latin1')]),
+    );
+    assert.strictEqual((await statOne(le, { guard })).lineCount, 2);
+    assert.strictEqual((await statOne(latin1, { guard })).lineCount, 2);
+  });
+
   it('leaves lineCount out for binary, oversize, directory and secret entries', async () => {
     const dir = join(root, 'line_count_none');
     await mkdir(dir, { recursive: true });

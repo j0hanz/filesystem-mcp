@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isUtf8 } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import type { BigIntStats, Dir, Dirent, Stats } from 'node:fs';
@@ -39,7 +38,7 @@ import {
   rethrowIfAborted,
   unlessMissing,
 } from './errors.ts';
-import { detectMimeType, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
+import { detectMimeType, type FileKind } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import {
@@ -58,12 +57,13 @@ import {
   rmPinned,
   writeStagedPinned,
 } from './pinned.ts';
-import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec } from './read.ts';
+import type { ReadFileResult, ReadLimits, ReadSlice, ReadSpec, TextEncoding } from './read.ts';
 import {
   APPEND_CREATE_NOFOLLOW,
   APPEND_NOFOLLOW,
   assertFileStats,
   binaryKind,
+  classifyText,
   decodeUtf16,
   O_NOFOLLOW,
   READ_NOFOLLOW,
@@ -145,18 +145,39 @@ export interface ReadBytesResult {
 
 export type ReadResult = ReadTextResult | ReadBytesResult;
 
+/** ADR-020: text bytes are UTF-8 (UTF-16 decoded); `lossy` marks U+FFFD replacement. */
 export type TextVerdict =
-  | { readonly kind: 'text'; readonly bytes: Buffer; readonly stats: Stats }
-  | { readonly kind: 'undecodable'; readonly bytes: Buffer; readonly stats: Stats }
-  | { readonly kind: 'binary'; readonly utf16: boolean }
+  | {
+      readonly kind: 'text';
+      readonly bytes: Buffer;
+      readonly stats: Stats;
+      readonly encoding: TextEncoding;
+      readonly lossy: boolean;
+    }
+  | { readonly kind: 'binary' }
   | { readonly kind: 'tooLarge'; readonly size: number };
 
 export interface ReadTextOptions {
   readonly signal?: AbortSignal | undefined;
   /** The client's spelling of the path, for errors. */
   readonly requestedPath?: string | undefined;
-  /** Return BOM-marked UTF-16 as UTF-8 text instead of a binary verdict. */
-  readonly decodeUtf16?: boolean;
+}
+
+/**
+ * The one Rewrite rule: what a Rewrite does with a verdict, undefined to rewrite it.
+ * A Rewrite writes UTF-8 back, so it refuses UTF-16, lossy text and a NUL byte.
+ */
+export function rewriteSkipOf(verdict: TextVerdict): SkipVerdict | undefined {
+  switch (verdict.kind) {
+    case 'binary':
+      return { kind: 'binary', utf16: false };
+    case 'tooLarge':
+      return verdict;
+    case 'text':
+      if (verdict.encoding !== 'utf-8') return { kind: 'binary', utf16: true };
+      if (verdict.lossy || verdict.bytes.includes(0)) return { kind: 'undecodable' };
+      return undefined;
+  }
 }
 
 export interface ReadNamedTextOptions {
@@ -2055,19 +2076,9 @@ export class GuardedFileSystem {
         else await close();
       }
     }
-    // The probe is a slice of the bytes already read: no extra syscall.
-    const binary = binaryKind(filePath, bytes.subarray(0, MIME_SAMPLE_SIZE));
-    if (binary === 'utf16' && options?.decodeUtf16) {
-      // Re-encoded so callers keep one UTF-8 path; positions are in the decoded text.
-      const text = Buffer.from(decodeUtf16(bytes).content, 'utf8');
-      if (text.length > maxFileSize) return { kind: 'tooLarge', size: text.length };
-      return { kind: 'text', bytes: text, stats };
-    }
-    if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
-    // The probe samples only the leading bytes. A caller that writes the text
-    // back must refuse any byte the decode would replace with U+FFFD.
-    if (!isUtf8(bytes) || bytes.includes(0)) return { kind: 'undecodable', bytes, stats };
-    return { kind: 'text', bytes, stats };
+    // The size limit is judged on the bytes on disk, above (ADR-020).
+    const body = classifyText(filePath, bytes);
+    return body.kind === 'text' ? { ...body, stats } : body;
   }
 
   /**
@@ -2079,7 +2090,10 @@ export class GuardedFileSystem {
     const { stats, validPath } = await this.stat(filePath, { signal });
     assertFileStats(filePath, stats);
     const verdict = await this.readText(validPath, { signal, requestedPath: filePath });
-    if (verdict.kind !== 'text') throw refusalOf(verdict, filePath, options?.tool);
+    const refusal = rewriteSkipOf(verdict);
+    if (refusal !== undefined || verdict.kind !== 'text') {
+      throw refusalOf(refusal ?? { kind: 'binary', utf16: false }, filePath, options?.tool);
+    }
     return { validPath, content: verdict.bytes.toString('utf8'), stats: verdict.stats };
   }
 
