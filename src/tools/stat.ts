@@ -211,7 +211,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     'Get metadata for files or directories. ' +
     'Use when you need to check existence, size, or read cost. ' +
     'Do not use for contents; use `read` instead, `list` for directory entries, or `find_files` to find by name. ' +
-    'Pass `path` or `paths` (up to 1000), never both. ' +
+    'Pass `path` or `paths` (up to 1000). ' +
     'Paths settle independently (missing gives NOT_FOUND); the call errors only if all fail. ' +
     "Symlinks report their own metadata, not the target's. " +
     '`path` gives one result; `paths` gives one per path, in input order. ' +

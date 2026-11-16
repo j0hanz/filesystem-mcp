@@ -348,12 +348,11 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     'List a directory inside the roots as a name tree, walking up to maxDepth levels. Use when you need to see what a folder holds. ' +
     'Do not use it to find files by name or glob; use `find_files` instead, `read` or `search_text` for contents, `stat` for one path. ' +
     'Skips hidden entries, .gitignore matches, and build and tool folders unless includeHidden or includeIgnored is set, naming the ignore-rule folders it hid. ' +
-    'exclude leaves out more names or paths. ' +
-    'Folders at maxDepth are shown, but their contents are not listed or counted. ' +
     'At most 20,000 entries are kept. ' +
     'A timeout returns a partial result with stoppedReason. ' +
     'Errors: NOT_DIRECTORY for a file, ACCESS_DENIED outside the roots. ' +
-    'Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor (about 5 min) and resourceUri (about 60 s).',
+    'Returns tree text, entries[{name, relativePath, type, size?}], totals, unexpandedDirectories, and skippedInaccessible. ' +
+    'A cut result adds nextCursor (about 5 min) and resourceUri (about 60 s).',
   input: ListInputSchema,
   readOnlyHint: true,
   deadline: true,

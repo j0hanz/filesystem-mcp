@@ -236,9 +236,11 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
     'Delete files, directories, and symlinks. Use when a path should no longer exist. ' +
     'Do not use it to rename or relocate; use `move` instead, and `undo` to restore. ' +
     'A symlink is removed, never its target. ' +
-    'A non-empty directory needs `recursive: true`, else that path fails INVALID_INPUT, and user confirmation; nothing is deleted until all are answered, and a client that cannot prompt fails the whole call INVALID_INPUT. ' +
+    'A non-empty directory needs `recursive: true`; without it, that path fails INVALID_INPUT. ' +
+    'With it, the user must confirm. Nothing is deleted until every prompt is answered. ' +
+    'A client that cannot prompt fails the whole call INVALID_INPUT. ' +
     'Deleting a folder that holds protected files cannot be undone. ' +
-    'Otherwise each path fails alone (ACCESS_DENIED: root, read-only, outside; CANCELLED: refused or changed; INVALID_INPUT: nested pair). ' +
+    'Other failures hit only their own path: ACCESS_DENIED for a root, read-only, or outside path; CANCELLED when refused or changed; INVALID_INPUT for a nested pair. ' +
     'Returns per-path { deleted } or { error } (a skipped prompt gives deleted: false), a summary, and an undo id valid 30 minutes, or undoUnavailable with the reason.',
   input: DeleteInputSchema,
   readOnlyHint: false,

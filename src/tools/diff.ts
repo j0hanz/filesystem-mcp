@@ -29,10 +29,8 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     'Compare two text files and return a unified diff from a to b. Use when you need line differences between two files on disk. ' +
     'Do not use it to find text across files; use `search_text` instead. ' +
     'To preview your own pending change, use the dryRun option of the write tools. ' +
-    'Neither file is changed. Binary and non-UTF-8 files fail. ' +
+    'Binary and non-UTF-8 files fail. ' +
     'A file over the size limit fails with TOO_LARGE. So does a diff not done within 1 s, or a full diff queue; retry once, then `read` matching line ranges. ' +
-    'a is the - side and b the + side; swap them to reverse the diff. ' +
-    'context only sets how many unchanged lines surround each hunk, not what counts as a change. ' +
     'Returns ---/+++ headers (basenames) and @@ hunks; identical files give headers only.',
   input: DiffInputSchema,
   readOnlyHint: true,

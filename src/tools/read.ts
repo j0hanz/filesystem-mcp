@@ -523,10 +523,10 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Do not use it to check size or existence; use `stat` instead. ' +
     'To locate content, use `search_text`, `find_files`, or `list`. ' +
     'Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. ' +
-    'UTF-16 text with a byte-order mark is returned decoded, with encoding set, and fails TOO_LARGE past the size limit for every read mode; the write tools still refuse it. ' +
-    'Past the size limit, a single-path whole read returns up to its first 2000 lines (256 KiB) with continuation args, a batch file fails with TOO_LARGE, and a head or range is truncated. ' +
-    'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +
+    'Past the size limit: a single-path whole read returns its first 2000 lines (up to 256 KiB) with continuation args; a head or range is truncated; a batch file fails TOO_LARGE. ' +
+    'UTF-16 text with a byte-order mark is returned decoded, with encoding set; past the size limit it fails TOO_LARGE in every mode. ' +
+    'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. ' +
     'Full reads add totalLines; a tail gets no continuation.',
   input: ReadFileInputSchema,

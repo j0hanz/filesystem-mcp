@@ -492,7 +492,6 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     'Do not use it for one unique snippet; use `edit` instead, `patch` for a unified diff, or `search_text` to only find matches. ' +
     'A live run rewrites each file as the scan reaches it; one failed file does not stop the others. ' +
     'Reaching maxMatches (default 100), maxFiles, or the deadline stops the run; files already rewritten stay changed. ' +
-    'exclude leaves out more names or paths. ' +
     'Returns changed paths, failures, skip counts, stoppedReason, and an undo id (live runs, when undo is enabled) for `undo`, valid 30 minutes. ' +
     'isError is set when every file failed or the request is invalid (bad regex, path outside roots).',
   input: SearchAndReplaceInputSchema,

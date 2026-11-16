@@ -124,11 +124,11 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'Find files whose name or path matches a glob under a directory. ' +
     'Use when you know a name or path pattern but not the location. ' +
     'Do not use it for file contents; use `search_text` instead. To browse a folder, use `list`. ' +
-    'Matches files; type: "directory" or "any" also matches directories, printed with a trailing /. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
-    'exclude leaves out more names or paths. ' +
+    'Matches files; type: "directory" or "any" also matches directories. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
     'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
-    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires about 5 min after its last page, then search again without it). ' +
-    'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
+    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor. ' +
+    'Returns root, results[{ path }], totalMatches, and filesScanned. ' +
+    'When set, it adds nextCursor, stoppedReason, skippedInaccessible, excludedDirs (total and first 5), and resourceUri (all kept matches). ' +
     'Paths are relative to root when unambiguous, otherwise absolute.',
   input: SearchFilesInputSchema,
   readOnlyHint: true,

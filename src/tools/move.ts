@@ -394,7 +394,8 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
     'Missing parents are created. An existing destination asks to confirm; declining cancels the call, skipping drops that pair. Only copies can bypass the prompt (overwrite: true). ' +
     'A directory move never merges into a non-empty directory; a copy merges. ' +
     'Pairs that share a destination or overlap another pair fail; run dependent moves separately. ' +
-    'Returns summary lines naming each pair and failure, and { moves: [{ from, to }], failures?, skipped?, undo id for `undo` (30 minutes) or undoUnavailable }; an error only if every pair failed.',
+    'Returns a summary line per pair and failure, plus moves[{ from, to }], failures?, skipped?, and an undo id for `undo` (30 minutes) or undoUnavailable. ' +
+    'The call is an error only if every pair failed.',
   input: MoveInputSchema,
   readOnlyHint: false,
   progress: (args) => {

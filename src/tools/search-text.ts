@@ -194,13 +194,13 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   title: 'Search Content',
   description:
     'Search file contents under the roots for literal text or an RE2 regex. Use when you need the files and lines that contain some text. ' +
-    'Do not use it to find files by name; use `find_files` instead. ' +
+    'Do not use it to find files by name; use `find_files` instead, or `replace_text` to change every match. ' +
     'A regex may span lines; the hit is on its first line. ' +
     'Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
-    'exclude leaves out more names or paths. ' +
     'Lines over 1000 chars are clipped around the match. ' +
     'Stops early at 10000 matching lines or the timeout, setting stoppedReason. ' +
-    'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires about 5 min after its last page), and resourceUri (about 60 s) for a multi-page or stopped first page.',
+    'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, and skip counts. ' +
+    'A multi-page or stopped first page also returns nextCursor, valid about 5 min after its last page, and resourceUri, valid about 60 s.',
   input: GrepInputSchema,
   readOnlyHint: true,
   deadline: true,
