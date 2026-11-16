@@ -704,6 +704,19 @@ describe('read body', () => {
       });
     });
 
+    it('caps the head at 256 KiB when its lines are long', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const long = `${'y'.repeat(999)}\n`;
+        const file = await writeTestFile(root, 'oversize/long-lines.txt', long.repeat(2000));
+        const result = await read({ path: file }, { guard });
+        assert.strictEqual(result.isError, false);
+        const value = valueOf(result.structured.results[0]);
+        assert.ok(value?.linesRead !== undefined && value.linesRead < 2000);
+        assert.ok(value.linesRead * 1000 <= 256 * 1024, String(value.linesRead));
+        assert.match(result.text ?? '', /^\/\/ truncated: file is 2000000 bytes/m);
+      });
+    });
+
     it('a batch file over the limit still fails TOO_LARGE', async () => {
       await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
         const file = await writeTestFile(root, 'oversize/batch.txt', line.repeat(20_000));

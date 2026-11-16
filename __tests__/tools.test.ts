@@ -1144,7 +1144,9 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // oversized single-path whole read returns its head; measured 32532 / 16224.
     // Raised 2026-11-16 to 32650 full and 16350 read-only: read says it
     // decodes BOM-marked UTF-16; measured 32640 / 16332.
-    const BUDGET_CHARS = 32_650;
+    // Raised 2026-11-16 to 32700 full (read-only unchanged): the oversize head
+    // names its 256 KiB cap; measured 32656 / 16348.
+    const BUDGET_CHARS = 32_700;
     const BUDGET_CHARS_READ_ONLY = 16_350;
 
     const full = await createTestClientPair([tmpDir]);

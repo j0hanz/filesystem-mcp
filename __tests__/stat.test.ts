@@ -224,6 +224,25 @@ describe('stat body', () => {
     assert.ok(all.structured.results.every((row) => valueOf(row)?.lineCount === undefined));
   });
 
+  it('a stalled line count gives up and leaves the stat intact', { timeout: 5000 }, async (t) => {
+    const file = await writeTestFile(join(root, 'line_count_stall'), 'a.txt', 'a\n');
+    const fs = new GuardedFileSystem(guard);
+    // Never settles until its signal aborts, like a read on a hung mount.
+    t.mock.method(
+      fs,
+      'readText',
+      (_path: string, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            reject(options.signal?.reason as Error);
+          });
+        }),
+    );
+    const value = await statOne(file, { guard, fs });
+    assert.strictEqual(value.size, 2);
+    assert.strictEqual(value.lineCount, undefined);
+  });
+
   it('a failed line count leaves the stat intact', async (t) => {
     const file = await writeTestFile(join(root, 'line_count_fail'), 'a.txt', 'a\n');
     const fs = new GuardedFileSystem(guard);

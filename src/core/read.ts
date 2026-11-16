@@ -8,6 +8,7 @@ import { withAbort } from './concurrency.ts';
 import { createTooLargeError, ErrorCode, FsError, isFsError } from './errors.ts';
 import { countLines } from './fmt.ts';
 import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
+import { OVERSIZE_HEAD_MAX_BYTES } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
@@ -463,7 +464,13 @@ export async function readByMode(
           readMode: 'head',
           head: options.oversizeHead,
           oversize: true,
-          ...(await readRangeContent(handle, 1, options.oversizeHead, options, filePath)),
+          ...(await readRangeContent(
+            handle,
+            1,
+            options.oversizeHead,
+            { ...options, maxSize: Math.min(options.maxSize, OVERSIZE_HEAD_MAX_BYTES) },
+            filePath,
+          )),
         };
       }
       if (stats.size > options.maxSize) {

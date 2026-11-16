@@ -36,6 +36,8 @@ type StatOutput = BatchResult<FileInfo>;
 
 const LINE_COUNT_MAX_BYTES = 256 * 1024;
 const LINE_COUNT_MAX_PATHS = 20;
+/** One budget for every count in a call: a slow mount costs the counts, never the stat. */
+const LINE_COUNT_BUDGET_MS = 1000;
 
 function getPermissions(mode: number): string {
   let out = '';
@@ -111,14 +113,16 @@ async function getSymlinkTarget(
 // gets no count either; any failure degrades to no lineCount.
 async function countTextLines(
   path: string,
+  countSignal: AbortSignal,
   { signal, fs, log }: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
 ): Promise<number | undefined> {
   try {
-    const verdict = await fs.readText(path, { signal });
+    const verdict = await fs.readText(path, { signal: countSignal });
     if (verdict.kind === 'text') return countLines(verdict.bytes.toString('utf8'));
     log('debug', `stat: no line count for "${path}": ${verdict.kind}`, 'stat');
   } catch (error) {
-    rethrowIfAborted(error);
+    // Only the call's own cancellation fails the stat; the count budget running out does not.
+    if (signal.aborted) rethrowIfAborted(error);
     log('debug', `stat: line count failed for "${path}": ${String(error)}`, 'stat');
   }
   return undefined;
@@ -127,7 +131,7 @@ async function countTextLines(
 async function getFileInfo(
   filePath: string,
   { signal, fs, log }: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
-  countFileLines: boolean,
+  countSignal: AbortSignal | undefined,
 ): Promise<FileInfo> {
   signal.throwIfAborted();
 
@@ -181,8 +185,11 @@ async function getFileInfo(
   }
 
   const lineCount =
-    countFileLines && !isOwnSymlink && stats.isFile() && stats.size <= LINE_COUNT_MAX_BYTES
-      ? await countTextLines(requestedPath, { signal, fs, log })
+    countSignal !== undefined &&
+    !isOwnSymlink &&
+    stats.isFile() &&
+    stats.size <= LINE_COUNT_MAX_BYTES
+      ? await countTextLines(requestedPath, countSignal, { signal, fs, log })
       : undefined;
 
   return buildFileInfoResult(
@@ -224,8 +231,12 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   run: async (args, ctx) => {
     const paths = args.path !== undefined ? [args.path] : (args.paths ?? []);
 
+    const countSignal =
+      paths.length <= LINE_COUNT_MAX_PATHS
+        ? AbortSignal.any([ctx.signal, AbortSignal.timeout(LINE_COUNT_BUDGET_MS)])
+        : undefined;
     const batch = await runOverPaths(paths, ctx, ErrorCode.NOT_FOUND, async (path) =>
-      getFileInfo(path, ctx, paths.length <= LINE_COUNT_MAX_PATHS),
+      getFileInfo(path, ctx, countSignal),
     );
 
     // No `text` on purpose. The one-liner this used to build (`AGENTS.md: file,
