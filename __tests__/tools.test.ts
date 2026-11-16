@@ -1142,8 +1142,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // lineCount; measured 32462 / 16154.
     // Raised 2026-11-16 to 32550 full and 16250 read-only: read says an
     // oversized single-path whole read returns its head; measured 32532 / 16224.
-    const BUDGET_CHARS = 32_550;
-    const BUDGET_CHARS_READ_ONLY = 16_250;
+    // Raised 2026-11-16 to 32650 full and 16350 read-only: read says it
+    // decodes BOM-marked UTF-16; measured 32640 / 16332.
+    const BUDGET_CHARS = 32_650;
+    const BUDGET_CHARS_READ_ONLY = 16_350;
 
     const full = await createTestClientPair([tmpDir]);
     try {

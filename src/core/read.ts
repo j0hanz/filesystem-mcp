@@ -76,6 +76,8 @@ export interface ReadFileResult {
   hasMoreLines?: boolean;
   /** Set only when a `full` read fell back to `oversizeHead`. */
   oversize?: true;
+  /** Set when the text was decoded from UTF-16. */
+  encoding?: Utf16Encoding;
 }
 
 async function readFileBufferWithLimit(
@@ -496,6 +498,79 @@ export async function readByMode(
         tail: spec.lines,
         ...(await readTailContent(handle, spec.lines, options, validPath)),
       };
+  }
+}
+
+export type Utf16Encoding = 'utf-16le' | 'utf-16be';
+
+/** Decode BOM-marked UTF-16 (callers check {@link hasUtf16Bom} first); the BOM is dropped. */
+export function decodeUtf16(bytes: Buffer): { content: string; encoding: Utf16Encoding } {
+  const encoding: Utf16Encoding = bytes[0] === 0xff ? 'utf-16le' : 'utf-16be';
+  // Non-fatal: a trailing odd byte or a lone surrogate becomes U+FFFD instead of throwing.
+  return { content: new TextDecoder(encoding).decode(bytes), encoding };
+}
+
+/**
+ * An in-memory {@link ReadSpec} over already-decoded text, with the streaming
+ * readers' semantics: a whole read is verbatim; a slice drops one final newline,
+ * splits on \n, strips each line's trailing \r and joins with \n.
+ */
+export function sliceText(
+  content: string,
+  spec: ReadSpec,
+): Pick<
+  ReadFileResult,
+  | 'content'
+  | 'readMode'
+  | 'totalLines'
+  | 'linesRead'
+  | 'hasMoreLines'
+  | 'head'
+  | 'tail'
+  | 'startLine'
+  | 'endLine'
+> {
+  if (spec.kind === 'full') {
+    const totalLines = countLines(content);
+    return { content, readMode: 'full', totalLines, linesRead: totalLines, hasMoreLines: false };
+  }
+  const lines =
+    content.length === 0
+      ? []
+      : (content.endsWith('\n') ? content.slice(0, -1) : content)
+          .split('\n')
+          .map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+  const shown = (from: number, to: number) => {
+    const picked = lines.slice(from, to);
+    return { content: picked.join('\n'), linesRead: picked.length };
+  };
+  switch (spec.kind) {
+    case 'head':
+      return {
+        readMode: 'head',
+        head: spec.lines,
+        ...shown(0, spec.lines),
+        hasMoreLines: lines.length > spec.lines,
+      };
+    case 'tail': {
+      const from = Math.max(lines.length - spec.lines, 0);
+      return {
+        readMode: 'tail',
+        tail: spec.lines,
+        ...shown(from, lines.length),
+        hasMoreLines: from > 0,
+      };
+    }
+    case 'range': {
+      const to = spec.end ?? lines.length;
+      return {
+        readMode: 'range',
+        startLine: spec.start,
+        ...(spec.end !== undefined ? { endLine: spec.end } : {}),
+        ...shown(spec.start - 1, to),
+        hasMoreLines: to < lines.length,
+      };
+    }
   }
 }
 

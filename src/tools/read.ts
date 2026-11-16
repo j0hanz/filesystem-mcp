@@ -28,6 +28,7 @@ import {
   MAX_OUTBOUND_RESULT_BYTES,
   type Transport,
 } from '../core/outbound.ts';
+import type { Utf16Encoding } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -127,6 +128,7 @@ interface ReadPerPathValue {
   startLine?: number;
   endLine?: number;
   contentHash?: string;
+  encoding?: Utf16Encoding;
 }
 
 type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
@@ -135,6 +137,7 @@ const READ_TOOL_LABEL = 'Read';
 
 function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOptions {
   const base = {
+    decodeUtf16: true,
     ...(signal ? { signal } : {}),
     ...(args.paths !== undefined && hasLineRange(args)
       ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true }
@@ -296,7 +299,9 @@ function buildPerPathReadValue(
   const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
   // A slice is not the file, so the link rule gets its size, not its content.
+  // resources/read serves a decoded file's raw bytes, not this text, so it gets no link.
   const canLink =
+    result.encoding === undefined &&
     (result.fileSize === undefined || result.fileSize <= getMaxTextFileSize()) &&
     canLinkFile(options.transport, {
       uri: buildFileResourceUri(result.path),
@@ -321,6 +326,7 @@ function buildPerPathReadValue(
     ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
+    ...(result.encoding !== undefined ? { encoding: result.encoding } : {}),
     ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
@@ -410,6 +416,11 @@ function readTrailer(v: PerPathReadValue): string[] {
     );
   } else if (v.startLine !== undefined && v.linesRead === 0) {
     lines.push(`// no lines at or after line ${String(v.startLine)}`);
+  }
+  if (v.encoding !== undefined) {
+    lines.push(
+      `// decoded from ${v.encoding.toUpperCase()}: edit, patch, replace_text and diff refuse this file`,
+    );
   }
   if (v.contentHash !== undefined) {
     const slice = v.head !== undefined || v.tail !== undefined || v.startLine !== undefined;
@@ -510,6 +521,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Do not use it to check size or existence; use `stat` instead. ' +
     'To locate content, use `search_text`, `find_files`, or `list`. ' +
     'Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. ' +
+    'UTF-16 text with a byte-order mark is returned decoded, with encoding set; the write tools still refuse it. ' +
     'Past the size limit, a single-path whole read returns its first 2000 lines with continuation args, a batch file fails with TOO_LARGE, and a head or range is truncated. ' +
     'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +

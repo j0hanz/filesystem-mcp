@@ -3097,7 +3097,7 @@ describe('GuardedFileSystem.readNamedText', () => {
       fs.readNamedText(utf16),
       fsErrorMatcher(
         ErrorCode.INVALID_INPUT,
-        /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+        /^UTF-16 text file detected; read returns it decoded, but this tool needs UTF-8\.$/,
       ),
     );
   });

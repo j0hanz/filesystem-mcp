@@ -373,7 +373,7 @@ export function binaryRefusal(kind: 'binary' | 'utf16', filePath: string): FsErr
   return kind === 'utf16'
     ? new FsError(
         ErrorCode.INVALID_INPUT,
-        'UTF-16 text file detected; convert it to UTF-8 first.',
+        'UTF-16 text file detected; read returns it decoded, but this tool needs UTF-8.',
         filePath,
       )
     : new FsError(ErrorCode.BINARY_FILE, BINARY_FILE_MESSAGE, filePath);
