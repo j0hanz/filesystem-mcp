@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -70,6 +71,19 @@ const MAX_SYMLINK_HOPS = 40;
 /** Races only validation, never a commit, so a hung mount ends at the tool timeout. */
 function boundedValidation<T>(pending: Promise<T>): Promise<T> {
   return withAbort(pending, AbortSignal.timeout(getToolTimeoutMs()));
+}
+
+/** Folders one scan has found reachable from a root without passing a link. */
+const linkFreeDirs = new AsyncLocalStorage<Set<string>>();
+
+/**
+ * Runs one scan with `PathGuard.reachesRemoteLink` remembering the folders it
+ * found to hold no link, so the files of one folder share its check. Only
+ * Windows runs that check at all.
+ */
+// shortcut: another process swapping a folder for a link mid-scan goes unchecked until the scan ends; key the memory to the folder's lstat ino and mtime if that race matters.
+export function withLinkFreeDirs<T>(fn: () => Promise<T>): Promise<T> {
+  return IS_WINDOWS ? linkFreeDirs.run(new Set(), fn) : fn();
 }
 
 /** What a move, copy or rename does: see `PathGuard.resolveTransferDestination`. */
@@ -644,9 +658,11 @@ export class PathGuard {
    * which can connect to the named host and send the user's NTLM credentials,
    * so this reads each link with `lstat` and `readlink`, which open no target.
    */
-  // shortcut: one lstat per path part per validation on Windows (31 us each); cache link-free directories if large searches start hitting the tool deadline.
+  // One lstat per path part per validation on Windows (31 us each); a scan
+  // remembers the folders it has cleared (`withLinkFreeDirs`).
   async reachesRemoteLink(normalizedPath: string): Promise<boolean> {
     if (!IS_WINDOWS) return false;
+    const cleared = linkFreeDirs.getStore();
     let current = this.allowedRootContaining(normalizedPath) ?? parse(normalizedPath).root;
     const partsOf = (from: string, to: string) => relative(from, to).split(sep).filter(Boolean);
     let rest = partsOf(current, normalizedPath);
@@ -654,13 +670,19 @@ export class PathGuard {
     while (rest.length > 0) {
       const next = join(current, rest[0] ?? '');
       rest = rest.slice(1);
-      let isLink: boolean;
+      if (cleared?.has(next)) {
+        current = next;
+        continue;
+      }
+      let entry: Stats;
       try {
-        isLink = (await lstat(next)).isSymbolicLink();
+        entry = await lstat(next);
       } catch {
         return false; // Missing or unreadable: realpath reaches nothing past it.
       }
-      if (!isLink) {
+      if (!entry.isSymbolicLink()) {
+        // Every part from a root down to `next` was just seen not to be a link.
+        if (entry.isDirectory()) cleared?.add(next);
         current = next;
         continue;
       }
@@ -717,9 +739,14 @@ export class PathGuard {
    * ACCESS_DENIED for it rather than prompt. The caller returns an
    * `input_required` result carrying exactly this set (R7), and on retry applies
    * each accepted grant via {@link applyGrant} (R8). `requestState` binds this
-   * set so a grant accepted for X cannot authorize Y (R9).
+   * set so a grant accepted for X cannot authorize Y (R9). `askedFor`, when
+   * given, receives the first path that led to each directory, so the prompt
+   * can say why a folder the caller never named is being asked for.
    */
-  async precheckAccess(paths: readonly string[]): Promise<string[]> {
+  async precheckAccess(
+    paths: readonly string[],
+    askedFor?: Map<string, string>,
+  ): Promise<string[]> {
     if (!this.allowedDirectoriesState || paths.length === 0) {
       return [];
     }
@@ -748,6 +775,7 @@ export class PathGuard {
         continue;
       }
       grantDirs.push(targetDir);
+      askedFor?.set(targetDir, normalized);
     }
     return grantDirs.sort();
   }

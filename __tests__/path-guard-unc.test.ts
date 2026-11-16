@@ -20,7 +20,7 @@ import {
   isUncOrDevicePath,
   normalizePath,
 } from '../src/core/path-utils.ts';
-import { PathGuard } from '../src/core/path.ts';
+import { PathGuard, withLinkFreeDirs } from '../src/core/path.ts';
 import { scan } from '../src/core/scan.ts';
 import { snapshotTree, UndoJournal } from '../src/core/undo.ts';
 import { FIND_FILES, LIST } from '../src/tools/index.ts';
@@ -438,6 +438,73 @@ describe(
       const fs = stubLinks(t, { [link]: UNC_TARGET });
       assert.equal(await guard.entryVerdict(link), 'inaccessible');
       assert.deepEqual(fs.touched(link), []);
+    });
+
+    /** Counts real `lstat` calls on `path` itself. */
+    function countLstats(t: TestContext, path: string): () => number {
+      const wanted = normalizePath(path);
+      const lstatMock = t.mock.method(fsPromises, 'lstat', REAL_FS.lstat);
+      syncBuiltinESMExports();
+      t.after(() => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      return () =>
+        lstatMock.mock.calls.filter((call) => isSamePath(String(call.arguments[0]), wanted)).length;
+    }
+
+    it('inside one scan, a folder seen to hold no link is not checked again', async (t) => {
+      const folder = join(root, 'walked', 'deeper');
+      await mkdir(folder, { recursive: true });
+      const a = normalizePath(join(folder, 'a.txt'));
+      const b = normalizePath(join(folder, 'b.txt'));
+      await writeFile(a, 'a');
+      await writeFile(b, 'b');
+      const folderChecks = countLstats(t, folder);
+
+      await withLinkFreeDirs(async () => {
+        assert.equal(await guard.reachesRemoteLink(a), false);
+        assert.equal(await guard.reachesRemoteLink(b), false);
+        assert.equal(folderChecks(), 1, 'the second file must reuse the folder verdict');
+      });
+      // Nothing is remembered once the scan is over.
+      assert.equal(await guard.reachesRemoteLink(b), false);
+      assert.equal(folderChecks(), 2);
+    });
+
+    it('inside one scan, a link under a folder already seen is still refused', async (t) => {
+      const folder = join(root, 'seen');
+      await mkdir(folder, { recursive: true });
+      await writeFile(join(folder, 'a.txt'), 'a');
+      const planted = join(folder, 'planted');
+      const fs = stubLinks(t, { [planted]: UNC_TARGET });
+
+      await withLinkFreeDirs(async () => {
+        assert.equal(await guard.reachesRemoteLink(normalizePath(join(folder, 'a.txt'))), false);
+        assert.equal(await guard.reachesRemoteLink(normalizePath(join(planted, 'x.txt'))), true);
+        await assert.rejects(guard.validateExistingPath(join(planted, 'x.txt')), denied);
+      });
+      assert.deepEqual(fs.touched(planted), []);
+    });
+
+    it('a find_files walk checks a folder for a link fewer times than it has files', async (t) => {
+      const folder = join(root, 'many');
+      await mkdir(folder, { recursive: true });
+      const files = 80;
+      for (let i = 0; i < files; i++) await writeFile(join(folder, `f${String(i)}.txt`), 'x');
+      const folderChecks = countLstats(t, folder);
+
+      const { structured } = await runToolBodyResult(
+        FIND_FILES,
+        { path: root, pattern: 'many/*.txt', maxResults: files },
+        { guard },
+      );
+      assert.equal(structured.results.length, files);
+      // One check per file before; now only the walk's first concurrent wave misses.
+      assert.ok(
+        folderChecks() < files,
+        `${String(folderChecks())} checks for ${String(files)} files`,
+      );
     });
 
     it('finds the host at the end of a chain', async (t) => {

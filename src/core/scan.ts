@@ -31,7 +31,7 @@ import {
   resolveEntryType,
   toPosixPath,
 } from './path-utils.ts';
-import type { PathGuard } from './path.ts';
+import { type PathGuard, withLinkFreeDirs } from './path.ts';
 import { ALPHA_RANGE_RE, NUMERIC_RANGE_RE } from './schema.ts';
 import { MIB } from './util.ts';
 
@@ -174,7 +174,15 @@ export interface ScanOutcome<R> {
  * wins over the caps, and an abort that cut work short resolves as `'timeout'`,
  * never rejects.
  */
-export async function scan<R>(
+export function scan<R>(
+  scope: ScanScope,
+  options: ScanOptions<R>,
+  onEntry: (entry: ScanEntry) => Promise<R | ScanSkip | undefined>,
+): Promise<ScanOutcome<R>> {
+  return withLinkFreeDirs(() => scanWalk(scope, options, onEntry));
+}
+
+async function scanWalk<R>(
   scope: ScanScope,
   options: ScanOptions<R>,
   onEntry: (entry: ScanEntry) => Promise<R | ScanSkip | undefined>,

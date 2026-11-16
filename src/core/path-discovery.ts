@@ -80,7 +80,20 @@ let cachedSystemDirs: { key: string; dirs: string[] } | undefined;
 export function getUnsafeSystemDirs(): string[] {
   const raw = IS_WINDOWS
     ? getWindowsSystemDirs()
-    : ['/usr', '/etc', '/bin', '/sbin', '/System', '/proc', '/sys', '/dev', '/boot'];
+    : [
+        '/usr',
+        '/etc',
+        '/bin',
+        '/sbin',
+        '/System',
+        '/proc',
+        '/sys',
+        '/dev',
+        '/boot',
+        // Where Docker and Kubernetes mount a container's secrets.
+        '/run/secrets',
+        '/var/run/secrets',
+      ];
   const key = raw.join(';');
   if (cachedSystemDirs?.key === key) {
     return cachedSystemDirs.dirs;
@@ -114,6 +127,19 @@ const UNSAFE_HOME_SUBDIRS = [
   '.config/gcloud',
   '.config/gh',
   '.azure',
+  // The same tools' credential folders on Windows, and the macOS keychains.
+  'AppData/Roaming/gcloud',
+  'AppData/Roaming/GitHub CLI',
+  'AppData/Roaming/terraform.d',
+  'Library/Keychains',
+  // Browser profiles: cookies, saved logins, history.
+  'AppData/Local/Google/Chrome/User Data',
+  'AppData/Local/Microsoft/Edge/User Data',
+  'AppData/Roaming/Mozilla/Firefox',
+  'Library/Application Support/Google/Chrome',
+  'Library/Application Support/Firefox',
+  '.config/google-chrome',
+  '.mozilla',
 ];
 
 export function isUnsafeCwdPath(normalizedCwd: string): boolean {

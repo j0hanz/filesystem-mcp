@@ -29,7 +29,7 @@ import {
   Problem,
 } from '../core/errors.ts';
 import type { ProgressCtx } from '../core/fmt.ts';
-import { plainMessage } from '../core/fmt.ts';
+import { joinRoster, plainMessage } from '../core/fmt.ts';
 import { GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
@@ -413,8 +413,19 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   private async precheckGrant(): Promise<InputRequiredResult | undefined> {
     const paths = this.collectPaths();
     if (paths.length === 0) return undefined;
-    const grantDirs = await this.toolCtx.fs.pathGuard.precheckAccess(paths);
+    const askedFor = new Map<string, string>();
+    const grantDirs = await this.toolCtx.fs.pathGuard.precheckAccess(paths, askedFor);
     if (grantDirs.length === 0) return undefined;
+    // A missing path is granted through its nearest existing folder, and a file
+    // through its parent: name the path, or the person cannot tell why a folder
+    // the caller never mentioned is being asked for.
+    // With several folders, each path is paired with its folder.
+    const reasons = (dirs: readonly string[], paired: boolean): string[] =>
+      dirs.flatMap((dir) => {
+        const path = askedFor.get(dir);
+        if (path === undefined || isSamePath(path, dir)) return [];
+        return [paired ? `"${dir}" is needed for "${path}"` : `"${path}"`];
+      });
     // The grant round always comes first. A folder still ungranted in a later
     // round was declined, and validateAccess fails it closed.
     const state = this.toolCtx.requestState?.<PendingState>();
@@ -428,20 +439,28 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     const round = await pendingRoundTrip(this.toolCtx, {
       op: 'grant',
       pending: grantDirs,
-      buildInputs: (dirs) =>
-        multi
+      buildInputs: (dirs) => {
+        const why = reasons(dirs, multi);
+        const needed =
+          why.length === 0
+            ? ''
+            : multi
+              ? ` ${joinRoster(why, '; ')}.`
+              : ` Needed for ${why.join(', ')}.`;
+        return multi
           ? [
               {
                 key: 'grant',
-                message: 'Grant filesystem access to these directories? Select the ones to allow.',
+                message: `Grant filesystem access to these directories? Select the ones to allow.${needed}`,
                 choices: dirs,
                 multi: true,
               },
             ]
           : dirs.map((dir, i) => ({
               key: confirmKey(i),
-              message: `Grant filesystem access to "${dir}"?`,
-            })),
+              message: `Grant filesystem access to "${dir}"?${needed}`,
+            }));
+      },
     });
     if (round !== undefined) return round;
     // Apply accepted grants for the session (R8). Declined/missing dirs are

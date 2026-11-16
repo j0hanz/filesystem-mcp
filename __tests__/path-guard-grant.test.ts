@@ -299,6 +299,48 @@ describe('PathGuard grant round-trip', () => {
     }
   });
 
+  it('app-data credential stores and browser profiles are unsafe, their siblings are not', () => {
+    const home = homedir();
+    for (const sub of [
+      'AppData',
+      'AppData/Roaming',
+      'AppData/Roaming/gcloud',
+      'AppData/Roaming/GitHub CLI',
+      'AppData/Roaming/terraform.d',
+      'AppData/Roaming/Mozilla/Firefox/Profiles/x',
+      'AppData/Local/Google/Chrome/User Data/Default',
+      'AppData/Local/Microsoft/Edge/User Data',
+      'Library',
+      'Library/Keychains',
+      'Library/Application Support/Google/Chrome/Default',
+      'Library/Application Support/Firefox',
+      '.config/google-chrome',
+      '.mozilla/firefox',
+    ]) {
+      assert.ok(isUnsafeCwdPath(join(home, sub)), `${sub} must be unsafe`);
+    }
+    for (const sub of [
+      'AppData/Local/Temp/project',
+      'AppData/Roaming/Code/User',
+      'Library/Caches/project',
+    ]) {
+      assert.strictEqual(isUnsafeCwdPath(join(home, sub)), false, `${sub} must stay grantable`);
+    }
+  });
+
+  it(
+    'container secret mounts are unsafe, their siblings are not',
+    { skip: process.platform === 'win32' && 'POSIX paths' },
+    () => {
+      for (const dir of ['/run', '/run/secrets', '/run/secrets/db', '/var/run/secrets/k8s']) {
+        assert.ok(isUnsafeCwdPath(dir), `${dir} must be unsafe`);
+      }
+      for (const dir of ['/run/user/1000/project', '/var/tmp/project']) {
+        assert.strictEqual(isUnsafeCwdPath(dir), false, `${dir} must stay grantable`);
+      }
+    },
+  );
+
   it(
     'Linux virtual and boot folders are unsafe',
     { skip: process.platform === 'win32' && 'POSIX paths' },
