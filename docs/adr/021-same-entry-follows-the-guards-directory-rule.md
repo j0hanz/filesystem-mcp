@@ -1,57 +1,60 @@
 # ADR-021: Same-Entry in a Batch follows the guard's directory rule
 
-**Status**: accepted, 2026-11-16
+**Status**: accepted, 2026-11-16 (scope narrowed the same day)
 **Deciders**: j0hanz, in the architecture review of 2026-11-16 (Candidate 2)
 
 ## Context
 
 Batch tools decided "these two items name one entry" with whichever helper
-each picked:
+each picked: `create` and `move` used `isEquivalentPath` / `unicodeMatchKey`,
+`edit` used `isSamePath`, `delete` used `normalizeCaseForComparison` plus
+identity. All read the global `IS_CASE_INSENSITIVE_FS`, while `PathGuard`
+decides case sensitivity per directory.
 
-- `create` and `move` used `isEquivalentPath` / `unicodeMatchKey` (Unicode
-  and full case fold).
-- `edit` used `isSamePath` (ASCII case fold, no Unicode).
-- `delete` used `normalizeCaseForComparison` (ASCII only) plus identity.
+Implementation showed most of that drift is harmless:
 
-All of them read the global `IS_CASE_INSENSITIVE_FS`, while `PathGuard`
-decides case sensitivity per directory (`isDirectoryCaseSensitive`). So an
-NFC and an NFD spelling of one name were duplicates in `create` but not in
-`edit`, and a case-sensitive folder on Windows or macOS was judged by the
-wrong rule.
+- Checks on validated paths (`create`'s Landing check, `delete`'s
+  `seenTargets`, `move`'s destinations) already compare the guard's on-disk
+  spellings, so a Respelling is already one Entry there.
+- `edit` takes its write lock on the resolved path, so two spellings of one
+  file serialize and both edits land (`__tests__/unicode-paths.test.ts`,
+  "edit applies, and delete collapses, two spellings of one file").
+
+The real defect was in `create`'s schema-level checks, which folded raw
+spellings: two existing, distinct files whose names fold alike (`a b.txt` and
+`a b.txt`) were refused as duplicates, and the Landing check refused them
+again with "another entry in this batch".
 
 ## Decision
 
-`PathGuard` answers same-Entry for Batch tools through one async method that
-returns a key per path; equal keys name one Entry (a Respelling).
+`PathGuard.entryKeys` returns one key per path; equal keys name one Entry.
 
-- **Rule**: Unicode form and space characters always fold; letter case folds
-  only when the directory that holds the entry is case-insensitive. A
-  missing entry or parent takes the rule of its nearest existing ancestor
-  inside a root; with no such ancestor it falls back to
-  `IS_CASE_INSENSITIVE_FS`.
-- **Scope**: the duplicate checks of `create`, `edit`, `delete` and `move`.
-  `edit`'s and `create`'s checks leave their zod schemas and run in `run`
-  before any change, with the same `INVALID_INPUT` messages.
-- **Out of scope**: root and grant comparisons in `path.ts`, Scan name
-  matching, containment checks (`isPathInsideDirectory`, `nestedIndexes`),
-  `delete`'s identity check for an entry replaced during Confirmation, and
-  undo's refused-path filter, which compares spellings the server recorded.
+- **Rule**: a path naming an existing entry, as spelled or as its one
+  Respelling, keys on that entry, so two existing entries stay apart. A
+  missing path keys on its folded spelling: Unicode form and space characters
+  always fold; letter case folds only when the holding directory (or its
+  nearest existing ancestor inside a root) is case-insensitive. Outside the
+  roots, or when nothing can be read, `IS_CASE_INSENSITIVE_FS` decides.
+- **Scope**: `create` only. Its duplicate-file and duplicate-directory checks
+  leave the zod schema and run before planning, with the same
+  `INVALID_INPUT` messages; its Landing check keys through `entryKeys`.
 
 ## Considered options
 
-- **Global flag, sync.** Rejected: still disagrees with the guard in
-  case-sensitive directories.
-- **Spelling plus inode.** Rejected: merges hard links, which are distinct
-  Entries.
+- **All four Batch tools** (the original scope). Rejected: `edit`
+  deliberately serializes Respellings, and `delete` and `move` already
+  compare validated paths; refusing Respellings in `edit` would break tested
+  behaviour that loses no data.
+- **Spelling-only keys** (fold every path). Rejected: merges two existing
+  entries whose names fold alike.
+- **Spelling plus inode.** Rejected: merges hard links, distinct Entries.
 - **Keep a sync pre-check in the schemas.** Rejected: two rules drift again.
-- **A sync key from a cached directory rule.** Rejected: adds cache state and
-  invalidation for no caller that needs sync.
 - **Make undo's `journalRecords` async.** Rejected: its paths are on-disk
   spellings, not client respellings.
 
 ## Consequences
 
-- The advertised input schemas do not change (refinements are not in the JSON
-  schema); the contract snapshot stays the same.
-- `define.ts` keeps its second schema parse: `create`'s file-versus-directory
-  conflict check still runs there.
+- `create` overwrites two existing files whose names fold alike in one call.
+- The advertised input schemas do not change; the contract snapshot stays.
+- `define.ts` keeps its second schema parse for `create`'s
+  file-versus-directory conflict check.

@@ -498,11 +498,14 @@ export class PathGuard {
   }
 
   /**
-   * One key per path, in order; equal keys name one Entry (ADR-021). Unicode
-   * form and spaces always fold; letter case folds only where the directory
-   * holding the entry does, judged at its nearest existing ancestor inside a
-   * root. No directory outside the roots is read: there, and when nothing up
-   * to the root can be read, the platform rule decides.
+   * One key per path, in order; equal keys name one Entry (ADR-021). A path
+   * naming an existing entry, as spelled or as its one Respelling, keys on that
+   * entry, so two existing entries whose names fold alike stay apart. A missing
+   * one keys on its folded spelling: Unicode form and spaces always fold, and
+   * letter case folds only where the directory holding it does, judged at its
+   * nearest existing ancestor inside a root. No directory outside the roots is
+   * read: there, and when nothing up to the root can be read, the platform
+   * rule decides.
    */
   async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
     const roots = this.getAllowedDirectories();
@@ -530,12 +533,33 @@ export class PathGuard {
       }
       return rule;
     };
+    // shortcut: reads the parent once per path, not per folder; batches hold at most 100 paths.
+    const existingName = async (resolved: string): Promise<string | undefined> => {
+      const parent = dirname(resolved);
+      if (!roots.some((r) => isPathInsideDirectory(r, parent))) return undefined;
+      try {
+        return await this.findEquivalentEntry(
+          await realpath(parent),
+          basename(resolved),
+          resolved,
+          true,
+        );
+      } catch {
+        // Missing or unreadable parent, or an ambiguous name the guard will refuse.
+        return undefined;
+      }
+    };
     return Promise.all(
       paths.map(async (path) => {
-        const resolved = normalizePath(resolve(path));
-        return (await caseSensitiveAt(dirname(resolved)))
-          ? unicodeMatchKeyExactCase(resolved)
-          : unicodeMatchKey(resolved);
+        const resolved = normalizePath(path);
+        const parent = dirname(resolved);
+        const fold = (await caseSensitiveAt(parent)) ? unicodeMatchKeyExactCase : unicodeMatchKey;
+        signal?.throwIfAborted();
+        const entry = await existingName(resolved);
+        // Prefixes keep an existing entry's key apart from a missing name's.
+        return entry === undefined
+          ? `new:${fold(resolved)}`
+          : `on-disk:${fold(parent)}${sep}${entry}`;
       }),
     );
   }

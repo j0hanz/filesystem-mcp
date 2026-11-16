@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `create` no longer refuses two existing files whose names differ only in
+  Unicode form or space character (`a b.txt` and `a b.txt`) as duplicates;
+  its duplicate checks follow the folder's own case rule.
+
 ## [2.22.0] - 2026-11-16
 
 Exclude globs, directory search, UTF-16 reads, a truncated head for

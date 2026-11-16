@@ -1,5 +1,7 @@
 # Same-Entry Judge Implementation Plan
 
+> **Scope narrowed during execution (2026-11-16):** only Task 1 (with existing entries keyed on themselves) and Task 3 (`create`) shipped. Tasks 2, 4 and 5 were dropped; ADR-021 records why.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `create`, `edit`, `delete` and `move` decide "two items name one Entry" through one `PathGuard` method that follows the guard's per-directory case rule.
@@ -31,15 +33,19 @@
 ### Task 1: `PathGuard.entryKeys`
 
 **Files:**
+
 - Modify: `src/core/path.ts` (new public method on `PathGuard`; reuses `isDirectoryCaseSensitive` L191-212, `unicodeMatchKey`, `unicodeMatchKeyExactCase`)
 - Test: create `__tests__/path-guard-entry-keys.test.ts`
 
 **Interfaces:**
+
 - Produces:
+
   ```ts
   /** One key per path, in order; equal keys name one Entry (a Respelling). Paths are absolute. */
   entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]>;
   ```
+
   Key: `resolve(path)` folded with `unicodeMatchKey` when its rule directory is case-insensitive, else `unicodeMatchKeyExactCase`. Rule directory: the nearest existing ancestor of `dirname(path)` inside an allowed root (walk up, stop at the root). Read each rule directory once per call (Map by real path).
 
 - [ ] **Step 1: Write the failing tests**
@@ -47,7 +53,12 @@
 ```ts
 const caseless = process.platform === 'win32' || process.platform === 'darwin';
 it('folds Unicode form and spaces', async () => {
-  const [a, b, c, d] = await guard.entryKeys([join(root, 'café.txt'), join(root, 'café.txt'), join(root, 'shot PM.png'), join(root, 'shot PM.png')]);
+  const [a, b, c, d] = await guard.entryKeys([
+    join(root, 'café.txt'),
+    join(root, 'café.txt'),
+    join(root, 'shot PM.png'),
+    join(root, 'shot PM.png'),
+  ]);
   assert.strictEqual(a, b);
   assert.strictEqual(c, d);
 });
@@ -65,6 +76,7 @@ it('keeps different names apart', async () => {
   assert.notStrictEqual(a, b);
 });
 ```
+
 Plus a POSIX-only (`skip: process.platform === 'win32'`) test: a mode-000 folder as parent still yields keys, no throw. Plus `it('falls back to the platform rule outside the roots', …)`: two paths in `tmpdir()` (outside `root`) differing in case resolve without throwing, and `a === b` equals `caseless`.
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -86,10 +98,12 @@ git commit -m "feat(path): judge same-Entry by the guard's directory rule"
 ### Task 2: `edit` checks duplicates in `run`
 
 **Files:**
+
 - Modify: `src/tools/edit.ts` (remove L117-131 from `superRefine`; check in `run` before any Rewrite)
 - Test: `__tests__/edit.test.ts` (L169-188 and a new NFC/NFD test)
 
 **Interfaces:**
+
 - Consumes: `ctx.fs.pathGuard.entryKeys` (Task 1).
 
 - [ ] **Step 1: Write the failing test and adjust the old one**
@@ -115,10 +129,12 @@ git commit -m "fix(edit): refuse respellings of one file in a batch"
 ### Task 3: `create` uses the judge
 
 **Files:**
+
 - Modify: `src/tools/create.ts` (remove the duplicate checks L94-105 and L121-135 from `superRefine`, keep L106-120; replace `unicodeMatchKey(plan.validPath)` at L341)
 - Test: `__tests__/create.test.ts` (L136 test moves off `schemaIssues`; new tests)
 
 **Interfaces:**
+
 - Consumes: `entryKeys` (Task 1).
 
 - [ ] **Step 1: Write the failing tests**
@@ -146,11 +162,13 @@ git commit -m "refactor(create): judge duplicate entries through the path guard"
 ### Task 4: `move` and `delete` use the judge
 
 **Files:**
+
 - Modify: `src/tools/move.ts:165-188` (`destKey` from `entryKeys` over `ready` destinations; `touches` at L199-202 unchanged)
 - Modify: `src/tools/delete.ts:145-155` (`sawSameEntry` compares `entryKeys` of `validPath`s, keeps `sameIdentity`)
 - Test: `__tests__/move.test.ts`, `__tests__/delete.test.ts`
 
 **Interfaces:**
+
 - Consumes: `entryKeys` (Task 1).
 
 - [ ] **Step 1: Write the failing test**

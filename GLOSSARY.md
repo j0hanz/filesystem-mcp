@@ -20,7 +20,8 @@ A requested path that names an existing entry in another case or Unicode
 spelling; acting on it renames that entry rather than creating a second one.
 Whether case counts follows the directory that holds the entry, or its nearest
 existing ancestor when the entry or its parent is missing, never one flag for
-the whole server. A Batch treats two respellings of one entry as one item.
+the whole server. Two existing entries are never Respellings of each other,
+even when their names fold alike.
 _Avoid_: spelling-only rename, case rename
 
 **Self-move**:

@@ -14,6 +14,7 @@ import { CREATE } from '../src/tools/create.ts';
 import {
   cleanupTestRoot,
   createTestRoot,
+  fsErrorMatcher,
   makeGuard,
   trySymlink,
   withEnv,
@@ -59,6 +60,25 @@ describe('create body', () => {
     args: CreateArgs,
     options: Partial<ToolBodyOptions> = {},
   ): Promise<CreateRun> => (await runToolBodyResult(CREATE, args, { fs, ...options })) as CreateRun;
+
+  // ADR-021: two existing entries are not respellings, even when their names fold alike.
+  it('overwrites two existing files whose names fold alike', async () => {
+    const dir = join(root, 'fold-alike');
+    await mkdir(dir, { recursive: true });
+    const space = join(dir, 'a b.txt');
+    const nbsp = join(dir, 'a b.txt');
+    await writeFile(space, 'old');
+    await writeFile(nbsp, 'old');
+    const result = await create({
+      files: [
+        { path: space, content: 'S', overwrite: true },
+        { path: nbsp, content: 'N', overwrite: true },
+      ],
+    });
+    assert.notStrictEqual(result.isError, true, result.text);
+    assert.strictEqual(await readFile(space, 'utf8'), 'S');
+    assert.strictEqual(await readFile(nbsp, 'utf8'), 'N');
+  });
 
   it('refuses a batch whose combined content exceeds the file limit', async () => {
     const half = 'x'.repeat(Math.ceil(getMaxTextFileSize() / 2) + 1);
@@ -124,32 +144,44 @@ describe('create body', () => {
     const file = join(root, 'dup-create', 'dup.txt');
     const caseless = process.platform === 'win32' || process.platform === 'darwin';
     for (const twin of caseless ? [file, join(root, 'dup-create', 'DUP.TXT')] : [file]) {
-      const issues = await schemaIssues(
+      await assert.rejects(
         create({
           files: [
             { path: file, content: 'AAAA' },
             { path: twin, content: 'BBBB' },
           ],
         }),
-      );
-      assert.ok(
-        issues.some((m) => m.startsWith('duplicate of files[0].path')),
-        issues.join('; '),
+        fsErrorMatcher(
+          ErrorCode.INVALID_INPUT,
+          /duplicate of files\[0\]\.path; one entry per file/,
+        ),
       );
     }
     await assert.rejects(access(file), 'nothing may be written when the batch is refused');
   });
 
+  it('treats NFC and NFD new files under a new folder as one entry', async () => {
+    const dir = join(root, 'nf-new');
+    await assert.rejects(
+      create({
+        files: [
+          { path: join(dir, 'café.txt'), content: 'a' },
+          { path: join(dir, 'café.txt'), content: 'b' },
+        ],
+      }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /duplicate of files\[0\]\.path/),
+    );
+    await assert.rejects(access(dir), 'nothing may be written when the batch is refused');
+  });
+
   it('refuses a batch that names the same directory twice', async () => {
     const dir = join(root, 'dup-dir');
-    const issues = await schemaIssues(
-      create({
-        directories: [dir, dir],
-      }),
-    );
-    assert.ok(
-      issues.some((m) => m.startsWith('duplicate of directories[0]')),
-      issues.join('; '),
+    await assert.rejects(
+      create({ directories: [dir, dir] }),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /duplicate of directories\[0\]; one entry per directory/,
+      ),
     );
   });
 
@@ -184,14 +216,11 @@ describe('create body', () => {
 
   it('detects duplicate directories across home alias spellings', async () => {
     const homeDir = homedir();
-    const issues = await schemaIssues(
+    await assert.rejects(
       create({
         directories: ['~/test-dup-dir', join(homeDir, 'test-dup-dir')],
       }),
-    );
-    assert.ok(
-      issues.some((m) => m.includes('duplicate of directories[0]')),
-      issues.join('; '),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /duplicate of directories\[0\]/),
     );
   });
 

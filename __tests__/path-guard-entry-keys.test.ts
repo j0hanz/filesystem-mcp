@@ -49,6 +49,19 @@ describe('PathGuard.entryKeys', () => {
     assert.strictEqual(a === b, caseless);
   });
 
+  it('keeps two existing entries whose names fold alike apart', async () => {
+    await writeTestFile(root, 'a b.txt', 'space');
+    await writeTestFile(root, 'a b.txt', 'nbsp');
+    const [a, b] = await guard.entryKeys([join(root, 'a b.txt'), join(root, 'a b.txt')]);
+    assert.notStrictEqual(a, b);
+  });
+
+  it('keys a Respelling of an existing entry on that entry', async () => {
+    await writeTestFile(root, 'shot PM.png', 'x');
+    const [a, b] = await guard.entryKeys([join(root, 'shot PM.png'), join(root, 'shot PM.png')]);
+    assert.strictEqual(a, b);
+  });
+
   it('keeps different names apart', async () => {
     const [a, b] = await guard.entryKeys([join(root, 'a.txt'), join(root, 'b.txt')]);
     assert.notStrictEqual(a, b);
