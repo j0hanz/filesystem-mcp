@@ -552,7 +552,10 @@ describe('describeRefusal', () => {
   it('names each refusal kind', () => {
     const cases: [Record<string, unknown> | undefined, string][] = [
       [{ confirm_0: { action: 'decline' } }, 'declined by the user'],
-      [{ confirm_0: { action: 'cancel' } }, 'dismissed by the user'],
+      [
+        { confirm_0: { action: 'cancel' } },
+        'dismissed by the user; ask again if they still want it',
+      ],
       [{ confirm_0: { action: 'accept', content: {} } }, 'answered without a valid choice'],
       [{}, 'not answered'],
       [undefined, 'not answered'],

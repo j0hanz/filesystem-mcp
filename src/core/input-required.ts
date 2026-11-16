@@ -448,7 +448,7 @@ export function describeRefusal(
   const view = inputResponse(ctx.inputResponses, key);
   if (view.kind !== 'elicit') return 'not answered';
   if (view.action === 'decline') return 'declined by the user';
-  if (view.action === 'cancel') return 'dismissed by the user';
+  if (view.action === 'cancel') return 'dismissed by the user; ask again if they still want it';
   return 'answered without a valid choice';
 }
 
