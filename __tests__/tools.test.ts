@@ -1138,8 +1138,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // Raised 2026-11-16 to 32400 full and 16100 read-only: paging cursors say
     // they last about 5 min after their last page, apart from resourceUri's
     // 60 s; measured 32396 / 16088.
-    const BUDGET_CHARS = 32_400;
-    const BUDGET_CHARS_READ_ONLY = 16_100;
+    // Raised 2026-11-16 to 32500 full and 16200 read-only: stat names
+    // lineCount; measured 32462 / 16154.
+    const BUDGET_CHARS = 32_500;
+    const BUDGET_CHARS_READ_ONLY = 16_200;
 
     const full = await createTestClientPair([tmpDir]);
     try {
