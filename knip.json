@@ -1,11 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": [
-    "src/index.ts!",
-    "src/transport.ts!",
-    "src/core/diff-worker.ts!",
-    "__tests__/**/*.test.ts"
-  ],
+  "entry": ["src/core/diff-worker.ts!", "__tests__/**/*.test.ts"],
   "project": ["src/**/*.ts!", "__tests__/helpers.ts", "__tests__/tool-harness.ts"],
   "ignoreDependencies": ["@stryker-mutator/command-runner"]
 }
