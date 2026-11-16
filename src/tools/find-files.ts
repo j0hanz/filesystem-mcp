@@ -75,6 +75,20 @@ interface SearchFilesOutput {
   nextCursor?: string;
 }
 
+// An empty, complete scan for a pattern with no glob syntax most often meant "names containing it".
+function bareWordHint(pattern: string, metadata: SearchFilesPageMetadata): string[] {
+  if (
+    metadata.matched !== 0 ||
+    metadata.stoppedReason !== undefined ||
+    /[*?[\]{}!]/.test(pattern)
+  ) {
+    return [];
+  }
+  return [
+    `// '${pattern}' has no wildcard, so it matches only that exact name. For names containing it, use '*${pattern}*'.`,
+  ];
+}
+
 interface SearchFilesPageMetadata {
   readonly root: string;
   matched: number;
@@ -187,7 +201,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         stoppedReason: metadata.stoppedReason,
         skippedInaccessible: metadata.skippedInaccessible,
         excludedDirs: metadata.excludedDirs,
-        notes: hiddenLine(metadata.hiddenEntries),
+        notes: [...hiddenLine(metadata.hiddenEntries), ...bareWordHint(args.pattern, metadata)],
       }),
       render: ({ page, metadata, trailer }) => {
         const structured: SearchFilesOutput = {
