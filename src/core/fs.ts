@@ -1879,9 +1879,12 @@ export class GuardedFileSystem {
       (policy === 'media' && media) ||
       (policy === 'allow' && (media || refusal === 'binary'));
     // `raw` always takes the bytes path, so `!bytes` already excludes it.
-    if (!bytes && refusal === 'utf16' && options.decodeUtf16) {
-      options.beforeBody?.({ validPath, stats, mimeType, kind });
-      const maxSize = options.maxSize ?? getMaxTextFileSize();
+    const decode = !bytes && refusal === 'utf16' && options.decodeUtf16 === true;
+    if (!bytes && !decode && refusal !== undefined) throw binaryRefusal(refusal, filePath);
+    options.beforeBody?.({ validPath, stats, mimeType, kind });
+    const maxSize = options.maxSize ?? getMaxTextFileSize();
+
+    if (decode) {
       const { content, encoding } = decodeUtf16(
         await this.#readBounded(handle, stats, maxSize, filePath, signal),
       );
@@ -1896,9 +1899,6 @@ export class GuardedFileSystem {
         ...sliceText(content, options.slice ?? { kind: 'full' }),
       };
     }
-    if (!bytes && refusal !== undefined) throw binaryRefusal(refusal, filePath);
-    options.beforeBody?.({ validPath, stats, mimeType, kind });
-    const maxSize = options.maxSize ?? getMaxTextFileSize();
 
     if (bytes) {
       const content = await this.#readBounded(handle, stats, maxSize, filePath, signal);

@@ -366,7 +366,8 @@ export class PageSnapshotStore {
         items: params.items,
         metadata: params.metadata,
       },
-      params.weight ?? params.items.length,
+      // Clamped so a snapshot heavier than the cap alone evicts the rest, not itself.
+      Math.min(params.weight ?? params.items.length, MAX_SNAPSHOT_ITEMS),
     );
     this.#createdIds?.push(snapshotId);
     return snapshotId;

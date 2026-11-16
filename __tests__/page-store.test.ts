@@ -55,6 +55,14 @@ describe('PageSnapshotStore', () => {
     assert.deepStrictEqual(store.read(newer, KEY).items, ['y']);
   });
 
+  it('a snapshot heavier than the cap alone survives and evicts the rest', () => {
+    const store = new PageSnapshotStore();
+    const other = store.create({ queryKey: KEY, items: ['x'] });
+    const heavy = store.create({ queryKey: KEY, items: ['y'], weight: 210_000 });
+    assert.deepStrictEqual(store.read(heavy, KEY).items, ['y']);
+    assert.throws(() => store.read(other, KEY), stale);
+  });
+
   it('evicts the least recently used snapshot past 200,000 items', () => {
     const store = new PageSnapshotStore();
     const older = store.create({ queryKey: KEY, items: new Array<number>(150_000).fill(0) });
