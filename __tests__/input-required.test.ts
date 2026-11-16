@@ -23,6 +23,7 @@ import {
   readAcceptedMultiChoice,
   requestStateCodec,
   type RoundBind,
+  roundCallerOf,
 } from '../src/core/input-required.ts';
 import { createServer } from '../src/server.ts';
 import {
@@ -185,6 +186,45 @@ describe('input_required multi-round-trip infrastructure', () => {
     assert.strictEqual(same.op, 'delete');
     await assert.rejects(() => requestStateCodec.verify(wire, bindContext('tools/call', 'other')));
     await assert.rejects(() => requestStateCodec.verify(wire, bindContext()));
+  });
+
+  it('2f. binds to the user subject when the verifier provides one', async () => {
+    const httpBind = (sub: string | undefined, clientId: string): ServerContext =>
+      ({
+        mcpReq: { method: 'tools/call' },
+        http: { authInfo: { clientId, ...(sub === undefined ? {} : { extra: { sub } }) } },
+      }) as unknown as ServerContext;
+
+    const wire = await requestStateCodec.mint(
+      { op: 'delete', paths: ['/a'] },
+      httpBind('user-a', 'client-1'),
+    );
+    // The subject, not the OAuth client, is who the round belongs to.
+    await requestStateCodec.verify(wire, httpBind('user-a', 'client-2'));
+    await assert.rejects(() => requestStateCodec.verify(wire, httpBind('user-b', 'client-1')));
+  });
+
+  it('2g. roundCallerOf falls back to clientId when no subject was stamped', () => {
+    const auth = (extra?: Record<string, unknown>) =>
+      ({ clientId: 'c', scopes: [], token: 't', ...(extra ? { extra } : {}) }) as never;
+    assert.strictEqual(roundCallerOf(auth()), 'c');
+    assert.strictEqual(roundCallerOf(auth({ sub: '' })), 'c');
+    assert.strictEqual(roundCallerOf(auth({ sub: 'u' })), 'u');
+    assert.strictEqual(roundCallerOf(undefined), undefined);
+  });
+
+  it('2h. seals a round for an hour of think time', async () => {
+    const wire = await requestStateCodec.mint({ op: 'delete', paths: ['/a'] }, bindContext());
+    // Token layout: "v1." + base64url(JSON {p, exp, b}) + "." + base64url(mac).
+    const body = JSON.parse(
+      Buffer.from(wire.slice(3, wire.lastIndexOf('.')), 'base64url').toString('utf8'),
+    ) as { exp: number };
+    const seconds = body.exp - Math.floor(Date.now() / 1000);
+    assert.ok(
+      seconds > 3590 && seconds <= 3600,
+      `exp was ${String(seconds)}s away, expected ~3600`,
+    );
+    await requestStateCodec.verify(wire, bindContext());
   });
 
   it('3. pendingRoundTrip with no requestState mints a fresh input_required', async () => {
@@ -526,7 +566,10 @@ describe('describeRefusal', () => {
   it('names each refusal kind', () => {
     const cases: [Record<string, unknown> | undefined, string][] = [
       [{ confirm_0: { action: 'decline' } }, 'declined by the user'],
-      [{ confirm_0: { action: 'cancel' } }, 'dismissed by the user'],
+      [
+        { confirm_0: { action: 'cancel' } },
+        'dismissed by the user; ask again if they still want it',
+      ],
       [{ confirm_0: { action: 'accept', content: {} } }, 'answered without a valid choice'],
       [{}, 'not answered'],
       [undefined, 'not answered'],
@@ -793,7 +836,7 @@ describe('wrapped inputResponses over the modern wire', () => {
         requestState: requestState2,
       });
       assert.notStrictEqual(third.result?.['resultType'], 'input_required');
-      assert.strictEqual(third.result?.['isError'], true, JSON.stringify(third));
+      assert.notStrictEqual(third.result?.['isError'], true, JSON.stringify(third));
       // The refusal wording lives in the per-path failure and may or may not
       // be echoed in the text block; match the whole result.
       assert.match(JSON.stringify(third.result), /wrapped result/);

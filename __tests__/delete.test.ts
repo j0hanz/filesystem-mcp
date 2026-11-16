@@ -488,7 +488,7 @@ describe('delete body', () => {
       },
     );
 
-    assert.strictEqual(result.isError, true);
+    assert.notStrictEqual(result.isError, true);
     assert.strictEqual(only(result).error?.code, ErrorCode.CANCELLED);
     await access(join(tree, 'a.txt'));
     assert.strictEqual(capture.records.length, 0, 'no undo id for a delete that never ran');
@@ -702,12 +702,25 @@ describe('delete body', () => {
       { confirm: () => ({ action: 'decline' }) },
     );
 
-    assert.strictEqual(result.isError, true);
+    assert.notStrictEqual(result.isError, true, 'a decline is an answer, not a failure');
     const error = result.structured.results[0]?.error;
     assert.strictEqual(error?.code, 'CANCELLED');
     assert.match(error?.message ?? '', /declined by the user/);
     assert.match(result.text ?? '', /FAILED: Delete cancelled/);
     await access(join(dir, 'sub', 'f.txt'));
+  });
+
+  it('keeps isError true when a decline rides with a real failure', async () => {
+    const dir = await nonEmptyDir('del_mixed_dir');
+    const missing = join(root, 'del_mixed_missing.txt');
+    const result = await del(
+      { paths: [dir, missing], recursive: true },
+      { confirm: () => ({ action: 'decline' }) },
+    );
+
+    assert.strictEqual(result.isError, true, 'one real failure still fails the call');
+    const codes = result.structured.results.map((r) => r.error?.code ?? r.value?.deleted);
+    assert.deepStrictEqual(codes, ['CANCELLED', 'NOT_FOUND']);
   });
 
   it('deduplicates two spellings of the same missing path when ignoreIfNotExists is true', async () => {

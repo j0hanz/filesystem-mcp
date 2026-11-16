@@ -293,6 +293,10 @@ export function bearerAuthMiddleware(
       // `expiresAt` is deliberately omitted: a static API key has no expiry and
       // there is no `exp` claim or introspection response to read one from.
       // Populate it from the token if this ever moves to issued tokens.
+      // A future issued-token verifier MUST stamp the authenticated user's
+      // subject into `authInfo.extra.sub`: confirmation rounds seal to that
+      // subject (roundCallerOf in core/input-required.ts), so two users of one
+      // client cannot share an approval.
       const presented = authHeader.slice('Bearer '.length).trim();
       req.auth = {
         token: presented,

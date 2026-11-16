@@ -3314,6 +3314,25 @@ describe('undo body', () => {
     assert.ok(!third.includes('tx.txt'), `tx.txt was restored once: ${third}`);
   });
 
+  it('an undo that skips every path for staleness is not an error', async () => {
+    const x = join(root, 'skip-all-x.txt');
+    const y = join(root, 'skip-all-y.txt');
+    await writeFile(x, 'X0');
+    await writeFile(y, 'Y0');
+    const id = await journaled(CREATE, {
+      files: [
+        { path: x, content: 'X1', overwrite: true },
+        { path: y, content: 'Y1', overwrite: true },
+      ],
+    });
+    await writeFile(x, 'X-external');
+    await writeFile(y, 'Y-external');
+    const result = await undo({ id });
+    assert.notStrictEqual(result.isError, true, result.text);
+    assert.match(result.text ?? '', /SKIPPED/u);
+    assert.strictEqual(await readFile(x, 'utf8'), 'X-external');
+  });
+
   it('tells a preview from a restore, and names what was skipped and why', async () => {
     const x = join(root, 'said-x.txt');
     const y = join(root, 'said-y.txt');
@@ -3543,9 +3562,9 @@ describe('undo body', () => {
     });
     await journaled(EDIT, { path: file, edits: [{ oldText: 'v2', newText: 'v3' }] });
     const undone = await undo({ id: olderId });
-    // Every record was skipped, so the call reports isError — and the older
-    // entry is still listed by a later dry run.
-    assert.strictEqual(undone.isError, true);
+    // Every record was skipped: an answer the model can report, not an error
+    // — and the older entry is still listed by a later dry run.
+    assert.notStrictEqual(undone.isError, true, undone.text);
     assert.match(undone.text ?? '', /SKIPPED/u);
     assert.strictEqual(await readFile(file, 'utf8'), 'v3\n');
     const dry = await undo({ dryRun: true });

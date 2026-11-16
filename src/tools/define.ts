@@ -26,6 +26,7 @@ import {
   formatDetailedError,
   formatUnknownErrorMessage,
   FsError,
+  isRefusal,
   Problem,
 } from '../core/errors.ts';
 import type { ProgressCtx } from '../core/fmt.ts';
@@ -324,13 +325,17 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   private failProgress(
     error: unknown,
     undoSuffix = '',
-  ): { isError: true; content: ContentBlock[]; _meta: { error: Problem } } {
+  ): { isError?: true; content: ContentBlock[]; _meta: { error: Problem } } {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
     const problem = Problem.fromUnknown(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
+    // A refusal (CANCELLED) is an answer the model can report — decline,
+    // dismissal, or a race guard after an approval — so the failure detail
+    // still ships, but the call is not an error.
+    const refusal = isRefusal(problem);
     return {
       content: [{ type: 'text' as const, text: formatDetailedError(problem) + undoSuffix }],
-      isError: true,
+      ...(refusal ? {} : { isError: true }),
       // _meta, not structuredContent: a client would show that JSON in place of the text.
       _meta: { error: problem },
     };
