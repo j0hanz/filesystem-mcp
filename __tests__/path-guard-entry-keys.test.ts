@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import { cleanupTestRoot, createTestRoot, makeGuard, writeTestFile } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  makeGuard,
+  trySymlink,
+  writeTestFile,
+} from './helpers.ts';
 
 // ADR-021: equal keys name one Entry. Names are escapes so the source's own
 // normalization cannot change them.
@@ -72,6 +78,24 @@ describe('PathGuard.entryKeys', () => {
     try {
       const [a, b] = await guard.entryKeys([join(outside, 'Out.txt'), join(outside, 'OUT.txt')]);
       assert.strictEqual(a === b, caseless);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  // A link out of the root must not be followed: the folder it reaches is not listed.
+  it('reads no folder a link reaches outside the roots', async (t) => {
+    const outside = await mkdtemp(join(tmpdir(), 'entry-keys-link-'));
+    try {
+      await writeTestFile(outside, 'a b.txt', 'space');
+      await writeTestFile(outside, 'a b.txt', 'nbsp');
+      if (!(await trySymlink(outside, join(root, 'out'), () => t.skip('no symlinks')))) return;
+      const [a, b] = await guard.entryKeys([
+        join(root, 'out', 'a b.txt'),
+        join(root, 'out', 'a b.txt'),
+      ]);
+      // Unlisted, both fold as new names: listing would key the two files apart.
+      assert.strictEqual(a, b);
     } finally {
       await rm(outside, { recursive: true, force: true });
     }

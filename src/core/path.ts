@@ -511,13 +511,24 @@ export class PathGuard {
     const roots = this.getAllowedDirectories();
     const rules = new Map<string, Promise<boolean>>();
     const platformRule = !IS_CASE_INSENSITIVE_FS;
+    // The guard's own order (as respellMissing): no remote link is followed, and
+    // a folder whose real path leaves the roots or is denylisted is never listed.
+    // Throws only when `at` is missing or unreadable.
+    const realInside = async (at: string): Promise<string | undefined> => {
+      if (await this.reachesRemoteLink(at)) return undefined;
+      const real = normalizePath(await realpath(at));
+      return (await isPathWithinAllowedDirectories(real, roots)) && !this.isSensitive(real)
+        ? real
+        : undefined;
+    };
     const judge = async (dir: string): Promise<boolean> => {
       const root = roots.find((r) => isPathInsideDirectory(r, dir));
       if (root === undefined) return platformRule;
       for (let at = dir; ; at = dirname(at)) {
         signal?.throwIfAborted();
         try {
-          const real = await realpath(at);
+          const real = await realInside(at);
+          if (real === undefined) return platformRule;
           return await isDirectoryCaseSensitive(real, await readdir(real));
         } catch {
           // Missing or unreadable: the parent decides.
@@ -538,12 +549,9 @@ export class PathGuard {
       const parent = dirname(resolved);
       if (!roots.some((r) => isPathInsideDirectory(r, parent))) return undefined;
       try {
-        return await this.findEquivalentEntry(
-          await realpath(parent),
-          basename(resolved),
-          resolved,
-          true,
-        );
+        const real = await realInside(parent);
+        if (real === undefined) return undefined;
+        return await this.findEquivalentEntry(real, basename(resolved), resolved, true);
       } catch {
         // Missing or unreadable parent, or an ambiguous name the guard will refuse.
         return undefined;
