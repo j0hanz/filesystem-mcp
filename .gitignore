@@ -45,6 +45,7 @@ logs/
 memory_db/
 graphify-out
 .tmp/
+.tdqs
 
 # Editor directories and files
 .github/*
