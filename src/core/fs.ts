@@ -1910,14 +1910,18 @@ export class GuardedFileSystem {
       );
       // Unreachable: the probe already saw the UTF-16 mark.
       if (body.kind !== 'text' || body.encoding === 'utf-8') throw binaryRefusal('utf16', filePath);
+      const slice = sliceText(body.bytes.toString('utf8'), options.slice ?? { kind: 'full' });
+      // A slice is lossy only when its own lines hold a replacement (ADR-020).
+      // shortcut: a literal U+FFFD in a lossy file's clean lines reads as lossy; judge raw bytes per line if that matters.
+      const lossy = body.lossy && slice.content.includes('�');
       return {
         type: 'text',
         path: validPath,
         modified: stats.mtime.toISOString(),
         fileSize: stats.size,
         encoding: body.encoding,
-        ...(body.lossy ? { lossy: true as const } : {}),
-        ...sliceText(body.bytes.toString('utf8'), options.slice ?? { kind: 'full' }),
+        ...(lossy ? { lossy: true as const } : {}),
+        ...slice,
       };
     }
 

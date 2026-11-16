@@ -115,7 +115,7 @@ async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<Fi
   // A NUL byte past the leading bytes still marks a binary file, as it does
   // for `grep -I`. Other non-UTF-8 text is still searched: a lossy decode
   // only affects the bytes a pattern could not have matched anyway.
-  if (buffer.includes(0)) {
+  if (verdict.encoding === 'utf-8' && buffer.includes(0)) {
     return new ScanSkip({ kind: 'binary', utf16: false });
   }
 

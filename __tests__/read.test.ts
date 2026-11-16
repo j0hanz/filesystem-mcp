@@ -430,6 +430,21 @@ describe('read body', () => {
   describe('UTF-16', () => {
     const le = (text: string) =>
       Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+
+    it('judges a UTF-16 slice lossy on the lines it returned', async () => {
+      await mkdir(join(root, 'utf16'), { recursive: true });
+      const file = join(root, 'utf16', 'lone-late.txt');
+      // Line 3 holds a lone high surrogate.
+      await writeFile(
+        file,
+        Buffer.concat([le('ok\nfine\n'), Buffer.from([0x00, 0xd8]), Buffer.from('\n', 'utf16le')]),
+      );
+      const lossyOf = async (args: Omit<Parameters<typeof read>[0], 'path'>) =>
+        valueOf((await read({ path: file, ...args }, { guard })).structured.results[0])?.lossy;
+      assert.strictEqual(await lossyOf({ head: 1 }), undefined);
+      assert.strictEqual(await lossyOf({ startLine: 3 }), true);
+      assert.strictEqual(await lossyOf({}), true);
+    });
     const be = (text: string) =>
       Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
     const put = async (name: string, bytes: Buffer) => {
