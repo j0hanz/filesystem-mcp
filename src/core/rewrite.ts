@@ -81,9 +81,9 @@ export function rewriteEntry<T>(
 ): Promise<Rewritten<T> | ScanSkip | undefined> {
   return locked(request, async () => {
     const verdict = await request.fs.readText(request.path, { signal: request.signal });
+    if (verdict.kind !== 'text') return skipOf(verdict);
     const refusal = rewriteSkipOf(verdict);
     if (refusal !== undefined) return skipOf(refusal);
-    if (verdict.kind !== 'text') return skipOf(verdict);
     let view: TextView | undefined;
     const open = (): TextView => (view ??= viewText(verdict.bytes.toString('utf8')));
     const change = await transform(verdict.bytes, verdict.stats, open);

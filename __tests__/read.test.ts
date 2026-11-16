@@ -410,6 +410,14 @@ describe('read body', () => {
       assert.ok(clean && !('lossy' in clean));
     });
 
+    // The line reader takes 64 KiB chunks; a character split between two is still valid UTF-8.
+    it('does not mark a character split across read chunks lossy', async () => {
+      const file = await put('split.txt', Buffer.from(`${'a'.repeat(65_535)}€\nend\n`));
+      const sliced = await read({ path: file, startLine: 1, endLine: 2 }, { guard });
+      assert.strictEqual(sliced.isError, false);
+      assert.strictEqual(valueOf(sliced.structured.results[0])?.lossy, undefined);
+    });
+
     it('judges a slice lossy on the bytes it read', async () => {
       const file = await put(
         'late.txt',

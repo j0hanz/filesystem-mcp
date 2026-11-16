@@ -2835,12 +2835,29 @@ describe('GuardedFileSystem.readText', () => {
   });
 
   it('readText binary by extension', async () => {
-    assert.deepEqual(await fs.readText(await put('a.png', 'plain text')), { kind: 'binary' });
+    assert.deepEqual(await fs.readText(await put('a.png', 'plain text')), {
+      kind: 'binary',
+      utf16: false,
+    });
   });
 
   it('readText binary by sample', async () => {
     const path = await put('b.txt', Buffer.from([0x61, 0x62, 0x63, 0, 0x64]));
-    assert.deepEqual(await fs.readText(path), { kind: 'binary' });
+    assert.deepEqual(await fs.readText(path), { kind: 'binary', utf16: false });
+  });
+
+  // A Rewrite refuses UTF-16 by encoding alone, so a sweep never pays for the decode.
+  it('decodes UTF-16 only when its text is first used', async (t) => {
+    const path = await put(
+      'lazy16.txt',
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]),
+    );
+    const decode = t.mock.method(TextDecoder.prototype, 'decode');
+    const verdict = await fs.readText(path);
+    assert.equal(verdict.kind === 'text' && verdict.encoding, 'utf-16le');
+    assert.equal(decode.mock.callCount(), 0);
+    assert.equal(verdict.kind === 'text' && verdict.bytes.toString('utf8'), 'hi\n');
+    assert.equal(decode.mock.callCount(), 1, 'clean UTF-16 decodes once');
   });
 
   it('judges the UTF-16 size limit on bytes on disk', async () => {
