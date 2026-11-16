@@ -155,6 +155,8 @@ export interface ReadTextOptions {
   readonly signal?: AbortSignal | undefined;
   /** The client's spelling of the path, for errors. */
   readonly requestedPath?: string | undefined;
+  /** Return BOM-marked UTF-16 as UTF-8 text instead of a binary verdict. */
+  readonly decodeUtf16?: boolean;
 }
 
 export interface ReadNamedTextOptions {
@@ -2055,6 +2057,12 @@ export class GuardedFileSystem {
     }
     // The probe is a slice of the bytes already read: no extra syscall.
     const binary = binaryKind(filePath, bytes.subarray(0, MIME_SAMPLE_SIZE));
+    if (binary === 'utf16' && options?.decodeUtf16) {
+      // Re-encoded so callers keep one UTF-8 path; positions are in the decoded text.
+      const text = Buffer.from(decodeUtf16(bytes).content, 'utf8');
+      if (text.length > maxFileSize) return { kind: 'tooLarge', size: text.length };
+      return { kind: 'text', bytes: text, stats };
+    }
     if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
     // The probe samples only the leading bytes. A caller that writes the text
     // back must refuse any byte the decode would replace with U+FFFD.

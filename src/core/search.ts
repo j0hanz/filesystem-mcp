@@ -109,7 +109,10 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 
 async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  const verdict = await scanCtx.fs.readText(entryPath, { signal: scanCtx.signal });
+  const verdict = await scanCtx.fs.readText(entryPath, {
+    signal: scanCtx.signal,
+    decodeUtf16: true,
+  });
   if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does

@@ -740,15 +740,20 @@ describe('search_text body', () => {
     );
   });
 
-  it('refuses a named UTF-16 file', async () => {
-    const dir = join(root, 'named_utf16');
+  it('searches UTF-16 text, named or under a directory', async () => {
+    const dir = join(root, 'utf16_search');
     await mkdir(dir, { recursive: true });
     const file = join(dir, 'u.txt');
-    await writeFile(file, Buffer.from([0xff, 0xfe, 0x61, 0x00]));
-    await assert.rejects(
-      search({ path: file, searchPattern: 'a' }),
-      fsErrorMatcher(ErrorCode.INVALID_INPUT, /UTF-16/),
+    await writeFile(
+      file,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('one\r\nneedle here\r\n', 'utf16le')]),
     );
+    const named = await search({ path: file, searchPattern: 'needle' });
+    assert.strictEqual(named.structured.matches[0]?.line, 2);
+    assert.strictEqual(named.structured.matches[0]?.content, 'needle here');
+    const walked = await search({ path: dir, searchPattern: 'needle' });
+    assert.strictEqual(walked.structured.totalMatches, 1);
+    assert.strictEqual(walked.structured.skippedBinary, undefined);
   });
 
   it('refuses a named file with an overlong regex line, and names the line', async () => {
