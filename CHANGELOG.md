@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `stat` reports `lineCount` for UTF-16 text and for text that is not valid
+  UTF-8, counted as `read` shows them.
+- `read` adds `lossy: true` when it returns text that is not valid UTF-8 (shown
+  with U+FFFD), judged on the lines it returned. `edit`, `patch`,
+  `replace_text` and `diff` still refuse such files.
+- A UTF-16 file's size limit is judged on its bytes on disk, not on the
+  decoded text.
+
 ## [2.22.0] - 2026-11-16
 
 Exclude globs, directory search, UTF-16 reads, a truncated head for
