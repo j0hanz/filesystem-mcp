@@ -409,6 +409,22 @@ describe('read body', () => {
       const clean = valueOf((await read({ path: plain }, { guard })).structured.results[0]);
       assert.ok(clean && !('lossy' in clean));
     });
+
+    it('judges a slice lossy on the bytes it read', async () => {
+      const file = await put(
+        'late.txt',
+        Buffer.concat([head, Buffer.from('\ncaf\xe9\n', 'latin1')]),
+      );
+      const lossyOf = async (args: Omit<Parameters<typeof read>[0], 'path'>) =>
+        valueOf((await read({ path: file, ...args }, { guard })).structured.results[0])?.lossy;
+      assert.strictEqual(await lossyOf({ head: 1 }), undefined);
+      assert.strictEqual(await lossyOf({ startLine: 2 }), true);
+      assert.strictEqual(await lossyOf({ tail: 1 }), true);
+      assert.match(
+        (await read({ path: file }, { guard })).text ?? '',
+        /^\/\/ not UTF-8, shown with U\+FFFD: edit, patch, replace_text and diff refuse this file$/m,
+      );
+    });
   });
 
   describe('UTF-16', () => {

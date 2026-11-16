@@ -61,6 +61,14 @@ interface PartialReadResult {
   content: string;
   linesRead: number;
   hasMoreLines: boolean;
+  /** A returned line's bytes were not UTF-8 (ADR-020: judged on the bytes read). */
+  lossy?: true;
+}
+
+/** A decoded line and whether its raw bytes were valid UTF-8. */
+interface BoundedLine {
+  readonly text: string;
+  readonly lossy: boolean;
 }
 
 export interface ReadFileResult {
@@ -129,7 +137,7 @@ async function readFileBufferWithLimit(
   return Buffer.concat(chunks, totalSize);
 }
 
-async function peekHasMore(iterator: AsyncIterator<string>): Promise<boolean> {
+async function peekHasMore(iterator: AsyncIterator<unknown>): Promise<boolean> {
   try {
     const { done } = await iterator.next();
     return !done;
@@ -161,7 +169,7 @@ async function* readLinesBounded(
   options: ReadLimits,
   filePath: string,
   startLine: number,
-): AsyncGenerator<string, void, undefined> {
+): AsyncGenerator<BoundedLine, void, undefined> {
   options.signal?.throwIfAborted(); // see readFileBufferWithLimit
   const stream = handle.createReadStream({
     start: 0,
@@ -174,6 +182,10 @@ async function* readLinesBounded(
   const decoder = new StringDecoder('utf-8');
   let pending = '';
   let pendingBytes = 0;
+  // Raw bytes of the kept line so far, so its UTF-8 validity is judged whole, not per chunk.
+  let pendingRaw: Buffer[] = [];
+  const lossyLine = (last: Buffer): boolean =>
+    !isUtf8(pendingRaw.length === 0 ? last : Buffer.concat([...pendingRaw, last]));
   let lineNumber = 0;
 
   const tooLong = (bytes: number): FsError =>
@@ -199,10 +211,14 @@ async function* readLinesBounded(
           if (lineBytes > options.maxSize) throw tooLong(lineBytes);
           // LF ends a character sequence as well as a line. Flush incomplete
           // UTF-8 here instead of combining bytes from separate lines.
-          yield (pending + decoder.write(segment) + decoder.end()).replace(/\r$/, '');
+          yield {
+            text: (pending + decoder.write(segment) + decoder.end()).replace(/\r$/, ''),
+            lossy: lossyLine(segment),
+          };
         }
         pending = '';
         pendingBytes = 0;
+        pendingRaw = [];
         offset = nl + 1;
         nl = buffer.indexOf(LF, offset);
       }
@@ -214,6 +230,7 @@ async function* readLinesBounded(
       if (lineNumber + 1 >= startLine) {
         if (pendingBytes > options.maxSize) throw tooLong(pendingBytes);
         pending += decoder.write(rest);
+        pendingRaw.push(rest);
       }
     }
 
@@ -223,7 +240,7 @@ async function* readLinesBounded(
       lineNumber++;
       if (lineNumber >= startLine) {
         if (pendingBytes > options.maxSize) throw tooLong(pendingBytes);
-        yield pending + decoder.end();
+        yield { text: pending + decoder.end(), lossy: lossyLine(Buffer.alloc(0)) };
       }
     }
   } finally {
@@ -246,6 +263,7 @@ async function readRangeContent(
   options.signal?.throwIfAborted();
 
   const lines: string[] = [];
+  let lossy = false;
   let lineNumber = startLine - 1;
   let estimatedBytes = 0;
   const newlineBytes = Buffer.byteLength('\n', 'utf-8');
@@ -275,10 +293,11 @@ async function readRangeContent(
         }
         throw error;
       }
-      const { value: line, done } = next;
+      const { value, done } = next;
       if (done) {
         break;
       }
+      const line = value.text;
       lineNumber++;
 
       if (lineNumber > stopAt) {
@@ -297,6 +316,7 @@ async function readRangeContent(
       }
 
       lines.push(line);
+      lossy ||= value.lossy;
 
       estimatedBytes += lineBytes;
       if (estimatedBytes > options.maxSize) {
@@ -320,7 +340,19 @@ async function readRangeContent(
     content: lines.join('\n'),
     linesRead: lines.length,
     hasMoreLines,
+    ...(lossy ? { lossy: true as const } : {}),
   };
+}
+
+/** The raw bytes of the last `count` lines of `bytes`, a final LF aside. */
+function lastLinesBytes(bytes: Buffer, count: number): Buffer {
+  let end = bytes.length;
+  if (end > 0 && bytes[end - 1] === LF) end--;
+  let start = end;
+  for (let seen = 0; start > 0; start--) {
+    if (bytes[start - 1] === LF && ++seen === count) break;
+  }
+  return bytes.subarray(start, end);
 }
 
 async function readTailContent(
@@ -433,10 +465,12 @@ async function readTailContent(
   if (options.hardCap && contentBytes > options.maxSize) {
     throw createTooLargeError(contentBytes, options.maxSize, filePath);
   }
+  const lossy = lines.length > 0 && !isUtf8(lastLinesBytes(allBytes, lines.length));
   return {
     content,
     linesRead: lines.length,
     hasMoreLines,
+    ...(lossy ? { lossy: true as const } : {}),
   };
 }
 
@@ -525,7 +559,7 @@ export async function readByMode(
 export type Utf16Encoding = 'utf-16le' | 'utf-16be';
 
 /** Decode BOM-marked UTF-16 (callers check {@link hasUtf16Bom} first); the BOM is dropped. */
-export function decodeUtf16(bytes: Buffer): { content: string; encoding: Utf16Encoding } {
+function decodeUtf16(bytes: Buffer): { content: string; encoding: Utf16Encoding } {
   const encoding: Utf16Encoding = bytes[0] === 0xff ? 'utf-16le' : 'utf-16be';
   // Non-fatal: a trailing odd byte or a lone surrogate becomes U+FFFD instead of throwing.
   return { content: new TextDecoder(encoding).decode(bytes), encoding };
