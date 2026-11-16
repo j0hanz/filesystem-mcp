@@ -104,6 +104,8 @@ export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
 
 /** Default line chunk size for read continuation when no explicit range was given. */
 export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;
+/** Lines a single-path whole read returns instead of TOO_LARGE when the file is over the limit. */
+export const OVERSIZE_HEAD_LINES = 2000;
 
 export const MAX_TREE_DEPTH = 50;
 export const DEFAULT_TREE_ENTRIES = 1000;

@@ -118,6 +118,8 @@ interface ReadOptionsBase {
   readonly hardCap?: boolean;
   /** Runs after classification, before the body; a throw stops the read. */
   readonly beforeBody?: (meta: ReadProbeMeta) => void;
+  /** A whole read past `maxSize` returns this many leading lines instead of TOO_LARGE. */
+  readonly oversizeHead?: number;
 }
 
 export type ReadOptions = ReadOptionsBase &
@@ -1916,6 +1918,7 @@ export class GuardedFileSystem {
       maxSize,
       ...(options.hardCap ? { hardCap: true } : {}),
       ...(signal ? { signal } : {}),
+      ...(options.oversizeHead !== undefined ? { oversizeHead: options.oversizeHead } : {}),
     };
     const spec: ReadSpec = options.slice ?? { kind: 'full' };
     return {

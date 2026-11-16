@@ -51,6 +51,8 @@ export interface ReadLimits {
   maxSize: number;
   hardCap?: boolean;
   signal?: AbortSignal;
+  /** A `full` read past `maxSize` returns this many leading lines instead of throwing. */
+  oversizeHead?: number;
 }
 
 interface PartialReadResult {
@@ -72,6 +74,8 @@ export interface ReadFileResult {
   endLine?: number;
   linesRead?: number;
   hasMoreLines?: boolean;
+  /** Set only when a `full` read fell back to `oversizeHead`. */
+  oversize?: true;
 }
 
 async function readFileBufferWithLimit(
@@ -451,6 +455,15 @@ export async function readByMode(
   };
   switch (spec.kind) {
     case 'full': {
+      if (stats.size > options.maxSize && options.oversizeHead !== undefined) {
+        return {
+          ...base,
+          readMode: 'head',
+          head: options.oversizeHead,
+          oversize: true,
+          ...(await readRangeContent(handle, 1, options.oversizeHead, options, filePath)),
+        };
+      }
       if (stats.size > options.maxSize) {
         throw createTooLargeError(stats.size, options.maxSize, filePath, {
           suggestion: 'Use head to preview.',

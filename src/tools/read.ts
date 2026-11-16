@@ -37,6 +37,7 @@ import {
 } from '../core/schema.ts';
 import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
+  OVERSIZE_HEAD_LINES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
   sha256Hex,
@@ -154,7 +155,11 @@ function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOption
     };
   }
   // A full read returns image/audio as a media block; binary: true also returns other binary.
-  return { binary: args.binary ? 'allow' : 'media', ...base };
+  return {
+    binary: args.binary ? 'allow' : 'media',
+    ...base,
+    ...(args.paths === undefined ? { oversizeHead: OVERSIZE_HEAD_LINES } : {}),
+  };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
@@ -199,6 +204,8 @@ function buildReadContinuation(
 type PerPathReadValue = ReadPerPathValue & {
   content?: string;
   fileSize?: number;
+  /** A whole read past the size limit that came back as its head. */
+  oversize?: true;
   mediaData?: string;
   blobData?: string;
 };
@@ -302,6 +309,7 @@ function buildPerPathReadValue(
   return {
     content: result.content,
     ...(result.fileSize !== undefined ? { fileSize: result.fileSize } : {}),
+    ...(result.oversize ? { oversize: true } : {}),
     mimeType: mimeInfo.mimeType,
     kind: mimeInfo.kind,
     ...(continuation ? { continuation } : {}),
@@ -380,7 +388,12 @@ function wasCut(v: PerPathReadValue): boolean {
  */
 function readTrailer(v: PerPathReadValue): string[] {
   const lines: string[] = [];
-  if (v.continuation) {
+  if (v.oversize && v.continuation) {
+    const args = JSON.stringify(v.continuation.args);
+    lines.push(
+      `// truncated: file is ${String(v.fileSize)} bytes, over the ${String(getMaxTextFileSize())}-byte whole-read limit; showing lines 1-${String(v.linesRead)}. Continue: read ${args}`,
+    );
+  } else if (v.continuation) {
     const args = JSON.stringify(v.continuation.args);
     lines.push(
       wasCut(v)
@@ -497,7 +510,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Do not use it to check size or existence; use `stat` instead. ' +
     'To locate content, use `search_text`, `find_files`, or `list`. ' +
     'Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. ' +
-    'Past the size limit, a whole read fails with TOO_LARGE; a single-path head or range is truncated. ' +
+    'Past the size limit, a single-path whole read returns its first 2000 lines with continuation args, a batch file fails with TOO_LARGE, and a head or range is truncated. ' +
     'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +
     'Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. ' +
@@ -668,6 +681,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       const {
         content: _content,
         fileSize: _fileSize,
+        oversize: _oversize,
         mediaData: _mediaData,
         blobData: _blobData,
         ...value

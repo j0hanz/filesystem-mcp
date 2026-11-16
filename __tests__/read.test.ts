@@ -625,6 +625,66 @@ describe('read body', () => {
     assert.ok(!(refused.text ?? '').includes('allowed root'), refused.text);
   });
 
+  describe('oversized whole read', () => {
+    const limit = 1024 * 1024;
+    const line = `${'z'.repeat(99)}\n`;
+
+    it('returns the first 2000 lines with a continuation instead of TOO_LARGE', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/big.txt', line.repeat(20_000));
+        const first = await read({ path: file }, { guard });
+        assert.strictEqual(first.isError, false);
+        const value = valueOf(first.structured.results[0]);
+        assert.strictEqual(value?.linesRead, 2000);
+        assert.strictEqual(value.head, 2000);
+        assert.strictEqual(value.hasMoreLines, true);
+        assert.strictEqual(value.totalLines, undefined);
+        assert.ok(!('oversize' in value));
+        assert.deepStrictEqual(value.continuation?.args, {
+          path: file,
+          startLine: 2001,
+          endLine: 4000,
+        });
+        assert.match(
+          first.text ?? '',
+          /^\/\/ truncated: file is 2000000 bytes, over the 1048576-byte whole-read limit; showing lines 1-2000\. Continue: read \{/m,
+        );
+        const next = await read(value.continuation.args, { guard });
+        assert.strictEqual(valueOf(next.structured.results[0])?.startLine, 2001);
+      });
+    });
+
+    it('numbers the head and carries lineNumbers into the continuation', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/numbered.txt', line.repeat(20_000));
+        const result = await read({ path: file, lineNumbers: true }, { guard });
+        assert.ok(result.text?.startsWith('1\tzzz'));
+        assert.strictEqual(
+          valueOf(result.structured.results[0])?.continuation?.args.lineNumbers,
+          true,
+        );
+      });
+    });
+
+    it('a batch file over the limit still fails TOO_LARGE', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/batch.txt', line.repeat(20_000));
+        const result = await read({ paths: [file] }, { guard });
+        assert.strictEqual(errorOf(result.structured.results[0])?.code, 'TOO_LARGE');
+      });
+    });
+
+    it('one line longer than the limit fails TOO_LARGE naming the line', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/one-line.txt', 'z'.repeat(2 * limit));
+        const result = await read({ path: file }, { guard });
+        const error = errorOf(result.structured.results[0]);
+        assert.strictEqual(error?.code, 'TOO_LARGE');
+        assert.match(error.message, /single line/);
+      });
+    });
+  });
+
   describe('lineNumbers', () => {
     it('numbers whole files, heads and ranges from their real first line', async () => {
       const file = await writeTestFile(root, 'numbered.txt', 'a\nb\nc\nd\n');
