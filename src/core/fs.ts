@@ -64,11 +64,13 @@ import {
   APPEND_NOFOLLOW,
   assertFileStats,
   binaryKind,
+  decodeUtf16,
   O_NOFOLLOW,
   READ_NOFOLLOW,
   READ_NONBLOCK_NOFOLLOW,
   readByMode,
   readProbe,
+  sliceText,
   WRITE_NOFOLLOW,
 } from './read.ts';
 import type { SkipVerdict } from './scan.ts';
@@ -118,6 +120,10 @@ interface ReadOptionsBase {
   readonly hardCap?: boolean;
   /** Runs after classification, before the body; a throw stops the read. */
   readonly beforeBody?: (meta: ReadProbeMeta) => void;
+  /** A whole read past `maxSize` returns this many leading lines instead of TOO_LARGE. */
+  readonly oversizeHead?: number;
+  /** Return BOM-marked UTF-16 decoded instead of refusing it (any policy but `raw`). */
+  readonly decodeUtf16?: boolean;
 }
 
 export type ReadOptions = ReadOptionsBase &
@@ -149,6 +155,8 @@ export interface ReadTextOptions {
   readonly signal?: AbortSignal | undefined;
   /** The client's spelling of the path, for errors. */
   readonly requestedPath?: string | undefined;
+  /** Return BOM-marked UTF-16 as UTF-8 text instead of a binary verdict. */
+  readonly decodeUtf16?: boolean;
 }
 
 export interface ReadNamedTextOptions {
@@ -1870,38 +1878,30 @@ export class GuardedFileSystem {
       policy === 'raw' ||
       (policy === 'media' && media) ||
       (policy === 'allow' && (media || refusal === 'binary'));
-    if (!bytes && refusal !== undefined) throw binaryRefusal(refusal, filePath);
+    // `raw` always takes the bytes path, so `!bytes` already excludes it.
+    const decode = !bytes && refusal === 'utf16' && options.decodeUtf16 === true;
+    if (!bytes && !decode && refusal !== undefined) throw binaryRefusal(refusal, filePath);
     options.beforeBody?.({ validPath, stats, mimeType, kind });
     const maxSize = options.maxSize ?? getMaxTextFileSize();
 
+    if (decode) {
+      const { content, encoding } = decodeUtf16(
+        await this.#readBounded(handle, stats, maxSize, filePath, signal),
+      );
+      const decodedBytes = Buffer.byteLength(content, 'utf8');
+      if (decodedBytes > maxSize) throw createTooLargeError(decodedBytes, maxSize, filePath);
+      return {
+        type: 'text',
+        path: validPath,
+        modified: stats.mtime.toISOString(),
+        fileSize: stats.size,
+        encoding,
+        ...sliceText(content, options.slice ?? { kind: 'full' }),
+      };
+    }
+
     if (bytes) {
-      if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
-      // The stat above is older than this handle: a file that grew since must not be read whole.
-      // Sized to the stat plus one overflow byte, grown only if the file grew, capped at maxSize + 1.
-      const cap = maxSize + 1;
-      let buffer = Buffer.allocUnsafe(Math.min(stats.size + 1, cap));
-      let filled = 0;
-      try {
-        for (;;) {
-          if (filled === buffer.length) {
-            if (buffer.length === cap) break;
-            const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, cap));
-            buffer.copy(grown, 0, 0, filled);
-            buffer = grown;
-          }
-          signal?.throwIfAborted();
-          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
-          signal?.throwIfAborted();
-          if (bytesRead === 0) break;
-          filled += bytesRead;
-        }
-      } catch (error) {
-        // Node wraps even a TimeoutError signal reason in AbortError.
-        if (error instanceof Error && error.name === 'AbortError') signal?.throwIfAborted();
-        throw error;
-      }
-      if (filled > maxSize) throw createTooLargeError(filled, maxSize, filePath);
-      const content = buffer.subarray(0, filled);
+      const content = await this.#readBounded(handle, stats, maxSize, filePath, signal);
       return {
         type: 'bytes',
         content,
@@ -1916,12 +1916,50 @@ export class GuardedFileSystem {
       maxSize,
       ...(options.hardCap ? { hardCap: true } : {}),
       ...(signal ? { signal } : {}),
+      ...(options.oversizeHead !== undefined ? { oversizeHead: options.oversizeHead } : {}),
     };
     const spec: ReadSpec = options.slice ?? { kind: 'full' };
     return {
       type: 'text',
       ...(await readByMode(handle, validPath, filePath, stats, spec, limits)),
     };
+  }
+
+  /** The whole file through `handle`, refusing past `maxSize` even if it grew since `stats`. */
+  async #readBounded(
+    handle: FileHandle,
+    stats: Stats,
+    maxSize: number,
+    filePath: string,
+    signal: AbortSignal | undefined,
+  ): Promise<Buffer> {
+    if (stats.size > maxSize) throw createTooLargeError(stats.size, maxSize, filePath);
+    // The stat above is older than this handle: a file that grew since must not be read whole.
+    // Sized to the stat plus one overflow byte, grown only if the file grew, capped at maxSize + 1.
+    const cap = maxSize + 1;
+    let buffer = Buffer.allocUnsafe(Math.min(stats.size + 1, cap));
+    let filled = 0;
+    try {
+      for (;;) {
+        if (filled === buffer.length) {
+          if (buffer.length === cap) break;
+          const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, cap));
+          buffer.copy(grown, 0, 0, filled);
+          buffer = grown;
+        }
+        signal?.throwIfAborted();
+        const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+        signal?.throwIfAborted();
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+    } catch (error) {
+      // Node wraps even a TimeoutError signal reason in AbortError.
+      if (error instanceof Error && error.name === 'AbortError') signal?.throwIfAborted();
+      throw error;
+    }
+    if (filled > maxSize) throw createTooLargeError(filled, maxSize, filePath);
+    return buffer.subarray(0, filled);
   }
 
   /**
@@ -2019,6 +2057,12 @@ export class GuardedFileSystem {
     }
     // The probe is a slice of the bytes already read: no extra syscall.
     const binary = binaryKind(filePath, bytes.subarray(0, MIME_SAMPLE_SIZE));
+    if (binary === 'utf16' && options?.decodeUtf16) {
+      // Re-encoded so callers keep one UTF-8 path; positions are in the decoded text.
+      const text = Buffer.from(decodeUtf16(bytes).content, 'utf8');
+      if (text.length > maxFileSize) return { kind: 'tooLarge', size: text.length };
+      return { kind: 'text', bytes: text, stats };
+    }
     if (binary !== undefined) return { kind: 'binary', utf16: binary === 'utf16' };
     // The probe samples only the leading bytes. A caller that writes the text
     // back must refuse any byte the decode would replace with U+FFFD.

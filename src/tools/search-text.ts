@@ -200,7 +200,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     'exclude leaves out more names or paths. ' +
     'Lines over 1000 chars are clipped around the match. ' +
     'Stops early at 10000 matching lines or the timeout, setting stoppedReason. ' +
-    'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires after about 60 s), and resourceUri for a multi-page or stopped first page.',
+    'Returns root, `file:line: text` rows (a named file prints its path once), matches with column and context, totals, skip counts, nextCursor (expires about 5 min after its last page), and resourceUri (about 60 s) for a multi-page or stopped first page.',
   input: GrepInputSchema,
   readOnlyHint: true,
   deadline: true,
@@ -247,6 +247,9 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
           truncated: result.summary.truncated,
         };
       },
+      // Context lines are retained strings too, so they count against the item cap.
+      weigh: (matches) =>
+        matches.reduce((n, m) => n + 1 + (m.before?.length ?? 0) + (m.after?.length ?? 0), 0),
       externalize: (matches, metadata) =>
         putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
           ...searchContentOutput(matches, metadata, undefined, undefined),

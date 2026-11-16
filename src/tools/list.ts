@@ -353,7 +353,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     'At most 20,000 entries are kept. ' +
     'A timeout returns a partial result with stoppedReason. ' +
     'Errors: NOT_DIRECTORY for a file, ACCESS_DENIED outside the roots. ' +
-    'Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor and resourceUri (about 60 s).',
+    'Returns tree text, entries[{name, relativePath, type, size?}], totalEntries/Files/Directories, unexpandedDirectories, skippedInaccessible, and when cut nextCursor (about 5 min) and resourceUri (about 60 s).',
   input: ListInputSchema,
   readOnlyHint: true,
   deadline: true,

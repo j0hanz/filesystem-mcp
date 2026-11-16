@@ -98,6 +98,8 @@ export async function paginate<T, M, R>(params: {
   pageSize: number;
   produce: () => Promise<ProducedPage<T, M>>;
   externalize?: ((items: readonly T[], metadata: M) => R) | undefined;
+  /** A snapshot's weight against the store's item cap; its item count when absent. */
+  weigh?: ((items: readonly T[]) => number) | undefined;
 }): Promise<PaginatedPage<T, M, R>> {
   if (params.cursor !== undefined) {
     const decoded = decodePageCursor(params.cursor);
@@ -115,6 +117,7 @@ export async function paginate<T, M, R>(params: {
             queryKey: params.queryKey,
             items,
             metadata,
+            ...(params.weigh ? { weight: params.weigh(items) } : {}),
           }),
           0,
           params.pageSize,

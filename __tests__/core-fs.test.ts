@@ -2854,6 +2854,17 @@ describe('GuardedFileSystem.readText', () => {
     });
   });
 
+  it('readText decodeUtf16 returns BOM-marked UTF-16 as UTF-8 text', async () => {
+    const file = await put(
+      'c16.txt',
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]),
+    );
+    const decoded = await fs.readText(file, { decodeUtf16: true });
+    assert.equal(decoded.kind, 'text');
+    assert.equal(decoded.kind === 'text' && decoded.bytes.toString('utf8'), 'hi\n');
+    assert.deepEqual(await fs.readText(file), { kind: 'binary', utf16: true });
+  });
+
   it('readText undecodable past the probe', async () => {
     const latin1 = await fs.readText(await put('d.txt', pastProbe([0xe9])));
     assert.equal(latin1.kind, 'undecodable');
@@ -3097,7 +3108,7 @@ describe('GuardedFileSystem.readNamedText', () => {
       fs.readNamedText(utf16),
       fsErrorMatcher(
         ErrorCode.INVALID_INPUT,
-        /^UTF-16 text file detected; convert it to UTF-8 first\.$/,
+        /^UTF-16 text file detected; read returns it decoded, but this tool needs UTF-8\.$/,
       ),
     );
   });

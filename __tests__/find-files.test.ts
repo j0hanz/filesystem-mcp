@@ -66,6 +66,41 @@ describe('find_files body', () => {
       ...(signal ? { signal } : {}),
     });
 
+  const HINT =
+    /\/\/ 'config' has no wildcard, so it matches only that exact name\. For names containing it, use '\*config\*'\./;
+
+  it('hints at wildcards when a bare word matches nothing', async () => {
+    const dir = join(root, 'bare_word');
+    await writeTestFile(dir, 'app.config.ts', 'x');
+    const result = await find({ path: dir, pattern: 'config' });
+    assert.strictEqual(result.structured.totalMatches, 0);
+    assert.match(result.text ?? '', HINT);
+  });
+
+  it('gives no wildcard hint for a glob, a hit, or a stopped scan', async () => {
+    const dir = join(root, 'bare_word_quiet');
+    await writeTestFile(dir, 'config', 'x');
+    assert.doesNotMatch((await find({ path: dir, pattern: '*.md' })).text ?? '', /has no wildcard/);
+    assert.doesNotMatch(
+      (await find({ path: dir, pattern: '@(none)' })).text ?? '',
+      /has no wildcard/,
+    );
+    assert.doesNotMatch(
+      (await find({ path: dir, pattern: 'src/none' })).text ?? '',
+      /has no wildcard/,
+    );
+    assert.doesNotMatch(
+      (await find({ path: dir, pattern: 'config' })).text ?? '',
+      /has no wildcard/,
+    );
+    const stopped = await find(
+      { path: dir, pattern: 'nothing' },
+      AbortSignal.abort(new DOMException('test timeout', 'TimeoutError')),
+    );
+    assert.ok(stopped.structured.stoppedReason);
+    assert.doesNotMatch(stopped.text ?? '', /has no wildcard/);
+  });
+
   it('names the hidden entries it skipped', async () => {
     await writeTestFile(root, '.github/ci.yml', 'x');
     await writeTestFile(root, 'a.yml', 'x');

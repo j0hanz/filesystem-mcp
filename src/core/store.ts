@@ -18,12 +18,17 @@ class TtlLru<V> {
   readonly #maxEntries: number;
   readonly #maxWeight: number;
   readonly #ttlMs: number;
+  readonly #sliding: boolean;
   #weight = 0;
+  /** The one pending prune, set for the earliest expiry. */
+  #timer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number }) {
+  /** `sliding`: each `get` of a live entry restarts its TTL. */
+  constructor(opts: { maxEntries: number; ttlMs: number; maxWeight?: number; sliding?: boolean }) {
     this.#maxEntries = opts.maxEntries;
     this.#maxWeight = opts.maxWeight ?? Number.POSITIVE_INFINITY;
     this.#ttlMs = opts.ttlMs;
+    this.#sliding = opts.sliding ?? false;
   }
 
   /** Drop every expired entry; true when at least one went. */
@@ -46,6 +51,10 @@ class TtlLru<V> {
     }
     this.#byKey.delete(key);
     this.#byKey.set(key, entry);
+    if (this.#sliding) {
+      entry.expiresAt = Date.now() + this.#ttlMs;
+      this.#arm();
+    }
     return entry.value;
   }
 
@@ -56,7 +65,7 @@ class TtlLru<V> {
     this.#byKey.set(key, { value, expiresAt: Date.now() + this.#ttlMs, weight });
     this.#weight += weight;
     // Nothing else may touch the map again, so the entry's expiry frees it.
-    setTimeout(() => this.prune(), this.#ttlMs + 1).unref();
+    this.#arm();
     while (
       this.#byKey.size > 0 &&
       (this.#byKey.size > this.#maxEntries || this.#weight > this.#maxWeight)
@@ -65,6 +74,25 @@ class TtlLru<V> {
       if (oldest.done) break;
       this.delete(oldest.value);
     }
+  }
+
+  /**
+   * Keep one timer pending for the earliest expiry. A refreshed entry moves its
+   * expiry later, so the timer that fires early prunes nothing and re-arms.
+   */
+  #arm(): void {
+    if (this.#timer !== undefined || this.#byKey.size === 0) return;
+    let next = Number.POSITIVE_INFINITY;
+    for (const { expiresAt } of this.#byKey.values()) next = Math.min(next, expiresAt);
+    this.#timer = setTimeout(
+      () => {
+        this.#timer = undefined;
+        this.prune();
+        this.#arm();
+      },
+      Math.max(next - Date.now(), 0) + 1,
+    );
+    this.#timer.unref();
   }
 
   /** True when `key` was present. */
@@ -277,28 +305,32 @@ export interface PageSnapshot<T = unknown, M = unknown> {
 export function invalidCursor(): FsError {
   return new FsError(
     ErrorCode.INVALID_INPUT,
-    `Invalid cursor: a page expires after ${String(ENTRY_TTL_MS / 1000)} seconds, and a cursor works only with the query that made it. Request the first page without a cursor.`,
+    `Invalid cursor: a page expires ${String(SNAPSHOT_TTL_MS / 1000)} seconds after its last read, and a cursor works only with the query that made it. Request the first page without a cursor.`,
   );
 }
 
 const MAX_SNAPSHOTS = 32;
+const MAX_SNAPSHOT_ITEMS = 200_000;
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Short-lived snapshots of a completed query's full result set, so later pages
  * slice a stored array instead of re-scanning and re-sorting the filesystem.
  *
- * ponytail: bounded by snapshot count and TTL, not by bytes — MAX_SNAPSHOTS x
- * 20,000 `list` entries or MAX_SNAPSHOTS x 10,000 `search_text` matches, each
- * match retaining up to 20 more line strings at `context: 10`, order of a few
- * hundred MB held for 60s, and the HTTP leg shares one store so any caller can
- * drive it. If that shows up as memory pressure, pass a byte weight to `set`
- * the way `ResourceStore` does.
+ * Bounded by MAX_SNAPSHOTS (32) snapshots and MAX_SNAPSHOT_ITEMS (200,000)
+ * items across all of them, least recently used evicted first; a snapshot
+ * expires SNAPSHOT_TTL_MS (5 min) after its last read. A snapshot weighs its
+ * item count unless its caller passes a weight: `search_text` counts each
+ * match's context lines too, since one match can retain up to 20 more lines.
+ * The HTTP leg shares one store, so any caller can drive it.
  */
 export class PageSnapshotStore {
   // Not readonly: a call view (`forCall`) shares its store's snapshots.
   #byId = new TtlLru<PageSnapshot & { queryKey: string }>({
     maxEntries: MAX_SNAPSHOTS,
-    ttlMs: ENTRY_TTL_MS,
+    maxWeight: MAX_SNAPSHOT_ITEMS,
+    ttlMs: SNAPSHOT_TTL_MS,
+    sliding: true,
   });
   /** A call view's own snapshots; `undefined` on the store itself. */
   #createdIds: string[] | undefined;
@@ -319,13 +351,24 @@ export class PageSnapshotStore {
     for (const id of this.#createdIds?.splice(0) ?? []) this.#byId.delete(id);
   }
 
-  create(params: { queryKey: string; items: readonly unknown[]; metadata?: unknown }): string {
+  create(params: {
+    queryKey: string;
+    items: readonly unknown[];
+    metadata?: unknown;
+    /** Against the item cap; the item count when absent. */
+    weight?: number;
+  }): string {
     const snapshotId = randomUUID();
-    this.#byId.set(snapshotId, {
-      queryKey: params.queryKey,
-      items: params.items,
-      metadata: params.metadata,
-    });
+    this.#byId.set(
+      snapshotId,
+      {
+        queryKey: params.queryKey,
+        items: params.items,
+        metadata: params.metadata,
+      },
+      // Clamped so a snapshot heavier than the cap alone evicts the rest, not itself.
+      Math.min(params.weight ?? params.items.length, MAX_SNAPSHOT_ITEMS),
+    );
     this.#createdIds?.push(snapshotId);
     return snapshotId;
   }

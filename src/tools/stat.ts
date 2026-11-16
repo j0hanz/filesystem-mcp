@@ -1,6 +1,7 @@
 import { parse } from 'node:path';
 
 import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
+import { countLines } from '../core/fmt.ts';
 import type { GuardedFileSystem, Stats } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
@@ -17,6 +18,7 @@ interface FileInfo {
   size?: number;
   entryCount?: number;
   tokenEstimate?: number;
+  lineCount?: number;
   created: string;
   modified: string;
   accessed: string;
@@ -31,6 +33,11 @@ interface FileInfo {
 const StatInputSchema = singleOrBatchPathsInput({});
 
 type StatOutput = BatchResult<FileInfo>;
+
+const LINE_COUNT_MAX_BYTES = 256 * 1024;
+const LINE_COUNT_MAX_PATHS = 20;
+/** One budget for every count in a call: a slow mount costs the counts, never the stat. */
+const LINE_COUNT_BUDGET_MS = 1000;
 
 function getPermissions(mode: number): string {
   let out = '';
@@ -57,6 +64,7 @@ function buildFileInfoResult(
   mimeType: string | undefined,
   symlinkTarget: string | undefined,
   entryCount: number | undefined,
+  lineCount: number | undefined,
 ): FileInfo {
   const tokenEstimate = stats.isFile() ? Math.ceil(stats.size / 4) : undefined;
   return {
@@ -72,6 +80,7 @@ function buildFileInfoResult(
         : {}
       : { size: stats.size }),
     ...(tokenEstimate !== undefined ? { tokenEstimate } : {}),
+    ...(lineCount !== undefined ? { lineCount } : {}),
     created: stats.birthtime.toISOString(),
     modified: stats.mtime.toISOString(),
     accessed: stats.atime.toISOString(),
@@ -100,9 +109,29 @@ async function getSymlinkTarget(
   }
 }
 
+// Goes through readText, so a file `read` refuses (secret, binary, too large)
+// gets no count either; any failure degrades to no lineCount.
+async function countTextLines(
+  path: string,
+  countSignal: AbortSignal,
+  { signal, fs, log }: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+): Promise<number | undefined> {
+  try {
+    const verdict = await fs.readText(path, { signal: countSignal });
+    if (verdict.kind === 'text') return countLines(verdict.bytes.toString('utf8'));
+    log('debug', `stat: no line count for "${path}": ${verdict.kind}`, 'stat');
+  } catch (error) {
+    // Only the call's own cancellation fails the stat; the count budget running out does not.
+    if (signal.aborted) rethrowIfAborted(error);
+    log('debug', `stat: line count failed for "${path}": ${String(error)}`, 'stat');
+  }
+  return undefined;
+}
+
 async function getFileInfo(
   filePath: string,
   { signal, fs, log }: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+  countSignal: AbortSignal | undefined,
 ): Promise<FileInfo> {
   signal.throwIfAborted();
 
@@ -155,6 +184,14 @@ async function getFileInfo(
     }
   }
 
+  const lineCount =
+    countSignal !== undefined &&
+    !isOwnSymlink &&
+    stats.isFile() &&
+    stats.size <= LINE_COUNT_MAX_BYTES
+      ? await countTextLines(requestedPath, countSignal, { signal, fs, log })
+      : undefined;
+
   return buildFileInfoResult(
     name,
     requestedPath,
@@ -163,6 +200,7 @@ async function getFileInfo(
     mimeType,
     symlinkTarget,
     entryCount,
+    lineCount,
   );
 }
 
@@ -178,7 +216,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     "Symlinks report their own metadata, not the target's. " +
     '`path` gives one result; `paths` gives one per path, in input order. ' +
     'Returns per-path values or errors ({ code, message }), plus summary { total, succeeded, failed }. ' +
-    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), hardLinks (a file with other names; a write changes them all), mimeType, symlinkTarget.',
+    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), lineCount (text files up to 256 KiB, in calls of up to 20 paths), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), hardLinks (a file with other names; a write changes them all), mimeType, symlinkTarget.',
   input: StatInputSchema,
   readOnlyHint: true,
   deadline: true,
@@ -193,8 +231,12 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   run: async (args, ctx) => {
     const paths = args.path !== undefined ? [args.path] : (args.paths ?? []);
 
+    const countSignal =
+      paths.length <= LINE_COUNT_MAX_PATHS
+        ? AbortSignal.any([ctx.signal, AbortSignal.timeout(LINE_COUNT_BUDGET_MS)])
+        : undefined;
     const batch = await runOverPaths(paths, ctx, ErrorCode.NOT_FOUND, async (path) =>
-      getFileInfo(path, ctx),
+      getFileInfo(path, ctx, countSignal),
     );
 
     // No `text` on purpose. The one-liner this used to build (`AGENTS.md: file,

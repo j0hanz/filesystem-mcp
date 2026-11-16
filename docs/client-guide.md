@@ -404,8 +404,8 @@ the server's guide (below) say how to recover from each.
 - Repeat the call with the same arguments plus `cursor`. Every page is cut
   from one snapshot taken by the first call, so the pages are consistent with
   each other.
-- The snapshot expires after about 60 seconds. If a cursor is rejected, start
-  again without one.
+- The snapshot expires about 5 minutes after its last page is read. If a
+  cursor is rejected, start again without one.
 
 The first page of a split result also carries `_meta.resourceUri` and a
 `resource_link` to `filesystem-mcp://result/<id>`: the whole result as JSON,

@@ -183,6 +183,75 @@ describe('stat body', () => {
 
   // A folder has no size, so stat counts its direct children instead. Secret
   // files are left out of the count, the same way listings hide them.
+  it('reports lineCount for a small text file', async () => {
+    const dir = join(root, 'line_count');
+    assert.strictEqual(
+      (await statOne(await writeTestFile(dir, 'three.txt', 'a\nb\nc\n'), { guard })).lineCount,
+      3,
+    );
+    assert.strictEqual(
+      (await statOne(await writeTestFile(dir, 'open.txt', 'a\nb'), { guard })).lineCount,
+      2,
+    );
+    assert.strictEqual(
+      (await statOne(await writeTestFile(dir, 'empty.txt', ''), { guard })).lineCount,
+      0,
+    );
+  });
+
+  it('leaves lineCount out for binary, oversize, directory and secret entries', async () => {
+    const dir = join(root, 'line_count_none');
+    await mkdir(dir, { recursive: true });
+    const binary = join(dir, 'zero.txt');
+    await writeFile(binary, Buffer.from([0x61, 0x00, 0x62]));
+    const big = await writeTestFile(dir, 'big.txt', 'x\n'.repeat(200_000));
+    const secret = join(dir, '.env');
+    await writeFile(secret, 'SECRET=1\n');
+    for (const path of [binary, big, dir]) {
+      assert.strictEqual((await statOne(path, { guard })).lineCount, undefined, path);
+    }
+    const { structured } = await stat({ path: secret }, { guard });
+    assert.strictEqual(errorOf(structured.results[0])?.code, 'ACCESS_DENIED');
+  });
+
+  it('counts lines for 20 paths and for none of 21', async () => {
+    const dir = join(root, 'line_count_batch');
+    const paths: string[] = [];
+    for (let i = 0; i < 21; i++) paths.push(await writeTestFile(dir, `f${String(i)}.txt`, 'a\n'));
+    const twenty = await stat({ paths: paths.slice(0, 20) }, { guard });
+    assert.ok(twenty.structured.results.every((row) => valueOf(row)?.lineCount === 1));
+    const all = await stat({ paths }, { guard });
+    assert.ok(all.structured.results.every((row) => valueOf(row)?.lineCount === undefined));
+  });
+
+  it('a stalled line count gives up and leaves the stat intact', { timeout: 5000 }, async (t) => {
+    const file = await writeTestFile(join(root, 'line_count_stall'), 'a.txt', 'a\n');
+    const fs = new GuardedFileSystem(guard);
+    // Never settles until its signal aborts, like a read on a hung mount.
+    t.mock.method(
+      fs,
+      'readText',
+      (_path: string, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            reject(options.signal?.reason as Error);
+          });
+        }),
+    );
+    const value = await statOne(file, { guard, fs });
+    assert.strictEqual(value.size, 2);
+    assert.strictEqual(value.lineCount, undefined);
+  });
+
+  it('a failed line count leaves the stat intact', async (t) => {
+    const file = await writeTestFile(join(root, 'line_count_fail'), 'a.txt', 'a\n');
+    const fs = new GuardedFileSystem(guard);
+    t.mock.method(fs, 'readText', () => Promise.reject(new Error('boom')));
+    const value = await statOne(file, { guard, fs });
+    assert.strictEqual(value.size, 2);
+    assert.strictEqual(value.lineCount, undefined);
+  });
+
   describe('entryCount', () => {
     it('reports entryCount 0 for an empty folder, with no size', async () => {
       const empty = join(root, 'empty');

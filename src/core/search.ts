@@ -17,7 +17,7 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
 /**
  * A fresh, flat copy of `s`. V8 keeps a substring of a long string as a slice
  * that references its parent, so a kept line would otherwise pin the whole
- * file's text for as long as the match list lives (60 s in the page store).
+ * file's text for as long as the match list lives (5 min after the last read in the page store).
  */
 const own = (s: string): string => Buffer.from(s, 'utf8').toString('utf8');
 
@@ -109,7 +109,10 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
 
 async function scanFileBody(entryPath: string, scanCtx: ScanContext): Promise<FileScan | ScanSkip> {
   // No catch: scan counts a failed entry as inaccessible, or fails the call for a named file.
-  const verdict = await scanCtx.fs.readText(entryPath, { signal: scanCtx.signal });
+  const verdict = await scanCtx.fs.readText(entryPath, {
+    signal: scanCtx.signal,
+    decodeUtf16: true,
+  });
   if (verdict.kind === 'tooLarge' || verdict.kind === 'binary') return skipOf(verdict);
   const buffer = verdict.bytes;
   // A NUL byte past the leading bytes still marks a binary file, as it does

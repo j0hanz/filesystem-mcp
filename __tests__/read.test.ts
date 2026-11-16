@@ -227,8 +227,8 @@ describe('read body', () => {
       Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]),
     );
     const wide = await read({ path: utf16, binary: true }, { guard });
-    assert.strictEqual(wide.isError, true);
-    assert.match(errorOf(wide.structured.results[0])?.message ?? '', /UTF-16/);
+    assert.strictEqual(wide.isError, false);
+    assert.strictEqual(valueOf(wide.structured.results[0])?.encoding, 'utf-16le');
 
     const secret = await writeTestFile(root, 'binary-flag/.env', 'SECRET=1');
     const denied = await read({ path: secret, binary: true }, { guard });
@@ -386,21 +386,66 @@ describe('read body', () => {
     assert.strictEqual(errorOf(result.structured.results[0])?.code, 'NOT_FOUND');
   });
 
-  it('refuses a UTF-16 file with a message that names the encoding', async () => {
-    const utf16 = Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from('hello\nworld\n', 'utf16le'),
-    ]);
-    const file = join(root, 'utf16le.txt');
-    await writeFile(file, utf16);
+  describe('UTF-16', () => {
+    const le = (text: string) =>
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+    const be = (text: string) =>
+      Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+    const put = async (name: string, bytes: Buffer) => {
+      const file = join(root, 'utf16', name);
+      await mkdir(join(root, 'utf16'), { recursive: true });
+      await writeFile(file, bytes);
+      return file;
+    };
 
-    for (const extra of [{}, { head: 1 }, { tail: 1 }, { startLine: 1, endLine: 1 }]) {
-      const result = await read({ path: file, ...extra }, { guard });
-      assert.strictEqual(result.isError, true, `mode ${JSON.stringify(extra)} must refuse`);
-      const error = errorOf(result.structured.results[0]);
-      assert.strictEqual(error?.code, 'INVALID_INPUT');
-      assert.match(error?.message ?? '', /UTF-16/);
-    }
+    it('decodes a BOM-marked file, whole and sliced', async () => {
+      const file = await put('le.txt', le('hello\r\nworld\r\n'));
+      const whole = await read({ path: file }, { guard });
+      assert.strictEqual(whole.isError, false);
+      assert.ok(whole.text?.startsWith('hello\r\nworld\r\n'));
+      const value = valueOf(whole.structured.results[0]);
+      assert.strictEqual(value?.encoding, 'utf-16le');
+      assert.strictEqual(value.totalLines, 2);
+      assert.strictEqual(value.resourceUri, undefined);
+      assert.match(
+        whole.text ?? '',
+        /^\/\/ decoded from UTF-16LE: edit, patch, replace_text and diff refuse this file$/m,
+      );
+      assert.ok((await read({ path: file, head: 1 }, { guard })).text?.startsWith('hello\n'));
+      assert.ok((await read({ path: file, tail: 1 }, { guard })).text?.startsWith('world\n'));
+      assert.ok(
+        (await read({ path: file, startLine: 2, endLine: 2 }, { guard })).text?.startsWith(
+          'world\n',
+        ),
+      );
+    });
+
+    it('decodes big-endian and survives a trailing odd byte', async () => {
+      const big = await read({ path: await put('be.txt', be('hi\n')) }, { guard });
+      assert.strictEqual(valueOf(big.structured.results[0])?.encoding, 'utf-16be');
+      assert.ok(big.text?.startsWith('hi\n'));
+      const odd = await read(
+        { path: await put('odd.txt', Buffer.concat([le('hi'), Buffer.from([0x21])])) },
+        { guard },
+      );
+      assert.strictEqual(odd.isError, false);
+      assert.ok(odd.text?.startsWith('hi'));
+    });
+
+    it('a batch charges a UTF-16 file by its decoded size', async () => {
+      // 400,000 bytes as UTF-16, 600,000 as UTF-8: over the batch budget only once decoded.
+      const file = await put('cjk.txt', le('中'.repeat(200_000)));
+      const result = await read({ paths: [file] }, { guard });
+      assert.strictEqual(errorOf(result.structured.results[0])?.code, 'TOO_LARGE');
+    });
+
+    it('without a BOM it stays a binary refusal', async () => {
+      const result = await read(
+        { path: await put('nobom.txt', Buffer.from('hello\n', 'utf16le')) },
+        { guard },
+      );
+      assert.strictEqual(errorOf(result.structured.results[0])?.code, 'BINARY_FILE');
+    });
   });
 
   it('resource_link and resourceUri name the same file', async () => {
@@ -623,6 +668,91 @@ describe('read body', () => {
     assert.strictEqual(refused.isError, true);
     assert.match(refused.text ?? '', /^ACCESS_DENIED: Sensitive file blocked/);
     assert.ok(!(refused.text ?? '').includes('allowed root'), refused.text);
+  });
+
+  describe('oversized whole read', () => {
+    const limit = 1024 * 1024;
+    const line = `${'z'.repeat(99)}\n`;
+
+    it('returns the first 2000 lines with a continuation instead of TOO_LARGE', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/big.txt', line.repeat(20_000));
+        const first = await read({ path: file }, { guard });
+        assert.strictEqual(first.isError, false);
+        const value = valueOf(first.structured.results[0]);
+        assert.strictEqual(value?.linesRead, 2000);
+        assert.strictEqual(value.head, 2000);
+        assert.strictEqual(value.hasMoreLines, true);
+        assert.strictEqual(value.totalLines, undefined);
+        assert.ok(!('oversize' in value));
+        assert.deepStrictEqual(value.continuation?.args, {
+          path: file,
+          startLine: 2001,
+          endLine: 4000,
+        });
+        assert.match(
+          first.text ?? '',
+          /^\/\/ truncated: file is 2000000 bytes, over the 1048576-byte whole-read limit; showing lines 1-2000\. Continue: read \{/m,
+        );
+        const next = await read(value.continuation.args, { guard });
+        assert.strictEqual(valueOf(next.structured.results[0])?.startLine, 2001);
+      });
+    });
+
+    it('numbers the head and carries lineNumbers into the continuation', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/numbered.txt', line.repeat(20_000));
+        const result = await read({ path: file, lineNumbers: true }, { guard });
+        assert.ok(result.text?.startsWith('1\tzzz'));
+        assert.strictEqual(
+          valueOf(result.structured.results[0])?.continuation?.args.lineNumbers,
+          true,
+        );
+      });
+    });
+
+    it('caps the head at 256 KiB when its lines are long', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const long = `${'y'.repeat(999)}\n`;
+        const file = await writeTestFile(root, 'oversize/long-lines.txt', long.repeat(2000));
+        const result = await read({ path: file }, { guard });
+        assert.strictEqual(result.isError, false);
+        const value = valueOf(result.structured.results[0]);
+        assert.ok(value?.linesRead !== undefined && value.linesRead < 2000);
+        assert.ok(value.linesRead * 1000 <= 256 * 1024, String(value.linesRead));
+        assert.match(result.text ?? '', /^\/\/ truncated: file is 2000000 bytes/m);
+      });
+    });
+
+    it('stops the head before a line too long for it, keeping the lines above', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const body = 'a\nb\n' + 'z'.repeat(300 * 1024) + '\n' + line.repeat(10_000);
+        const file = await writeTestFile(root, 'oversize/long-third.txt', body);
+        const result = await read({ path: file }, { guard });
+        assert.strictEqual(result.isError, false);
+        const value = valueOf(result.structured.results[0]);
+        assert.strictEqual(value?.linesRead, 2);
+        assert.strictEqual(value.continuation?.args.startLine, 3);
+      });
+    });
+
+    it('a batch file over the limit still fails TOO_LARGE', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/batch.txt', line.repeat(20_000));
+        const result = await read({ paths: [file] }, { guard });
+        assert.strictEqual(errorOf(result.structured.results[0])?.code, 'TOO_LARGE');
+      });
+    });
+
+    it('one line longer than the limit fails TOO_LARGE naming the line', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const file = await writeTestFile(root, 'oversize/one-line.txt', 'z'.repeat(2 * limit));
+        const result = await read({ path: file }, { guard });
+        const error = errorOf(result.structured.results[0]);
+        assert.strictEqual(error?.code, 'TOO_LARGE');
+        assert.match(error.message, /single line/);
+      });
+    });
   });
 
   describe('lineNumbers', () => {

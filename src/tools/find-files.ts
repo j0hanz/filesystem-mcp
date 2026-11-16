@@ -75,6 +75,22 @@ interface SearchFilesOutput {
   nextCursor?: string;
 }
 
+// An empty, complete scan for a pattern with no glob syntax most often meant "names containing it".
+function bareWordHint(pattern: string, metadata: SearchFilesPageMetadata): string[] {
+  if (
+    metadata.matched !== 0 ||
+    metadata.stoppedReason !== undefined ||
+    /[*?[\]{}!()]/.test(pattern) ||
+    // A path pattern would get a hint wrapping the whole path in stars.
+    pattern.includes('/')
+  ) {
+    return [];
+  }
+  return [
+    `// '${pattern}' has no wildcard, so it matches only that exact name. For names containing it, use '*${pattern}*'.`,
+  ];
+}
+
 interface SearchFilesPageMetadata {
   readonly root: string;
   matched: number;
@@ -111,7 +127,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'Matches files; type: "directory" or "any" also matches directories, printed with a trailing /. Skips hidden entries, .gitignore matches, and build folders unless includeHidden or includeIgnored. ' +
     'exclude leaves out more names or paths. ' +
     'Scanning stops at 10,000 matches (stoppedReason maxResults) or the time limit (FS_TOOL_TIMEOUT_MS, default 5 s; stoppedReason timeout) and still returns what it found. ' +
-    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires after about 60 s, then search again without it). ' +
+    'path must be an existing directory; a file path is rejected. maxResults sizes a page, not the scan; page on with nextCursor (expires about 5 min after its last page, then search again without it). ' +
     'Returns root, results[{ path }], totalMatches, filesScanned, and when set nextCursor, stoppedReason, skippedInaccessible (entries it could not read), excludedDirs (skipped folders: total and first 5), resourceUri (all kept matches). ' +
     'Paths are relative to root when unambiguous, otherwise absolute.',
   input: SearchFilesInputSchema,
@@ -187,7 +203,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         stoppedReason: metadata.stoppedReason,
         skippedInaccessible: metadata.skippedInaccessible,
         excludedDirs: metadata.excludedDirs,
-        notes: hiddenLine(metadata.hiddenEntries),
+        notes: [...hiddenLine(metadata.hiddenEntries), ...bareWordHint(args.pattern, metadata)],
       }),
       render: ({ page, metadata, trailer }) => {
         const structured: SearchFilesOutput = {

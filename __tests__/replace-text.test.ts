@@ -51,6 +51,17 @@ describe('replace_text body', () => {
     return { ...result, rows: result.structured.results as readonly Row[] };
   };
 
+  it('skips a UTF-16 file and leaves its bytes alone', async () => {
+    const dir = join(root, 'utf16_skip');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'u.txt');
+    const original = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('needle\n', 'utf16le')]);
+    await writeFile(file, original);
+    const swept = await replace({ path: dir, searchPattern: 'needle', replacement: 'x' });
+    assert.strictEqual(swept.structured.summary.succeeded, 0);
+    assert.deepStrictEqual(await readFile(file), original);
+  });
+
   it('exclude leaves a folder unchanged', async () => {
     await writeTestFile(root, 'src/a.ts', 'needle');
     await writeTestFile(root, 'vendor/b.ts', 'needle');

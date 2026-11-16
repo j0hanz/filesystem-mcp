@@ -28,6 +28,7 @@ import {
   MAX_OUTBOUND_RESULT_BYTES,
   type Transport,
 } from '../core/outbound.ts';
+import type { Utf16Encoding } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -37,6 +38,7 @@ import {
 } from '../core/schema.ts';
 import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
+  OVERSIZE_HEAD_LINES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
   sha256Hex,
@@ -126,6 +128,7 @@ interface ReadPerPathValue {
   startLine?: number;
   endLine?: number;
   contentHash?: string;
+  encoding?: Utf16Encoding;
 }
 
 type ReadFileInput = z.infer<typeof ReadFileInputSchema>;
@@ -134,6 +137,7 @@ const READ_TOOL_LABEL = 'Read';
 
 function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOptions {
   const base = {
+    decodeUtf16: true,
     ...(signal ? { signal } : {}),
     ...(args.paths !== undefined && hasLineRange(args)
       ? { maxSize: READ_MANY_MAX_TOTAL_BYTES, hardCap: true }
@@ -154,7 +158,11 @@ function buildReadOptions(args: ReadFileInput, signal?: AbortSignal): ReadOption
     };
   }
   // A full read returns image/audio as a media block; binary: true also returns other binary.
-  return { binary: args.binary ? 'allow' : 'media', ...base };
+  return {
+    binary: args.binary ? 'allow' : 'media',
+    ...base,
+    ...(args.paths === undefined ? { oversizeHead: OVERSIZE_HEAD_LINES } : {}),
+  };
 }
 
 // No `totalLines`: only `readFull` counts them and a full read never leaves
@@ -199,6 +207,8 @@ function buildReadContinuation(
 type PerPathReadValue = ReadPerPathValue & {
   content?: string;
   fileSize?: number;
+  /** A whole read past the size limit that came back as its head. */
+  oversize?: true;
   mediaData?: string;
   blobData?: string;
 };
@@ -206,6 +216,8 @@ type PerPathReadValue = ReadPerPathValue & {
 interface BudgetItem {
   path: string;
   skip?: FsError;
+  /** Bytes the pre-pass charged this file. */
+  size?: number;
 }
 
 interface BudgetMode {
@@ -268,7 +280,7 @@ async function collectFileBudget(
       return { path, skip: budgetSkip(path, maxTotalSize) };
     }
     total += size;
-    return { path };
+    return { path, size };
   });
 }
 
@@ -289,7 +301,9 @@ function buildPerPathReadValue(
   const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
   // A slice is not the file, so the link rule gets its size, not its content.
+  // resources/read serves a decoded file's raw bytes, not this text, so it gets no link.
   const canLink =
+    result.encoding === undefined &&
     (result.fileSize === undefined || result.fileSize <= getMaxTextFileSize()) &&
     canLinkFile(options.transport, {
       uri: buildFileResourceUri(result.path),
@@ -302,6 +316,7 @@ function buildPerPathReadValue(
   return {
     content: result.content,
     ...(result.fileSize !== undefined ? { fileSize: result.fileSize } : {}),
+    ...(result.oversize ? { oversize: true } : {}),
     mimeType: mimeInfo.mimeType,
     kind: mimeInfo.kind,
     ...(continuation ? { continuation } : {}),
@@ -313,6 +328,7 @@ function buildPerPathReadValue(
     ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
+    ...(result.encoding !== undefined ? { encoding: result.encoding } : {}),
     ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
@@ -380,7 +396,12 @@ function wasCut(v: PerPathReadValue): boolean {
  */
 function readTrailer(v: PerPathReadValue): string[] {
   const lines: string[] = [];
-  if (v.continuation) {
+  if (v.oversize && v.continuation) {
+    const args = JSON.stringify(v.continuation.args);
+    lines.push(
+      `// truncated: file is ${String(v.fileSize)} bytes, over the ${String(getMaxTextFileSize())}-byte whole-read limit; showing lines 1-${String(v.linesRead)}. Continue: read ${args}`,
+    );
+  } else if (v.continuation) {
     const args = JSON.stringify(v.continuation.args);
     lines.push(
       wasCut(v)
@@ -397,6 +418,11 @@ function readTrailer(v: PerPathReadValue): string[] {
     );
   } else if (v.startLine !== undefined && v.linesRead === 0) {
     lines.push(`// no lines at or after line ${String(v.startLine)}`);
+  }
+  if (v.encoding !== undefined) {
+    lines.push(
+      `// decoded from ${v.encoding.toUpperCase()}: edit, patch, replace_text and diff refuse this file`,
+    );
   }
   if (v.contentHash !== undefined) {
     const slice = v.head !== undefined || v.tail !== undefined || v.startLine !== undefined;
@@ -497,7 +523,8 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Do not use it to check size or existence; use `stat` instead. ' +
     'To locate content, use `search_text`, `find_files`, or `list`. ' +
     'Only whole reads return images and audio as media; other binary files fail with BINARY_FILE unless binary: true. ' +
-    'Past the size limit, a whole read fails with TOO_LARGE; a single-path head or range is truncated. ' +
+    'UTF-16 text with a byte-order mark is returned decoded, with encoding set, and fails TOO_LARGE past the size limit for every read mode; the write tools still refuse it. ' +
+    'Past the size limit, a single-path whole read returns up to its first 2000 lines (256 KiB) with continuation args, a batch file fails with TOO_LARGE, and a head or range is truncated. ' +
     'A batch shares a 512 KiB budget: an overflowing file is skipped and later files still read. isError means every path failed. ' +
     'Pick one slice (head, tail, or startLine/endLine); it applies to every batch file. ' +
     'Returns text plus per-path results[]: an error, or linesRead, hasMoreLines, continuation args, modified, optional contentHash. ' +
@@ -544,7 +571,8 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
               },
             );
     const items = rawItems.map((item, index) => ({ ...item, index }));
-    let charged = 0;
+    // A whole batch starts from what the pre-pass charged; a slice batch charges as it reads.
+    let charged = slice ? 0 : rawItems.reduce((n, item) => n + (item.size ?? 0), 0);
     let nextToCharge = 0;
     const waiters = new Map<number, () => void>();
     const waitForTurn = (index: number): Promise<void> =>
@@ -565,18 +593,24 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      async ({ path, skip, index }) => {
+      async ({ path, skip, index, size: budgeted }) => {
         let value: PerPathReadValue | undefined;
         try {
           if (skip) throw skip;
           value = await readOnePath(path, args, ctx);
         } finally {
-          if (slice) {
+          if (args.paths !== undefined) {
             await waitForTurn(index);
             if (value !== undefined) {
               const size = Buffer.byteLength(value.content ?? '', 'utf8');
-              if (charged + size <= READ_MANY_MAX_TOTAL_BYTES) {
-                charged += size;
+              // A decoded UTF-16 file can outgrow the stat size the pre-pass charged.
+              const cost = slice
+                ? size
+                : value.encoding !== undefined
+                  ? Math.max(size - (budgeted ?? 0), 0)
+                  : 0;
+              if (charged + cost <= READ_MANY_MAX_TOTAL_BYTES) {
+                charged += cost;
               } else {
                 value = undefined;
               }
@@ -585,7 +619,11 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
           }
         }
         if (value === undefined) {
-          throw budgetSkip(path, READ_MANY_MAX_TOTAL_BYTES, SLICE_SKIP_SUGGESTION);
+          throw budgetSkip(
+            path,
+            READ_MANY_MAX_TOTAL_BYTES,
+            slice ? SLICE_SKIP_SUGGESTION : undefined,
+          );
         }
         return value;
       },
@@ -668,6 +706,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       const {
         content: _content,
         fileSize: _fileSize,
+        oversize: _oversize,
         mediaData: _mediaData,
         blobData: _blobData,
         ...value

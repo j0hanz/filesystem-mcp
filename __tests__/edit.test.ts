@@ -685,6 +685,17 @@ describe('edit body', () => {
     assert.strictEqual(result.structured.results[0]?.value?.modified, '2001-01-01T00:00:00.000Z');
   });
 
+  it('refuses a UTF-16 file and leaves its bytes alone', async () => {
+    const path = join(root, 'wide.txt');
+    const original = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hello\n', 'utf16le')]);
+    await writeFile(path, original);
+
+    const edited = await edit({ path, edits: [{ oldText: 'hello', newText: 'x' }] });
+    assert.strictEqual(edited.isError, true);
+    assert.match(firstError(edited)?.message ?? '', /UTF-16/);
+    assert.deepStrictEqual(await readFile(path), original);
+  });
+
   it('refuses a non-UTF-8 file and leaves its bytes intact', async () => {
     const path = join(root, 'late.txt');
     // First 512 bytes are plain ASCII; the bad byte (0xe9) lands past the binary probe.

@@ -1135,8 +1135,21 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // idempotentHint; measured 32030 / ~15863.
     // Raised 2026-11-15 to 32198 full and 16031 read-only: read-only tools publish
     // destructiveHint false; measured 32198 / 16031.
-    const BUDGET_CHARS = 32_339;
-    const BUDGET_CHARS_READ_ONLY = 16_031;
+    // Raised 2026-11-16 to 32400 full and 16100 read-only: paging cursors say
+    // they last about 5 min after their last page, apart from resourceUri's
+    // 60 s; measured 32396 / 16088.
+    // Raised 2026-11-16 to 32500 full and 16200 read-only: stat names
+    // lineCount; measured 32462 / 16154.
+    // Raised 2026-11-16 to 32550 full and 16250 read-only: read says an
+    // oversized single-path whole read returns its head; measured 32532 / 16224.
+    // Raised 2026-11-16 to 32650 full and 16350 read-only: read says it
+    // decodes BOM-marked UTF-16; measured 32640 / 16332.
+    // Raised 2026-11-16 to 32700 full (read-only unchanged): the oversize head
+    // names its 256 KiB cap; measured 32656 / 16348.
+    // Raised 2026-11-16 to 32750 full and 16450 read-only: read says UTF-16
+    // past the size limit fails TOO_LARGE; measured 32717 / 16409.
+    const BUDGET_CHARS = 32_750;
+    const BUDGET_CHARS_READ_ONLY = 16_450;
 
     const full = await createTestClientPair([tmpDir]);
     try {

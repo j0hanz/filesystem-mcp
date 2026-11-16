@@ -57,6 +57,8 @@ export async function pagedScan<T, M, S extends object>(options: {
     readonly fs: GuardedFileSystem;
   }) => Promise<ProducedPage<T, M>>;
   readonly externalize: (items: readonly T[], metadata: M) => JsonResourceResult;
+  /** A snapshot's weight against the page store's item cap; its item count when absent. */
+  readonly weigh?: (items: readonly T[]) => number;
   readonly trailer: (metadata: M, page: readonly T[]) => PagedScanMeta;
   readonly render: (view: PagedScanView<T, M>) => { structured: S; text: string };
 }): Promise<{
@@ -84,6 +86,7 @@ export async function pagedScan<T, M, S extends object>(options: {
       return await options.produce({ scope, paths, fs: ctx.fs });
     },
     externalize: options.externalize,
+    weigh: options.weigh,
   });
 
   const resourceUri = paged.resource?.entry.uri;
