@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import { ErrorCode, FsError } from '../core/errors.ts';
+import { ErrorCode, FsError, isRefusal } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { defaultFalseBoolean } from '../core/schema.ts';
 import type { RestoreStep, UndoFileResult, UndoSelection } from '../core/undo.ts';
@@ -159,7 +159,11 @@ export const UNDO = defineTool<typeof UndoInputSchema, UndoOutput>({
     return {
       structured: { steps: listSteps(stepResults) },
       text: [...stepLines, ...reasonLines(allResults)].join('\n'),
-      isError: isTotalFailure(summarize(allResults)),
+      // A staleness skip is a refusal: nothing was reverted, nothing broke,
+      // the model can say so and try again. Only a real failure is an error.
+      isError:
+        isTotalFailure(summarize(allResults)) &&
+        allResults.some((r) => 'error' in r && !isRefusal(r.error)),
     };
   },
 });
