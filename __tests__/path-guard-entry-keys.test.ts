@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict';
+import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import { IS_CASE_INSENSITIVE_FS } from '../src/core/path-utils.ts';
+import type { PathGuard } from '../src/core/path.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  makeGuard,
+  trySymlink,
+  writeTestFile,
+} from './helpers.ts';
+
+// ADR-021: equal keys name one Entry. Names are escapes so the source's own
+// normalization cannot change them.
+describe('PathGuard.entryKeys', () => {
+  let root: string;
+  let guard: PathGuard;
+  const caseless = IS_CASE_INSENSITIVE_FS;
+
+  beforeEach(async () => {
+    root = await createTestRoot();
+    guard = await makeGuard([root]);
+  });
+
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  it('folds Unicode form and spaces', async () => {
+    const [a, b, c, d] = await guard.entryKeys([
+      join(root, 'café.txt'),
+      join(root, 'café.txt'),
+      join(root, 'shot PM.png'),
+      join(root, 'shot PM.png'),
+    ]);
+    assert.strictEqual(a, b);
+    assert.strictEqual(c, d);
+  });
+
+  it('folds case by the directory rule', async () => {
+    await writeTestFile(root, 'k/Name.txt', 'x');
+    const [a, b] = await guard.entryKeys([
+      join(root, 'k', 'Name.txt'),
+      join(root, 'k', 'NAME.txt'),
+    ]);
+    assert.strictEqual(a === b, caseless);
+  });
+
+  it('uses the nearest existing ancestor for a missing parent', async () => {
+    const [a, b] = await guard.entryKeys([join(root, 'new', 'x.txt'), join(root, 'NEW', 'X.txt')]);
+    assert.strictEqual(a === b, caseless);
+  });
+
+  it('keeps two existing entries whose names fold alike apart', async () => {
+    await writeTestFile(root, 'a b.txt', 'space');
+    await writeTestFile(root, 'a b.txt', 'nbsp');
+    const [a, b] = await guard.entryKeys([join(root, 'a b.txt'), join(root, 'a b.txt')]);
+    assert.notStrictEqual(a, b);
+  });
+
+  it('keys a Respelling of an existing entry on that entry', async () => {
+    await writeTestFile(root, 'shot PM.png', 'x');
+    const [a, b] = await guard.entryKeys([join(root, 'shot PM.png'), join(root, 'shot PM.png')]);
+    assert.strictEqual(a, b);
+  });
+
+  it('keeps different names apart', async () => {
+    const [a, b] = await guard.entryKeys([join(root, 'a.txt'), join(root, 'b.txt')]);
+    assert.notStrictEqual(a, b);
+  });
+
+  it('falls back to the platform rule outside the roots', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'entry-keys-out-'));
+    try {
+      const [a, b] = await guard.entryKeys([join(outside, 'Out.txt'), join(outside, 'OUT.txt')]);
+      assert.strictEqual(a === b, caseless);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  // A link out of the root must not be followed: the folder it reaches is not listed.
+  it('reads no folder a link reaches outside the roots', async (t) => {
+    const outside = await mkdtemp(join(tmpdir(), 'entry-keys-link-'));
+    try {
+      await writeTestFile(outside, 'a b.txt', 'space');
+      await writeTestFile(outside, 'a b.txt', 'nbsp');
+      if (!(await trySymlink(outside, join(root, 'out'), () => t.skip('no symlinks')))) return;
+      const [a, b] = await guard.entryKeys([
+        join(root, 'out', 'a b.txt'),
+        join(root, 'out', 'a b.txt'),
+      ]);
+      // Unlisted, both fold as new names: listing would key the two files apart.
+      assert.strictEqual(a, b);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('yields keys under an unreadable folder', { skip: process.platform === 'win32' }, async () => {
+    const locked = join(root, 'locked');
+    await mkdir(locked);
+    await chmod(locked, 0o000);
+    try {
+      const keys = await guard.entryKeys([join(locked, 'a.txt'), join(locked, 'b.txt')]);
+      assert.strictEqual(keys.length, 2);
+      assert.notStrictEqual(keys[0], keys[1]);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+});

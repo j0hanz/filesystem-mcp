@@ -498,6 +498,81 @@ export class PathGuard {
   }
 
   /**
+   * One key per path, in order; equal keys name one Entry (ADR-021). A path
+   * naming an existing entry, as spelled or as its one Respelling, keys on that
+   * entry, so two existing entries whose names fold alike stay apart. A missing
+   * one keys on its folded spelling: Unicode form and spaces always fold, and
+   * letter case folds only where the directory holding it does, judged at its
+   * nearest existing ancestor inside a root. No directory outside the roots is
+   * read: there, and when nothing up to the root can be read, the platform
+   * rule decides.
+   */
+  async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
+    const roots = this.getAllowedDirectories();
+    const rules = new Map<string, Promise<boolean>>();
+    const platformRule = !IS_CASE_INSENSITIVE_FS;
+    // The guard's own order (as respellMissing): no remote link is followed, and
+    // a folder whose real path leaves the roots or is denylisted is never listed.
+    // Throws only when `at` is missing or unreadable.
+    const realInside = async (at: string): Promise<string | undefined> => {
+      if (await this.reachesRemoteLink(at)) return undefined;
+      const real = normalizePath(await realpath(at));
+      return (await isPathWithinAllowedDirectories(real, roots)) && !this.isSensitive(real)
+        ? real
+        : undefined;
+    };
+    const judge = async (dir: string): Promise<boolean> => {
+      const root = roots.find((r) => isPathInsideDirectory(r, dir));
+      if (root === undefined) return platformRule;
+      for (let at = dir; ; at = dirname(at)) {
+        signal?.throwIfAborted();
+        try {
+          const real = await realInside(at);
+          if (real === undefined) return platformRule;
+          return await isDirectoryCaseSensitive(real, await readdir(real));
+        } catch {
+          // Missing or unreadable: the parent decides.
+        }
+        if (isSamePath(at, root) || dirname(at) === at) return platformRule;
+      }
+    };
+    const caseSensitiveAt = (dir: string): Promise<boolean> => {
+      let rule = rules.get(dir);
+      if (rule === undefined) {
+        rule = judge(dir);
+        rules.set(dir, rule);
+      }
+      return rule;
+    };
+    // shortcut: reads the parent once per path, not per folder; batches hold at most 100 paths.
+    const existingName = async (resolved: string): Promise<string | undefined> => {
+      const parent = dirname(resolved);
+      if (!roots.some((r) => isPathInsideDirectory(r, parent))) return undefined;
+      try {
+        const real = await realInside(parent);
+        if (real === undefined) return undefined;
+        return await this.findEquivalentEntry(real, basename(resolved), resolved, true);
+      } catch {
+        // Missing or unreadable parent, or an ambiguous name the guard will refuse.
+        return undefined;
+      }
+    };
+    return Promise.all(
+      paths.map(async (path) => {
+        const resolved = normalizePath(path);
+        const parent = dirname(resolved);
+        const fold = (await caseSensitiveAt(parent)) ? unicodeMatchKeyExactCase : unicodeMatchKey;
+        signal?.throwIfAborted();
+        const entry = await existingName(resolved);
+        // Prefixes keep an existing entry's key apart from a missing name's.
+        return entry === undefined
+          ? `new:${fold(resolved)}`
+          : `on-disk:${fold(parent)}${sep}${entry}`;
+      }),
+    );
+  }
+
+  /**
    * The allowed directory that contains `resolvedPath` — the longest match,
    * so a nested root wins over its parent — or `undefined` when none does.
    * Walks use it as the `.gitignore` ceiling: rules above an allowed root are
