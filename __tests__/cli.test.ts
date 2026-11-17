@@ -234,6 +234,24 @@ describe('CLI (real subprocess)', () => {
     }
   });
 
+  it('CLI-HTTP-001: --api-key without --port exits 1 naming --port', async () => {
+    const { code, stderr } = await runCli(['--api-key', 'k'.repeat(16), root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
+  });
+
+  it('CLI-HTTP-002: --http-host without --port exits 1 naming --port', async () => {
+    const { code, stderr } = await runCli(['--http-host', '127.0.0.1', root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
+  });
+
+  it('CLI-HTTP-003: FS_API_KEY without --port still starts stdio', async () => {
+    // stdin is 'ignore' in runCli, so stdio sees EOF and shuts down cleanly.
+    const { code, stderr } = await runCli([root], { FS_API_KEY: 'k'.repeat(16) });
+    assert.strictEqual(code, 0, stderr);
+  });
+
   it('FS_READ_ONLY turns on read-only mode like --read-only', async () => {
     const printed = async (args: string[], env?: Record<string, string>) => {
       const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
