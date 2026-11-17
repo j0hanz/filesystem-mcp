@@ -18,6 +18,8 @@ import {
   UriTemplate,
 } from '@modelcontextprotocol/server';
 
+import { pathToFileURL } from 'node:url';
+
 import { getMaxTextFileSize } from './core/config.ts';
 import type { FsError } from './core/errors.ts';
 import { ErrorCode, formatUnknownErrorMessage, isFsError } from './core/errors.ts';
@@ -225,6 +227,22 @@ function createFileUrlResource(options: ResourceRegistrationOptions): ResourceCo
       ctx.mcpReq.signal.throwIfAborted();
       return readWorkspaceFile(options, uri, extractFileUrlPath(uri.href), ctx);
     },
+    complete: {
+      // Values are URL paths (`/C:/…` on Windows), so `file://` + value is a
+      // valid `file:///` URL; the partial is decoded the same way a read is.
+      path: async (value) => {
+        const suggestions = await suggestPaths(
+          options.pathGuard,
+          extractFileUrlPath(`file://${value}`) ?? value,
+        );
+        return (
+          suggestions
+            .map((p) => pathToFileURL(p).href.slice('file://'.length))
+            // UNC paths yield `host/share/...` (no leading `/`) and are not addressable through the file:// alias.
+            .filter((v) => v.startsWith('/'))
+        );
+      },
+    },
   };
 }
 
@@ -262,7 +280,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   return {
     name: 'filesystem-mcp-file',
     title: 'Workspace File',
-    description: 'Read a file from the workspace. Subscribe to get updates when the file changes.',
+    description:
+      'Read a file from the workspace. Subscribe to get updates when it changes. A directory URI can be subscribed (direct children only on Linux) but not read: use the list tool for its entries.',
     uriTemplate: FILESYSTEM_FILE_URI_TEMPLATE,
     annotations: { audience: ['assistant'], priority: 0.8 },
     // Without this the SDK falls back to its conservative `{ ttlMs: 0,
@@ -328,9 +347,6 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       };
       const guardedNotify = (notifiedUri: string): void => {
         if (!active) return;
-        // A root revoked since subscribe (ADR-018) gets no more change notices.
-        const path = extractPath(notifiedUri);
-        if (path !== undefined && !options.pathGuard.isInsideAllowed(path)) return;
         notify(notifiedUri);
       };
 

@@ -47,6 +47,9 @@ export interface RuntimeState {
   dispose(): void;
 }
 
+/** Window that folds a burst of ResourceStore list-changed signals into one. */
+export const RESOURCES_CHANGED_DEBOUNCE_MS = 100;
+
 export function createRuntimeState(
   options: ServerOptions = {},
   hooks: {
@@ -59,8 +62,22 @@ export function createRuntimeState(
   const watcherRegistry = createWatcherRegistry();
   const pageStore = new PageSnapshotStore();
   const undoJournal = new UndoJournal();
-  const resourceStore = new ResourceStore(hooks.onResourcesChanged, hooks.maxReadResultBytes);
   let disposed = false;
+  let changedTimer: NodeJS.Timeout | undefined;
+  // Trailing edge: the first change arms the timer, later ones ride on it.
+  // The modern HTTP leg has no SDK-side coalescing, so do it here.
+  const onChanged = hooks.onResourcesChanged;
+  const resourceStore = new ResourceStore(
+    onChanged &&
+      (() => {
+        if (changedTimer || disposed) return;
+        changedTimer = setTimeout(() => {
+          changedTimer = undefined;
+          if (!disposed) onChanged();
+        }, RESOURCES_CHANGED_DEBOUNCE_MS).unref();
+      }),
+    hooks.maxReadResultBytes,
+  );
   return {
     pathGuard: new PathGuard(options),
     resourceStore,
@@ -70,6 +87,7 @@ export function createRuntimeState(
     dispose() {
       if (disposed) return;
       disposed = true;
+      clearTimeout(changedTimer);
       watcherRegistry.destroy();
       pageStore.clear();
       undoJournal.clear();
@@ -165,11 +183,6 @@ export async function createServer(
     // connection can send the same notification several times in one tick;
     // each copy makes the client refetch an unchanged list. The SDK
     // coalesces same-tick duplicates for methods listed here.
-    // ponytail: same-tick coalescing only — cross-tick bursts (batch
-    // externalizations separated by fs awaits) still fan out; a store-level
-    // debounce is the fix if clients ever report that. The modern HTTP leg
-    // publishes through the ServerEventBus, which this option does not
-    // touch, so it protects the stdio/in-memory leg.
     debouncedNotificationMethods: ['notifications/resources/list_changed'],
   };
 

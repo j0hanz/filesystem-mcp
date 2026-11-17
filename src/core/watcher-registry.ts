@@ -1,5 +1,5 @@
 import type { FSWatcher } from 'node:fs';
-import { statSync, watch } from 'node:fs';
+import { watch as fsWatch, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseEnvInt } from './config.ts';
@@ -10,7 +10,7 @@ import { isSamePath } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 
 // Cap concurrent file watchers to avoid exhausting OS-level watch handles
-// (e.g. Linux inotify, default ~8192/user). One subscription == one watcher.
+// (e.g. Linux inotify, default ~8192/user). One real path == one watcher.
 export const MAX_WATCHERS = parseEnvInt('FS_MAX_WATCHERS', 256, 1, 4096);
 
 /** A client-supplied URI, safe for one log line. */
@@ -33,6 +33,24 @@ export type WatcherAttachResult =
   | { ok: false; reason: 'stale' | 'capped' | 'bad-uri' | 'attach-failed' }
   | { ok: false; reason: 'invalid-path'; error: unknown };
 
+/** The `fs.watch` surface the registry uses; injectable so tests can fire events and errors. */
+export type WatchFn = (
+  path: string,
+  options: { recursive?: boolean },
+  listener: (event: string, filename: string | null) => void,
+) => FSWatcher;
+
+// The default reads the `fsWatch` binding per call, not once at creation, so a
+// test that mocks `fs.watch` and re-syncs the ESM exports still takes effect.
+const defaultWatch: WatchFn = (path, options, listener) => fsWatch(path, options, listener);
+
+/** One OS watcher, shared by every URI that resolves to `path` (`%61.txt` and `a.txt`, drive-letter case). */
+interface WatchEntry {
+  path: string;
+  watcher: FSWatcher;
+  uris: Set<string>;
+}
+
 /**
  * Owns the uri → FSWatcher map and the subscription bookkeeping around it:
  * notify callbacks, in-flight subscribe cancellation, and the watcher cap —
@@ -41,8 +59,11 @@ export type WatcherAttachResult =
  * afterwards, so callers do not: they take a lease and release it. The
  * individual primitives stay closure-private.
  */
-export function createWatcherRegistry() {
-  const watchers = new Map<string, FSWatcher>();
+export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchFn } = {}) {
+  // Keyed by URI; aliases of one real path point at the same entry. `byPath`
+  // owns the OS watcher, and its size is the cap count.
+  const watchers = new Map<string, WatchEntry>();
+  const byPath = new Map<string, WatchEntry>();
   // A URI may have several notification sinks and several independent leases.
   // Callback identity and lifetime are intentionally separate: the HTTP leg
   // uses one stable bus-publishing callback for every listen stream, while each
@@ -61,6 +82,8 @@ export function createWatcherRegistry() {
   // later acquire (no sticky per-URI state).
   const pendingSubscribes = new Map<string, Set<{ aborted: boolean }>>();
   const debounceTimers = new Map<string, NodeJS.Timeout>();
+  // The guard each live watcher was acquired with, to re-check its root at fan-out.
+  const guards = new Map<string, PathGuard>();
   let destroyed = false;
 
   const abortPendingSubscribes = (uri: string): void => {
@@ -73,17 +96,23 @@ export function createWatcherRegistry() {
   // next release from one of those leases decrement from zero and drop a
   // watcher a later subscriber re-established for the same URI. `drop` below is
   // the only path that ends leases, and it is the only one that clears them.
-  const dropWatcher = (uri: string, watcher: FSWatcher): void => {
+  // The OS watcher closes only when the last URI aliasing its path leaves.
+  const dropWatcher = (uri: string, entry: WatchEntry): void => {
     const current = watchers.get(uri);
-    if (current !== watcher) return;
+    if (current !== entry) return;
     const timer = debounceTimers.get(uri);
     if (timer) {
       clearTimeout(timer);
       debounceTimers.delete(uri);
     }
-    watcher.close();
+    entry.uris.delete(uri);
+    if (entry.uris.size === 0) {
+      entry.watcher.close();
+      if (byPath.get(entry.path) === entry) byPath.delete(entry.path);
+    }
     watchers.delete(uri);
     activeCallbacks.delete(uri);
+    guards.delete(uri);
   };
 
   /** The last lease ended: drop the watcher and every trace of the URI. */
@@ -93,9 +122,10 @@ export function createWatcherRegistry() {
       clearTimeout(timer);
       debounceTimers.delete(uri);
     }
-    const watcher = watchers.get(uri);
-    if (watcher) dropWatcher(uri, watcher);
+    const entry = watchers.get(uri);
+    if (entry) dropWatcher(uri, entry);
     activeCallbacks.delete(uri);
+    guards.delete(uri);
     subscriberCounts.delete(uri);
     abortPendingSubscribes(uri);
   };
@@ -111,6 +141,22 @@ export function createWatcherRegistry() {
       debounceTimers.delete(uri);
       const cbs = activeCallbacks.get(uri);
       if (!cbs) return;
+      // A root revoked since subscribe (ADR-018) gets no more change notices on
+      // either subscription path. The watcher stays, so notices resume if the
+      // root is granted again: a modern listen stream has no way to re-attach.
+      // shortcut: a revoked root's watcher holds its slot until the last lease is released; hook PathGuard root changes if idle revoked watchers ever hit the cap.
+      const path = extractPath(uri);
+      const guard = guards.get(uri);
+      const entry = watchers.get(uri);
+      // A symlink spelled inside a live root can resolve into a revoked one, so
+      // the resolved path is checked too.
+      if (
+        path !== undefined &&
+        guard &&
+        !(guard.isInsideAllowed(path) && (!entry || guard.isInsideAllowed(entry.path)))
+      ) {
+        return;
+      }
       // One debounce timer per URI — fan out to every subscriber inside it, so
       // a burst of changes still fires one notification round per URI, not per
       // subscriber.
@@ -133,7 +179,7 @@ export function createWatcherRegistry() {
 
   const hasWatcher = (uri: string): boolean => watchers.has(uri);
 
-  const isAtCap = (): boolean => watchers.size >= MAX_WATCHERS;
+  const isAtCap = (): boolean => byPath.size >= MAX_WATCHERS;
 
   const addCallback = (uri: string, notify: (uri: string) => void): void => {
     let callbacks = activeCallbacks.get(uri);
@@ -162,7 +208,15 @@ export function createWatcherRegistry() {
     drop(uri);
   };
 
-  const attach = (uri: string, resolvedPath: string): boolean => {
+  const attach = (uri: string, resolvedPath: string, pathGuard: PathGuard): boolean => {
+    // Another URI already watches this real path: join its entry, no new OS watcher.
+    const shared = byPath.get(resolvedPath);
+    if (shared) {
+      shared.uris.add(uri);
+      watchers.set(uri, shared);
+      guards.set(uri, pathGuard);
+      return true;
+    }
     try {
       // Directories: one recursive watch on macOS and Windows, where the
       // kernel provides it. Not on Linux: Node's recursive watch there walks
@@ -183,26 +237,43 @@ export function createWatcherRegistry() {
       // sync throw; the outer catch handles sync throws (inotify
       // exhaustion, path-race).
       const isDirectory = statSync(resolvedPath).isDirectory();
+      // Each alias gets its own debounced notification carrying its own URI.
+      const notifyEntry = (): void => {
+        for (const u of entry.uris) notifyAll(u);
+      };
       const watcher = isDirectory
-        ? watch(resolvedPath, { recursive: process.platform !== 'linux' }, () => {
-            notifyAll(uri);
-          })
-        : watch(dirname(resolvedPath), (_event, filename) => {
-            if (filename === null || isSamePath(filename, basename(resolvedPath))) notifyAll(uri);
+        ? watch(resolvedPath, { recursive: process.platform !== 'linux' }, notifyEntry)
+        : watch(dirname(resolvedPath), {}, (_event, filename) => {
+            if (filename === null || isSamePath(filename, basename(resolvedPath))) notifyEntry();
           });
+      const entry: WatchEntry = { path: resolvedPath, watcher, uris: new Set([uri]) };
       watcher.on('error', (err: Error) => {
-        Logger.warn(`Watcher error for ${shownUri(uri)}: ${sanitizeLogField(err.message, 256)}`);
-        dropWatcher(uri, watcher);
+        // The path, not `uri`: the URI that created the entry may have left while aliases remain.
+        Logger.warn(
+          `Watcher error for ${sanitizeLogField(entry.path, 256)}: ${sanitizeLogField(err.message, 256)}`,
+        );
+        // The client re-reads and learns the file is gone or changed; a later
+        // `resources/subscribe` re-acquires because `hasWatcher` is now false.
+        // Every alias is dropped first, then each hears its own URI.
+        const pending = [...entry.uris].map(
+          (u) => [u, [...(activeCallbacks.get(u) ?? [])]] as const,
+        );
+        for (const [u] of pending) dropWatcher(u, entry);
+        for (const [u, callbacks] of pending) {
+          for (const cb of callbacks) {
+            try {
+              cb(u);
+            } catch (cbErr) {
+              Logger.warn(
+                `Notify callback error for ${shownUri(u)}: ${formatUnknownErrorMessage(cbErr)}`,
+              );
+            }
+          }
+        }
       });
-      // Two attaches that both cleared `hasWatcher` before either finished
-      // validating land here for the same uri. Keep the one already wired to
-      // the callback set and close this one — overwriting the map entry would
-      // strand the first watcher's fd with nothing left holding a reference.
-      if (watchers.has(uri)) {
-        watcher.close();
-        return true;
-      }
-      watchers.set(uri, watcher);
+      watchers.set(uri, entry);
+      byPath.set(resolvedPath, entry);
+      guards.set(uri, pathGuard);
       return true;
     } catch (err) {
       Logger.error(
@@ -216,7 +287,7 @@ export function createWatcherRegistry() {
     hasWatcher,
 
     /** Live watcher count, for pre-checking a batched listen against remaining capacity. */
-    size: (): number => watchers.size,
+    size: (): number => byPath.size,
 
     release,
 
@@ -228,7 +299,7 @@ export function createWatcherRegistry() {
      * (`prepareListenWatchers`) treats the batch as all-or-nothing, releasing
      * every lease it already took and rejecting the request. Idempotent per URI
      * — a second call for an already-watched URI re-registers the notify
-     * callback (one watcher per URI).
+     * callback. URIs that resolve to one real path share one watcher.
      *
      * `markSubscribe` is the one branch that differs: only `resources/subscribe`
      * gets a cancellation token, which a `release` landing mid-await aborts
@@ -255,15 +326,16 @@ export function createWatcherRegistry() {
         retain(uri);
         return { ok: true };
       }
-      // A cap hit before validation and one found after the await are the same
-      // condition, and both are reported the same way.
-      if (isAtCap()) {
+      // At cap only an alias of an already-watched path can succeed, and that
+      // needs the resolved path, so the cap is checked after validation. A URI
+      // that cannot resolve at cap still reports 'capped', as before.
+      const capped = (): WatcherAttachResult => {
         warnWatcherCap(uri);
         return { ok: false, reason: 'capped' };
-      }
+      };
 
       const filePath = extractPath(uri);
-      if (!filePath) return { ok: false, reason: 'bad-uri' };
+      if (!filePath) return isAtCap() ? capped() : { ok: false, reason: 'bad-uri' };
 
       const token = markSubscribe ? { aborted: false } : undefined;
       if (token) {
@@ -279,7 +351,7 @@ export function createWatcherRegistry() {
         try {
           resolved = await pathGuard.validateExistingPath(filePath);
         } catch (error: unknown) {
-          return { ok: false, reason: 'invalid-path', error };
+          return isAtCap() ? capped() : { ok: false, reason: 'invalid-path', error };
         }
 
         // Re-check what the await could have changed: the registry was destroyed,
@@ -290,13 +362,10 @@ export function createWatcherRegistry() {
           retain(uri);
           return { ok: true };
         }
-        if (isAtCap()) {
-          warnWatcherCap(uri);
-          return { ok: false, reason: 'capped' };
-        }
+        if (!byPath.has(resolved) && isAtCap()) return capped();
 
         addCallback(uri, notify);
-        if (!attach(uri, resolved)) {
+        if (!attach(uri, resolved, pathGuard)) {
           // fs.watch threw (inotify exhaustion, or a race deleted the path): take
           // back the callback this call added. Not `release`: leases whose
           // watcher errored still hold their counts (see `dropWatcher`), and a
@@ -323,14 +392,16 @@ export function createWatcherRegistry() {
         clearTimeout(timer);
       }
       debounceTimers.clear();
-      for (const watcher of watchers.values()) {
+      for (const { watcher } of byPath.values()) {
         try {
           watcher.close();
         } catch {
           /* ignore close errors so all watchers are attempted */
         }
       }
+      byPath.clear();
       watchers.clear();
+      guards.clear();
       activeCallbacks.clear();
       subscriberCounts.clear();
       pendingSubscribes.clear();
