@@ -10,6 +10,8 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
+import { Logger } from '../src/core/observability.ts';
+import { UndoJournal } from '../src/core/undo.ts';
 import { getMaxInboundMessageBytes, MIB } from '../src/core/util.ts';
 import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
 import { startHttpServer } from '../src/transport.ts';
@@ -104,6 +106,22 @@ describe('Real HTTP Server integration', () => {
     } finally {
       await srv[Symbol.asyncDispose]();
     }
+  });
+
+  it('HTTP-LIFE-002: a throwing state cleanup still closes the server and logs', async (t) => {
+    const srv = await startHttpServer(0, { cliAllowedDirs: [tmpDir] }, { apiKey: TEST_API_KEY });
+    t.mock.method(UndoJournal.prototype, 'clear', () => {
+      throw new Error('clear failed');
+    });
+    const logged = t.mock.method(Logger, 'error', () => {});
+    await Promise.race([
+      srv[Symbol.asyncDispose](),
+      sleep(2000).then(() => assert.fail('close hung after a throwing state cleanup')),
+    ]);
+    assert.ok(
+      logged.mock.calls.some((c) => String(c.arguments[1]).includes('clear failed')),
+      'the cleanup error must be logged',
+    );
   });
 
   it('closes immediately on shutdown even with an idle keep-alive client connected', async () => {

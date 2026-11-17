@@ -390,7 +390,12 @@ export async function startHttpServer(
         Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
       })
       .finally(() => {
-        state.dispose();
+        // A throw here would reject teardown and skip the real close below.
+        try {
+          state.dispose();
+        } catch (err: unknown) {
+          Logger.error('[HTTP] Error disposing server state:', formatUnknownErrorMessage(err));
+        }
       });
   };
   const originalClose = httpServer.close.bind(httpServer);
