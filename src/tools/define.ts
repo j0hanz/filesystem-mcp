@@ -34,6 +34,7 @@ import { joinRoster, plainMessage } from '../core/fmt.ts';
 import { GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
+  describeRefusal,
   pendingRoundTrip,
   type PendingState,
   readAcceptedConfirm,
@@ -44,7 +45,7 @@ import {
 import { Logger, sanitizeLogField } from '../core/observability.ts';
 import { bytesOverMessageLimit, refuseToolResult } from '../core/outbound.ts';
 import { isSamePath } from '../core/path-utils.ts';
-import type { PathGuard } from '../core/path.ts';
+import { type PathGuard, withRefusedGrants } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import type { UndoCapture, UndoJournal } from '../core/undo.ts';
@@ -341,6 +342,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     };
   }
 
+  /** Grant folders refused this round; see `withRefusedGrants`. */
+  #refusedGrants: { readonly dirs: readonly string[]; readonly answer: string } | undefined;
+
   /** The undo id for this call, minted once; a re-run of #undoSuffix reuses it. */
   #undoId: string | undefined;
 
@@ -411,8 +415,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
    * grantable. If any are and this round carries no verified `requestState`,
    * return `input_required` (nothing is read or written — R7). On retry, the
    * verified state must bind this grant set (R9); apply each accepted grant for
-   * the session (R8) and proceed. A declined or ungrantable path is left for
-   * `validateAccess` to fail closed during the operation. Returns `undefined`
+   * the session (R8) and proceed. An ungrantable path is left for
+   * `validateAccess` to fail closed during the operation; one under a refused
+   * folder is denied there with the answer, and when nothing was granted and no path can
+   * run the whole call ends CANCELLED here. Returns `undefined`
    * when no round-trip is needed and any applicable grants have been applied.
    */
   private async precheckGrant(): Promise<InputRequiredResult | undefined> {
@@ -488,10 +494,38 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       : grantDirs.filter((_dir, i) =>
           readAcceptedConfirm(this.toolCtx.inputResponses, confirmKey(i)),
         );
-    for (const dir of accepted) {
-      if (!grantDirs.some((g) => isSamePath(g, dir))) continue;
-      await this.toolCtx.fs.pathGuard.applyGrant(dir, 'access');
+    const guard = this.toolCtx.fs.pathGuard;
+    const granted = accepted.filter((dir) => grantDirs.some((g) => isSamePath(g, dir)));
+    for (const dir of granted) await guard.applyGrant(dir, 'access');
+    const refused = grantDirs.filter((g) => !granted.some((dir) => isSamePath(dir, g)));
+    if (refused.length === 0) return undefined;
+    // A multi-select answered at all, even with nothing ticked, left these out.
+    const answer =
+      multi && readAcceptedMultiChoice(this.toolCtx.inputResponses, 'grant') !== undefined
+        ? 'left unselected by the user'
+        : describeRefusal(this.toolCtx, multi ? 'grant' : confirmKey(0));
+    // Nothing granted and every path still needs a grant: the call can only
+    // fail, so it ends on the person's answer. Otherwise the paths that can
+    // run do, and each one under a refused folder is denied with the answer.
+    if (granted.length === 0) {
+      let anyRuns = false;
+      for (const p of paths) {
+        if ((await guard.precheckAccess([p])).length === 0) {
+          anyRuns = true;
+          break;
+        }
+      }
+      if (!anyRuns) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `Access grant for ${joinRoster(
+            grantDirs.map((d) => `"${d}"`),
+            ', ',
+          )} was ${answer}. Nothing was read or changed.`,
+        );
+      }
     }
+    this.#refusedGrants = { dirs: refused, answer };
     return undefined;
   }
 
@@ -536,7 +570,9 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       await this.resolveRelativePaths();
       const grantRequired = await this.precheckGrant();
       if (grantRequired !== undefined) return grantRequired;
-      const result = await this.def.run(this.parsedArgs, this.toolCtx);
+      const result = await withRefusedGrants(this.#refusedGrants, () =>
+        this.def.run(this.parsedArgs, this.toolCtx),
+      );
       // input_required is a return value, not a completed call: the client
       // retries the same tools/call carrying inputResponses, and this
       // handler re-enters from the top. Skip the progress "done" close and

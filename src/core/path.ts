@@ -86,6 +86,23 @@ export function withLinkFreeDirs<T>(fn: () => Promise<T>): Promise<T> {
   return IS_WINDOWS ? linkFreeDirs.run(new Set(), fn) : fn();
 }
 
+/** Grant folders the person refused in this call, and how they answered. */
+const refusedGrants = new AsyncLocalStorage<{
+  readonly dirs: readonly string[];
+  readonly answer: string;
+}>();
+
+/**
+ * Runs one call with a path under a refused grant folder denied with the
+ * person's answer, instead of the out-of-root advice that invites a retry.
+ */
+export function withRefusedGrants<T>(
+  refused: { readonly dirs: readonly string[]; readonly answer: string } | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return refused ? refusedGrants.run(refused, fn) : fn();
+}
+
 /** What a move, copy or rename does: see `PathGuard.resolveTransferDestination`. */
 export type TransferKind = 'distinct' | 'respelling' | 'self';
 
@@ -1007,6 +1024,16 @@ export class PathGuard {
         this.throwRemoteDenied(
           requestedPath,
           `${accessDeniedHint} Network and device paths are never granted. Configure the share as a root.`,
+        );
+      }
+      const refused = refusedGrants.getStore();
+      if (refused && (await isPathWithinAllowedDirectories(normalizedRequested, refused.dirs))) {
+        // ACCESS_DENIED, not CANCELLED: rethrowIfAborted reads CANCELLED as the
+        // whole call stopping, and only this path was refused.
+        this.throwAccessDenied(
+          requestedPath,
+          `The access grant for its folder was ${refused.answer}.`,
+          'Do not retry unless the person asks for it.',
         );
       }
       // Grant advice only where precheckAccess would offer one; if the check

@@ -830,17 +830,14 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           const s = result._meta as { moves?: unknown[] };
           assert.strictEqual(s.moves?.length, 1, 'offered accepted dir is granted');
 
-          // secretDir was never offered -> not granted -> read fails ACCESS_DENIED.
+          // secretDir was never granted: its own prompt got an invalid answer,
+          // so the read ends CANCELLED before touching the file.
           const readRes = await eh.client.callTool({
             name: 'read',
             arguments: { path: join(secretDir, 'secret.txt') },
           });
-          const rs = readRes._meta as {
-            results?: { error?: { code?: string } }[];
-            summary?: { failed?: number };
-          };
-          assert.strictEqual(rs.summary?.failed, 1);
-          assert.strictEqual(rs.results?.[0]?.error?.code, 'ACCESS_DENIED');
+          const rs = readRes._meta as { error?: { code?: string } };
+          assert.strictEqual(rs.error?.code, 'CANCELLED');
         } finally {
           await eh.close();
         }
