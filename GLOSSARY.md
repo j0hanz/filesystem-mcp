@@ -198,6 +198,12 @@ choice settled once at startup (port, host, API key, read-only).
 _Avoid_: config value, option, override (the flag half), env var (the other
 half)
 
+## Subscriptions
+
+**Watcher lease**:
+One acquired interest in change notices for a resource, independent of every other lease for that resource. Ending a pending lease cancels it and ending a settled lease releases it; either is exactly-once, stops that lease's notices, and leaves other leases untouched, even when a protocol treats repeated subscribes as idempotent.
+_Avoid_: subscription (the protocol operation), watcher (the OS resource)
+
 ## Transport
 
 **Message limit**:

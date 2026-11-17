@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Batch tools**: `create`, `edit`, `delete` and `move` decide whether two
+  paths name the same entry by the directory that holds the entry. Unicode
+  form and space characters always fold; letter case folds only where that
+  directory is case-insensitive. Two existing files whose names fold alike stay
+  two entries. No tool schema changes.
+- **Watchers**: each subscription holds its own lease on a watcher.
+  Disposing a lease before the watcher is ready cancels the pending
+  acquisition, and a departed notification callback detaches at once instead of
+  lingering until the last lease on that URI ends. Releasing one subscription
+  can no longer release another's.
+- **Shutdown**: closing a server attempts every owned cleanup, logs each
+  failure instead of throwing, and retries only the cleanups that failed.
+  Subscriptions are released before shared state is disposed.
+
+### Fixed
+
+- `edit` and `delete` treat Unicode respellings of one file as one item, so
+  a batch naming both spellings is refused instead of acting on the file
+  twice.
+- A watcher lease that stays live through a watcher error receives notices
+  again once anyone re-establishes that URI's watcher. Before, it went silent.
+
 ## [2.23.0] - 2026-11-17
 
 Lossy-text reads, path completion for `file://` resource URIs, and
