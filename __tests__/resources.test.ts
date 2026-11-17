@@ -13,6 +13,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setImmediate as nextTick, setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
@@ -32,7 +33,7 @@ import { MIB } from '../src/core/util.ts';
 import { createWatcherRegistry } from '../src/core/watcher-registry.ts';
 import { buildSectionsRecord, INSTRUCTIONS_URI, renderSections } from '../src/instructions.ts';
 import { getResourceContracts, registerResources } from '../src/resources.ts';
-import { createServer } from '../src/server.ts';
+import { createRuntimeState, createServer, RESOURCES_CHANGED_DEBOUNCE_MS } from '../src/server.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   cleanupTestRoot,
@@ -1168,6 +1169,8 @@ describe('MCP Resources', () => {
     });
 
     it('two same-tick resources/list_changed sends coalesce into one client notification', async () => {
+      // Let a debounced store notification from earlier tests flush first.
+      await sleep(RESOURCES_CHANGED_DEBOUNCE_MS + 50);
       const seen: unknown[] = [];
       harness.client.setNotificationHandler('notifications/resources/list_changed', (n) => {
         seen.push(n);
@@ -1301,5 +1304,26 @@ describe('filesystem resource path completion', () => {
     } finally {
       await harness.close();
     }
+  });
+});
+
+describe('result-store list_changed coalescing', () => {
+  it('a burst of result-store changes across ticks sends one list_changed', async () => {
+    let count = 0;
+    const state = createRuntimeState(
+      {},
+      {
+        onResourcesChanged: () => {
+          count++;
+        },
+      },
+    );
+    for (let i = 0; i < 3; i++) {
+      state.resourceStore.putText({ name: `r${i}`, text: 'x' });
+      await nextTick();
+    }
+    await sleep(RESOURCES_CHANGED_DEBOUNCE_MS + 50);
+    assert.equal(count, 1);
+    state.dispose();
   });
 });
