@@ -29,6 +29,7 @@ import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
 import { getMaxInboundMessageBytes } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
+import { formatHttpHost } from './transport/http-policy.ts';
 
 // ════════════════════════════════════════════════════════════
 // Path & Config Utilities — pure functions and error types
@@ -245,6 +246,12 @@ export async function parseArgs(): Promise<{
       v['read-only'] || parseTrueEnvFlag(process.env['FS_READ_ONLY'], 'FS_READ_ONLY');
     const printConfig = v['print-config'];
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
+    // Flags only: FS_API_KEY is often exported globally, and stdio must still start then.
+    if (port === undefined && (v['api-key'] !== undefined || v['http-host'] !== undefined)) {
+      throw new CliExitError(
+        'Error: --api-key and --http-host apply only to the HTTP transport. Add --port, or drop them for stdio.',
+      );
+    }
     const allowMissingRoots = getAllowMissingRoots();
 
     // A read-only dir need not be an allowed root — the guard unions these
@@ -322,7 +329,7 @@ export async function runPrintConfig(
   const config = {
     transport:
       options.port !== undefined
-        ? `http://${options.httpHost ?? '127.0.0.1'}:${String(options.port)}`
+        ? `http://${formatHttpHost(options.httpHost ?? '127.0.0.1')}:${String(options.port)}`
         : 'stdio',
     readOnly: options.readOnly,
     readOnlyDirs: pathGuard.getReadOnlyDirs(),

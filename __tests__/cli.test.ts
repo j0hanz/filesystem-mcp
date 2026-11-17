@@ -65,7 +65,18 @@ describe('CLI (real subprocess)', () => {
   it('--print-config masks the API key and reports the access policy', async () => {
     const key = 'cli-test-dummy-key-0123456789';
     const { code, stdout, stderr } = await runCli(
-      ['--print-config', '--api-key', key, '--deny', 'secrets/**', '--root-boundary', root, root],
+      [
+        '--print-config',
+        '--port',
+        '3000',
+        '--api-key',
+        key,
+        '--deny',
+        'secrets/**',
+        '--root-boundary',
+        root,
+        root,
+      ],
       { FS_ALLOWLIST: 'secrets/README.md' },
     );
     assert.strictEqual(code, 0, stderr);
@@ -232,6 +243,46 @@ describe('CLI (real subprocess)', () => {
       assert.strictEqual(code, 1, `--port ${port} must fail`);
       assert.match(stderr, /--port \/ FS_PORT must be an integer between 1 and 65535/);
     }
+  });
+
+  it('CLI-HTTP-001: --api-key without --port exits 1 naming --port', async () => {
+    const { code, stderr } = await runCli(['--api-key', 'k'.repeat(16), root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
+  });
+
+  it('CLI-HTTP-002: --http-host without --port exits 1 naming --port', async () => {
+    const { code, stderr } = await runCli(['--http-host', '127.0.0.1', root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
+  });
+
+  it('CLI-HTTP-003: FS_API_KEY without --port still starts stdio', async () => {
+    // stdin is 'ignore' in runCli, so stdio sees EOF and shuts down cleanly.
+    const { code, stderr } = await runCli([root], { FS_API_KEY: 'k'.repeat(16) });
+    assert.strictEqual(code, 0, stderr);
+  });
+
+  it('CLI-HTTP-005: --print-config refuses --http-host without --port, like a real start', async () => {
+    const { code, stderr } = await runCli(['--print-config', '--http-host', '::1', root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
+  });
+
+  it('CLI-HTTP-004: --print-config brackets an IPv6 --http-host', async () => {
+    const { code, stdout, stderr } = await runCli([
+      '--print-config',
+      '--port',
+      '3000',
+      '--http-host',
+      '::1',
+      root,
+    ]);
+    assert.strictEqual(code, 0, stderr);
+    assert.strictEqual(
+      (JSON.parse(stdout) as { transport: string }).transport,
+      'http://[::1]:3000',
+    );
   });
 
   it('FS_READ_ONLY turns on read-only mode like --read-only', async () => {

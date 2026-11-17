@@ -313,6 +313,25 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
   }
   let gated = Promise.resolve();
   wire.onmessage = (message) => {
+    // A request reusing an open listen's ID would get a response under that ID,
+    // and the send wrapper above would release the listen's leases, leaving its
+    // stream open but silent. Refuse it through the unwrapped `send`, so the
+    // refusal itself releases nothing. Runs before the oversized check, whose
+    // reply goes through `wire.send`; an ID in `listens` already passed that
+    // check, so it is short enough to echo.
+    if ('method' in message && 'id' in message && listens.has(message.id)) {
+      send(
+        jsonRpcError(
+          ProtocolErrorCode.InvalidRequest,
+          `Request ID ${JSON.stringify(message.id)} is in use by an open subscriptions/listen. Use a fresh ID.`,
+          message.id,
+        ),
+      ).catch((error: unknown) => {
+        wire.onerror?.(normalizeUnknownError(error));
+      });
+      return;
+    }
+
     const oversized = oversizedEcho(message);
     if (oversized !== undefined) {
       // Never echo an oversized ID: it could overflow even a compact error. A
@@ -357,7 +376,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       return;
     }
     const id = jsonRpcRequestId(message);
-    if (id === null || listens.has(id)) {
+    if (id === null) {
       deliver(message);
       return;
     }
