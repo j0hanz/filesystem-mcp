@@ -23,6 +23,7 @@ import {
   encodeFileUriPath,
   extractFileUrlPath,
   extractPath,
+  FILE_URL_TEMPLATE,
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
@@ -1269,6 +1270,26 @@ describe('filesystem resource path completion', () => {
       // SDK slices.
       assert.ok(result.completion.values[0]?.endsWith('f000.txt'));
       assert.ok(result.completion.values[99]?.endsWith('f099.txt'));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('completes file:// alias paths as URL paths that read back', async () => {
+    await writeTestFile(root, 'alias.txt', 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILE_URL_TEMPLATE },
+        argument: {
+          name: 'path',
+          value: pathToFileURL(`${root}${sep}`).href.slice('file://'.length),
+        },
+      });
+      assert.ok(result.completion.values.length > 0);
+      const file = result.completion.values.find((v) => !v.endsWith('/'));
+      assert.ok(file?.startsWith('/'));
+      await harness.client.readResource({ uri: `file://${file}` }); // resolves, no throw
     } finally {
       await harness.close();
     }

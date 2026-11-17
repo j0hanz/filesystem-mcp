@@ -18,6 +18,8 @@ import {
   UriTemplate,
 } from '@modelcontextprotocol/server';
 
+import { pathToFileURL } from 'node:url';
+
 import { getMaxTextFileSize } from './core/config.ts';
 import type { FsError } from './core/errors.ts';
 import { ErrorCode, formatUnknownErrorMessage, isFsError } from './core/errors.ts';
@@ -224,6 +226,17 @@ function createFileUrlResource(options: ResourceRegistrationOptions): ResourceCo
     async read(uri, _variables, ctx: ServerContext) {
       ctx.mcpReq.signal.throwIfAborted();
       return readWorkspaceFile(options, uri, extractFileUrlPath(uri.href), ctx);
+    },
+    complete: {
+      // Values are URL paths (`/C:/…` on Windows), so `file://` + value is a
+      // valid `file:///` URL; the partial is decoded the same way a read is.
+      path: async (value) => {
+        const suggestions = await suggestPaths(
+          options.pathGuard,
+          extractFileUrlPath(`file://${value}`) ?? value,
+        );
+        return suggestions.map((p) => pathToFileURL(p).href.slice('file://'.length));
+      },
     },
   };
 }
