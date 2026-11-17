@@ -1,5 +1,5 @@
 import type { FSWatcher } from 'node:fs';
-import { statSync, watch } from 'node:fs';
+import { watch as fsWatch, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseEnvInt } from './config.ts';
@@ -33,6 +33,17 @@ export type WatcherAttachResult =
   | { ok: false; reason: 'stale' | 'capped' | 'bad-uri' | 'attach-failed' }
   | { ok: false; reason: 'invalid-path'; error: unknown };
 
+/** The `fs.watch` surface the registry uses; injectable so tests can fire events and errors. */
+export type WatchFn = (
+  path: string,
+  options: { recursive?: boolean },
+  listener: (event: string, filename: string | null) => void,
+) => FSWatcher;
+
+// The default reads the `fsWatch` binding per call, not once at creation, so a
+// test that mocks `fs.watch` and re-syncs the ESM exports still takes effect.
+const defaultWatch: WatchFn = (path, options, listener) => fsWatch(path, options, listener);
+
 /**
  * Owns the uri → FSWatcher map and the subscription bookkeeping around it:
  * notify callbacks, in-flight subscribe cancellation, and the watcher cap —
@@ -41,7 +52,7 @@ export type WatcherAttachResult =
  * afterwards, so callers do not: they take a lease and release it. The
  * individual primitives stay closure-private.
  */
-export function createWatcherRegistry() {
+export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchFn } = {}) {
   const watchers = new Map<string, FSWatcher>();
   // A URI may have several notification sinks and several independent leases.
   // Callback identity and lifetime are intentionally separate: the HTTP leg
@@ -187,12 +198,24 @@ export function createWatcherRegistry() {
         ? watch(resolvedPath, { recursive: process.platform !== 'linux' }, () => {
             notifyAll(uri);
           })
-        : watch(dirname(resolvedPath), (_event, filename) => {
+        : watch(dirname(resolvedPath), {}, (_event, filename) => {
             if (filename === null || isSamePath(filename, basename(resolvedPath))) notifyAll(uri);
           });
       watcher.on('error', (err: Error) => {
         Logger.warn(`Watcher error for ${shownUri(uri)}: ${sanitizeLogField(err.message, 256)}`);
+        // The client re-reads and learns the file is gone or changed; a later
+        // `resources/subscribe` re-acquires because `hasWatcher` is now false.
+        const callbacks = [...(activeCallbacks.get(uri) ?? [])];
         dropWatcher(uri, watcher);
+        for (const cb of callbacks) {
+          try {
+            cb(uri);
+          } catch (cbErr) {
+            Logger.warn(
+              `Notify callback error for ${shownUri(uri)}: ${formatUnknownErrorMessage(cbErr)}`,
+            );
+          }
+        }
       });
       // Two attaches that both cleared `hasWatcher` before either finished
       // validating land here for the same uri. Keep the one already wired to
