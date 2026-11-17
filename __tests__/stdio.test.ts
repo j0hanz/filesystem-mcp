@@ -841,7 +841,7 @@ describe('Stdio subscription lease lifecycle', () => {
 
   const collisions: [string, (uri: string) => JSONRPCMessage][] = [
     [
-      'STDIO-015: a request reusing an open listen ID is refused and keeps the lease',
+      'STDIO-020: a request reusing an open listen ID is refused and keeps the lease',
       (_uri: string) => ({
         jsonrpc: '2.0',
         id: 'dup',
@@ -850,12 +850,23 @@ describe('Stdio subscription lease lifecycle', () => {
       }),
     ],
     [
-      'STDIO-016: a duplicate listen ID is refused and keeps the first lease',
+      'STDIO-021: a duplicate listen ID is refused and keeps the first lease',
       (uri: string) => ({
         jsonrpc: '2.0',
         id: 'dup',
         method: 'subscriptions/listen',
         params: { _meta: MODERN_META, notifications: { resourceSubscriptions: [uri] } },
+      }),
+    ],
+    [
+      'STDIO-022: a reused listen ID with an oversized progress token keeps the lease',
+      (_uri: string) => ({
+        jsonrpc: '2.0',
+        id: 'dup',
+        method: 'tools/list',
+        params: {
+          _meta: { ...MODERN_META, progressToken: 'p'.repeat(MAX_STDIO_REQUEST_ID_BYTES + 1) },
+        },
       }),
     ],
   ];
