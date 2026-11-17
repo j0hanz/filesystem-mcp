@@ -46,6 +46,26 @@ describe('PathGuard.entryKeys', () => {
     assert.strictEqual(c, d);
   });
 
+  it('keeps existing fold-alike entries apart and joins a respelling to its entry', async () => {
+    const plain = 'a b.txt';
+    const nbsp = 'a\u00a0b.txt';
+    assert.notStrictEqual(plain, nbsp);
+    await writeTestFile(root, `k/${plain}`, '1');
+    await writeTestFile(root, `k/${nbsp}`, '2');
+    const [a, b] = await guard.entryKeys([join(root, 'k', plain), join(root, 'k', nbsp)]);
+    assert.notStrictEqual(a, b);
+
+    const nfc = 'caf\u00e9.txt';
+    const nfd = 'cafe\u0301.txt';
+    assert.notStrictEqual(nfc, nfd);
+    await writeTestFile(root, `k/${nfc}`, '3');
+    const [existing, respelled] = await guard.entryKeys([
+      join(root, 'k', nfc),
+      join(root, 'k', nfd),
+    ]);
+    assert.strictEqual(existing, respelled);
+  });
+
   it('follows the directory rule for letter case', async () => {
     const [upper, lower] = await guard.entryKeys([
       join(root, 'k', 'Name.txt'),

@@ -205,6 +205,17 @@ function isPathWithinAllowedDirectoriesSync(
   return false;
 }
 
+/** The entries whose name folds equal to `name` under the directory's rule. */
+function equivalentEntries(
+  entries: readonly string[],
+  name: string,
+  caseSensitive: boolean,
+): string[] {
+  const fold = caseSensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
+  const key = fold(name);
+  return entries.filter((entry) => fold(entry) === key);
+}
+
 async function isDirectoryCaseSensitive(
   realDir: string,
   entries: readonly string[],
@@ -1582,18 +1593,30 @@ export class PathGuard {
   /** One key per path, in order; equal keys name one Entry. Paths are absolute. */
   async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
     const allowedDirs = this.getAllowedDirectories();
-    // Real directory -> whether its entries are case-sensitive; undefined when unreadable.
-    const rules = new Map<string, Promise<boolean | undefined>>();
-    const readRule = async (realDir: string): Promise<boolean | undefined> => {
+    // Real directory -> its listing and whether its entries are case-sensitive; undefined when unreadable.
+    interface Listing {
+      entries: string[];
+      sensitive: boolean;
+    }
+    const listings = new Map<string, Promise<Listing | undefined>>();
+    const readListing = async (realDir: string): Promise<Listing | undefined> => {
       try {
-        if (!IS_CASE_INSENSITIVE_FS) return true;
-        return await isDirectoryCaseSensitive(realDir, await readdir(realDir));
+        const entries = await readdir(realDir);
+        return {
+          entries,
+          sensitive: IS_CASE_INSENSITIVE_FS
+            ? await isDirectoryCaseSensitive(realDir, entries)
+            : true,
+        };
       } catch {
         return undefined;
       }
     };
-    const ruleFor = async (path: string): Promise<boolean> => {
-      let dir = dirname(path);
+    const locate = async (
+      path: string,
+    ): Promise<{ sensitive: boolean; entry?: string | undefined }> => {
+      const parent = dirname(path);
+      let dir = parent;
       while (isPathWithinAllowedDirectoriesSync(normalizePath(dir), allowedDirs)) {
         signal?.throwIfAborted();
         let real: string | undefined;
@@ -1604,27 +1627,37 @@ export class PathGuard {
         }
         // A link inside a root can point out of it: never read that target.
         if (real !== undefined && (await isPathWithinAllowedDirectories(real, allowedDirs))) {
-          let rule = rules.get(real);
-          if (!rule) {
-            rule = readRule(real);
-            rules.set(real, rule);
+          let listing = listings.get(real);
+          if (!listing) {
+            listing = readListing(real);
+            listings.set(real, listing);
           }
-          const sensitive = await rule;
-          if (sensitive !== undefined) return sensitive;
+          const found = await listing;
+          if (found !== undefined) {
+            if (dir !== parent) return { sensitive: found.sensitive };
+            // An exact name wins; else the single fold-equal entry; else (missing or ambiguous) none.
+            const name = basename(path);
+            const matches = found.entries.includes(name)
+              ? [name]
+              : equivalentEntries(found.entries, name, found.sensitive);
+            return matches.length === 1
+              ? { sensitive: found.sensitive, entry: matches[0] }
+              : { sensitive: found.sensitive };
+          }
         }
-        const parent = dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
+        const up = dirname(dir);
+        if (up === dir) break;
+        dir = up;
       }
-      return !IS_CASE_INSENSITIVE_FS;
+      return { sensitive: !IS_CASE_INSENSITIVE_FS };
     };
     const keys: string[] = [];
     for (const path of paths) {
       signal?.throwIfAborted();
       const resolved = resolve(path);
-      keys.push(
-        (await ruleFor(resolved)) ? unicodeMatchKeyExactCase(resolved) : unicodeMatchKey(resolved),
-      );
+      const { sensitive, entry } = await locate(resolved);
+      const fold = sensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
+      keys.push(entry === undefined ? fold(resolved) : `${fold(dirname(resolved))}${sep}${entry}`);
     }
     return keys;
   }
@@ -1648,11 +1681,10 @@ export class PathGuard {
       return undefined;
     }
     if (entries.includes(name)) return name;
-    const isCaseSensitive = await isDirectoryCaseSensitive(realDir, entries);
-    const key = isCaseSensitive ? unicodeMatchKeyExactCase(name) : unicodeMatchKey(name);
-    const matches = entries.filter(
-      (entry) =>
-        (isCaseSensitive ? unicodeMatchKeyExactCase(entry) : unicodeMatchKey(entry)) === key,
+    const matches = equivalentEntries(
+      entries,
+      name,
+      await isDirectoryCaseSensitive(realDir, entries),
     );
     // A match the denylist covers is refused here, as a lone one would be by
     // the caller, so the ambiguity error below never lists a hidden name.
