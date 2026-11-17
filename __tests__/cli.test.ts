@@ -65,7 +65,18 @@ describe('CLI (real subprocess)', () => {
   it('--print-config masks the API key and reports the access policy', async () => {
     const key = 'cli-test-dummy-key-0123456789';
     const { code, stdout, stderr } = await runCli(
-      ['--print-config', '--api-key', key, '--deny', 'secrets/**', '--root-boundary', root, root],
+      [
+        '--print-config',
+        '--port',
+        '3000',
+        '--api-key',
+        key,
+        '--deny',
+        'secrets/**',
+        '--root-boundary',
+        root,
+        root,
+      ],
       { FS_ALLOWLIST: 'secrets/README.md' },
     );
     assert.strictEqual(code, 0, stderr);
@@ -250,6 +261,12 @@ describe('CLI (real subprocess)', () => {
     // stdin is 'ignore' in runCli, so stdio sees EOF and shuts down cleanly.
     const { code, stderr } = await runCli([root], { FS_API_KEY: 'k'.repeat(16) });
     assert.strictEqual(code, 0, stderr);
+  });
+
+  it('CLI-HTTP-005: --print-config refuses --http-host without --port, like a real start', async () => {
+    const { code, stderr } = await runCli(['--print-config', '--http-host', '::1', root]);
+    assert.strictEqual(code, 1);
+    assert.match(stderr, /--port/);
   });
 
   it('CLI-HTTP-004: --print-config brackets an IPv6 --http-host', async () => {

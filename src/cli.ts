@@ -247,11 +247,7 @@ export async function parseArgs(): Promise<{
     const printConfig = v['print-config'];
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
     // Flags only: FS_API_KEY is often exported globally, and stdio must still start then.
-    if (
-      !printConfig &&
-      port === undefined &&
-      (v['api-key'] !== undefined || v['http-host'] !== undefined)
-    ) {
+    if (port === undefined && (v['api-key'] !== undefined || v['http-host'] !== undefined)) {
       throw new CliExitError(
         'Error: --api-key and --http-host apply only to the HTTP transport. Add --port, or drop them for stdio.',
       );
