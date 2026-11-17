@@ -149,10 +149,13 @@ async function handleDelete(
   // respellings (letter case, Unicode form) collapse and two on-disk names that
   // fold alike stay apart. Collapse only when both plans also saw one
   // identity: a link or a replaced entry can share a key and not an Entry.
-  const keys = await ctx.fs.pathGuard.entryKeys(
-    planned.map(({ value: r }) => (r.status === 'noop' ? r.deleted : r.plan.validPath)),
-    ctx.signal,
-  );
+  const keys =
+    planned.length < 2
+      ? []
+      : await ctx.fs.pathGuard.entryKeys(
+          planned.map(({ value: r }) => (r.status === 'noop' ? r.deleted : r.plan.validPath)),
+          ctx.signal,
+        );
   const sawSameEntry = (plan: DeletePlan, key: string): boolean => {
     const stats = plan.firstStats?.stats;
     if (stats === undefined) return false;

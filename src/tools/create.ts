@@ -297,10 +297,10 @@ async function handleCreate(
   // entries for one path race: the last rename wins and the other's content
   // is lost while both report success. The path guard keys each path by the
   // Entry it names, so Unicode respellings count as one.
-  const inputKeys = await ctx.fs.pathGuard.entryKeys(
-    [...dirs, ...files.map((file) => file.path)].map(normalizePath),
-    ctx.signal,
-  );
+  const inputPaths = [...dirs, ...files.map((file) => file.path)].map(normalizePath);
+  // One path cannot repeat: skip the guard's directory reads.
+  const inputKeys =
+    inputPaths.length < 2 ? [] : await ctx.fs.pathGuard.entryKeys(inputPaths, ctx.signal);
   const refuseRepeats = (
     keys: string[],
     label: (index: number, ref?: boolean) => string,
@@ -346,10 +346,13 @@ async function handleCreate(
   // writes. Any other pairing with a `pending` entry fails at once. Two
   // appends both land.
   const planOrder = [...plans.keys()].sort((a, b) => a - b);
-  const landingKeys = await ctx.fs.pathGuard.entryKeys(
-    planOrder.map((index) => plans.get(index)?.validPath ?? ''),
-    ctx.signal,
-  );
+  const landingKeys =
+    planOrder.length < 2
+      ? []
+      : await ctx.fs.pathGuard.entryKeys(
+          planOrder.map((index) => plans.get(index)?.validPath ?? ''),
+          ctx.signal,
+        );
   const firstByLanding = new Map<string, CreatePlan>();
   const duplicatePendingOf = new Map<number, { inputPath: string; validPath: string }>();
   for (const [at, index] of planOrder.entries()) {
