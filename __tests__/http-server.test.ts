@@ -96,6 +96,16 @@ describe('Real HTTP Server integration', () => {
     }
   });
 
+  it('HTTP-LIFE-001: request receive timeout is 300 s, not the MCP request timeout', async () => {
+    const srv = await startHttpServer(0, { cliAllowedDirs: [tmpDir] }, { apiKey: TEST_API_KEY });
+    try {
+      assert.strictEqual(srv.requestTimeout, 300_000);
+      assert.strictEqual(srv.headersTimeout, 10_000);
+    } finally {
+      await srv[Symbol.asyncDispose]();
+    }
+  });
+
   it('closes immediately on shutdown even with an idle keep-alive client connected', async () => {
     const srv = await startHttpServer(0, { cliAllowedDirs: [tmpDir] }, { apiKey: TEST_API_KEY });
     const srvPort = (srv.address() as AddressInfo).port;

@@ -9,7 +9,6 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { McpHttpHandler, ServerNotifier } from '@modelcontextprotocol/server';
 import {
   createMcpHandler,
-  DEFAULT_REQUEST_TIMEOUT_MSEC,
   isJsonContentType,
   ProtocolErrorCode,
 } from '@modelcontextprotocol/server';
@@ -53,6 +52,9 @@ import { jsonRpcRequestId, listenSubscriptionUris, prepareListenWatchers } from 
 const KEEPALIVE_TIMEOUT_MS = 65_000;
 // A slow client's limit on sending headers; idle keep-alive time does not count.
 const HEADERS_TIMEOUT_MS = 10_000;
+// Time to receive a whole request: a max-size body (3 × FS_MAX_FILE_SIZE + 1 MiB)
+// must fit on a slow link. HEADERS_TIMEOUT_MS still guards slowloris.
+const REQUEST_RECEIVE_TIMEOUT_MS = 300_000;
 
 /** Body-parser rejections and anything else that reaches the end of the chain. */
 function errorHandlerMiddleware(
@@ -367,7 +369,7 @@ export async function startHttpServer(
   const httpServer = createHttpServer(app);
   httpServer.keepAliveTimeout = KEEPALIVE_TIMEOUT_MS;
   httpServer.headersTimeout = HEADERS_TIMEOUT_MS;
-  httpServer.requestTimeout = DEFAULT_REQUEST_TIMEOUT_MSEC;
+  httpServer.requestTimeout = REQUEST_RECEIVE_TIMEOUT_MS;
 
   const onHttpServerError = (error: Error): void => {
     Logger.error('[HTTP] runtime server error', {
@@ -381,10 +383,15 @@ export async function startHttpServer(
   const teardown = (): Promise<void> => {
     const limiter = app.locals['rateLimiter'] as RateLimiterMiddleware | undefined;
     limiter?.close();
-    state.dispose();
-    return modernHandler.close().catch((err: unknown) => {
-      Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
-    });
+    // Abort in-flight exchanges first, so no tool call runs against disposed stores.
+    return modernHandler
+      .close()
+      .catch((err: unknown) => {
+        Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
+      })
+      .finally(() => {
+        state.dispose();
+      });
   };
   const originalClose = httpServer.close.bind(httpServer);
   httpServer.close = function (callback?: (error?: Error) => void) {
