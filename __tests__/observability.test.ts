@@ -7,7 +7,11 @@ import { describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { sanitizeLogField } from '../src/core/observability.ts';
-import { createWatcherRegistry, MAX_WATCHERS } from '../src/core/watcher-registry.ts';
+import {
+  createWatcherRegistry,
+  MAX_WATCHERS,
+  type WatcherLease,
+} from '../src/core/watcher-registry.ts';
 import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
 
 describe('sanitizeLogField', () => {
@@ -32,20 +36,20 @@ describe('sanitizeLogField', () => {
     t.mock.method(console, 'error', (...args: unknown[]) => {
       logged.push(args);
     });
-    const acquiredUris: string[] = [];
+    const leases: WatcherLease[] = [];
 
     try {
       for (let i = 0; i < MAX_WATCHERS; i++) {
         const sub = join(dir, `sub-${i}`);
         await mkdir(sub);
         const uri = buildFileResourceUri(sub);
-        const res = await registry.acquire(guard, uri, () => {});
-        assert.strictEqual(res.ok, true);
-        acquiredUris.push(uri);
+        const lease = registry.acquire(guard, uri, () => {});
+        leases.push(lease);
+        assert.strictEqual((await lease.ready).ok, true);
       }
 
       const forgedUri = `${buildFileResourceUri(dir)}/x\n[error] forged line`;
-      const capped = await registry.acquire(guard, forgedUri, () => {});
+      const capped = await registry.acquire(guard, forgedUri, () => {}).ready;
       assert.deepStrictEqual(capped, { ok: false, reason: 'capped' });
 
       const capLogs = logged.filter(
@@ -56,9 +60,7 @@ describe('sanitizeLogField', () => {
       assert(typeof firstArg === 'string');
       assert.strictEqual(firstArg.includes('\n'), false);
     } finally {
-      for (const uri of acquiredUris) {
-        registry.release(uri);
-      }
+      for (const lease of leases) lease.dispose();
       await cleanupTestRoot(dir);
     }
   });
@@ -77,7 +79,7 @@ describe('sanitizeLogField', () => {
     });
     syncBuiltinESMExports();
     try {
-      await registry.acquire(guard, buildFileResourceUri(dir), () => {});
+      await registry.acquire(guard, buildFileResourceUri(dir), () => {}).ready;
       const failLogs = logged.filter(
         (args) => typeof args[0] === 'string' && args[0].includes('Failed to create watcher'),
       );

@@ -164,10 +164,17 @@ async function runTransfers(
   // same destination are reported as a per-item failure.
   const seenDest = new Set<string>();
   const ready: IndexedPlan[] = [];
-  for (const candidate of candidates) {
-    // Unicode-folded too: two spellings of one missing name land on one file
-    // once the first move creates it (#101).
-    const destKey = unicodeMatchKey(candidate.plan.destination);
+  // The guard keys each destination by the Entry it names, so two spellings of
+  // one missing name land on one file once the first move creates it (#101).
+  const destKeys =
+    candidates.length < 2
+      ? []
+      : await ctx.fs.pathGuard.entryKeys(
+          candidates.map((candidate) => candidate.plan.destination),
+          ctx.signal,
+        );
+  for (const [i, candidate] of candidates.entries()) {
+    const destKey = destKeys[i] ?? candidate.plan.destination;
     if (seenDest.has(destKey)) {
       slots[candidate.index] = {
         status: 'failure',

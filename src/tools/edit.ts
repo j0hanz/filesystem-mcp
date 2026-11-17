@@ -11,7 +11,8 @@ import { ErrorCode, FsError, type PerPathResult } from '../core/errors.ts';
 import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { createYielder } from '../core/matcher.ts';
-import { isSamePath } from '../core/path-utils.ts';
+import { normalizePath } from '../core/path-utils.ts';
+import { firstRepeat } from '../core/path.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import {
   defaultFalseBoolean,
@@ -113,21 +114,6 @@ const EditFileInputSchema = z
         message: "'edits' not allowed with 'files'; each file carries its own edits",
         input: value,
       });
-    }
-    // Batch entries run in parallel and each rewrites its file whole, so two
-    // entries for one file race: the last write wins and the other's edits are
-    // lost while both report success. One entry per file.
-    const files = value.files ?? [];
-    for (const [index, file] of files.entries()) {
-      const first = files.findIndex((other) => isSamePath(other.path, file.path));
-      if (first < index) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['files', index, 'path'],
-          message: `duplicate of files[${String(first)}].path; put every edit for one file in a single entry`,
-          input: value,
-        });
-      }
     }
   });
 
@@ -800,6 +786,24 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
   run: async (args, ctx) => {
     const items =
       args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);
+
+    // Batch entries run in parallel and each rewrites its file whole, so two
+    // entries for one file race: the last write wins and the other's edits are
+    // lost while both report success. One entry per file, however spelled.
+    if (items.length > 1) {
+      const keys = await ctx.fs.pathGuard.entryKeys(
+        items.map((item) => normalizePath(item.path)),
+        ctx.signal,
+      );
+      const repeat = firstRepeat(keys);
+      if (repeat) {
+        const [index, first] = repeat;
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `files.${String(index)}.path: duplicate of files[${String(first)}].path; put every edit for one file in a single entry`,
+        );
+      }
+    }
 
     const batch = await runOverPaths(items, ctx, ErrorCode.UNKNOWN, ({ path, edits }) =>
       editOnce(path, edits, args, ctx),

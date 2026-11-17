@@ -1085,6 +1085,7 @@ describe('move body', () => {
       const destB = join(root, 'order_dest_b.txt');
 
       const mockFs = {
+        pathGuard: fs.pathGuard,
         planTransfer: async (_op: string, pair: { source: string; destination: string }) => {
           if (pair.source === b) {
             throw new FsError(ErrorCode.NOT_FOUND, 'Source does not exist', pair.source);
@@ -1126,6 +1127,7 @@ describe('move body', () => {
       const dest = join(root, 'dest_missing_exec.txt');
 
       const mockFs = {
+        pathGuard: fs.pathGuard,
         planTransfer: async (_op: string, pair: { source: string; destination: string }) => ({
           request: pair,
           source: pair.source,

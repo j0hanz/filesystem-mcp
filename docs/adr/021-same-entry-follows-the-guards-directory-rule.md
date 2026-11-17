@@ -28,7 +28,11 @@ returns a key per path; equal keys name one Entry (a Respelling).
   only when the directory that holds the entry is case-insensitive. A
   missing entry or parent takes the rule of its nearest existing ancestor
   inside a root; with no such ancestor it falls back to
-  `IS_CASE_INSENSITIVE_FS`.
+  `IS_CASE_INSENSITIVE_FS`. Two existing entries whose names fold alike
+  (`a b.txt` and `a b.txt`) are two Entries and are not refused:
+  `entryKeys` keys an existing entry by its exact on-disk name. A respelling
+  of an existing entry matches that entry, and a missing name folds by the
+  directory rule.
 - **Scope**: the duplicate checks of `create`, `edit`, `delete` and `move`.
   `edit`'s and `create`'s checks leave their zod schemas and run in `run`
   before any change, with the same `INVALID_INPUT` messages.

@@ -9,6 +9,8 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { Logger } from '../src/core/observability.ts';
+import { ResourceStore } from '../src/core/store.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   assertOneNotificationPerRound,
@@ -156,8 +158,8 @@ describe('Resource subscriptions round-trip', () => {
     });
 
     await pair.client.subscribeResource({ uri });
-    // Over-release: the registry ref-counts by URI, so an unsubscribe for a
-    // lease this connection never took used to decrement someone else's.
+    // Over-release: when the registry ref-counted by URI, an unsubscribe for a
+    // lease this connection never took decremented someone else's.
     await pair.client.unsubscribeResource({
       uri: buildFileResourceUri(join(tmpDir, 'never-subscribed.txt')),
     });
@@ -240,12 +242,153 @@ describe('createServer disposal on connection close', () => {
     }
   });
 
+  it('instance cleanup logs lease failures and preserves injected state', async (t) => {
+    const root = await createTestRoot();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
+    try {
+      const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
+      t.mock.method(state.watcherRegistry, 'acquire', () => ({
+        ready: Promise.resolve({ ok: true } as const),
+        dispose(): void {
+          throw new Error('lease failed');
+        },
+      }));
+      const errors = t.mock.method(Logger, 'error', () => {});
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+      const uri = buildFileResourceUri(await writeTestFile(root, 'lease.txt', 'x'));
+      await client.subscribeResource({ uri });
+
+      await client.close();
+      assert.ok(
+        errors.mock.calls.some((c) => c.arguments.some((a) => String(a).includes('lease failed'))),
+      );
+      assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
+    } finally {
+      state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('closing a self-owned instance disposes its RuntimeState', async (t) => {
+    const root = await createTestRoot();
+    try {
+      const clear = t.mock.method(ResourceStore.prototype, 'clear');
+      const ctx = await createServer({ cliAllowedDirs: [root] });
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+      await client.close();
+      assert.strictEqual(clear.mock.callCount(), 1);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('a fresh subscribe after pending unsubscribe stays active', async (t) => {
+    const root = await createTestRoot();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
+    const filePath = await writeTestFile(root, 'fresh.txt', 'x');
+    const uri = buildFileResourceUri(filePath);
+    const client = new Client({ name: 'fresh-subscribe-test', version: '1.0.0' });
+    try {
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+
+      const validations: PromiseWithResolvers<string>[] = [];
+      t.mock.method(state.pathGuard, 'validateExistingPath', () => {
+        const validation = Promise.withResolvers<string>();
+        validations.push(validation);
+        return validation.promise;
+      });
+
+      const first = client.subscribeResource({ uri });
+      await waitFor(() => validations.length === 1);
+      await client.unsubscribeResource({ uri });
+      const fresh = client.subscribeResource({ uri });
+      await waitFor(() => validations.length === 2);
+      assert.strictEqual(validations.length, 2, 'the fresh subscribe takes its own lease');
+
+      validations[0]?.resolve(filePath);
+      await first; // cancelled: success with no subscription
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), false);
+
+      validations[1]?.resolve(filePath);
+      await fresh;
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), true);
+      await waitForResourceUpdate(client, uri, () => writeFile(filePath, 'changed'));
+
+      await client.unsubscribeResource({ uri });
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), false);
+    } finally {
+      await client.close();
+      state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('createRuntimeState dispose clears the page store', () => {
     const state = createRuntimeState({ cliAllowedDirs: [tmpdir()] });
     const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
     state.dispose();
     state.dispose(); // idempotent
     assert.throws(() => state.pageStore.read(pageId, 'q'));
+  });
+
+  it('logs every cleanup failure and retries only failed cleanup', (t) => {
+    const state = createRuntimeState({ cliAllowedDirs: [tmpdir()] });
+    let failUndo = true;
+    const undo = t.mock.method(state.undoJournal, 'clear', () => {
+      if (failUndo) throw new Error('clear failed');
+    });
+    const pages = t.mock.method(state.pageStore, 'clear', () => {});
+    const resources = t.mock.method(state.resourceStore, 'clear', () => {});
+    const watchers = t.mock.method(state.watcherRegistry, 'destroy', () => {});
+    const logged = t.mock.method(Logger, 'error', () => {});
+
+    assert.doesNotThrow(() => state.dispose());
+    assert.equal(undo.mock.callCount(), 1);
+    assert.equal(pages.mock.callCount(), 1);
+    assert.equal(resources.mock.callCount(), 1);
+    assert.equal(watchers.mock.callCount(), 1);
+    assert.ok(logged.mock.calls.some((call) => String(call.arguments[1]).includes('clear failed')));
+
+    failUndo = false;
+    state.dispose();
+    assert.equal(undo.mock.callCount(), 2);
+    assert.equal(pages.mock.callCount(), 1);
+    assert.equal(resources.mock.callCount(), 1);
+    assert.equal(watchers.mock.callCount(), 1);
+  });
+
+  it('stops change notifications while failed cleanup awaits retry', async (t) => {
+    let notified = 0;
+    const state = createRuntimeState(
+      { cliAllowedDirs: [tmpdir()] },
+      {
+        onResourcesChanged: () => {
+          notified++;
+        },
+      },
+    );
+    let fail = true;
+    t.mock.method(state.pageStore, 'clear', () => {
+      if (fail) throw new Error('clear failed');
+    });
+    t.mock.method(Logger, 'error', () => {});
+
+    state.resourceStore.putText({ name: 'x.txt', text: 'x' });
+    state.dispose();
+    await setTimeout(150);
+    assert.equal(notified, 0);
+
+    fail = false;
+    state.dispose();
+    await setTimeout(150);
+    assert.equal(notified, 0);
   });
 });
 

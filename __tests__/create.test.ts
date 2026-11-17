@@ -124,32 +124,77 @@ describe('create body', () => {
     const file = join(root, 'dup-create', 'dup.txt');
     const caseless = process.platform === 'win32' || process.platform === 'darwin';
     for (const twin of caseless ? [file, join(root, 'dup-create', 'DUP.TXT')] : [file]) {
-      const issues = await schemaIssues(
+      await assert.rejects(
         create({
           files: [
             { path: file, content: 'AAAA' },
             { path: twin, content: 'BBBB' },
           ],
         }),
-      );
-      assert.ok(
-        issues.some((m) => m.startsWith('duplicate of files[0].path')),
-        issues.join('; '),
+        {
+          code: ErrorCode.INVALID_INPUT,
+          message: 'files.1.path: duplicate of files[0].path; one entry per file',
+        },
       );
     }
     await assert.rejects(access(file), 'nothing may be written when the batch is refused');
   });
 
+  it('treats NFC and NFD new files under a new folder as one entry', async () => {
+    const nfc = 'nf/caf\u00e9.txt';
+    const nfd = 'nf/cafe\u0301.txt';
+    assert.notStrictEqual(nfc, nfd);
+    await assert.rejects(
+      create({
+        files: [
+          { path: join(root, nfc), content: 'AAAA' },
+          { path: join(root, nfd), content: 'BBBB' },
+        ],
+      }),
+      {
+        code: ErrorCode.INVALID_INPUT,
+        message: 'files.1.path: duplicate of files[0].path; one entry per file',
+      },
+    );
+    await assert.rejects(access(join(root, 'nf')), 'nothing may be written');
+  });
+
+  it('treats case-variant new folders as one entry on a case-insensitive host', async (t) => {
+    if (process.platform === 'linux') {
+      t.skip('case-sensitive filesystem');
+      return;
+    }
+    await assert.rejects(
+      create({
+        files: [
+          { path: join(root, 'nf', 'a.txt'), content: 'AAAA' },
+          { path: join(root, 'NF', 'a.txt'), content: 'BBBB' },
+        ],
+      }),
+      {
+        code: ErrorCode.INVALID_INPUT,
+        message: 'files.1.path: duplicate of files[0].path; one entry per file',
+      },
+    );
+    await assert.rejects(access(join(root, 'nf')), 'nothing may be written');
+  });
+
   it('refuses a batch that names the same directory twice', async () => {
     const dir = join(root, 'dup-dir');
-    const issues = await schemaIssues(
-      create({
-        directories: [dir, dir],
-      }),
-    );
-    assert.ok(
-      issues.some((m) => m.startsWith('duplicate of directories[0]')),
-      issues.join('; '),
+    await assert.rejects(create({ directories: [dir, dir] }), {
+      code: ErrorCode.INVALID_INPUT,
+      message: 'directories.1: duplicate of directories[0]; one entry per directory',
+    });
+  });
+
+  it('refuses case-variant directories on a case-insensitive host', async (t) => {
+    if (process.platform === 'linux') {
+      t.skip('case-sensitive filesystem');
+      return;
+    }
+    await assert.rejects(
+      create({ directories: [join(root, 'd1'), join(root, 'D1')] }),
+      /duplicate of directories\[0\]; one entry per directory/u,
     );
   });
 
@@ -183,15 +228,9 @@ describe('create body', () => {
   });
 
   it('detects duplicate directories across home alias spellings', async () => {
-    const homeDir = homedir();
-    const issues = await schemaIssues(
-      create({
-        directories: ['~/test-dup-dir', join(homeDir, 'test-dup-dir')],
-      }),
-    );
-    assert.ok(
-      issues.some((m) => m.includes('duplicate of directories[0]')),
-      issues.join('; '),
+    await assert.rejects(
+      create({ directories: ['~/test-dup-dir', join(homedir(), 'test-dup-dir')] }),
+      /duplicate of directories\[0\]; one entry per directory/u,
     );
   });
 

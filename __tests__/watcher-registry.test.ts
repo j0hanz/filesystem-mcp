@@ -7,6 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { Logger } from '../src/core/observability.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { createWatcherRegistry, MAX_WATCHERS, type WatchFn } from '../src/core/watcher-registry.ts';
 
@@ -66,7 +67,7 @@ describe('watcher registry', () => {
         fakeGuard(() => true),
         uri,
         throwing,
-      ),
+      ).ready,
       { ok: true },
     );
     assert.deepEqual(
@@ -74,11 +75,36 @@ describe('watcher registry', () => {
         fakeGuard(() => true),
         uri,
         (u) => seen.push(u),
-      ),
+      ).ready,
       { ok: true },
     );
     watchers[0]?.emit('error', new Error('EPERM'));
     assert.deepEqual(seen, [uri]); // synchronous, not debounced
+    assert.equal(registry.size(), 0);
+    assert.equal(registry.hasWatcher(uri), false);
+  });
+
+  it('a watcher whose close throws is still dropped, and the throw is logged', async (t) => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    const lease = registry.acquire(
+      fakeGuard(() => true),
+      uri,
+      () => {},
+    );
+    assert.deepEqual(await lease.ready, { ok: true });
+    const w = watchers[0];
+    assert.ok(w);
+    w.close = () => {
+      throw new Error('close boom');
+    };
+    const errors = t.mock.method(Logger, 'error', () => {});
+    assert.doesNotThrow(() => {
+      lease.dispose();
+    });
+    assert.equal(errors.mock.callCount(), 1);
+    assert.match(String(errors.mock.calls[0]?.arguments[0]), /close boom/u);
     assert.equal(registry.size(), 0);
     assert.equal(registry.hasWatcher(uri), false);
   });
@@ -93,7 +119,7 @@ describe('watcher registry', () => {
       fakeGuard(() => allowed),
       uri,
       (u) => seen.push(u),
-    );
+    ).ready;
     allowed = false;
     watchers[0]?.fire(basename(filePath));
     await setTimeout(100);
@@ -112,7 +138,7 @@ describe('watcher registry', () => {
     const { watch, watchers } = fakeWatch();
     const registry = createWatcherRegistry({ watch });
     const seen: string[] = [];
-    await registry.acquire(guard, uri, (u) => seen.push(u));
+    await registry.acquire(guard, uri, (u) => seen.push(u)).ready;
     watchers[0]?.fire(basename(target));
     await setTimeout(100);
     assert.deepEqual(seen, []);
@@ -129,7 +155,7 @@ describe('watcher registry', () => {
       fakeGuard(() => allowed),
       uri,
       notify,
-    );
+    ).ready;
     allowed = false;
     watchers[0]?.fire(basename(filePath));
     await setTimeout(100);
@@ -147,28 +173,30 @@ describe('watcher registry', () => {
     const plain = buildFileResourceUri(filePath);
     const aliased = plain.replace(/a\.txt$/, '%61.txt'); // test file named a.txt
     const seen: string[] = [];
-    await registry.acquire(
+    const plainLease = registry.acquire(
       fakeGuard(() => true),
       plain,
       (u) => seen.push(u),
     );
-    await registry.acquire(
+    await plainLease.ready;
+    const aliasedLease = registry.acquire(
       fakeGuard(() => true),
       aliased,
       (u) => seen.push(u),
     );
+    await aliasedLease.ready;
     assert.equal(watchers.length, 1);
     assert.equal(registry.size(), 1);
     watchers[0]?.fire('a.txt');
     await setTimeout(100);
     assert.deepEqual(seen.sort(), [aliased, plain].sort());
-    registry.release(plain);
+    plainLease.dispose();
     assert.equal(registry.size(), 1);
     seen.length = 0;
     watchers[0]?.fire('a.txt');
     await setTimeout(100);
     assert.deepEqual(seen, [aliased]);
-    registry.release(aliased);
+    aliasedLease.dispose();
     assert.equal(registry.size(), 0);
   });
 
@@ -179,24 +207,112 @@ describe('watcher registry', () => {
     const plain = buildFileResourceUri(filePath);
     const aliased = plain.replace(/a\.txt$/, '%61.txt');
     const seen: string[] = [];
-    await registry.acquire(guard, plain, (u) => seen.push(u));
+    await registry.acquire(guard, plain, (u) => seen.push(u)).ready;
     for (let i = 1; i < MAX_WATCHERS; i++) {
       const sub = join(dir, `cap-${i}`);
       await mkdir(sub);
-      assert.equal((await registry.acquire(guard, buildFileResourceUri(sub), () => {})).ok, true);
+      assert.equal(
+        (await registry.acquire(guard, buildFileResourceUri(sub), () => {}).ready).ok,
+        true,
+      );
     }
     const extra = join(dir, 'cap-extra');
     await mkdir(extra);
-    assert.deepEqual(await registry.acquire(guard, buildFileResourceUri(extra), () => {}), {
+    assert.deepEqual(await registry.acquire(guard, buildFileResourceUri(extra), () => {}).ready, {
       ok: false,
       reason: 'capped',
     });
-    assert.deepEqual(await registry.acquire(guard, aliased, (u) => seen.push(u)), { ok: true });
+    assert.deepEqual(await registry.acquire(guard, aliased, (u) => seen.push(u)).ready, {
+      ok: true,
+    });
     assert.equal(registry.size(), MAX_WATCHERS);
     watchers[0]?.emit('error', new Error('EPERM'));
     assert.deepEqual(seen.sort(), [aliased, plain].sort());
     assert.equal(watchers[0]?.closed, true);
     assert.equal(registry.size(), MAX_WATCHERS - 1);
     registry.destroy();
+  });
+
+  it('cancelling a pending lease resolves ready before validation settles', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    const validation = Promise.withResolvers<string>();
+    const guard = {
+      validateExistingPath: () => validation.promise,
+      isInsideAllowed: () => true,
+    } as unknown as PathGuard;
+    const lease = registry.acquire(guard, uri, () => {});
+    lease.dispose();
+    assert.deepEqual(await lease.ready, { ok: false, reason: 'cancelled' });
+    validation.resolve(filePath);
+    await setTimeout(0);
+    assert.equal(watchers.length, 0);
+    assert.equal(registry.size(), 0);
+    lease.dispose();
+  });
+
+  it('owns independent same-URI leases and detaches callbacks per lease', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    const seen: string[] = [];
+    const guard = fakeGuard(() => true);
+    const first = registry.acquire(guard, uri, () => seen.push('first'));
+    const second = registry.acquire(guard, uri, () => seen.push('second'));
+    assert.deepEqual(await first.ready, { ok: true });
+    assert.deepEqual(await second.ready, { ok: true });
+    first.dispose();
+    first.dispose();
+    assert.equal(registry.size(), 1);
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.deepEqual(seen, ['second']);
+    second.dispose();
+    assert.equal(registry.size(), 0);
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.deepEqual(seen, ['second']);
+  });
+
+  it('a shared callback survives until its final lease ends', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    let calls = 0;
+    const shared = (): void => {
+      calls += 1;
+    };
+    const guard = fakeGuard(() => true);
+    const one = registry.acquire(guard, uri, shared);
+    const two = registry.acquire(guard, uri, shared);
+    assert.deepEqual(await one.ready, { ok: true });
+    assert.deepEqual(await two.ready, { ok: true });
+    one.dispose();
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.equal(calls, 1);
+    two.dispose();
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.equal(calls, 1);
+  });
+
+  it('destroying the registry cancels pending acquisition', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    const validation = Promise.withResolvers<string>();
+    const guard = {
+      validateExistingPath: () => validation.promise,
+      isInsideAllowed: () => true,
+    } as unknown as PathGuard;
+    const lease = registry.acquire(guard, uri, () => {});
+    registry.destroy();
+    assert.deepEqual(await lease.ready, { ok: false, reason: 'cancelled' });
+    validation.resolve(filePath);
+    await setTimeout(0);
+    assert.equal(watchers.length, 0);
+    assert.equal(registry.size(), 0);
   });
 });

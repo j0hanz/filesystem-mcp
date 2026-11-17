@@ -397,8 +397,8 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     if (resolved.size === 0) return;
     const rewritten = mapPaths(this.parsedArgs, (path) => resolved.get(path) ?? path);
     // The schema compared the spellings the caller sent, so `a.txt` and
-    // `<root>/a.txt` passed create's and edit's one-entry-per-file rule as two
-    // files. Its checks judge the resolved paths too.
+    // `<root>/a.txt` passed create's file-versus-directory conflict check as
+    // two paths. That check judges the resolved paths too.
     const check = this.def.input.safeParse(rewritten);
     if (!check.success) {
       const issues = check.error.issues.map(

@@ -9,8 +9,13 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
-import { listenSubscriptionUris } from '../src/transport/shared.ts';
+import type { PathGuard } from '../src/core/path.ts';
+import {
+  createWatcherRegistry,
+  MAX_WATCHERS,
+  type WatcherLease,
+} from '../src/core/watcher-registry.ts';
+import { listenSubscriptionUris, prepareListenWatchers } from '../src/transport/shared.ts';
 import {
   assertOneNotificationPerRound,
   bootHttpTest,
@@ -53,6 +58,39 @@ describe('listenSubscriptionUris', () => {
       params: { notifications: { toolsListChanged: true } },
     };
     assert.deepStrictEqual(listenSubscriptionUris(body), []);
+  });
+});
+
+describe('prepareListenWatchers', () => {
+  it('disposing a pending listen preparation cancels acquisition', async () => {
+    const root = await createTestRoot();
+    const registry = createWatcherRegistry();
+    try {
+      const filePath = await writeTestFile(root, 'pending.txt', 'x');
+      const validation = Promise.withResolvers<string>();
+      const guard = {
+        validateExistingPath: () => validation.promise,
+        isInsideAllowed: () => true,
+      } as unknown as PathGuard;
+      const leases: WatcherLease[] = [];
+      const prepared = prepareListenWatchers(
+        [buildFileResourceUri(filePath)],
+        guard,
+        registry,
+        () => {},
+        leases,
+      );
+      assert.strictEqual(leases.length, 1);
+      leases[0]?.dispose();
+      validation.resolve(filePath);
+      const result = await prepared;
+      assert.strictEqual(result.ok, false);
+      assert.ok(!result.ok && result.message.includes('subscription was cancelled during setup'));
+      assert.strictEqual(registry.size(), 0);
+    } finally {
+      registry.destroy();
+      await cleanupTestRoot(root);
+    }
   });
 });
 

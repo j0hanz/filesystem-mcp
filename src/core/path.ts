@@ -205,6 +205,28 @@ function isPathWithinAllowedDirectoriesSync(
   return false;
 }
 
+/** The first key that repeats an earlier one, as `[index, firstIndex]`. */
+export function firstRepeat(keys: readonly string[]): [number, number] | undefined {
+  const seen = new Map<string, number>();
+  for (const [index, key] of keys.entries()) {
+    const first = seen.get(key);
+    if (first !== undefined) return [index, first];
+    seen.set(key, index);
+  }
+  return undefined;
+}
+
+/** The entries whose name folds equal to `name` under the directory's rule. */
+function equivalentEntries(
+  entries: readonly string[],
+  name: string,
+  caseSensitive: boolean,
+): string[] {
+  const fold = caseSensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
+  const key = fold(name);
+  return entries.filter((entry) => fold(entry) === key);
+}
+
 async function isDirectoryCaseSensitive(
   realDir: string,
   entries: readonly string[],
@@ -1579,6 +1601,99 @@ export class PathGuard {
     return join(ancestor, ...spelled, ...missing.slice(spelled.length));
   }
 
+  /** One key per path, in order; equal keys name one Entry. Paths are absolute. */
+  async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
+    const allowedDirs = this.getAllowedDirectories();
+    // Real directory -> its listing and whether its entries are case-sensitive; undefined when unreadable.
+    interface Listing {
+      entries: string[];
+      sensitive: boolean;
+    }
+    const listings = new Map<string, Promise<Listing | undefined>>();
+    const readListing = async (realDir: string): Promise<Listing | undefined> => {
+      try {
+        const entries = await readdir(realDir);
+        return {
+          entries,
+          sensitive: IS_CASE_INSENSITIVE_FS
+            ? await isDirectoryCaseSensitive(realDir, entries)
+            : true,
+        };
+      } catch {
+        return undefined;
+      }
+    };
+    const realRoots = new Map<string, Promise<string | undefined>>();
+    const realRootOf = (root: string): Promise<string | undefined> => {
+      let real = realRoots.get(root);
+      if (!real) {
+        real = realpath(root).catch(() => undefined);
+        realRoots.set(root, real);
+      }
+      return real;
+    };
+    // The real directory, which realpath reports in its on-disk case, so ancestor
+    // respellings meet. A link inside the root is not a respelling (two Entries):
+    // then the caller's spelling, folded by the host rule so a respelled link
+    // above a case-sensitive directory still meets (at worst it over-refuses).
+    const keyDir = async (dir: string, real: string, fold: (s: string) => string) => {
+      const root = this.allowedRootContaining(dir);
+      const realRoot = root === undefined ? undefined : await realRootOf(root);
+      return root !== undefined &&
+        realRoot !== undefined &&
+        unicodeMatchKey(relative(root, dir)) === unicodeMatchKey(relative(realRoot, real))
+        ? real
+        : (IS_CASE_INSENSITIVE_FS ? unicodeMatchKey : fold)(dir);
+    };
+    const locate = async (path: string): Promise<string | undefined> => {
+      const parent = dirname(path);
+      let dir = parent;
+      while (isPathWithinAllowedDirectoriesSync(normalizePath(dir), allowedDirs)) {
+        signal?.throwIfAborted();
+        let real: string | undefined;
+        try {
+          real = await realpath(dir);
+        } catch {
+          // Missing or unreadable: try the parent.
+        }
+        // A link inside a root can point out of it: never read that target.
+        if (real !== undefined && (await isPathWithinAllowedDirectories(real, allowedDirs))) {
+          let listing = listings.get(real);
+          if (!listing) {
+            listing = readListing(real);
+            listings.set(real, listing);
+          }
+          const found = await listing;
+          if (found !== undefined) {
+            const fold = found.sensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
+            const prefix = await keyDir(dir, real, fold);
+            if (dir !== parent) return join(prefix, fold(relative(dir, path)));
+            // An exact name wins; else the single fold-equal entry; else (missing or ambiguous) the folded name.
+            const name = basename(path);
+            const matches = found.entries.includes(name)
+              ? [name]
+              : equivalentEntries(found.entries, name, found.sensitive);
+            return join(prefix, matches.length === 1 ? (matches[0] ?? name) : fold(name));
+          }
+        }
+        const up = dirname(dir);
+        if (up === dir) break;
+        dir = up;
+      }
+      return undefined;
+    };
+    const keys: string[] = [];
+    for (const path of paths) {
+      signal?.throwIfAborted();
+      const resolved = resolve(path);
+      keys.push(
+        (await locate(resolved)) ??
+          (IS_CASE_INSENSITIVE_FS ? unicodeMatchKey : unicodeMatchKeyExactCase)(resolved),
+      );
+    }
+    return keys;
+  }
+
   /**
    * The entry of `realDir` that `name` names: `name` itself when it is
    * there, else the one entry with the same `unicodeMatchKey`. Two or more
@@ -1598,11 +1713,10 @@ export class PathGuard {
       return undefined;
     }
     if (entries.includes(name)) return name;
-    const isCaseSensitive = await isDirectoryCaseSensitive(realDir, entries);
-    const key = isCaseSensitive ? unicodeMatchKeyExactCase(name) : unicodeMatchKey(name);
-    const matches = entries.filter(
-      (entry) =>
-        (isCaseSensitive ? unicodeMatchKeyExactCase(entry) : unicodeMatchKey(entry)) === key,
+    const matches = equivalentEntries(
+      entries,
+      name,
+      await isDirectoryCaseSensitive(realDir, entries),
     );
     // A match the denylist covers is refused here, as a lone one would be by
     // the caller, so the ambiguity error below never lists a hidden name.

@@ -41,6 +41,7 @@ import { entryReadResult } from './core/store.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
+  type WatcherLease,
   type WatcherRegistry,
 } from './core/watcher-registry.ts';
 import {
@@ -256,26 +257,15 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   // destroyed on dispose; the shared modern-leg registry is owned by the host
   // and torn down at server shutdown.
   const ownsRegistry = options.watcherRegistry === undefined;
-  // The URIs this connection holds a `resources/subscribe` lease for. The wire
-  // verb is per-URI and idempotent — a second subscribe is the same
-  // subscription, and one unsubscribe ends it — but the registry ref-counts
-  // leases (the HTTP listen leg needs that). Without this set a double
-  // subscribe took two leases that one unsubscribe could not release, and an
-  // unsubscribe for a URI never subscribed released a lease this connection
-  // never took, dropping a watcher some other holder still wanted.
-  const leasedUris = new Set<string>();
-  // Subscribes mid-acquire, keyed by URI. Two concurrent subscribes for the
-  // same URI must share one acquire: both passing the `leasedUris` check
-  // before either finished took two registry leases that the single set entry
-  // could release only once — on the shared modern registry that orphan lease
-  // pinned a watcher until process shutdown.
+  // This connection's `resources/subscribe` lease per URI, pending or settled.
+  // The wire verb is per-URI and idempotent — a second subscribe is the same
+  // subscription, and one unsubscribe ends it — while every registry
+  // acquisition is an independent lease (ADR-022). So one URI holds one lease
+  // here, and an unsubscribe for a URI never subscribed finds nothing to end.
+  const leases = new Map<string, WatcherLease>();
+  // Subscribes mid-acquire, keyed by URI: a concurrent duplicate subscribe
+  // shares the pending outcome instead of taking a second lease.
   const inflight = new Map<string, Promise<boolean | undefined>>();
-  // URIs whose in-flight subscribe was unsubscribed before it settled: the
-  // lease it is about to take is given back instead of kept.
-  const cancelled = new Set<string>();
-  // Active subscription callback controllers, to disable notifications once unsubscribed
-  // even if another subscriber's lease keeps the underlying watcher alive.
-  const activeCallbacks = new Map<string, { disable: () => void }>();
 
   return {
     name: 'filesystem-mcp-file',
@@ -322,48 +312,26 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
     },
 
     subscribe(uri, notify) {
+      // A subscribe for this URI is mid-acquire: share its outcome.
+      const pending = inflight.get(uri);
+      if (pending) return pending;
       // Already subscribed on this connection with a live watcher: this is a
       // no-op success rather than a second lease. If the OS watcher errored and
-      // was dropped, release the dead lease and re-acquire.
-      if (leasedUris.has(uri)) {
+      // was dropped, dispose the dead lease and re-acquire.
+      const held = leases.get(uri);
+      if (held) {
         if (registry.hasWatcher(uri)) return undefined;
-        leasedUris.delete(uri);
-        activeCallbacks.get(uri)?.disable();
-        activeCallbacks.delete(uri);
-        registry.release(uri);
-      }
-      // A subscribe for this URI is mid-acquire: share its outcome instead of
-      // taking a second lease the lease set cannot represent.
-      const pending = inflight.get(uri);
-      if (pending) {
-        // A fresh subscribe outranks an unsubscribe that came before it.
-        cancelled.delete(uri);
-        return pending;
+        leases.delete(uri);
+        held.dispose();
       }
 
-      let active = true;
-      const disable = () => {
-        active = false;
-      };
-      const guardedNotify = (notifiedUri: string): void => {
-        if (!active) return;
-        notify(notifiedUri);
-      };
-
+      const lease = registry.acquire(options.pathGuard, uri, notify);
+      leases.set(uri, lease);
       const acquire = async (): Promise<boolean | undefined> => {
-        const result = await registry.acquire(options.pathGuard, uri, guardedNotify, {
-          markSubscribe: true,
-        });
-        if (result.ok) {
-          if (cancelled.delete(uri)) {
-            disable();
-            registry.release(uri);
-            return undefined;
-          }
-          leasedUris.add(uri);
-          activeCallbacks.set(uri, { disable });
-          return undefined;
-        }
+        const result = await lease.ready;
+        if (result.ok) return undefined;
+        // An unsubscribe or a fresh subscribe may already own this slot.
+        if (leases.get(uri) === lease) leases.delete(uri);
 
         if (result.reason === 'bad-uri') {
           throw new ResourceNotFoundError(uri, `Cannot subscribe: not a filesystem URI`);
@@ -381,40 +349,36 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
         }
         // Unsubscribed (or the registry destroyed) mid-await: the caller already
         // asked for this to stop, so there is nothing to reject.
-        if (result.reason === 'stale') return undefined;
+        if (result.reason === 'cancelled') return undefined;
         // capped / attach-failed: `false` tells the handler to reject, since
         // undefined would report success with no watcher attached.
         return false;
       };
 
-      const promise = acquire().finally(() => {
-        inflight.delete(uri);
-        cancelled.delete(uri);
+      const promise: Promise<boolean | undefined> = acquire().finally(() => {
+        // A fresh subscribe after an unsubscribe owns the slot now.
+        if (inflight.get(uri) === promise) inflight.delete(uri);
       });
       inflight.set(uri, promise);
       return promise;
     },
 
     unsubscribe(uri) {
-      // Mid-subscribe: no lease exists yet, so mark it for release on arrival.
-      if (inflight.has(uri) && !leasedUris.has(uri)) {
-        cancelled.add(uri);
-        return;
-      }
-      // Only release a lease this connection actually took.
-      if (!leasedUris.delete(uri)) return;
-      activeCallbacks.get(uri)?.disable();
-      activeCallbacks.delete(uri);
-      registry.release(uri);
+      // Ends this connection's lease, pending or settled; a pending subscribe
+      // then resolves as cancelled. A URI never subscribed has nothing to end.
+      const lease = leases.get(uri);
+      if (!lease) return;
+      leases.delete(uri);
+      inflight.delete(uri);
+      lease.dispose();
     },
 
     destroy() {
-      // Release what this connection still holds before the registry goes: on
-      // the shared (modern) registry nothing else would ever end these leases.
-      for (const uri of leasedUris) registry.release(uri);
-      leasedUris.clear();
-      for (const entry of activeCallbacks.values()) entry.disable();
-      activeCallbacks.clear();
+      // End what this connection still holds before the registry goes: on the
+      // shared (modern) registry nothing else would ever end these leases.
+      for (const lease of leases.values()) lease.dispose();
+      leases.clear();
+      inflight.clear();
       if (ownsRegistry) registry.destroy();
     },
   };
@@ -614,11 +578,8 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     server.server.assertCanSetRequestHandler('resources/unsubscribe');
 
     // One stable callback for the whole registrar, NOT one per subscribe. The
-    // registry holds these in a Set keyed by identity, so a fresh closure per
-    // request made a second `resources/subscribe` for the same URI register a
-    // second sink: one file change then sent N notifications, and `unsubscribe`
-    // (which only ends a lease) removed none of them. Subscribe is per-URI on
-    // the wire, so the sink must be too — this makes it idempotent.
+    // registry de-duplicates callbacks by identity in each notification round,
+    // so a stable sink can never send one change twice.
     const notifyUpdated = (updatedUri: string): void => {
       voidSend(server.server.sendResourceUpdated({ uri: updatedUri }), 'resource update', {
         uri: updatedUri,
