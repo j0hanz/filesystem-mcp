@@ -1008,7 +1008,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
       "name": "filesystem-mcp-file",
       "title": "Workspace File",
       "uriTemplate": "filesystem-mcp://file/{+path}",
-      "description": "Read a file from the workspace. Subscribe to get updates when the file changes.",
+      "description": "Read a file from the workspace. Subscribe to get updates when it changes. A directory URI can be subscribed (direct children only on Linux) but not read: use the list tool for its entries.",
       "annotations": {
         "audience": [
           "assistant"
@@ -1564,7 +1564,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "name": "filesystem-mcp-file",
       "title": "Workspace File",
       "uriTemplate": "filesystem-mcp://file/{+path}",
-      "description": "Read a file from the workspace. Subscribe to get updates when the file changes.",
+      "description": "Read a file from the workspace. Subscribe to get updates when it changes. A directory URI can be subscribed (direct children only on Linux) but not read: use the list tool for its entries.",
       "annotations": {
         "audience": [
           "assistant"

@@ -262,7 +262,8 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
   return {
     name: 'filesystem-mcp-file',
     title: 'Workspace File',
-    description: 'Read a file from the workspace. Subscribe to get updates when the file changes.',
+    description:
+      'Read a file from the workspace. Subscribe to get updates when it changes. A directory URI can be subscribed (direct children only on Linux) but not read: use the list tool for its entries.',
     uriTemplate: FILESYSTEM_FILE_URI_TEMPLATE,
     annotations: { audience: ['assistant'], priority: 0.8 },
     // Without this the SDK falls back to its conservative `{ ttlMs: 0,
