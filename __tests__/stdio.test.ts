@@ -839,6 +839,65 @@ describe('Stdio subscription lease lifecycle', () => {
     }
   });
 
+  for (const [label, collide] of [
+    [
+      'STDIO-015: a request reusing an open listen ID is refused and keeps the lease',
+      (_uri: string) => ({
+        jsonrpc: '2.0',
+        id: 'dup',
+        method: 'tools/list',
+        params: { _meta: MODERN_META },
+      }),
+    ],
+    [
+      'STDIO-016: a duplicate listen ID is refused and keeps the first lease',
+      (uri: string) => ({
+        jsonrpc: '2.0',
+        id: 'dup',
+        method: 'subscriptions/listen',
+        params: { _meta: MODERN_META, notifications: { resourceSubscriptions: [uri] } },
+      }),
+    ],
+  ] as const) {
+    it(label, async () => {
+      const tmpDir = await createTestRoot();
+      const harness = await createRawStdioServer(tmpDir, { FS_MAX_WATCHERS: '1' });
+      try {
+        const sharedUri = buildFileResourceUri(await writeTestFile(tmpDir, 'shared.txt', 's'));
+        const otherUri = buildFileResourceUri(await writeTestFile(tmpDir, 'other.txt', 'o'));
+        await discoverModern(harness);
+
+        await harness.send({
+          jsonrpc: '2.0',
+          id: 'dup',
+          method: 'subscriptions/listen',
+          params: { _meta: MODERN_META, notifications: { resourceSubscriptions: [sharedUri] } },
+        });
+        assert.ok('method' in (await harness.nextMessage()));
+
+        await harness.send(collide(sharedUri));
+        const collision = await harness.nextMessage();
+        assert.ok('error' in collision, JSON.stringify(collision));
+        assert.strictEqual(collision.id, 'dup');
+        assert.strictEqual(collision.error.code, ProtocolErrorCode.InvalidRequest);
+
+        await harness.send({
+          jsonrpc: '2.0',
+          id: 'other',
+          method: 'subscriptions/listen',
+          params: { _meta: MODERN_META, notifications: { resourceSubscriptions: [otherUri] } },
+        });
+        const blocked = await harness.nextMessage();
+        assert.ok('error' in blocked, JSON.stringify(blocked));
+        // The shared lease still holds the only watcher slot.
+        assert.strictEqual(blocked.error.code, ProtocolErrorCode.InvalidParams);
+      } finally {
+        await harness.close();
+        await cleanupTestRoot(tmpDir);
+      }
+    });
+  }
+
   it('STDIO-011: an SDK version rejection releases an acquired watcher lease', async () => {
     const tmpDir = await createTestRoot();
     const harness = await createRawStdioServer(tmpDir, {

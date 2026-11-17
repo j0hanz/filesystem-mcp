@@ -349,6 +349,23 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       return;
     }
 
+    // A request reusing an open listen's ID would get a response under that ID,
+    // and the send wrapper above would release the listen's leases, leaving its
+    // stream open but silent. Refuse it through the unwrapped `send`, so the
+    // refusal itself releases nothing.
+    if ('method' in message && 'id' in message && listens.has(message.id)) {
+      send(
+        jsonRpcError(
+          ProtocolErrorCode.InvalidRequest,
+          `Request ID ${JSON.stringify(message.id)} is in use by an open subscriptions/listen. Use a fresh ID.`,
+          message.id,
+        ),
+      ).catch((error: unknown) => {
+        wire.onerror?.(normalizeUnknownError(error));
+      });
+      return;
+    }
+
     // A malformed listen, or one naming no resources, needs no watcher and
     // goes straight to the SDK, which answers it.
     const subscriptionUris = listenSubscriptionUris(message);
@@ -357,7 +374,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       return;
     }
     const id = jsonRpcRequestId(message);
-    if (id === null || listens.has(id)) {
+    if (id === null) {
       deliver(message);
       return;
     }
