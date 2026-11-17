@@ -17,12 +17,7 @@ import {
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
-import {
-  isEquivalentPath,
-  isPathInsideDirectory,
-  normalizePath,
-  unicodeMatchKey,
-} from '../core/path-utils.ts';
+import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import {
@@ -97,18 +92,6 @@ const CreateInputSchema = z
     }
     const files = value.files ?? [];
     const dirs = value.directories ?? [];
-    for (const [index, dir] of dirs.entries()) {
-      const normDir = normalizePath(dir);
-      const first = dirs.findIndex((other) => isEquivalentPath(normalizePath(other), normDir));
-      if (first < index) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['directories', index],
-          message: `duplicate of directories[${String(first)}]; one entry per directory`,
-          input: value,
-        });
-      }
-    }
     for (const [fileIndex, file] of files.entries()) {
       const normFile = normalizePath(file.path);
       const dirIndex = dirs.findIndex((dir) => {
@@ -120,24 +103,6 @@ const CreateInputSchema = z
           code: 'custom',
           path: ['files', fileIndex, 'path'],
           message: `conflicts with directories[${String(dirIndex)}]; path cannot be both a file and a directory`,
-          input: value,
-        });
-      }
-    }
-    // Entries write in parallel and each replaces its file whole, so two
-    // entries for one path race: the last rename wins and the other's
-    // content is lost while both report success. One entry per file, counting
-    // the Unicode spellings the path guard resolves to one name (#101).
-    for (const [index, file] of files.entries()) {
-      const normFile = normalizePath(file.path);
-      const first = files.findIndex((other) =>
-        isEquivalentPath(normalizePath(other.path), normFile),
-      );
-      if (first < index) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['files', index, 'path'],
-          message: `duplicate of files[${String(first)}].path; one entry per file`,
           input: value,
         });
       }
@@ -328,6 +293,40 @@ async function handleCreate(
   const files = args.files ?? [];
   const dirs = args.directories ?? [];
 
+  // Entries write in parallel and each replaces its file whole, so two
+  // entries for one path race: the last rename wins and the other's content
+  // is lost while both report success. The path guard keys each path by the
+  // Entry it names, so Unicode respellings count as one.
+  const inputKeys = await ctx.fs.pathGuard.entryKeys(
+    [...dirs, ...files.map((file) => file.path)].map(normalizePath),
+    ctx.signal,
+  );
+  const refuseRepeats = (
+    keys: string[],
+    label: (index: number, ref?: boolean) => string,
+    noun: string,
+  ): void => {
+    for (const [index, key] of keys.entries()) {
+      const first = keys.indexOf(key);
+      if (first < index) {
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `${label(index)}: duplicate of ${label(first, true)}; one entry per ${noun}`,
+        );
+      }
+    }
+  };
+  refuseRepeats(
+    inputKeys.slice(0, dirs.length),
+    (i, ref) => (ref ? `directories[${String(i)}]` : `directories.${String(i)}`),
+    'directory',
+  );
+  refuseRepeats(
+    inputKeys.slice(dirs.length),
+    (i, ref) => (ref ? `files[${String(i)}].path` : `files.${String(i)}.path`),
+    'file',
+  );
+
   const { slots, planned } = await planIntoSlots<
     CreateFileItem,
     CreateFilePlanResult,
@@ -346,12 +345,17 @@ async function handleCreate(
   // stays until approved: the Confirmation asks once, then only the first
   // writes. Any other pairing with a `pending` entry fails at once. Two
   // appends both land.
+  const planOrder = [...plans.keys()].sort((a, b) => a - b);
+  const landingKeys = await ctx.fs.pathGuard.entryKeys(
+    planOrder.map((index) => plans.get(index)?.validPath ?? ''),
+    ctx.signal,
+  );
   const firstByLanding = new Map<string, CreatePlan>();
   const duplicatePendingOf = new Map<number, { inputPath: string; validPath: string }>();
-  for (const index of [...plans.keys()].sort((a, b) => a - b)) {
+  for (const [at, index] of planOrder.entries()) {
     const plan = plans.get(index);
-    if (!plan) continue;
-    const key = unicodeMatchKey(plan.validPath);
+    const key = landingKeys[at];
+    if (!plan || key === undefined) continue;
     const first = firstByLanding.get(key);
     if (first === undefined) {
       firstByLanding.set(key, plan);
