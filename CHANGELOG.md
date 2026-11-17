@@ -5,10 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.23.0] - 2026-11-17
+
+Lossy-text reads, path completion for `file://` resource URIs, and
+confirmation, watcher and transport fixes. Before upgrading, read Security if
+your HTTP server serves several users through one OAuth client, or your
+client revokes roots while it holds a `subscriptions/listen` stream. Read
+Changed if you pass `--api-key` or `--http-host` without `--port`, or if you
+treat `isError` as "the call failed" after a refused confirmation on `create`,
+`delete` or `move`, or after an `undo` that only skipped stale paths. Read
+Fixed if you match the error a declined access grant returned.
+
+### Security
+
+- **Confirmations**: a sealed confirmation round binds to the token's user
+  subject (`authInfo.extra.sub`) when the verifier provides one, else the
+  OAuth client id. Before, two users behind one client could answer each
+  other's confirmations.
+- **Resources**: root revocation stops updates on every subscription path,
+  including `subscriptions/listen`. Before, only a 2025-style
+  `resources/subscribe` was checked, so a listen kept notifying for files
+  under a revoked root.
+- **Resources**: the revocation check also tests a watched file's resolved
+  path, so a link inside a live root that points into a revoked root stops
+  notifying.
+
+### Added
+
+- `file://` resource URIs complete their `path`, like `filesystem-mcp://file`
+  URIs. UNC paths are left out, since the `file://` alias cannot address them.
 
 ### Changed
 
+- A refused confirmation on `create`, `delete` or `move` (declined, dismissed,
+  or a race guard after approval) is no longer `isError`. The result still
+  carries the `CANCELLED` detail in its text and `_meta.error`.
+- An `undo` whose every path was skipped as stale is no longer `isError`.
+- A confirmation round stays valid for an hour, up from the SDK's ten
+  minutes, so a long batch of prompts no longer expires into a raw `-32602`.
+- A dismissed prompt says the person may be asked again.
+- The `filesystem-mcp://file` template states that a directory URI can be
+  subscribed (direct children only on Linux) but not read.
 - `stat` reports `lineCount` for UTF-16 text and for text that is not valid
   UTF-8, counted as `read` shows them.
 - `read` adds `lossy: true` when it returns text that is not valid UTF-8 (shown
@@ -36,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource updates.
 - HTTP shutdown stops in-flight requests before it clears server state, and
   still closes if clearing that state fails.
+- A watcher that errors notifies its subscribers, so they re-read the file;
+  a later subscribe starts a new watcher.
+- Resource updates resume when a revoked root is granted again. Before, a
+  `subscriptions/listen` stream stayed silent after a revoke and re-grant.
+- Bursts of `notifications/resources/list_changed` from stored tool results
+  are merged into one within 100 ms, on every transport.
 
 ## [2.22.0] - 2026-11-16
 
