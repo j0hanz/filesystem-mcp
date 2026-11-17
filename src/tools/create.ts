@@ -18,6 +18,7 @@ import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '..
 import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
+import { firstRepeat } from '../core/path.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import {
@@ -301,31 +302,22 @@ async function handleCreate(
   // One path cannot repeat: skip the guard's directory reads.
   const inputKeys =
     inputPaths.length < 2 ? [] : await ctx.fs.pathGuard.entryKeys(inputPaths, ctx.signal);
-  const refuseRepeats = (
-    keys: string[],
-    label: (index: number, ref?: boolean) => string,
-    noun: string,
-  ): void => {
-    for (const [index, key] of keys.entries()) {
-      const first = keys.indexOf(key);
-      if (first < index) {
-        throw new FsError(
-          ErrorCode.INVALID_INPUT,
-          `${label(index)}: duplicate of ${label(first, true)}; one entry per ${noun}`,
-        );
-      }
-    }
-  };
-  refuseRepeats(
-    inputKeys.slice(0, dirs.length),
-    (i, ref) => (ref ? `directories[${String(i)}]` : `directories.${String(i)}`),
-    'directory',
-  );
-  refuseRepeats(
-    inputKeys.slice(dirs.length),
-    (i, ref) => (ref ? `files[${String(i)}].path` : `files.${String(i)}.path`),
-    'file',
-  );
+  const dirRepeat = firstRepeat(inputKeys.slice(0, dirs.length));
+  if (dirRepeat) {
+    const [index, first] = dirRepeat;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      `directories.${String(index)}: duplicate of directories[${String(first)}]; one entry per directory`,
+    );
+  }
+  const fileRepeat = firstRepeat(inputKeys.slice(dirs.length));
+  if (fileRepeat) {
+    const [index, first] = fileRepeat;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      `files.${String(index)}.path: duplicate of files[${String(first)}].path; one entry per file`,
+    );
+  }
 
   const { slots, planned } = await planIntoSlots<
     CreateFileItem,
@@ -345,20 +337,18 @@ async function handleCreate(
   // stays until approved: the Confirmation asks once, then only the first
   // writes. Any other pairing with a `pending` entry fails at once. Two
   // appends both land.
-  const planOrder = [...plans.keys()].sort((a, b) => a - b);
+  const planOrder = [...plans.entries()].sort(([a], [b]) => a - b);
   const landingKeys =
     planOrder.length < 2
       ? []
       : await ctx.fs.pathGuard.entryKeys(
-          planOrder.map((index) => plans.get(index)?.validPath ?? ''),
+          planOrder.map(([, plan]) => plan.validPath),
           ctx.signal,
         );
   const firstByLanding = new Map<string, CreatePlan>();
   const duplicatePendingOf = new Map<number, { inputPath: string; validPath: string }>();
-  for (const [at, index] of planOrder.entries()) {
-    const plan = plans.get(index);
-    const key = landingKeys[at];
-    if (!plan || key === undefined) continue;
+  for (const [at, [index, plan]] of planOrder.entries()) {
+    const key = landingKeys[at] ?? plan.validPath;
     const first = firstByLanding.get(key);
     if (first === undefined) {
       firstByLanding.set(key, plan);

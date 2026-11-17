@@ -12,6 +12,7 @@ import type { WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { createYielder } from '../core/matcher.ts';
 import { normalizePath } from '../core/path-utils.ts';
+import { firstRepeat } from '../core/path.ts';
 import { rewriteFile } from '../core/rewrite.ts';
 import {
   defaultFalseBoolean,
@@ -794,14 +795,13 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
         items.map((item) => normalizePath(item.path)),
         ctx.signal,
       );
-      for (const [index, key] of keys.entries()) {
-        const first = keys.indexOf(key);
-        if (first < index) {
-          throw new FsError(
-            ErrorCode.INVALID_INPUT,
-            `files.${String(index)}.path: duplicate of files[${String(first)}].path; put every edit for one file in a single entry`,
-          );
-        }
+      const repeat = firstRepeat(keys);
+      if (repeat) {
+        const [index, first] = repeat;
+        throw new FsError(
+          ErrorCode.INVALID_INPUT,
+          `files.${String(index)}.path: duplicate of files[${String(first)}].path; put every edit for one file in a single entry`,
+        );
       }
     }
 
