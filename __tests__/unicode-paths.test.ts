@@ -897,7 +897,7 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
     });
 
-    it('edit applies, and delete collapses, two spellings of one file', async () => {
+    it('edit refuses, and delete collapses, two spellings of one file', async () => {
       await writeFile(join(root, NBSP_NAME), 'one two');
       const pair = await createTestClientPair([root]);
       try {
@@ -910,8 +910,12 @@ describe('Unicode-equivalent path lookup (#101)', () => {
             ],
           },
         });
-        assert.notStrictEqual(edit.isError, true, firstTextBlock(edit).text);
-        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'A B');
+        assert.strictEqual(edit.isError, true);
+        assert.match(
+          firstTextBlock(edit).text ?? '',
+          /INVALID_INPUT.*duplicate of files\[0\]\.path/s,
+        );
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'one two');
 
         const del = await pair.client.callTool({
           name: 'delete',

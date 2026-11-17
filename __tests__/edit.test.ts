@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import type * as z from 'zod/v4';
 
-import { isNodeError } from '../src/core/errors.ts';
+import { ErrorCode, FsError, isNodeError } from '../src/core/errors.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { EDIT, findFrom, type FlexMatch, flexMatches } from '../src/tools/edit.ts';
 import {
@@ -166,25 +166,38 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(file, 'utf-8'), 'original content');
   });
 
-  it('refuses a batch that names the same file twice', async () => {
+  const refusesDuplicate = async (names: [string, string]): Promise<void> => {
     const original = 'alpha\nbeta\n';
-    const file = await writeTestFile(root, 'dup-batch/dup.txt', original);
-    const caseless = process.platform === 'win32' || process.platform === 'darwin';
-    for (const twin of caseless ? [file, join(dirname(file), 'DUP.TXT')] : [file]) {
-      const issues = await schemaIssues(
-        edit({
-          files: [
-            { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
-            { path: twin, edits: [{ oldText: 'beta', newText: 'B' }] },
-          ],
-        }),
-      );
-      assert.ok(
-        issues.some((m) => m.startsWith('duplicate of files[0].path')),
-        issues.join('; '),
-      );
-    }
+    const file = await writeTestFile(root, `dup-batch/${names[0]}`, original);
+    await assert.rejects(
+      edit({
+        files: [
+          { path: file, edits: [{ oldText: 'alpha', newText: 'A' }] },
+          { path: join(dirname(file), names[1]), edits: [{ oldText: 'beta', newText: 'B' }] },
+        ],
+      }),
+      (error: unknown) =>
+        error instanceof FsError &&
+        error.code === ErrorCode.INVALID_INPUT &&
+        error.message.includes(
+          'duplicate of files[0].path; put every edit for one file in a single entry',
+        ),
+    );
     assert.strictEqual(await readFile(file, 'utf-8'), original);
+  };
+
+  it('refuses a batch that names the same file twice', async () => {
+    await refusesDuplicate(['dup.txt', 'dup.txt']);
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      await refusesDuplicate(['dup2.txt', 'DUP2.TXT']);
+    }
+  });
+
+  it('refuses NFC and NFD spellings of one file in one batch', async () => {
+    const nfc = 'caf\u00e9.txt';
+    const nfd = 'cafe\u0301.txt';
+    assert.notStrictEqual(nfc, nfd);
+    await refusesDuplicate([nfc, nfd]);
   });
 
   it('refuses a UTF-16 file with the UTF-16 refusal', async () => {
