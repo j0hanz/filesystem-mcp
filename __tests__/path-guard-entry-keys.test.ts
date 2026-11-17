@@ -120,6 +120,23 @@ describe('PathGuard.entryKeys', () => {
     assert.notStrictEqual(missing, otherCase);
   });
 
+  it('joins case respellings of a link above a case-sensitive directory', async (t) => {
+    const sens = join(root, 'Real', 'Sens');
+    if (!(await makeCaseSensitive(sens)))
+      return t.skip('no case-sensitive directory available here');
+    await writeTestFile(root, 'Real/Sens/a.txt', '1');
+    if (!(await trySymlink(join(root, 'Real'), join(root, 'Lnk'), () => t.skip('no link right'))))
+      return;
+    const [existing, existingRespelled, missing, missingRespelled] = await guard.entryKeys([
+      join(root, 'Lnk', 'Sens', 'a.txt'),
+      join(root, 'lnk', 'Sens', 'a.txt'),
+      join(root, 'Lnk', 'Sens', 'new.txt'),
+      join(root, 'LNK', 'Sens', 'new.txt'),
+    ]);
+    assert.strictEqual(existing, existingRespelled);
+    assert.strictEqual(missing, missingRespelled);
+  });
+
   it('tells different names apart', async () => {
     const [first, second] = await guard.entryKeys([join(root, 'a.txt'), join(root, 'b.txt')]);
     assert.notStrictEqual(first, second);

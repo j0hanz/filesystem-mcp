@@ -205,6 +205,17 @@ function isPathWithinAllowedDirectoriesSync(
   return false;
 }
 
+/** The first key that repeats an earlier one, as `[index, firstIndex]`. */
+export function firstRepeat(keys: readonly string[]): [number, number] | undefined {
+  const seen = new Map<string, number>();
+  for (const [index, key] of keys.entries()) {
+    const first = seen.get(key);
+    if (first !== undefined) return [index, first];
+    seen.set(key, index);
+  }
+  return undefined;
+}
+
 /** The entries whose name folds equal to `name` under the directory's rule. */
 function equivalentEntries(
   entries: readonly string[],
@@ -1623,7 +1634,8 @@ export class PathGuard {
     };
     // The real directory, which realpath reports in its on-disk case, so ancestor
     // respellings meet. A link inside the root is not a respelling (two Entries):
-    // then the caller's spelling, folded by the directory rule, as before.
+    // then the caller's spelling, folded by the host rule so a respelled link
+    // above a case-sensitive directory still meets (at worst it over-refuses).
     const keyDir = async (dir: string, real: string, fold: (s: string) => string) => {
       const root = this.allowedRootContaining(dir);
       const realRoot = root === undefined ? undefined : await realRootOf(root);
@@ -1631,7 +1643,7 @@ export class PathGuard {
         realRoot !== undefined &&
         unicodeMatchKey(relative(root, dir)) === unicodeMatchKey(relative(realRoot, real))
         ? real
-        : fold(dir);
+        : (IS_CASE_INSENSITIVE_FS ? unicodeMatchKey : fold)(dir);
     };
     const locate = async (path: string): Promise<string | undefined> => {
       const parent = dirname(path);
