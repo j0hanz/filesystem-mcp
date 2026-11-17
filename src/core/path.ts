@@ -1612,9 +1612,28 @@ export class PathGuard {
         return undefined;
       }
     };
-    const locate = async (
-      path: string,
-    ): Promise<{ sensitive: boolean; entry?: string | undefined }> => {
+    const realRoots = new Map<string, Promise<string | undefined>>();
+    const realRootOf = (root: string): Promise<string | undefined> => {
+      let real = realRoots.get(root);
+      if (!real) {
+        real = realpath(root).catch(() => undefined);
+        realRoots.set(root, real);
+      }
+      return real;
+    };
+    // The real directory, which realpath reports in its on-disk case, so ancestor
+    // respellings meet. A link inside the root is not a respelling (two Entries):
+    // then the caller's spelling, folded by the directory rule, as before.
+    const keyDir = async (dir: string, real: string, fold: (s: string) => string) => {
+      const root = this.allowedRootContaining(dir);
+      const realRoot = root === undefined ? undefined : await realRootOf(root);
+      return root !== undefined &&
+        realRoot !== undefined &&
+        unicodeMatchKey(relative(root, dir)) === unicodeMatchKey(relative(realRoot, real))
+        ? real
+        : fold(dir);
+    };
+    const locate = async (path: string): Promise<string | undefined> => {
       const parent = dirname(path);
       let dir = parent;
       while (isPathWithinAllowedDirectoriesSync(normalizePath(dir), allowedDirs)) {
@@ -1634,30 +1653,31 @@ export class PathGuard {
           }
           const found = await listing;
           if (found !== undefined) {
-            if (dir !== parent) return { sensitive: found.sensitive };
-            // An exact name wins; else the single fold-equal entry; else (missing or ambiguous) none.
+            const fold = found.sensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
+            const prefix = await keyDir(dir, real, fold);
+            if (dir !== parent) return join(prefix, fold(relative(dir, path)));
+            // An exact name wins; else the single fold-equal entry; else (missing or ambiguous) the folded name.
             const name = basename(path);
             const matches = found.entries.includes(name)
               ? [name]
               : equivalentEntries(found.entries, name, found.sensitive);
-            return matches.length === 1
-              ? { sensitive: found.sensitive, entry: matches[0] }
-              : { sensitive: found.sensitive };
+            return join(prefix, matches.length === 1 ? (matches[0] ?? name) : fold(name));
           }
         }
         const up = dirname(dir);
         if (up === dir) break;
         dir = up;
       }
-      return { sensitive: !IS_CASE_INSENSITIVE_FS };
+      return undefined;
     };
     const keys: string[] = [];
     for (const path of paths) {
       signal?.throwIfAborted();
       const resolved = resolve(path);
-      const { sensitive, entry } = await locate(resolved);
-      const fold = sensitive ? unicodeMatchKeyExactCase : unicodeMatchKey;
-      keys.push(entry === undefined ? fold(resolved) : `${fold(dirname(resolved))}${sep}${entry}`);
+      keys.push(
+        (await locate(resolved)) ??
+          (IS_CASE_INSENSITIVE_FS ? unicodeMatchKey : unicodeMatchKeyExactCase)(resolved),
+      );
     }
     return keys;
   }

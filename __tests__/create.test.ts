@@ -159,6 +159,26 @@ describe('create body', () => {
     await assert.rejects(access(join(root, 'nf')), 'nothing may be written');
   });
 
+  it('treats case-variant new folders as one entry on a case-insensitive host', async (t) => {
+    if (process.platform === 'linux') {
+      t.skip('case-sensitive filesystem');
+      return;
+    }
+    await assert.rejects(
+      create({
+        files: [
+          { path: join(root, 'nf', 'a.txt'), content: 'AAAA' },
+          { path: join(root, 'NF', 'a.txt'), content: 'BBBB' },
+        ],
+      }),
+      {
+        code: ErrorCode.INVALID_INPUT,
+        message: 'files.1.path: duplicate of files[0].path; one entry per file',
+      },
+    );
+    await assert.rejects(access(join(root, 'nf')), 'nothing may be written');
+  });
+
   it('refuses a batch that names the same directory twice', async () => {
     const dir = join(root, 'dup-dir');
     await assert.rejects(create({ directories: [dir, dir] }), {
