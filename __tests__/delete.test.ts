@@ -737,10 +737,29 @@ describe('delete body', () => {
     assert.strictEqual(result.structured.results[0]?.value?.deleted, true);
   });
 
+  it(
+    'collapses NFC and NFD names of one entry',
+    { skip: process.platform === 'linux' },
+    async () => {
+      const nfc = 'caf\u00e9.txt';
+      const nfd = 'cafe\u0301.txt';
+      assert.notStrictEqual(nfc, nfd);
+      const file = await writeTestFile(root, nfc, 'x\n');
+
+      const result = await del({ paths: [file, join(root, nfd)] });
+
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(result.structured.results.length, 1);
+      assert.strictEqual(result.structured.results[0]?.value?.deleted, true);
+      await assert.rejects(lstat(file));
+    },
+  );
+
   it('retains distinct on-disk case spellings as separate deletion targets without collapsing them', async () => {
     const fileA = join(root, 'case_test_file.txt');
     const fileB = join(root, 'CASE_TEST_FILE.txt');
     const mockFs = {
+      pathGuard: fs.pathGuard,
       planDelete: async (path: string) => ({
         inputPath: path,
         validPath: path,
@@ -784,6 +803,7 @@ describe('delete body', () => {
 
     const customSuggestion = 'Custom suggestion for recovery';
     const mockFs = {
+      pathGuard: fs.pathGuard,
       planDelete: async (path: string) => ({
         inputPath: path,
         validPath: path,

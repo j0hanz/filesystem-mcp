@@ -143,26 +143,31 @@ async function handleDelete(
     ctx.signal,
   );
 
-  let plans: { plan: DeletePlan; index: number }[] = [];
+  let plans: { plan: DeletePlan; index: number; key: string }[] = [];
   const seenTargets = new Set<string>();
-  // A link keeps the letter case it was typed in, so one link named twice
-  // plans twice where the filesystem folds case. Collapse those only when both
-  // plans saw one Entry: two names that fold alike can be two entries.
-  const sawSameEntry = (plan: DeletePlan): boolean => {
+  // One call to the guard keys every validated path by the Entry it names, so
+  // respellings (letter case, Unicode form) collapse and two on-disk names that
+  // fold alike stay apart. Collapse only when both plans also saw one
+  // identity: a link or a replaced entry can share a key and not an Entry.
+  const keys = await ctx.fs.pathGuard.entryKeys(
+    planned.map(({ value: r }) => (r.status === 'noop' ? r.deleted : r.plan.validPath)),
+    ctx.signal,
+  );
+  const sawSameEntry = (plan: DeletePlan, key: string): boolean => {
     const stats = plan.firstStats?.stats;
     if (stats === undefined) return false;
-    const folded = normalizeCaseForComparison(plan.validPath);
     return plans.some(
-      ({ plan: earlier }) =>
+      ({ plan: earlier, key: earlierKey }) =>
         earlier.firstStats !== undefined &&
-        normalizeCaseForComparison(earlier.validPath) === folded &&
+        earlierKey === key &&
         sameIdentity(identityOf(earlier.firstStats.stats), identityOf(stats)),
     );
   };
 
-  for (const { index, value: r } of planned) {
+  for (const [i, { index, value: r }] of planned.entries()) {
     const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
-    if (seenTargets.has(target) || (r.status !== 'noop' && sawSameEntry(r.plan))) {
+    const key = keys[i] ?? target;
+    if (seenTargets.has(target) || (r.status !== 'noop' && sawSameEntry(r.plan, key))) {
       slots[index] = { status: 'omitted' };
       continue;
     }
@@ -170,7 +175,7 @@ async function handleDelete(
     if (r.status === 'noop') {
       slots[index] = { status: 'settled', path: r.deleted, value: { deleted: true } };
     } else {
-      plans.push({ plan: r.plan, index });
+      plans.push({ plan: r.plan, index, key });
     }
   }
 
