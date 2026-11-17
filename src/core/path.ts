@@ -1579,6 +1579,55 @@ export class PathGuard {
     return join(ancestor, ...spelled, ...missing.slice(spelled.length));
   }
 
+  /** One key per path, in order; equal keys name one Entry. Paths are absolute. */
+  async entryKeys(paths: readonly string[], signal?: AbortSignal): Promise<string[]> {
+    const allowedDirs = this.getAllowedDirectories();
+    // Real directory -> whether its entries are case-sensitive; undefined when unreadable.
+    const rules = new Map<string, Promise<boolean | undefined>>();
+    const readRule = async (realDir: string): Promise<boolean | undefined> => {
+      try {
+        if (!IS_CASE_INSENSITIVE_FS) return true;
+        return await isDirectoryCaseSensitive(realDir, await readdir(realDir));
+      } catch {
+        return undefined;
+      }
+    };
+    const ruleFor = async (path: string): Promise<boolean> => {
+      let dir = dirname(path);
+      while (isPathWithinAllowedDirectoriesSync(normalizePath(dir), allowedDirs)) {
+        signal?.throwIfAborted();
+        let real: string | undefined;
+        try {
+          real = await realpath(dir);
+        } catch {
+          // Missing or unreadable: try the parent.
+        }
+        if (real !== undefined) {
+          let rule = rules.get(real);
+          if (!rule) {
+            rule = readRule(real);
+            rules.set(real, rule);
+          }
+          const sensitive = await rule;
+          if (sensitive !== undefined) return sensitive;
+        }
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      return !IS_CASE_INSENSITIVE_FS;
+    };
+    const keys: string[] = [];
+    for (const path of paths) {
+      signal?.throwIfAborted();
+      const resolved = resolve(path);
+      keys.push(
+        (await ruleFor(resolved)) ? unicodeMatchKeyExactCase(resolved) : unicodeMatchKey(resolved),
+      );
+    }
+    return keys;
+  }
+
   /**
    * The entry of `realDir` that `name` names: `name` itself when it is
    * there, else the one entry with the same `unicodeMatchKey`. Two or more
