@@ -1,3 +1,5 @@
+import type { ElicitResult } from '@modelcontextprotocol/client';
+
 import assert from 'node:assert/strict';
 import { access, lstat, mkdir, readdir, readFile, rename, rm, symlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -51,6 +53,111 @@ async function deleteAnsweringByName(
 }
 
 describe('Mutation regressions', () => {
+  for (const action of ['decline', 'cancel'] as const) {
+    it(`a ${action === 'decline' ? 'declined' : 'dismissed'} access grant ends CANCELLED, not isError, unless some path can run`, async () => {
+      const root = await createTestRoot();
+      try {
+        await withBoundary(root, async () => {
+          const allowed = join(root, 'allowed');
+          const inside = await writeTestFile(root, 'allowed/in.txt', 'in');
+          const outside = await writeTestFile(root, 'outside/file.txt', 'outside');
+          const pair = await createElicitationClientPair([allowed], () => ({ action }));
+          try {
+            const alone = await pair.client.callTool({
+              name: 'delete',
+              arguments: { paths: [outside] },
+            });
+            assert.notStrictEqual(alone.isError, true, JSON.stringify(alone));
+            const text = JSON.stringify(alone.content);
+            assert.match(text, /CANCELLED/u);
+            assert.match(text, action === 'decline' ? /declined by the user/u : /dismissed/u);
+            await access(outside);
+
+            // A path that can run keeps the batch going; the outside one is
+            // denied with the answer, not with advice to get a grant.
+            const mixed = await pair.client.callTool({
+              name: 'delete',
+              arguments: { paths: [inside, outside] },
+            });
+            const mixedText = JSON.stringify(mixed);
+            assert.match(mixedText, action === 'decline' ? /declined by the user/u : /dismissed/u);
+            assert.doesNotMatch(mixedText, /accepted grant/u);
+            await assert.rejects(access(inside), { code: 'ENOENT' });
+            await access(outside);
+          } finally {
+            await pair.close();
+          }
+        });
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
+  const multiAnswers: { name: string; answer: ElicitResult; expect: RegExp }[] = [
+    { name: 'declined', answer: { action: 'decline' }, expect: /declined by the user/u },
+    {
+      name: 'answered with nothing ticked',
+      answer: { action: 'accept', content: { choice: [] } },
+      expect: /left unselected by the user/u,
+    },
+  ];
+  for (const { name, answer, expect } of multiAnswers) {
+    it(`a multi-folder grant ${name} ends CANCELLED with that answer`, async () => {
+      const root = await createTestRoot();
+      try {
+        await withBoundary(root, async () => {
+          const a = await writeTestFile(root, 'outsideA/a.txt', 'a');
+          const b = await writeTestFile(root, 'outsideB/b.txt', 'b');
+          const pair = await createElicitationClientPair([join(root, 'allowed')], () => answer);
+          try {
+            const result = await pair.client.callTool({
+              name: 'delete',
+              arguments: { paths: [a, b] },
+            });
+            assert.notStrictEqual(result.isError, true, JSON.stringify(result));
+            assert.match(JSON.stringify(result.content), expect);
+            await access(a);
+            await access(b);
+          } finally {
+            await pair.close();
+          }
+        });
+      } finally {
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
+  it('a folder left unticked in a multi-folder grant is denied with that answer, the ticked one runs', async () => {
+    const root = await createTestRoot();
+    try {
+      await withBoundary(root, async () => {
+        const a = await writeTestFile(root, 'outsideA/a.txt', 'a');
+        const b = await writeTestFile(root, 'outsideB/b.txt', 'b');
+        const pair = await createElicitationClientPair([join(root, 'allowed')], () => ({
+          action: 'accept',
+          content: { choice: [join(root, 'outsideA')] },
+        }));
+        try {
+          const result = await pair.client.callTool({
+            name: 'delete',
+            arguments: { paths: [a, b] },
+          });
+          const text = JSON.stringify(result);
+          assert.match(text, /left unselected by the user/u);
+          assert.doesNotMatch(text, /accepted grant/u);
+          await assert.rejects(access(a), { code: 'ENOENT' });
+          await access(b);
+        } finally {
+          await pair.close();
+        }
+      });
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('delete binds its own identity after an access-grant round', async () => {
     const root = await createTestRoot();
     try {

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A declined or dismissed access grant ends the call as `CANCELLED`, not an
+  error, when no path in it can run. A path under a folder the person
+  declined or left unticked is denied with their answer instead of advice to
+  get a grant, so the model no longer retries into the same prompt.
 - An IPv6 HTTP bind prints its URL with brackets (`http://[::1]:3000`) in the
   startup log and `--print-config`.
 - On stdio, a request that reuses the ID of an open `subscriptions/listen` is
