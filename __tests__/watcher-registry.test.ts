@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -8,7 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import type { PathGuard } from '../src/core/path.ts';
-import { createWatcherRegistry, type WatchFn } from '../src/core/watcher-registry.ts';
+import { createWatcherRegistry, MAX_WATCHERS, type WatchFn } from '../src/core/watcher-registry.ts';
 
 type FakeWatcher = EventEmitter & {
   closed: boolean;
@@ -130,5 +130,64 @@ describe('watcher registry', () => {
     watchers[1]?.fire(basename(filePath));
     await setTimeout(100);
     assert.deepEqual(seen, [uri]);
+  });
+
+  it('two URIs for one file share a watcher and each hears its own URI', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const plain = buildFileResourceUri(filePath);
+    const aliased = plain.replace(/a\.txt$/, '%61.txt'); // test file named a.txt
+    const seen: string[] = [];
+    await registry.acquire(
+      fakeGuard(() => true),
+      plain,
+      (u) => seen.push(u),
+    );
+    await registry.acquire(
+      fakeGuard(() => true),
+      aliased,
+      (u) => seen.push(u),
+    );
+    assert.equal(watchers.length, 1);
+    assert.equal(registry.size(), 1);
+    watchers[0]?.fire('a.txt');
+    await setTimeout(100);
+    assert.deepEqual(seen.sort(), [aliased, plain].sort());
+    registry.release(plain);
+    assert.equal(registry.size(), 1);
+    seen.length = 0;
+    watchers[0]?.fire('a.txt');
+    await setTimeout(100);
+    assert.deepEqual(seen, [aliased]);
+    registry.release(aliased);
+    assert.equal(registry.size(), 0);
+  });
+
+  it('at cap an alias still joins its watcher, and an error reaches every alias', async () => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const guard = fakeGuard(() => true);
+    const plain = buildFileResourceUri(filePath);
+    const aliased = plain.replace(/a\.txt$/, '%61.txt');
+    const seen: string[] = [];
+    await registry.acquire(guard, plain, (u) => seen.push(u));
+    for (let i = 1; i < MAX_WATCHERS; i++) {
+      const sub = join(dir, `cap-${i}`);
+      await mkdir(sub);
+      assert.equal((await registry.acquire(guard, buildFileResourceUri(sub), () => {})).ok, true);
+    }
+    const extra = join(dir, 'cap-extra');
+    await mkdir(extra);
+    assert.deepEqual(await registry.acquire(guard, buildFileResourceUri(extra), () => {}), {
+      ok: false,
+      reason: 'capped',
+    });
+    assert.deepEqual(await registry.acquire(guard, aliased, (u) => seen.push(u)), { ok: true });
+    assert.equal(registry.size(), MAX_WATCHERS);
+    watchers[0]?.emit('error', new Error('EPERM'));
+    assert.deepEqual(seen.sort(), [aliased, plain].sort());
+    assert.equal(watchers[0]?.closed, true);
+    assert.equal(registry.size(), MAX_WATCHERS - 1);
+    registry.destroy();
   });
 });
