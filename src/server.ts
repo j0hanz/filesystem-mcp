@@ -301,7 +301,14 @@ export async function createServer(
     disposeRuntimeState() {
       if (cleanedUp) return;
       cleanedUp = true;
-      resourceDisposable.dispose();
+      try {
+        resourceDisposable.dispose();
+      } catch (error) {
+        Logger.error(
+          '[Server] Resource registration cleanup failed:',
+          formatUnknownErrorMessage(error),
+        );
+      }
       if (ownsState) state.dispose();
     },
   };

@@ -236,19 +236,14 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
     if (closed) return;
     closed = true;
     for (const state of listens.values()) state.cancelled = true;
-    listens.clear();
-    runtime.dispose();
+    // Leases end before the registry is destroyed.
+    for (const id of [...listens.keys()]) releaseListen(id);
     const ctx = activeCtx;
     activeCtx = undefined;
-    // Both steps below are guarded separately, and for the same reason: this
-    // also runs from `wire.onclose`, where a throw is an uncaught exception on
-    // the stdin close event rather than a rejected close(). One shared catch
-    // would let a failed disposal skip the unref and strand the process.
-    try {
-      ctx?.disposeRuntimeState();
-    } catch {
-      /* idempotent — disposeRuntimeState guards cleanedUp */
-    }
+    // Both disposals are no-throw (ADR-023). The unref below keeps its own
+    // catch: this runs from `wire.onclose`, where a throw is uncaught.
+    ctx?.disposeRuntimeState();
+    runtime.dispose();
     try {
       // The SDK's transport close pauses stdin only when no other 'data'
       // listener is left, so a fatal read error (a ReadBuffer overflow) tears

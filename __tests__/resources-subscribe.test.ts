@@ -10,6 +10,7 @@ import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import { Logger } from '../src/core/observability.ts';
+import { ResourceStore } from '../src/core/store.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   assertOneNotificationPerRound,
@@ -237,6 +238,51 @@ describe('createServer disposal on connection close', () => {
       assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
     } finally {
       state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('instance cleanup logs lease failures and preserves injected state', async (t) => {
+    const root = await createTestRoot();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
+    try {
+      const pageId = state.pageStore.create({ queryKey: 'q', items: [1] });
+      t.mock.method(state.watcherRegistry, 'acquire', () => ({
+        ready: Promise.resolve({ ok: true } as const),
+        dispose(): void {
+          throw new Error('lease failed');
+        },
+      }));
+      const errors = t.mock.method(Logger, 'error', () => {});
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+      const uri = buildFileResourceUri(await writeTestFile(root, 'lease.txt', 'x'));
+      await client.subscribeResource({ uri });
+
+      await client.close();
+      assert.ok(
+        errors.mock.calls.some((c) => c.arguments.some((a) => String(a).includes('lease failed'))),
+      );
+      assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
+    } finally {
+      state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('closing a self-owned instance disposes its RuntimeState', async (t) => {
+    const root = await createTestRoot();
+    try {
+      const clear = t.mock.method(ResourceStore.prototype, 'clear');
+      const ctx = await createServer({ cliAllowedDirs: [root] });
+      const client = new Client({ name: 'dispose-test', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+      await client.close();
+      assert.strictEqual(clear.mock.callCount(), 1);
+    } finally {
       await cleanupTestRoot(root);
     }
   });
