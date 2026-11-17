@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
 import type { PathGuard } from '../src/core/path.ts';
@@ -80,5 +81,54 @@ describe('watcher registry', () => {
     assert.deepEqual(seen, [uri]); // synchronous, not debounced
     assert.equal(registry.size(), 0);
     assert.equal(registry.hasWatcher(uri), false);
+  });
+
+  it('a change under a revoked root notifies nobody and frees the watcher', async () => {
+    const uri = buildFileResourceUri(filePath);
+    let allowed = true;
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const seen: string[] = [];
+    await registry.acquire(
+      fakeGuard(() => allowed),
+      uri,
+      (u) => seen.push(u),
+    );
+    allowed = false;
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.deepEqual(seen, []);
+    assert.equal(registry.size(), 0);
+  });
+
+  it('re-subscribing after the root is re-granted attaches a new watcher', async () => {
+    const uri = buildFileResourceUri(filePath);
+    let allowed = true;
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const seen: string[] = [];
+    const notify = (u: string) => seen.push(u);
+    await registry.acquire(
+      fakeGuard(() => allowed),
+      uri,
+      notify,
+    );
+    allowed = false;
+    watchers[0]?.fire(basename(filePath));
+    await setTimeout(100);
+    allowed = true;
+    registry.release(uri);
+    assert.deepEqual(
+      await registry.acquire(
+        fakeGuard(() => allowed),
+        uri,
+        notify,
+      ),
+      { ok: true },
+    );
+    assert.equal(registry.size(), 1);
+    watchers[1]?.fire(basename(filePath));
+    await setTimeout(100);
+    assert.deepEqual(seen, [uri]);
   });
 });

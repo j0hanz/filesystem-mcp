@@ -72,6 +72,8 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
   // later acquire (no sticky per-URI state).
   const pendingSubscribes = new Map<string, Set<{ aborted: boolean }>>();
   const debounceTimers = new Map<string, NodeJS.Timeout>();
+  // The guard each live watcher was acquired with, to re-check its root at fan-out.
+  const guards = new Map<string, PathGuard>();
   let destroyed = false;
 
   const abortPendingSubscribes = (uri: string): void => {
@@ -95,6 +97,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
     watcher.close();
     watchers.delete(uri);
     activeCallbacks.delete(uri);
+    guards.delete(uri);
   };
 
   /** The last lease ended: drop the watcher and every trace of the URI. */
@@ -107,6 +110,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
     const watcher = watchers.get(uri);
     if (watcher) dropWatcher(uri, watcher);
     activeCallbacks.delete(uri);
+    guards.delete(uri);
     subscriberCounts.delete(uri);
     abortPendingSubscribes(uri);
   };
@@ -122,6 +126,17 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
       debounceTimers.delete(uri);
       const cbs = activeCallbacks.get(uri);
       if (!cbs) return;
+      // A root revoked since subscribe (ADR-018) gets no more change notices on
+      // either subscription path; free the slot. Lease counts stay (callers own
+      // them), same as the error path.
+      // shortcut: the slot frees on the first change after a revoke, not at the revoke; hook PathGuard root changes if idle revoked watchers ever hit the cap.
+      const path = extractPath(uri);
+      const guard = guards.get(uri);
+      if (path !== undefined && guard && !guard.isInsideAllowed(path)) {
+        const watcher = watchers.get(uri);
+        if (watcher) dropWatcher(uri, watcher);
+        return;
+      }
       // One debounce timer per URI — fan out to every subscriber inside it, so
       // a burst of changes still fires one notification round per URI, not per
       // subscriber.
@@ -173,7 +188,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
     drop(uri);
   };
 
-  const attach = (uri: string, resolvedPath: string): boolean => {
+  const attach = (uri: string, resolvedPath: string, pathGuard: PathGuard): boolean => {
     try {
       // Directories: one recursive watch on macOS and Windows, where the
       // kernel provides it. Not on Linux: Node's recursive watch there walks
@@ -226,6 +241,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
         return true;
       }
       watchers.set(uri, watcher);
+      guards.set(uri, pathGuard);
       return true;
     } catch (err) {
       Logger.error(
@@ -319,7 +335,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
         }
 
         addCallback(uri, notify);
-        if (!attach(uri, resolved)) {
+        if (!attach(uri, resolved, pathGuard)) {
           // fs.watch threw (inotify exhaustion, or a race deleted the path): take
           // back the callback this call added. Not `release`: leases whose
           // watcher errored still hold their counts (see `dropWatcher`), and a
@@ -354,6 +370,7 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
         }
       }
       watchers.clear();
+      guards.clear();
       activeCallbacks.clear();
       subscriberCounts.clear();
       pendingSubscribes.clear();

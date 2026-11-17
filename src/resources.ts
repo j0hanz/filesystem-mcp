@@ -328,9 +328,6 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       };
       const guardedNotify = (notifiedUri: string): void => {
         if (!active) return;
-        // A root revoked since subscribe (ADR-018) gets no more change notices.
-        const path = extractPath(notifiedUri);
-        if (path !== undefined && !options.pathGuard.isInsideAllowed(path)) return;
         notify(notifiedUri);
       };
 
