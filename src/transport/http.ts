@@ -24,7 +24,7 @@ import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { PathGuard, ServerOptions } from '../core/path.ts';
 import { getMaxInboundMessageBytes, MIB } from '../core/util.ts';
-import type { WatcherRegistry } from '../core/watcher-registry.ts';
+import type { WatcherLease, WatcherRegistry } from '../core/watcher-registry.ts';
 import { createRuntimeState, createServer } from '../server.ts';
 import {
   assertHttpBindingPolicy,
@@ -217,12 +217,25 @@ function setupExpressApp(
         return;
       }
 
+      // The response owns these leases. `close` fires once, so the listener goes
+      // on before the attach loop awaits path validation: a client gone by then
+      // cancels whatever is still pending instead of leaking it.
+      const leases: WatcherLease[] = [];
+      let released = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        for (const lease of leases) lease.dispose();
+      };
+      res.once('close', release);
+
       // Over-cap listens are rejected inside prepareListenWatchers, before the ack.
       const prepared = await prepareListenWatchers(
         requestedUris,
         sharedPathGuard,
         sharedRegistry,
         resourceUpdateSink,
+        leases,
       );
       if (!prepared.ok) {
         sendJsonRpcError(
@@ -235,20 +248,8 @@ function setupExpressApp(
         return;
       }
 
-      let released = false;
-      const release = (): void => {
-        if (released) return;
-        released = true;
-        for (const uri of prepared.acquiredUris) sharedRegistry.release(uri);
-      };
-      if (prepared.acquiredUris.length > 0) {
-        // The attach loop awaits per-URI path validation, so the client can be
-        // gone by the time it returns. `close` fires once: a listener attached
-        // after it would never run and every lease this batch took would leak
-        // until process shutdown.
-        if (res.closed || res.destroyed || res.writableEnded) release();
-        else res.once('close', release);
-      }
+      // A response already closed when the handler began never fires `close`.
+      if (res.closed || res.destroyed || res.writableEnded) release();
 
       try {
         await modernNodeHandler(req, res, parsedBody);

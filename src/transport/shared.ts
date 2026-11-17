@@ -1,7 +1,7 @@
 // Pieces both transport legs share: the runtime config contract, the JSON-RPC
 // error envelope, and the `subscriptions/listen` watcher-preparation ladder.
-// stdio and HTTP gate the same message shape; only where the lease is released
-// differs (connection close vs response close).
+// stdio and HTTP gate the same message shape; only what ends the leases
+// differs (request cancellation or completion vs response close).
 import { JSONRPC_VERSION, specTypeSchemas } from '@modelcontextprotocol/server';
 
 import { formatUnknownErrorMessage } from '../core/errors.ts';
@@ -9,6 +9,7 @@ import type { PathGuard } from '../core/path.ts';
 import {
   MAX_WATCHERS,
   type WatcherAttachResult,
+  type WatcherLease,
   type WatcherRegistry,
 } from '../core/watcher-registry.ts';
 
@@ -66,20 +67,18 @@ export function listenSubscriptionUris(message: unknown): string[] | undefined {
   if ((message as { method?: unknown }).method !== 'subscriptions/listen') return undefined;
   const result = specTypeSchemas.SubscriptionsListenRequest['~standard'].validate(message);
   if (result instanceof Promise || result.issues !== undefined) return undefined;
-  // De-duplicate: one attach must yield one ref-count, or the release below
-  // decrements further than it incremented and tears down a live watcher.
+  // De-duplicate: one URI named twice needs one lease, not two.
   return [...new Set(result.value.params.notifications.resourceSubscriptions ?? [])];
 }
 
 export type ListenPreparation =
-  | { readonly ok: true; readonly acquiredUris: string[] }
-  | { readonly ok: false; readonly message: string };
+  { readonly ok: true } | { readonly ok: false; readonly message: string };
 
 const WATCHER_FAILURE_REASONS = {
   'bad-uri': 'unsupported resource URI',
   capped: `watcher limit ${MAX_WATCHERS} reached`,
   'attach-failed': 'filesystem watcher could not be created',
-  stale: 'subscription was cancelled during setup',
+  cancelled: 'subscription was cancelled during setup',
 } as const;
 
 function watcherFailureMessage(
@@ -95,15 +94,18 @@ function watcherFailureMessage(
 
 /**
  * Prepare every filesystem watcher named by a `subscriptions/listen` filter.
- * The batch is all-or-nothing: a failed URI releases each prior lease. An
- * over-cap listen is rejected up front, before the ack and before any watcher
- * exists.
+ * Each lease lands in the caller's `leases` before it is awaited, so the caller
+ * can dispose a pending preparation (that URI then fails as cancelled). The
+ * batch is all-or-nothing: a failed URI disposes every lease in `leases` and
+ * empties it. An over-cap listen is rejected up front, before the ack and
+ * before any watcher exists. On success the caller owns the leases.
  */
 export async function prepareListenWatchers(
   uris: readonly string[],
   pathGuard: PathGuard,
   registry: WatcherRegistry,
   notify: (uri: string) => void,
+  leases: WatcherLease[],
 ): Promise<ListenPreparation> {
   // The per-URI `capped` failure below would also reject, but only after
   // creating and tearing down watchers up to the cap. Only URIs without a live
@@ -116,14 +118,15 @@ export async function prepareListenWatchers(
       message: `subscriptions/listen asks for ${newUris.length} new URIs, but only ${available} watcher slots remain (cap ${MAX_WATCHERS}). Shorten the resourceSubscriptions list.`,
     };
   }
-  const acquired: string[] = [];
   for (const uri of uris) {
-    const result = await registry.acquire(pathGuard, uri, notify);
+    const lease = registry.acquire(pathGuard, uri, notify);
+    leases.push(lease);
+    const result = await lease.ready;
     if (!result.ok) {
-      for (const prior of acquired) registry.release(prior);
+      for (const prior of leases) prior.dispose();
+      leases.length = 0;
       return { ok: false, message: watcherFailureMessage(uri, result) };
     }
-    acquired.push(uri);
   }
-  return { ok: true, acquiredUris: acquired };
+  return { ok: true };
 }

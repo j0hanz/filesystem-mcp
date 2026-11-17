@@ -16,6 +16,7 @@ import { Logger, voidSend } from '../core/observability.ts';
 import { MAX_OUTBOUND_RESULT_BYTES, MAX_STDIO_REQUEST_ID_BYTES } from '../core/outbound.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { getMaxInboundMessageBytes } from '../core/util.ts';
+import type { WatcherLease } from '../core/watcher-registry.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createRuntimeState, createServer } from '../server.ts';
 import type { RuntimeConfig } from './shared.ts';
@@ -27,7 +28,7 @@ import {
 } from './shared.ts';
 
 interface StdioListenState {
-  acquiredUris: string[];
+  leases: WatcherLease[];
   cancelled: boolean;
   delivered: boolean;
 }
@@ -143,7 +144,7 @@ export async function seedRootsFromClient(
  * `req.body`. The watcher's notify sink calls `sendResourceUpdated` on the
  * pinned instance, which the router then delivers to the listening stream.
  *
- * Watcher leases are tracked by listen request ID and released on cancellation,
+ * Watcher leases are tracked by listen request ID and disposed on cancellation,
  * rejection, graceful completion, or connection close.
  *
  * `_config` is unused: an API key has no meaning on stdio. The parameter keeps
@@ -203,12 +204,10 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
     return c.mcp;
   };
 
-  // One sink for the whole connection. `addCallback` de-duplicates by function
-  // identity, so re-using this closure makes a repeat `subscriptions/listen` on
-  // an already-watched URI a no-op; a fresh closure per listen would instead
-  // stack a callback every time, double-notifying and growing an
-  // `activeCallbacks` set that MAX_WATCHERS does not bound (it caps watchers,
-  // not callbacks). Reads `activeCtx` when it fires rather than capturing it, so
+  // One sink for the whole connection. The registry de-duplicates callbacks by
+  // function identity in each notification round, so two listens naming one
+  // URI still send one update per change; a fresh closure per listen would
+  // double-notify. Reads `activeCtx` when it fires rather than capturing it, so
   // it never pins a disposed instance.
   const sink = (uri: string): void => {
     voidSend(activeCtx?.mcp.server.sendResourceUpdated({ uri }), '[Stdio] resource update', {
@@ -230,7 +229,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
     const state = listens.get(id);
     if (!state) return;
     listens.delete(id);
-    for (const uri of state.acquiredUris) registry.release(uri);
+    for (const lease of state.leases) lease.dispose();
   };
 
   const cleanupConnection = (): void => {
@@ -297,10 +296,10 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
   };
 
   // Wrap the callback `serveStdio` just installed. Listen requests are admitted
-  // in order so two requests naming the same URI cannot race the registry's
-  // ref-count. Cancellation is serialized with pending admission by request ID:
-  // a pending request is suppressed and releases after preparation, while an
-  // active request releases before the SDK closes its stream.
+  // in order. Cancellation is matched by request ID: a pending request disposes
+  // its leases at once (cancelling any acquisition still in flight) and is
+  // suppressed, its state kept until preparation exits; an active request
+  // releases before the SDK closes its stream.
   //
   // serveStdio installs its onmessage synchronously and only then starts the
   // wire; this wrapper is only correct because of that ordering. Assert it
@@ -364,7 +363,9 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       if (state.delivered) {
         releaseListen(cancelId);
         deliver(message);
+        return;
       }
+      for (const lease of state.leases) lease.dispose();
       return;
     }
 
@@ -381,7 +382,7 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
       return;
     }
     const state: StdioListenState = {
-      acquiredUris: [],
+      leases: [],
       cancelled: false,
       delivered: false,
     };
@@ -393,13 +394,20 @@ export function startServer(options: ServerOptions, _config?: RuntimeConfig): St
           return;
         }
         await ensurePathGuard();
-        const prepared = await prepareListenWatchers(subscriptionUris, pathGuard, registry, sink);
+        const prepared = await prepareListenWatchers(
+          subscriptionUris,
+          pathGuard,
+          registry,
+          sink,
+          state.leases,
+        );
         if (!prepared.ok) {
           listens.delete(id);
+          // A cancelled request was never delivered, so nothing answers it.
+          if (isListenCancelled(state)) return;
           await wire.send(jsonRpcError(ProtocolErrorCode.InvalidParams, prepared.message, id));
           return;
         }
-        state.acquiredUris = prepared.acquiredUris;
         if (isListenCancelled(state)) {
           releaseListen(id);
           return;

@@ -114,11 +114,10 @@ describe('Stdio Transport (real subprocess)', () => {
     // Two open listen streams both match this URI, so the SDK router delivers
     // two notifications per change — that fan-out is expected. What must NOT
     // scale is the registry side: the notify sink is one closure per
-    // connection, so the second listen re-registers the same callback and the
-    // registry de-duplicates it by identity. A sink built per listen would
-    // stack a second callback, each sending its own update through the same
-    // two streams — 4 notifications, and an activeCallbacks set that grows
-    // with every re-listen (MAX_WATCHERS caps watchers, not callbacks).
+    // connection, so the second listen's lease carries the same callback and
+    // the registry de-duplicates it by identity in each notification round. A
+    // sink built per listen would add a second callback, each sending its own
+    // update through the same two streams — 4 notifications.
     const filePath = await writeTestFile(tmpDir, 'relisten.txt', 'initial');
     const uri = buildFileResourceUri(filePath);
     const streams = 2;

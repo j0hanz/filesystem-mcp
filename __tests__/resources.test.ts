@@ -635,7 +635,7 @@ describe('MCP Resources', () => {
       const notifications: string[] = [];
       const result = await registry.acquire(pathGuard, testUri, (uri) => {
         notifications.push(uri);
-      });
+      }).ready;
       assert.strictEqual(result.ok, true);
       assert.strictEqual(registry.hasWatcher(testUri), true);
 
@@ -662,7 +662,7 @@ describe('MCP Resources', () => {
           const notifications: string[] = [];
           const result = await registry.acquire(pathGuard, buildFileResourceUri(dir), (uri) => {
             notifications.push(uri);
-          });
+          }).ready;
           assert.strictEqual(result.ok, true);
 
           // A change two levels down is not reported.
@@ -699,10 +699,10 @@ describe('MCP Resources', () => {
       syncBuiltinESMExports();
 
       try {
-        const a = await registry.acquire(pathGuard, testUri, () => {});
-        const b = await registry.acquire(pathGuard, testUri, () => {});
-        assert.strictEqual(a.ok, true);
-        assert.strictEqual(b.ok, true);
+        const a = registry.acquire(pathGuard, testUri, () => {});
+        const b = registry.acquire(pathGuard, testUri, () => {});
+        assert.strictEqual((await a.ready).ok, true);
+        assert.strictEqual((await b.ready).ok, true);
         assert.strictEqual(made.length, 1);
         assert.ok(made[0]);
 
@@ -714,20 +714,21 @@ describe('MCP Resources', () => {
         });
         syncBuiltinESMExports();
 
-        const c = await registry.acquire(pathGuard, testUri, () => {});
+        const c = await registry.acquire(pathGuard, testUri, () => {}).ready;
         assert.deepStrictEqual(c, { ok: false, reason: 'attach-failed' });
 
         t.mock.restoreAll();
         syncBuiltinESMExports();
 
-        registry.release(testUri);
+        a.dispose();
 
-        const d = await registry.acquire(pathGuard, testUri, () => {});
-        assert.strictEqual(d.ok, true);
+        const d = registry.acquire(pathGuard, testUri, () => {});
+        assert.strictEqual((await d.ready).ok, true);
         assert.strictEqual(registry.hasWatcher(testUri), true);
 
-        registry.release(testUri);
+        d.dispose();
 
+        // `b` still holds its lease, so the re-established watcher stays.
         assert.strictEqual(registry.hasWatcher(testUri), true);
       } finally {
         t.mock.restoreAll();
@@ -749,7 +750,7 @@ describe('MCP Resources', () => {
         const notifications: string[] = [];
         const result = await registry.acquire(pathGuard, testUri, (uri) => {
           notifications.push(uri);
-        });
+        }).ready;
         assert.strictEqual(result.ok, true);
 
         // Trigger modification
@@ -763,19 +764,19 @@ describe('MCP Resources', () => {
       },
     );
 
-    it('TC-FUNC-064: WatcherRegistry - release tears down the watcher and leaves no stale state', async () => {
+    it('TC-FUNC-064: WatcherRegistry - disposing the lease tears down the watcher and leaves no stale state', async () => {
       const registry = createWatcherRegistry();
       const testFile = await writeTestFile(tmpDir, 'remove_test.txt', 'content');
       const testUri = buildFileResourceUri(testFile);
 
-      const result = await registry.acquire(pathGuard, testUri, () => {});
-      assert.strictEqual(result.ok, true);
+      const lease = registry.acquire(pathGuard, testUri, () => {});
+      assert.strictEqual((await lease.ready).ok, true);
       assert.strictEqual(registry.hasWatcher(testUri), true);
 
-      registry.release(testUri);
+      lease.dispose();
       assert.strictEqual(registry.hasWatcher(testUri), false);
       // No stale state: a fresh acquire for the same uri succeeds.
-      const reacquired = await registry.acquire(pathGuard, testUri, () => {});
+      const reacquired = await registry.acquire(pathGuard, testUri, () => {}).ready;
       assert.strictEqual(reacquired.ok, true);
 
       registry.destroy();
@@ -792,10 +793,10 @@ describe('MCP Resources', () => {
 
       // Two leases on one callback identity: the registry de-duplicates the
       // sink, so one filesystem event still fires it once.
-      const first = await registry.acquire(pathGuard, testUri, callback);
-      const second = await registry.acquire(pathGuard, testUri, callback);
-      assert.strictEqual(first.ok, true);
-      assert.strictEqual(second.ok, true);
+      const first = registry.acquire(pathGuard, testUri, callback);
+      const second = registry.acquire(pathGuard, testUri, callback);
+      assert.strictEqual((await first.ready).ok, true);
+      assert.strictEqual((await second.ready).ok, true);
       assert.strictEqual(registry.size(), 1);
 
       await writeFile(testFile, 'changed');
@@ -803,10 +804,10 @@ describe('MCP Resources', () => {
 
       assert.strictEqual(notifications, 1, 'one filesystem event must invoke one callback');
 
-      registry.release(testUri);
+      first.dispose();
       assert.strictEqual(registry.hasWatcher(testUri), true, 'one retained lease must remain');
-      registry.release(testUri);
-      assert.strictEqual(registry.hasWatcher(testUri), false, 'last release must drop the watcher');
+      second.dispose();
+      assert.strictEqual(registry.hasWatcher(testUri), false, 'last dispose must drop the watcher');
 
       registry.destroy();
     });
@@ -817,7 +818,7 @@ describe('MCP Resources', () => {
       registry.destroy();
     });
 
-    it('TC-FUNC-066: WatcherRegistry - destroy closes all watchers and makes every uri stale', async () => {
+    it('TC-FUNC-066: WatcherRegistry - destroy closes all watchers and cancels every later acquire', async () => {
       const registry = createWatcherRegistry();
       const fileA = await writeTestFile(tmpDir, 'destroy_a.txt', 'A');
       const fileB = await writeTestFile(tmpDir, 'destroy_b.txt', 'B');
@@ -826,8 +827,8 @@ describe('MCP Resources', () => {
       const uriB = buildFileResourceUri(fileB);
       const freshUri = buildFileResourceUri(freshFile);
 
-      assert.strictEqual((await registry.acquire(pathGuard, uriA, () => {})).ok, true);
-      assert.strictEqual((await registry.acquire(pathGuard, uriB, () => {})).ok, true);
+      assert.strictEqual((await registry.acquire(pathGuard, uriA, () => {}).ready).ok, true);
+      assert.strictEqual((await registry.acquire(pathGuard, uriB, () => {}).ready).ok, true);
 
       assert.strictEqual(registry.hasWatcher(uriA), true);
       assert.strictEqual(registry.hasWatcher(uriB), true);
@@ -838,31 +839,29 @@ describe('MCP Resources', () => {
       assert.strictEqual(registry.hasWatcher(uriA), false);
       assert.strictEqual(registry.hasWatcher(uriB), false);
       assert.strictEqual(registry.size(), 0);
-      // Destroyed registry: even a uri never watched aborts as stale.
-      assert.deepStrictEqual(await registry.acquire(pathGuard, freshUri, () => {}), {
+      // Destroyed registry: even a uri never watched is cancelled.
+      assert.deepStrictEqual(await registry.acquire(pathGuard, freshUri, () => {}).ready, {
         ok: false,
-        reason: 'stale',
+        reason: 'cancelled',
       });
     });
 
-    it('TC-FUNC-067: WatcherRegistry - release during in-flight subscribe marks stale; settled release does not', async () => {
+    it('TC-FUNC-067: WatcherRegistry - disposing an in-flight lease cancels it; a settled dispose does not', async () => {
       const registry = createWatcherRegistry();
       const file = await writeTestFile(tmpDir, 'resub.txt', 'content');
       const uri = buildFileResourceUri(file);
 
-      // Settled subscribe then release: no stale marker, a fresh acquire works.
-      assert.strictEqual(
-        (await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true })).ok,
-        true,
-      );
-      registry.release(uri);
+      // Settled lease then dispose: no cancel marker, a fresh acquire works.
+      const settled = registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual((await settled.ready).ok, true);
+      settled.dispose();
       assert.strictEqual(registry.hasWatcher(uri), false);
-      const reacquired = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
-      assert.strictEqual(reacquired.ok, true);
-      registry.release(uri);
+      const reacquired = registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual((await reacquired.ready).ok, true);
+      reacquired.dispose();
 
-      // In-flight abort: a release landing while path validation is still
-      // awaited must abort the acquire as stale.
+      // In-flight cancel: a dispose landing while path validation is still
+      // awaited resolves the lease as cancelled.
       let openGate: () => void = () => {};
       const gate = new Promise<void>((resolve) => {
         openGate = resolve;
@@ -873,25 +872,21 @@ describe('MCP Resources', () => {
           return pathGuard.validateExistingPath(filePath);
         },
       } as unknown as PathGuard;
-      const inFlight = registry.acquire(gatedGuard, uri, () => {}, { markSubscribe: true });
-      registry.release(uri);
+      const inFlight = registry.acquire(gatedGuard, uri, () => {});
+      inFlight.dispose();
       openGate();
-      assert.deepStrictEqual(await inFlight, { ok: false, reason: 'stale' });
+      assert.deepStrictEqual(await inFlight.ready, { ok: false, reason: 'cancelled' });
+      assert.strictEqual(registry.hasWatcher(uri), false);
 
-      // A listen acquire straight after the stale abort is unaffected.
-      const listen = await registry.acquire(pathGuard, uri, () => {});
-      assert.strictEqual(listen.ok, true);
-      registry.release(uri);
-
-      // A fresh acquire is unaffected.
-      const resumed = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
-      assert.strictEqual(resumed.ok, true);
-      registry.release(uri);
+      // A later acquire is unaffected.
+      const resumed = registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual((await resumed.ready).ok, true);
+      resumed.dispose();
 
       registry.destroy();
     });
 
-    it('TC-FUNC-067b: release during in-flight subscribe does not block later markSubscribe=false or newer subscribe attaches', async () => {
+    it('TC-FUNC-067b: a disposed in-flight lease does not block a newer lease on the same uri', async () => {
       const registry = createWatcherRegistry();
       const file = await writeTestFile(tmpDir, 'resub-modern.txt', 'content');
       const uri = buildFileResourceUri(file);
@@ -907,22 +902,21 @@ describe('MCP Resources', () => {
         },
       } as unknown as PathGuard;
 
-      const abortedSub = registry.acquire(gatedGuard, uri, () => {}, { markSubscribe: true });
-      registry.release(uri);
+      const aborted = registry.acquire(gatedGuard, uri, () => {});
+      aborted.dispose();
 
-      // A newer subscribe starting immediately after release must survive even
-      // while the released attach is still pending, failing only the aborted one.
-      const newerSub = await registry.acquire(pathGuard, uri, () => {}, { markSubscribe: true });
-      assert.strictEqual(newerSub.ok, true);
-      registry.release(uri);
+      // A newer lease taken while the cancelled attach is still pending
+      // survives it, and the late validation attaches nothing extra.
+      const newer = registry.acquire(pathGuard, uri, () => {});
+      assert.strictEqual((await newer.ready).ok, true);
 
       releaseFirstGate();
-      assert.deepStrictEqual(await abortedSub, { ok: false, reason: 'stale' });
+      assert.deepStrictEqual(await aborted.ready, { ok: false, reason: 'cancelled' });
+      assert.strictEqual(registry.hasWatcher(uri), true);
+      assert.strictEqual(registry.size(), 1);
 
-      // Modern `subscriptions/listen` calls acquire with markSubscribe=false.
-      const modernListen = await registry.acquire(pathGuard, uri, () => {});
-      assert.strictEqual(modernListen.ok, true);
-      registry.release(uri);
+      newer.dispose();
+      assert.strictEqual(registry.hasWatcher(uri), false);
 
       registry.destroy();
     });

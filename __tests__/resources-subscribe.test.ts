@@ -156,8 +156,8 @@ describe('Resource subscriptions round-trip', () => {
     });
 
     await pair.client.subscribeResource({ uri });
-    // Over-release: the registry ref-counts by URI, so an unsubscribe for a
-    // lease this connection never took used to decrement someone else's.
+    // Over-release: when the registry ref-counted by URI, an unsubscribe for a
+    // lease this connection never took decremented someone else's.
     await pair.client.unsubscribeResource({
       uri: buildFileResourceUri(join(tmpDir, 'never-subscribed.txt')),
     });
@@ -235,6 +235,49 @@ describe('createServer disposal on connection close', () => {
       await client.close();
       assert.deepStrictEqual(state.pageStore.read(pageId, 'q').items, [1]);
     } finally {
+      state.dispose();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('a fresh subscribe after pending unsubscribe stays active', async (t) => {
+    const root = await createTestRoot();
+    const state = createRuntimeState({ cliAllowedDirs: [root] });
+    const filePath = await writeTestFile(root, 'fresh.txt', 'x');
+    const uri = buildFileResourceUri(filePath);
+    const client = new Client({ name: 'fresh-subscribe-test', version: '1.0.0' });
+    try {
+      const ctx = await createServer({ cliAllowedDirs: [root] }, { state });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([ctx.mcp.connect(serverTransport), client.connect(clientTransport)]);
+
+      const validations: PromiseWithResolvers<string>[] = [];
+      t.mock.method(state.pathGuard, 'validateExistingPath', () => {
+        const validation = Promise.withResolvers<string>();
+        validations.push(validation);
+        return validation.promise;
+      });
+
+      const first = client.subscribeResource({ uri });
+      await waitFor(() => validations.length === 1);
+      await client.unsubscribeResource({ uri });
+      const fresh = client.subscribeResource({ uri });
+      await waitFor(() => validations.length === 2);
+      assert.strictEqual(validations.length, 2, 'the fresh subscribe takes its own lease');
+
+      validations[0]?.resolve(filePath);
+      await first; // cancelled: success with no subscription
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), false);
+
+      validations[1]?.resolve(filePath);
+      await fresh;
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), true);
+      await waitForResourceUpdate(client, uri, () => writeFile(filePath, 'changed'));
+
+      await client.unsubscribeResource({ uri });
+      assert.strictEqual(state.watcherRegistry.hasWatcher(uri), false);
+    } finally {
+      await client.close();
       state.dispose();
       await cleanupTestRoot(root);
     }
