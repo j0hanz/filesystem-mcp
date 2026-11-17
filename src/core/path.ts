@@ -1602,7 +1602,8 @@ export class PathGuard {
         } catch {
           // Missing or unreadable: try the parent.
         }
-        if (real !== undefined) {
+        // A link inside a root can point out of it: never read that target.
+        if (real !== undefined && (await isPathWithinAllowedDirectories(real, allowedDirs))) {
           let rule = rules.get(real);
           if (!rule) {
             rule = readRule(real);

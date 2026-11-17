@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type { PathGuard } from '../src/core/path.ts';
-import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
+import {
+  cleanupTestRoot,
+  createTestRoot,
+  makeGuard,
+  trySymlink,
+  writeTestFile,
+} from './helpers.ts';
 
 const caseless = process.platform === 'win32' || process.platform === 'darwin';
 
@@ -23,9 +30,9 @@ describe('PathGuard.entryKeys', () => {
   });
 
   it('folds Unicode form and space characters', async () => {
-    const nfc = 'café.txt';
-    const nfd = 'café.txt';
-    const narrow = 'shot PM.png';
+    const nfc = 'caf\u00e9.txt';
+    const nfd = 'cafe\u0301.txt';
+    const narrow = 'shot\u202fPM.png';
     const plain = 'shot PM.png';
     assert.notStrictEqual(nfc, nfd);
     assert.notStrictEqual(narrow, plain);
@@ -65,8 +72,12 @@ describe('PathGuard.entryKeys', () => {
     await mkdir(locked);
     await chmod(locked, 0o000);
     try {
-      const keys = await guard.entryKeys([join(locked, 'x.txt'), join(locked, 'X.txt')]);
-      assert.strictEqual(keys.length, 2);
+      const [lockedKey, lockedOther] = await guard.entryKeys([
+        join(locked, 'x.txt'),
+        join(locked, 'X.txt'),
+      ]);
+      // Falls back to the root's rule; the root is case-sensitive only off win32/darwin.
+      assert.strictEqual(lockedKey === lockedOther, caseless);
     } finally {
       await chmod(locked, 0o755);
     }
@@ -78,6 +89,33 @@ describe('PathGuard.entryKeys', () => {
       join(tmpdir(), 'entry-keys-out', 'y.txt'),
     ]);
     assert.strictEqual(a === b, caseless);
+  });
+
+  it('never reads a directory a link leads out of the roots', async (t) => {
+    const outside = await createTestRoot();
+    try {
+      // Outside holds two names that differ by case, so a read would show a case-sensitive dir.
+      await writeTestFile(outside, 'a', '');
+      await writeTestFile(outside, 'A', '');
+      if (!(await trySymlink(outside, join(root, 'escape'), () => t.skip('no symlink right')))) {
+        return;
+      }
+      const reads: string[] = [];
+      const original = fsPromises.readdir;
+      const spy = t.mock.method(fsPromises, 'readdir', (...args: Parameters<typeof original>) => {
+        reads.push(String(args[0]));
+        return Reflect.apply(original, fsPromises, args);
+      });
+      syncBuiltinESMExports();
+      const [a, b] = await guard.entryKeys([join(root, 'escape', 'x'), join(root, 'escape', 'X')]);
+      assert.strictEqual(a === b, caseless);
+      assert.ok(!reads.some((dir) => dir.startsWith(outside)));
+      assert.ok(spy.mock.callCount() > 0, 'the readdir spy saw the guard');
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await cleanupTestRoot(outside);
+    }
   });
 
   it('honors an aborted signal', async () => {
