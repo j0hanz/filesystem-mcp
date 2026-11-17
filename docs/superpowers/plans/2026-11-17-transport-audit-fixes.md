@@ -31,7 +31,7 @@ Out of scope (audit recommended against): sessionful legacy HTTP via `isLegacyRe
 
 ## Review Focus
 
-1. `--print-config --api-key <key>` with no `--port` must still print config (the existing masking test at `__tests__/cli.test.ts:65` relies on it). Task 1 skips the guard under `--print-config`.
+1. `--print-config --api-key <key>` with no `--port` must still print config (the existing masking test at `__tests__/cli.test.ts:65` relies on it). Task 1 skips the guard under `--print-config`. Superseded: `--print-config` refuses the same commands as a real start (CLI-HTTP-005), and the masking test passes `--port`.
 2. A host already in brackets (`[::1]`) must not become `[[::1]]`. Task 2 unit test.
 3. The collision error in Task 4 must not itself release the lease: it has to go out through the unwrapped `send`, not `wire.send`. Task 4 test proves the lease survives.
 4. A client response to a server-originated request (`roots/list` answer: has `id`, no `method`) must not be refused by Task 4's collision check. Task 4 checks `method` first; covered by existing legacy roots tests.
