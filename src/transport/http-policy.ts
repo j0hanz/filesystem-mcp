@@ -63,6 +63,11 @@ export function isLoopbackHttpHost(host: string): boolean {
   );
 }
 
+/** `host` as it goes in a URL: a bare IPv6 address needs brackets. */
+export function formatHttpHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
+
 /** A bind to every interface. Clients never send `Host: 0.0.0.0`, so this bind
  * cannot derive its allowed-host set from itself. */
 function isWildcardHttpHost(host: string): boolean {

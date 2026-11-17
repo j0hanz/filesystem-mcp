@@ -18,6 +18,7 @@ import {
   corsMiddleware,
   createBodyBudget,
   createRateLimiter,
+  formatHttpHost,
   isLoopbackHttpHost,
   isOriginAllowed,
   protectedResourceUrl,
@@ -1008,6 +1009,14 @@ describe('HTTP Policy & Security', () => {
         'https://mcp.example.com/mcp#section',
       );
       assert.strictEqual(url?.href, 'https://mcp.example.com/mcp');
+    });
+
+    it('formatHttpHost brackets bare IPv6 and leaves the rest alone', () => {
+      assert.strictEqual(formatHttpHost('::1'), '[::1]');
+      assert.strictEqual(formatHttpHost('::'), '[::]');
+      assert.strictEqual(formatHttpHost('[::1]'), '[::1]');
+      assert.strictEqual(formatHttpHost('127.0.0.1'), '127.0.0.1');
+      assert.strictEqual(formatHttpHost('localhost'), 'localhost');
     });
 
     it('isLoopbackHttpHost identifies loopback hosts correctly', () => {

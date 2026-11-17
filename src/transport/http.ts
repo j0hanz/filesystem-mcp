@@ -35,6 +35,7 @@ import {
   corsMiddleware,
   createBodyBudget,
   createRateLimiter,
+  formatHttpHost,
   isLoopbackHttpHost,
   JSONRPC_SERVER_ERROR,
   protectedResourceUrl,
@@ -403,7 +404,7 @@ export async function startHttpServer(
 
     httpServer.listen(port, httpHost, () => {
       httpServer.removeListener('error', onError);
-      Logger.info(`[HTTP] Server listening on http://${httpHost}:${port}`);
+      Logger.info(`[HTTP] Server listening on http://${formatHttpHost(httpHost)}:${port}`);
       resolve(httpServer);
     });
   });

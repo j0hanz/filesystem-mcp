@@ -29,6 +29,7 @@ import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
 import { getMaxInboundMessageBytes } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
+import { formatHttpHost } from './transport/http-policy.ts';
 
 // ════════════════════════════════════════════════════════════
 // Path & Config Utilities — pure functions and error types
@@ -332,7 +333,7 @@ export async function runPrintConfig(
   const config = {
     transport:
       options.port !== undefined
-        ? `http://${options.httpHost ?? '127.0.0.1'}:${String(options.port)}`
+        ? `http://${formatHttpHost(options.httpHost ?? '127.0.0.1')}:${String(options.port)}`
         : 'stdio',
     readOnly: options.readOnly,
     readOnlyDirs: pathGuard.getReadOnlyDirs(),

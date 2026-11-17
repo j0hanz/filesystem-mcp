@@ -252,6 +252,22 @@ describe('CLI (real subprocess)', () => {
     assert.strictEqual(code, 0, stderr);
   });
 
+  it('CLI-HTTP-004: --print-config brackets an IPv6 --http-host', async () => {
+    const { code, stdout, stderr } = await runCli([
+      '--print-config',
+      '--port',
+      '3000',
+      '--http-host',
+      '::1',
+      root,
+    ]);
+    assert.strictEqual(code, 0, stderr);
+    assert.strictEqual(
+      (JSON.parse(stdout) as { transport: string }).transport,
+      'http://[::1]:3000',
+    );
+  });
+
   it('FS_READ_ONLY turns on read-only mode like --read-only', async () => {
     const printed = async (args: string[], env?: Record<string, string>) => {
       const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
