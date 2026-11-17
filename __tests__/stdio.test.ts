@@ -839,7 +839,7 @@ describe('Stdio subscription lease lifecycle', () => {
     }
   });
 
-  for (const [label, collide] of [
+  const collisions: [string, (uri: string) => JSONRPCMessage][] = [
     [
       'STDIO-015: a request reusing an open listen ID is refused and keeps the lease',
       (_uri: string) => ({
@@ -858,7 +858,8 @@ describe('Stdio subscription lease lifecycle', () => {
         params: { _meta: MODERN_META, notifications: { resourceSubscriptions: [uri] } },
       }),
     ],
-  ] as const) {
+  ];
+  for (const [label, collide] of collisions) {
     it(label, async () => {
       const tmpDir = await createTestRoot();
       const harness = await createRawStdioServer(tmpDir, { FS_MAX_WATCHERS: '1' });
