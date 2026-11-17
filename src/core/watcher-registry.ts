@@ -142,9 +142,9 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
       const cbs = activeCallbacks.get(uri);
       if (!cbs) return;
       // A root revoked since subscribe (ADR-018) gets no more change notices on
-      // either subscription path; free the slot. Lease counts stay (callers own
-      // them), same as the error path.
-      // shortcut: the slot frees on the first change after a revoke, not at the revoke; hook PathGuard root changes if idle revoked watchers ever hit the cap.
+      // either subscription path. The watcher stays, so notices resume if the
+      // root is granted again: a modern listen stream has no way to re-attach.
+      // shortcut: a revoked root's watcher holds its slot until the last lease is released; hook PathGuard root changes if idle revoked watchers ever hit the cap.
       const path = extractPath(uri);
       const guard = guards.get(uri);
       const entry = watchers.get(uri);
@@ -155,7 +155,6 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
         guard &&
         !(guard.isInsideAllowed(path) && (!entry || guard.isInsideAllowed(entry.path)))
       ) {
-        if (entry) dropWatcher(uri, entry);
         return;
       }
       // One debounce timer per URI — fan out to every subscriber inside it, so
@@ -249,7 +248,10 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
           });
       const entry: WatchEntry = { path: resolvedPath, watcher, uris: new Set([uri]) };
       watcher.on('error', (err: Error) => {
-        Logger.warn(`Watcher error for ${shownUri(uri)}: ${sanitizeLogField(err.message, 256)}`);
+        // The path, not `uri`: the URI that created the entry may have left while aliases remain.
+        Logger.warn(
+          `Watcher error for ${sanitizeLogField(entry.path, 256)}: ${sanitizeLogField(err.message, 256)}`,
+        );
         // The client re-reads and learns the file is gone or changed; a later
         // `resources/subscribe` re-acquires because `hasWatcher` is now false.
         // Every alias is dropped first, then each hears its own URI.
@@ -269,14 +271,6 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
           }
         }
       });
-      // Two attaches that both cleared `hasWatcher` before either finished
-      // validating land here for the same uri. Keep the one already wired to
-      // the callback set and close this one — overwriting the map entry would
-      // strand the first watcher's fd with nothing left holding a reference.
-      if (watchers.has(uri)) {
-        watcher.close();
-        return true;
-      }
       watchers.set(uri, entry);
       byPath.set(resolvedPath, entry);
       guards.set(uri, pathGuard);

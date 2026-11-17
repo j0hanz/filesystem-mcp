@@ -83,7 +83,7 @@ describe('watcher registry', () => {
     assert.equal(registry.hasWatcher(uri), false);
   });
 
-  it('a change under a revoked root notifies nobody and frees the watcher', async () => {
+  it('a change under a revoked root notifies nobody and keeps the watcher', async () => {
     const uri = buildFileResourceUri(filePath);
     let allowed = true;
     const { watch, watchers } = fakeWatch();
@@ -98,7 +98,7 @@ describe('watcher registry', () => {
     watchers[0]?.fire(basename(filePath));
     await setTimeout(100);
     assert.deepEqual(seen, []);
-    assert.equal(registry.size(), 0);
+    assert.equal(registry.size(), 1);
   });
 
   it('a change whose resolved path left the allowed roots notifies nobody', async () => {
@@ -116,10 +116,9 @@ describe('watcher registry', () => {
     watchers[0]?.fire(basename(target));
     await setTimeout(100);
     assert.deepEqual(seen, []);
-    assert.equal(registry.size(), 0);
   });
 
-  it('re-subscribing after the root is re-granted attaches a new watcher', async () => {
+  it('notices resume on the same watcher once the root is granted again', async () => {
     const uri = buildFileResourceUri(filePath);
     let allowed = true;
     const { watch, watchers } = fakeWatch();
@@ -134,20 +133,12 @@ describe('watcher registry', () => {
     allowed = false;
     watchers[0]?.fire(basename(filePath));
     await setTimeout(100);
+    assert.deepEqual(seen, []);
     allowed = true;
-    registry.release(uri);
-    assert.deepEqual(
-      await registry.acquire(
-        fakeGuard(() => allowed),
-        uri,
-        notify,
-      ),
-      { ok: true },
-    );
-    assert.equal(registry.size(), 1);
-    watchers[1]?.fire(basename(filePath));
+    watchers[0]?.fire(basename(filePath));
     await setTimeout(100);
     assert.deepEqual(seen, [uri]);
+    assert.equal(watchers.length, 1);
   });
 
   it('two URIs for one file share a watcher and each hears its own URI', async () => {
