@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoded text.
 - `--api-key` or `--http-host` without `--port` now exits 1. Before, the
   server started on stdio and ignored both flags. Add `--port`, or drop the
-  flags for stdio. `FS_API_KEY` and `FS_HTTP_HOST` in the environment still
-  start stdio.
+  flags for stdio. `--print-config` refuses the same command. `FS_API_KEY` and
+  `FS_HTTP_HOST` in the environment still start stdio.
 - The HTTP server allows 300 s, up from 60 s, to receive a whole request, so
   a write near the size limit fits on a slow link.
 
@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On stdio, a request that reuses the ID of an open `subscriptions/listen` is
   refused with `-32600`. Before, its reply silently stopped the listen's
   resource updates.
-- HTTP shutdown stops in-flight requests before it clears server state.
+- HTTP shutdown stops in-flight requests before it clears server state, and
+  still closes if clearing that state fails.
 
 ## [2.22.0] - 2026-11-16
 

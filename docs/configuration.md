@@ -219,8 +219,8 @@ exceptions:
 | `--max-file-size <bytes>`    | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.                               |
 | `--tool-timeout <ms>`        | 5000        | Time limit for one listing, read, search, `edit`, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                                |
 | `--port <n>`                 |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                                      |
-| `--http-host <host>`         | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                                                |
-| `--api-key <key>`            |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments.                    |
+| `--http-host <host>`         | `127.0.0.1` | Address to listen on over HTTP. Requires `--port`. Env: `FS_HTTP_HOST`.                                                                             |
+| `--api-key <key>`            |             | Require `Authorization: Bearer <key>` over HTTP. Requires `--port`. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
 | `--log-level <level>`        | `info`      | `debug`, `info`, `notice`, `warn`, `error`, `critical`, `alert`, or `emergency`. Env: `FS_LOG_LEVEL`.                                               |
 | `--print-config`             |             | Print the settings the server would use, as JSON, and exit.                                                                                         |
 | `-h`, `--help`               |             | Show help.                                                                                                                                          |
