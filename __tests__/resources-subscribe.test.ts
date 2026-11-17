@@ -9,6 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { Logger } from '../src/core/observability.ts';
 import { createRuntimeState, createServer } from '../src/server.ts';
 import {
   assertOneNotificationPerRound,
@@ -289,6 +290,59 @@ describe('createServer disposal on connection close', () => {
     state.dispose();
     state.dispose(); // idempotent
     assert.throws(() => state.pageStore.read(pageId, 'q'));
+  });
+
+  it('logs every cleanup failure and retries only failed cleanup', (t) => {
+    const state = createRuntimeState({ cliAllowedDirs: [tmpdir()] });
+    let failUndo = true;
+    const undo = t.mock.method(state.undoJournal, 'clear', () => {
+      if (failUndo) throw new Error('clear failed');
+    });
+    const pages = t.mock.method(state.pageStore, 'clear', () => {});
+    const resources = t.mock.method(state.resourceStore, 'clear', () => {});
+    const watchers = t.mock.method(state.watcherRegistry, 'destroy', () => {});
+    const logged = t.mock.method(Logger, 'error', () => {});
+
+    assert.doesNotThrow(() => state.dispose());
+    assert.equal(undo.mock.callCount(), 1);
+    assert.equal(pages.mock.callCount(), 1);
+    assert.equal(resources.mock.callCount(), 1);
+    assert.equal(watchers.mock.callCount(), 1);
+    assert.ok(logged.mock.calls.some((call) => String(call.arguments[1]).includes('clear failed')));
+
+    failUndo = false;
+    state.dispose();
+    assert.equal(undo.mock.callCount(), 2);
+    assert.equal(pages.mock.callCount(), 1);
+    assert.equal(resources.mock.callCount(), 1);
+    assert.equal(watchers.mock.callCount(), 1);
+  });
+
+  it('stops change notifications while failed cleanup awaits retry', async (t) => {
+    let notified = 0;
+    const state = createRuntimeState(
+      { cliAllowedDirs: [tmpdir()] },
+      {
+        onResourcesChanged: () => {
+          notified++;
+        },
+      },
+    );
+    let fail = true;
+    t.mock.method(state.pageStore, 'clear', () => {
+      if (fail) throw new Error('clear failed');
+    });
+    t.mock.method(Logger, 'error', () => {});
+
+    state.resourceStore.putText({ name: 'x.txt', text: 'x' });
+    state.dispose();
+    await setTimeout(150);
+    assert.equal(notified, 0);
+
+    fail = false;
+    state.dispose();
+    await setTimeout(150);
+    assert.equal(notified, 0);
   });
 });
 

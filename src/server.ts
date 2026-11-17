@@ -6,6 +6,7 @@ import type {
 import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
+import { formatUnknownErrorMessage } from './core/errors.ts';
 import { requestStateCodec } from './core/input-required.ts';
 import { Logger, voidSend } from './core/observability.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from './core/outbound.ts';
@@ -43,8 +44,14 @@ export interface RuntimeState {
   readonly pageStore: PageSnapshotStore;
   readonly undoJournal: UndoJournal;
   readonly watcherRegistry: WatcherRegistry;
-  /** Destroys the registry and clears the three stores. Idempotent. */
+  /** Cleans up every owned part; never throws, and retries only failed parts on later calls. */
   dispose(): void;
+}
+
+interface OwnedCleanup {
+  readonly label: string;
+  readonly run: () => void;
+  done: boolean;
 }
 
 /** Window that folds a burst of ResourceStore list-changed signals into one. */
@@ -78,6 +85,45 @@ export function createRuntimeState(
       }),
     hooks.maxReadResultBytes,
   );
+  // Closures read the live method at call time.
+  const cleanups: OwnedCleanup[] = [
+    {
+      label: 'change timer',
+      run: () => {
+        clearTimeout(changedTimer);
+        changedTimer = undefined;
+      },
+      done: false,
+    },
+    {
+      label: 'watcher registry',
+      run: () => {
+        watcherRegistry.destroy();
+      },
+      done: false,
+    },
+    {
+      label: 'page store',
+      run: () => {
+        pageStore.clear();
+      },
+      done: false,
+    },
+    {
+      label: 'undo journal',
+      run: () => {
+        undoJournal.clear();
+      },
+      done: false,
+    },
+    {
+      label: 'resource store',
+      run: () => {
+        resourceStore.clear();
+      },
+      done: false,
+    },
+  ];
   return {
     pathGuard: new PathGuard(options),
     resourceStore,
@@ -85,13 +131,20 @@ export function createRuntimeState(
     undoJournal,
     watcherRegistry,
     dispose() {
-      if (disposed) return;
+      // First call stops notifications even if a cleanup below fails.
       disposed = true;
-      clearTimeout(changedTimer);
-      watcherRegistry.destroy();
-      pageStore.clear();
-      undoJournal.clear();
-      resourceStore.clear();
+      for (const cleanup of cleanups) {
+        if (cleanup.done) continue;
+        try {
+          cleanup.run();
+          cleanup.done = true;
+        } catch (error) {
+          Logger.error(
+            `[Runtime] ${cleanup.label} cleanup failed:`,
+            formatUnknownErrorMessage(error),
+          );
+        }
+      }
     },
   };
 }
