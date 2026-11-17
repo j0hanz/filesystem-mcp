@@ -235,7 +235,12 @@ function createFileUrlResource(options: ResourceRegistrationOptions): ResourceCo
           options.pathGuard,
           extractFileUrlPath(`file://${value}`) ?? value,
         );
-        return suggestions.map((p) => pathToFileURL(p).href.slice('file://'.length));
+        return (
+          suggestions
+            .map((p) => pathToFileURL(p).href.slice('file://'.length))
+            // UNC paths yield `host/share/...` (no leading `/`) and are not addressable through the file:// alias.
+            .filter((v) => v.startsWith('/'))
+        );
       },
     },
   };
