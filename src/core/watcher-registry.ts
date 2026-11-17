@@ -147,8 +147,14 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
       // shortcut: the slot frees on the first change after a revoke, not at the revoke; hook PathGuard root changes if idle revoked watchers ever hit the cap.
       const path = extractPath(uri);
       const guard = guards.get(uri);
-      if (path !== undefined && guard && !guard.isInsideAllowed(path)) {
-        const entry = watchers.get(uri);
+      const entry = watchers.get(uri);
+      // A symlink spelled inside a live root can resolve into a revoked one, so
+      // the resolved path is checked too.
+      if (
+        path !== undefined &&
+        guard &&
+        !(guard.isInsideAllowed(path) && (!entry || guard.isInsideAllowed(entry.path)))
+      ) {
         if (entry) dropWatcher(uri, entry);
         return;
       }

@@ -101,6 +101,24 @@ describe('watcher registry', () => {
     assert.equal(registry.size(), 0);
   });
 
+  it('a change whose resolved path left the allowed roots notifies nobody', async () => {
+    const uri = buildFileResourceUri(filePath);
+    const target = join(dir, 'target.txt');
+    await writeFile(target, 'x');
+    const guard = {
+      validateExistingPath: async () => target, // symlink-style: URI path resolves elsewhere
+      isInsideAllowed: (p: string) => p !== target,
+    } as unknown as PathGuard;
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const seen: string[] = [];
+    await registry.acquire(guard, uri, (u) => seen.push(u));
+    watchers[0]?.fire(basename(target));
+    await setTimeout(100);
+    assert.deepEqual(seen, []);
+    assert.equal(registry.size(), 0);
+  });
+
   it('re-subscribing after the root is re-granted attaches a new watcher', async () => {
     const uri = buildFileResourceUri(filePath);
     let allowed = true;
