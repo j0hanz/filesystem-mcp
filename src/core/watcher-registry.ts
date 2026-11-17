@@ -123,12 +123,18 @@ export function createWatcherRegistry({ watch = defaultWatch }: { watch?: WatchF
       debounceTimers.delete(uri);
     }
     entry.uris.delete(uri);
-    if (entry.uris.size === 0) {
-      entry.watcher.close();
-      if (byPath.get(entry.path) === entry) byPath.delete(entry.path);
-    }
     watchers.delete(uri);
     guards.delete(uri);
+    if (entry.uris.size === 0) {
+      if (byPath.get(entry.path) === entry) byPath.delete(entry.path);
+      try {
+        entry.watcher.close();
+      } catch (err) {
+        Logger.error(
+          `Failed to close watcher for ${shownUri(uri)}: ${sanitizeLogField(formatUnknownErrorMessage(err), 256)}`,
+        );
+      }
+    }
   };
 
   /** Ends one lease. A pending lease resolves `cancelled`; the URI's last settled lease drops its watcher. */

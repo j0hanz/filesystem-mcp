@@ -7,6 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { Logger } from '../src/core/observability.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import { createWatcherRegistry, MAX_WATCHERS, type WatchFn } from '../src/core/watcher-registry.ts';
 
@@ -79,6 +80,31 @@ describe('watcher registry', () => {
     );
     watchers[0]?.emit('error', new Error('EPERM'));
     assert.deepEqual(seen, [uri]); // synchronous, not debounced
+    assert.equal(registry.size(), 0);
+    assert.equal(registry.hasWatcher(uri), false);
+  });
+
+  it('a watcher whose close throws is still dropped, and the throw is logged', async (t) => {
+    const { watch, watchers } = fakeWatch();
+    const registry = createWatcherRegistry({ watch });
+    const uri = buildFileResourceUri(filePath);
+    const lease = registry.acquire(
+      fakeGuard(() => true),
+      uri,
+      () => {},
+    );
+    assert.deepEqual(await lease.ready, { ok: true });
+    const w = watchers[0];
+    assert.ok(w);
+    w.close = () => {
+      throw new Error('close boom');
+    };
+    const errors = t.mock.method(Logger, 'error', () => {});
+    assert.doesNotThrow(() => {
+      lease.dispose();
+    });
+    assert.equal(errors.mock.callCount(), 1);
+    assert.match(String(errors.mock.calls[0]?.arguments[0]), /close boom/u);
     assert.equal(registry.size(), 0);
     assert.equal(registry.hasWatcher(uri), false);
   });
