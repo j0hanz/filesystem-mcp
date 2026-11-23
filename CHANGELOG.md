@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Sensitive paths**: the built-in denylist covers more credential files
+  kept in a home folder: Claude Code and Codex logins, RubyGems, Maven,
+  Terraform CLI, Pulumi, Composer, rclone and Hugging Face tokens. Before, a
+  root that held the home folder let a client read them.
+
 ### Changed
 
 - **Batch tools**: `create`, `edit`, `delete` and `move` decide whether two
@@ -29,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scans**: `find_files`, `search_text`, `list` and `replace_text` read each
+  folder's `.gitignore` as the walk reaches it. Before, a separate pass read
+  every folder first, so a tree too large to finish that pass before the
+  timeout returned no results instead of partial ones.
 - A watcher lease that stays live through a watcher error receives notices
   again once anyone re-establishes that URI's watcher. Before, it went silent.
 - A watcher whose close fails is logged and still released. Before, it kept
