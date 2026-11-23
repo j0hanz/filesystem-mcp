@@ -6,7 +6,6 @@ import { basename } from 'node:path';
 import * as z from 'zod/v4';
 
 import { getMaxTextFileSize } from '../core/config.ts';
-import { confirm } from '../core/confirmation.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -18,16 +17,15 @@ import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '..
 import type { CreatePlan, Stats } from '../core/fs.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isEquivalentPath, isPathInsideDirectory, normalizePath } from '../core/path-utils.ts';
-import { firstRepeat } from '../core/path.ts';
 import { modifiedAfterWrite, statAfterWrite } from '../core/rewrite.ts';
 import { RequiredPath } from '../core/schema.ts';
 import {
   type BatchResult,
   type BatchSlot,
-  cancelMessage,
   executeBatchSlots,
   isTotalFailure,
-  planIntoSlots,
+  planBatch,
+  repeatedEntry,
 } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
@@ -243,24 +241,6 @@ type CreateSlotValue =
 type CreateFilePlanResult =
   { status: 'plan'; plan: CreatePlan } | { status: 'fail'; failure: CreateFailure };
 
-function duplicateLandingSlot(
-  inputPath: string,
-  firstInputPath: string,
-): BatchSlot<CreateSlotValue> {
-  return {
-    status: 'failure',
-    path: inputPath,
-    error: toCreateFailure(
-      inputPath,
-      new FsError(
-        ErrorCode.INVALID_INPUT,
-        `create cancelled: another entry in this batch already writes "${firstInputPath}"`,
-        inputPath,
-      ),
-    ).error,
-  };
-}
-
 /**
  * Phase 1 (no mutation): plan one file through the guarded filesystem.
  */
@@ -298,11 +278,7 @@ async function handleCreate(
   // entries for one path race: the last rename wins and the other's content
   // is lost while both report success. The path guard keys each path by the
   // Entry it names, so Unicode respellings count as one.
-  const inputPaths = [...dirs, ...files.map((file) => file.path)].map(normalizePath);
-  // One path cannot repeat: skip the guard's directory reads.
-  const inputKeys =
-    inputPaths.length < 2 ? [] : await ctx.fs.pathGuard.entryKeys(inputPaths, ctx.signal);
-  const dirRepeat = firstRepeat(inputKeys.slice(0, dirs.length));
+  const dirRepeat = await repeatedEntry(dirs, ctx);
   if (dirRepeat) {
     const [index, first] = dirRepeat;
     throw new FsError(
@@ -310,7 +286,10 @@ async function handleCreate(
       `directories.${String(index)}: duplicate of directories[${String(first)}]; one entry per directory`,
     );
   }
-  const fileRepeat = firstRepeat(inputKeys.slice(dirs.length));
+  const fileRepeat = await repeatedEntry(
+    files.map((file) => file.path),
+    ctx,
+  );
   if (fileRepeat) {
     const [index, first] = fileRepeat;
     throw new FsError(
@@ -319,103 +298,55 @@ async function handleCreate(
     );
   }
 
-  const { slots, planned } = await planIntoSlots<
-    CreateFileItem,
-    CreateFilePlanResult,
-    CreateSlotValue
-  >(
-    files,
-    (file) => file.path,
-    (file) => planFile(file, ctx),
-    ctx.signal,
-  );
-  const plans = new Map(planned.map(({ index, value }) => [index, value.plan]));
-
-  // Two entries that land on one file (through a linked folder, say) race as
-  // two spellings do: the last write wins and both report success. The schema
-  // compares spellings only, so the Landings settle it here. A `pending` twin
-  // stays until approved: the Confirmation asks once, then only the first
-  // writes. Any other pairing with a `pending` entry fails at once. Two
-  // appends both land.
-  const planOrder = [...plans.entries()].sort(([a], [b]) => a - b);
-  const landingKeys =
-    planOrder.length < 2
-      ? []
-      : await ctx.fs.pathGuard.entryKeys(
-          planOrder.map(([, plan]) => plan.validPath),
-          ctx.signal,
-        );
-  const firstByLanding = new Map<string, CreatePlan>();
-  const duplicatePendingOf = new Map<number, { inputPath: string; validPath: string }>();
-  for (const [at, [index, plan]] of planOrder.entries()) {
-    const key = landingKeys[at] ?? plan.validPath;
-    const first = firstByLanding.get(key);
-    if (first === undefined) {
-      firstByLanding.set(key, plan);
-      continue;
-    }
-    if (plan.kind === 'pending' && first.kind === 'pending') {
-      duplicatePendingOf.set(index, { inputPath: first.inputPath, validPath: first.validPath });
-      continue;
-    }
-    if (plan.kind === 'append' && first.kind === 'append') continue;
-    slots[index] = duplicateLandingSlot(plan.inputPath, first.inputPath);
-    plans.delete(index);
-  }
-
-  // Round 1 returns input_required while an overwrite needs approval (R14).
-  // append never destroys, and overwrite: true is that word given up front,
-  // so neither asks.
-  const confirmed = await confirm(
-    ctx,
-    'create',
-    'overwrite',
-    [...plans.values()].flatMap((plan) =>
-      plan.kind !== 'pending' || plan.identity === undefined
-        ? []
-        : [
-            {
+  const ready = await planBatch<CreateFileItem, CreatePlan, CreateSlotValue>(
+    {
+      op: 'create',
+      accept: 'overwrite',
+      items: files,
+      pathOf: (file) => file.path,
+      plan: (file) => planFile(file, ctx),
+      slotPath: (plan) => plan.inputPath,
+      landing: (plan) => plan.validPath,
+      // Two entries that land on one file (through a linked folder, say) race
+      // as two spellings do: the last write wins and both report success.
+      // Two appends both land.
+      duplicates: {
+        policy: 'fail',
+        refuse: (plan, first) =>
+          plan.kind === 'append' && first.kind === 'append'
+            ? undefined
+            : toCreateFailure(
+                plan.inputPath,
+                new FsError(
+                  ErrorCode.INVALID_INPUT,
+                  `create cancelled: another entry in this batch already writes "${first.inputPath}"`,
+                  plan.inputPath,
+                ),
+              ).error,
+      },
+      // append never destroys, and overwrite: true is that word given up
+      // front, so neither asks.
+      confirmItem: (plan) =>
+        plan.kind !== 'pending' || plan.identity === undefined
+          ? undefined
+          : {
               path: plan.validPath,
               identity: plan.identity,
               required: true,
               message: `"${plan.validPath}" already exists. Overwrite it?`,
             },
-          ],
-    ),
-  );
-  if (isInputRequiredResult(confirmed)) return confirmed;
-
-  // Phase 2 (mutation): execute every planned write.
-  for (const [index, plan] of plans) {
-    const file = files[index];
-    if (!file) continue;
-    const first = duplicatePendingOf.get(index);
-    if (first !== undefined && confirmed.verdict(first.validPath) === 'proceed') {
-      slots[index] = duplicateLandingSlot(plan.inputPath, first.inputPath);
-      continue;
-    }
-    slots[index] = {
-      status: 'pending',
-      path: plan.inputPath,
-      run: async (c) => {
-        if (plan.kind === 'pending') {
-          const verdict = confirmed.verdict(plan.validPath);
-          if (verdict === 'skipped') return { skipped: plan.inputPath };
-          if (verdict !== 'proceed') {
-            throw new FsError(
-              ErrorCode.CANCELLED,
-              cancelMessage('create', plan.inputPath, verdict),
-              plan.inputPath,
-            );
-          }
-        }
+      onRefusal: 'fail slot',
+      skipped: (plan) => ({ skipped: plan.inputPath }),
+      run: async (plan, file, c) => {
         const { validPath, writtenAt } = await c.fs.executeCreate(plan, file.content, {
           signal: c.signal,
         });
         return createOne(validPath, writtenAt, file.content, file.append, c);
       },
-    };
-  }
+    },
+    ctx,
+  );
+  if (isInputRequiredResult(ready)) return ready;
 
   // Directories wait for the overwrite question above, so nothing is written
   // before the user answers.
@@ -434,11 +365,7 @@ async function handleCreate(
     defaultErrorCode: ErrorCode.UNKNOWN,
   });
 
-  const batch = await executeBatchSlots(slots, ctx, {
-    progressOffset: dirs.length,
-    progressTotal,
-    defaultErrorCode: ErrorCode.UNKNOWN,
-  });
+  const batch = await ready.execute({ progressOffset: dirs.length, progressTotal });
   return { dirBatch, batch };
 }
 

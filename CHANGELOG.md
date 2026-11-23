@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **delete**, **move**: when two items in a batch name one entry, the first in
+  the client's order is the one kept. Before, the item whose plan finished
+  first was kept, so the reported path could change from run to run.
+
 ### Security
 
 - **Sensitive paths**: the built-in denylist covers more credential files
@@ -25,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice), and `delete` deletes the file once and reports the repeat as
   `omitted`. Paths that differ only in the case of a case-insensitive parent
   folder match too, even under a case-sensitive folder. No tool schema changes.
+- **create**: two entries that overwrite one existing file (through a linked
+  folder, say) settle like any other pair: the second fails at once as a
+  duplicate, and only the first is asked about. Before, the second waited for
+  the answer and reported `skipped` or `CANCELLED` with the first. A refused
+  overwrite in `create` now names the file's validated path, as `delete` and
+  `move` do.
 - **Watchers**: each subscription holds its own lease on a watcher.
   Disposing a lease before the watcher is ready cancels the pending
   acquisition, and a departed notification callback detaches at once instead of

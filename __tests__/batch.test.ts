@@ -1,19 +1,29 @@
+import { isInputRequiredResult } from '@modelcontextprotocol/server';
+
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import * as z from 'zod/v4';
 
 import { ErrorCode, FsError, Problem } from '../src/core/errors.ts';
+import { GuardedFileSystem, UNKNOWN_IDENTITY } from '../src/core/fs.ts';
 import { PARALLEL_CONCURRENCY } from '../src/core/util.ts';
 import {
+  type BatchPlan,
+  type BatchResult,
   type BatchSlot,
-  cancelMessage,
   executeBatchSlots,
-  type PlanFailure,
-  planIntoSlots,
+  planBatch,
+  type PlanOutcome,
+  repeatedEntry,
   runOverPaths,
   summarize,
   toProblem,
 } from '../src/tools/batch.ts';
-import type { ToolCtx } from '../src/tools/define.ts';
+import { defineTool, type ToolCtx } from '../src/tools/define.ts';
+import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.ts';
+import { choose, runToolBodyResult } from './tool-harness.ts';
 
 describe('executeBatchSlots', () => {
   it('preserves input order across settled, failure, omitted, and pending slots', async () => {
@@ -170,66 +180,331 @@ describe('summarize', () => {
   });
 });
 
-describe('planIntoSlots', () => {
-  type R = { status: 'plan'; n: number } | PlanFailure;
-  const plan = async (item: string): Promise<R> => {
-    if (item === 'boom') throw new Error('exploded');
-    if (item === 'bad') {
-      return { status: 'fail', failure: { path: item, error: Problem.invalidInput('no') } };
-    }
-    return { status: 'plan', n: item.length };
-  };
+describe('planBatch', () => {
+  /** A stub plan: the entry it lands on and whether destroying it needs approval. */
+  interface Stub {
+    readonly name: string;
+    readonly landing: string;
+    readonly ask?: boolean;
+    readonly id?: number;
+  }
+  type Outcome = PlanOutcome<Stub, string>;
+
+  const NoArgs = z.strictObject({});
+
+  /** A tool whose body is one Batch, so Confirmation rounds run through the harness. */
+  function probe(spec: (ctx: ToolCtx) => BatchPlan<string, Stub, string>) {
+    return defineTool<typeof NoArgs, BatchResult<string>>({
+      name: 'batch_probe',
+      title: 'Batch probe',
+      description: 'Drives planBatch in tests.',
+      input: NoArgs,
+      readOnlyHint: false,
+      run: async (_args, ctx) => {
+        const ready = await planBatch(spec(ctx), ctx);
+        if (isInputRequiredResult(ready)) return ready;
+        return { structured: await ready.execute() };
+      },
+    });
+  }
+
+  /** A spec over `items` whose plans come from `table`; `ran` records each executed plan. */
+  function specOf(
+    items: readonly string[],
+    table: Readonly<Record<string, Outcome | Error>>,
+    ran: string[],
+    overrides: Partial<BatchPlan<string, Stub, string>> = {},
+  ): BatchPlan<string, Stub, string> {
+    return {
+      op: 'delete',
+      accept: 'delete',
+      items,
+      pathOf: (item) => item,
+      plan: (item) => {
+        const outcome = table[item];
+        if (outcome instanceof Error) return Promise.reject(outcome);
+        return Promise.resolve(outcome ?? { status: 'plan', plan: { name: item, landing: item } });
+      },
+      slotPath: (plan) => plan.name,
+      landing: (plan) => plan.landing,
+      duplicates: {
+        policy: 'fail',
+        refuse: (plan, first) => Problem.invalidInput(`${plan.name} repeats ${first.name}`),
+      },
+      confirmItem: (plan) =>
+        plan.ask === true
+          ? {
+              path: plan.landing,
+              identity: UNKNOWN_IDENTITY,
+              required: true,
+              message: `Delete ${plan.name}?`,
+            }
+          : undefined,
+      onRefusal: 'fail slot',
+      skipped: (plan) => `skipped ${plan.name}`,
+      run: (plan) => {
+        ran.push(plan.name);
+        return Promise.resolve(`ran ${plan.name}`);
+      },
+      ...overrides,
+    };
+  }
+
+  /** Each result as `path: value` or `path: CODE message`, in order. */
+  function rows(results: BatchResult<string>['results']): string[] {
+    return results.map((r) =>
+      'error' in r ? `${r.path}: ${r.error.code} ${r.error.message}` : `${r.path}: ${r.value}`,
+    );
+  }
+
+  let root = '';
+  beforeEach(async () => {
+    root = await createTestRoot();
+  });
+  afterEach(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  // NFC and NFD spellings of one missing name: the guard folds Unicode form on
+  // every filesystem, so they key alike without depending on letter case.
+  const nfc = () => join(root, 'café.txt');
+  const nfd = () => join(root, 'café.txt');
 
   it('fails only the items whose plan failed or threw, in input order', async () => {
-    const { slots, planned } = await planIntoSlots<string, R, number>(
-      ['a', 'boom', 'bad', 'ccc'],
-      (item) => item,
-      plan,
-      undefined,
+    const ran: string[] = [];
+    const tool = probe(() =>
+      specOf(
+        ['a', 'boom', 'bad', 'c'],
+        {
+          a: { status: 'plan', plan: { name: 'a', landing: join(root, 'a') } },
+          boom: new Error('exploded'),
+          bad: { status: 'fail', failure: { path: 'bad', error: Problem.invalidInput('no') } },
+          c: { status: 'plan', plan: { name: 'c', landing: join(root, 'c') } },
+        },
+        ran,
+      ),
     );
-    assert.strictEqual(slots.length, 4);
-    assert.deepStrictEqual(
-      [slots[0], slots[3]].map((slot) => slot?.status),
-      [undefined, undefined],
+    const { structured } = await runToolBodyResult(tool, {}, { roots: [root] });
+    assert.deepStrictEqual(rows(structured.results), [
+      'a: ran a',
+      'boom: UNKNOWN exploded',
+      'bad: INVALID_INPUT no',
+      'c: ran c',
+    ]);
+    assert.deepStrictEqual(ran.sort(), ['a', 'c']);
+  });
+
+  it('fail: the first item per Landing runs; a respelling fails, or also lands when refuse allows', async () => {
+    const table = (): Record<string, Outcome> => ({
+      first: { status: 'plan', plan: { name: 'first', landing: nfc() } },
+      second: { status: 'plan', plan: { name: 'second', landing: nfd() } },
+    });
+    const ran: string[] = [];
+    const refused = await runToolBodyResult(
+      probe(() => specOf(['first', 'second'], table(), ran)),
+      {},
+      { roots: [root] },
     );
-    assert.deepStrictEqual(
-      [slots[1], slots[2]].map((slot) => slot?.status === 'failure' && slot.path),
-      ['boom', 'bad'],
+    assert.deepStrictEqual(rows(refused.structured.results), [
+      'first: ran first',
+      'second: INVALID_INPUT second repeats first',
+    ]);
+
+    const both: string[] = [];
+    const allowed = await runToolBodyResult(
+      probe(() =>
+        specOf(['first', 'second'], table(), both, {
+          duplicates: { policy: 'fail', refuse: () => undefined },
+        }),
+      ),
+      {},
+      { roots: [root] },
     );
-    assert.match(slots[1]?.status === 'failure' ? slots[1].error.message : '', /exploded/);
-    assert.deepStrictEqual(planned.map(({ index, value }) => [index, value.n]).sort(), [
-      [0, 1],
-      [3, 3],
+    assert.strictEqual(allowed.structured.summary.succeeded, 2);
+    assert.deepStrictEqual(both.sort(), ['first', 'second']);
+  });
+
+  it('collapse: an exact repeat is never planned, and a respelling drops only when it saw the same entry', async () => {
+    const planned: string[] = [];
+    const ran: string[] = [];
+    const run = (sameEntry: boolean) =>
+      runToolBodyResult(
+        probe(() => {
+          const spec = specOf(
+            ['x', 'x', 'nfc', 'nfd'],
+            {
+              x: { status: 'plan', plan: { name: 'x', landing: join(root, 'x') } },
+              nfc: { status: 'plan', plan: { name: 'nfc', landing: nfc(), id: 1 } },
+              nfd: { status: 'plan', plan: { name: 'nfd', landing: nfd(), id: 1 } },
+            },
+            ran,
+            {
+              duplicates: {
+                policy: 'collapse',
+                sameEntry: (plan, earlier) => sameEntry && plan.id === earlier.id,
+              },
+            },
+          );
+          return {
+            ...spec,
+            plan: (item) => {
+              planned.push(item);
+              return spec.plan(item);
+            },
+          };
+        }),
+        {},
+        { roots: [root] },
+      );
+
+    const collapsed = await run(true);
+    assert.deepStrictEqual(rows(collapsed.structured.results), ['x: ran x', 'nfc: ran nfc']);
+    assert.deepStrictEqual(planned.sort(), ['nfc', 'nfd', 'x'], 'the exact repeat is not planned');
+
+    const apart = await run(false);
+    assert.deepStrictEqual(rows(apart.structured.results), [
+      'x: ran x',
+      'nfc: ran nfc',
+      'nfd: ran nfd',
     ]);
   });
 
-  it('rejects when the signal is already aborted', async () => {
-    await assert.rejects(
-      planIntoSlots<string, R, number>(['a'], (item) => item, plan, AbortSignal.abort()),
+  it('collapse: a settled item with a Landing absorbs a later plan on that path', async () => {
+    const ran: string[] = [];
+    const target = join(root, 'gone');
+    const { structured } = await runToolBodyResult(
+      probe(() =>
+        specOf(
+          ['noop', 'later'],
+          {
+            noop: { status: 'settled', path: 'noop', value: 'already gone', landing: target },
+            later: { status: 'plan', plan: { name: 'later', landing: target } },
+          },
+          ran,
+          { duplicates: { policy: 'collapse', sameEntry: () => false } },
+        ),
+      ),
+      {},
+      { roots: [root] },
     );
+    assert.deepStrictEqual(rows(structured.results), ['noop: already gone']);
+    assert.deepStrictEqual(ran, []);
+  });
+
+  it('runs the cross-item hook on the survivors of the duplicate check, before any prompt', async () => {
+    const ran: string[] = [];
+    let seen: string[] = [];
+    const { structured, rounds } = await runToolBodyResult(
+      probe(() =>
+        specOf(
+          ['a', 'b', 'c'],
+          {
+            a: { status: 'plan', plan: { name: 'a', landing: nfc(), ask: true } },
+            b: { status: 'plan', plan: { name: 'b', landing: nfd(), ask: true } },
+            c: { status: 'plan', plan: { name: 'c', landing: join(root, 'c'), ask: true } },
+          },
+          ran,
+          {
+            refuse: (plans) => {
+              seen = plans.map(({ plan }) => plan.name);
+              return Promise.resolve(new Map([[2, Problem.invalidInput('overlaps')]]));
+            },
+          },
+        ),
+      ),
+      {},
+      { roots: [root], confirm: choose('delete') },
+    );
+    assert.deepStrictEqual(seen, ['a', 'c'], 'the duplicate never reaches the hook');
+    assert.deepStrictEqual(rows(structured.results), [
+      'a: ran a',
+      'b: INVALID_INPUT b repeats a',
+      'c: INVALID_INPUT overlaps',
+    ]);
+    assert.strictEqual(rounds, 1, 'only the survivor is asked about');
+  });
+
+  it('returns the round while an approval is due, with nothing run', async () => {
+    const ran: string[] = [];
+    const tool = probe(() =>
+      specOf(
+        ['quiet', 'asks'],
+        {
+          quiet: { status: 'plan', plan: { name: 'quiet', landing: join(root, 'quiet') } },
+          asks: { status: 'plan', plan: { name: 'asks', landing: join(root, 'asks'), ask: true } },
+        },
+        ran,
+      ),
+    );
+    await assert.rejects(runToolBodyResult(tool, {}, { roots: [root] }), /asked for input/);
+    assert.deepStrictEqual(ran, []);
+  });
+
+  const asking = (): Record<string, Outcome> => ({
+    keep: { status: 'plan', plan: { name: 'keep', landing: join(root, 'keep'), ask: true } },
+    skip: { status: 'plan', plan: { name: 'skip', landing: join(root, 'skip'), ask: true } },
+    quiet: { status: 'plan', plan: { name: 'quiet', landing: join(root, 'quiet') } },
+  });
+  const answer = (prompt: { message: string }) =>
+    prompt.message.includes('keep') ? ({ action: 'decline' } as const) : choose('skip')();
+
+  it('fail slot: a declined item fails CANCELLED, a skipped one settles, the rest run', async () => {
+    const ran: string[] = [];
+    const { structured } = await runToolBodyResult(
+      probe(() => specOf(['keep', 'skip', 'quiet'], asking(), ran)),
+      {},
+      { roots: [root], confirm: answer },
+    );
+    const [declined, skipped, quiet] = structured.results;
+    assert.ok(declined && 'error' in declined);
+    assert.strictEqual(declined.error.code, ErrorCode.CANCELLED);
+    assert.match(declined.error.message, /^Delete cancelled: approval for ".*keep" was declined/);
+    assert.deepStrictEqual(rows([skipped, quiet].filter((r) => r !== undefined)), [
+      'skip: skipped skip',
+      'quiet: ran quiet',
+    ]);
+    assert.deepStrictEqual(ran, ['quiet']);
+  });
+
+  it('fail call: a declined item cancels the whole call before anything runs', async () => {
+    const ran: string[] = [];
+    await assert.rejects(
+      runToolBodyResult(
+        probe(() =>
+          specOf(['keep', 'skip', 'quiet'], asking(), ran, {
+            op: 'move',
+            accept: 'overwrite',
+            onRefusal: 'fail call',
+          }),
+        ),
+        {},
+        { roots: [root], confirm: answer },
+      ),
+      (error: unknown) =>
+        error instanceof FsError &&
+        error.code === ErrorCode.CANCELLED &&
+        /^Move cancelled: approval for ".*keep" was declined/.test(error.message),
+    );
+    assert.deepStrictEqual(ran, []);
   });
 });
 
-describe('cancelMessage', () => {
-  it('names the op and the path for a replaced entry', () => {
-    assert.strictEqual(
-      cancelMessage('delete', '/r/dir', 'changed'),
-      'Delete cancelled: "/r/dir" was replaced again while the prompt was open.',
-    );
+describe('repeatedEntry', () => {
+  let root = '';
+  beforeEach(async () => {
+    root = await createTestRoot();
+  });
+  afterEach(async () => {
+    await cleanupTestRoot(root);
   });
 
-  it('names the op and the path for a refusal', () => {
-    for (const [op, verb] of [
-      ['create', 'create'],
-      ['delete', 'Delete'],
-      ['move', 'Move'],
-      ['copy', 'Copy'],
-    ] as const) {
-      assert.strictEqual(
-        cancelMessage(op, '/r/x', { refused: 'declined by the user' }),
-        `${verb} cancelled: approval for "/r/x" was declined by the user`,
-      );
-    }
+  it('finds the first respelling of an earlier path', async () => {
+    const fs = new GuardedFileSystem(await makeGuard([root]));
+    const ctx = { fs, signal: new AbortController().signal };
+    const paths = [join(root, 'a'), join(root, 'café'), join(root, 'café')];
+    assert.deepStrictEqual(await repeatedEntry(paths, ctx), [2, 1]);
+    assert.strictEqual(await repeatedEntry(paths.slice(0, 2), ctx), undefined);
+    assert.strictEqual(await repeatedEntry(paths.slice(0, 1), ctx), undefined);
   });
 });
 

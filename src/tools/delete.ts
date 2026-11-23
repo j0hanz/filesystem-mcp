@@ -5,7 +5,6 @@ import { basename, dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { confirm, type Confirmed } from '../core/confirmation.ts';
 import {
   DELETE_ERRNOS,
   DELETE_ERRNOS_NO_CONFIRM,
@@ -26,11 +25,10 @@ import { normalizeCaseForComparison } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import {
   type BatchResult,
-  cancelMessage,
-  executeBatchSlots,
   failureLines,
   isTotalFailure,
-  planIntoSlots,
+  planBatch,
+  type PlanOutcome,
 } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
@@ -60,10 +58,7 @@ function toDeleteFailure(path: string, error: unknown): DeleteFailure {
   return { path, error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, path, DELETE_ERRNOS) };
 }
 
-type PlanResult =
-  | { status: 'fail'; failure: DeleteFailure }
-  | { status: 'noop'; deleted: string }
-  | { status: 'plan'; plan: DeletePlan };
+type PlanResult = PlanOutcome<DeletePlan, { deleted: boolean }>;
 
 /**
  * Phase 1 (no mutation): plan every path through the guarded filesystem.
@@ -80,7 +75,14 @@ async function planPath(
       ignoreIfNotExists: args.ignoreIfNotExists,
       signal,
     });
-    if (plan.noop) return { status: 'noop', deleted: plan.validPath };
+    if (plan.noop) {
+      return {
+        status: 'settled',
+        path: plan.validPath,
+        value: { deleted: true },
+        landing: plan.validPath,
+      };
+    }
     return { status: 'plan', plan };
   } catch (error) {
     return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
@@ -88,27 +90,16 @@ async function planPath(
 }
 
 /**
- * Execute one planned path on the retry round through the guarded filesystem.
- * A pending path deletes only on an accepted choice; decline, cancel, a missing key,
- * or an entry replaced again after the re-prompt report CANCELLED for that path.
+ * Execute one approved plan through the guarded filesystem.
  */
 async function executePlan(
   plan: DeletePlan,
   ctx: Pick<ToolCtx, 'fs' | 'log' | 'signal' | 'clientCapabilities'>,
-  confirmed: Confirmed,
-): Promise<{ deleted: string } | { skipped: true; path: string }> {
-  const verdict = confirmed.verdict(plan.validPath);
-  if (verdict === 'skipped') return { skipped: true as const, path: plan.validPath };
-  if (verdict !== 'proceed') {
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Batch catches and preserves non-Error Problem
-    throw Problem.cancelled(cancelMessage('delete', plan.validPath, verdict), {
-      path: plan.validPath,
-    });
-  }
+): Promise<{ deleted: boolean }> {
   try {
-    const res = await ctx.fs.executeDelete(plan, { signal: ctx.signal });
+    await ctx.fs.executeDelete(plan, { signal: ctx.signal });
     ctx.log('info', `rm: ${plan.inputPath}`, 'delete');
-    return res;
+    return { deleted: true };
   } catch (error) {
     const rows = canElicit(ctx.clientCapabilities) ? DELETE_ERRNOS : DELETE_ERRNOS_NO_CONFIRM;
     // eslint-disable-next-line @typescript-eslint/only-throw-error -- Batch catches and preserves non-Error Problem
@@ -129,118 +120,63 @@ async function handleDelete(
   args: DeleteInput,
   ctx: ToolCtx,
 ): Promise<DeleteOutput | InputRequiredResult> {
-  // Duplicate paths collapse: results are keyed by path, so a repeated entry
-  // would emit two rows for one deletion and inflate `summary.total`. Exact
-  // repeats go here; other spellings of one entry collapse after planning,
-  // by validated path, so two on-disk names that fold alike both stay.
-  const paths = [...new Set(args.paths)];
-
-  // Phase 1 (no mutation): plan every path.
-  const { slots, planned } = await planIntoSlots<string, PlanResult, { deleted: boolean }>(
-    paths,
-    (inputPath) => inputPath,
-    (inputPath) => planPath(inputPath, args, ctx.fs, ctx.signal),
-    ctx.signal,
-  );
-
-  let plans: { plan: DeletePlan; index: number; key: string }[] = [];
-  const seenTargets = new Set<string>();
-  // One call to the guard keys every validated path by the Entry it names, so
-  // respellings (letter case, Unicode form) collapse and two on-disk names that
-  // fold alike stay apart. Collapse only when both plans also saw one
-  // identity: a link or a replaced entry can share a key and not an Entry.
-  const keys =
-    planned.length < 2
-      ? []
-      : await ctx.fs.pathGuard.entryKeys(
-          planned.map(({ value: r }) => (r.status === 'noop' ? r.deleted : r.plan.validPath)),
-          ctx.signal,
-        );
-  const sawSameEntry = (plan: DeletePlan, key: string): boolean => {
-    const stats = plan.firstStats?.stats;
-    if (stats === undefined) return false;
-    return plans.some(
-      ({ plan: earlier, key: earlierKey }) =>
-        earlier.firstStats !== undefined &&
-        earlierKey === key &&
-        sameIdentity(identityOf(earlier.firstStats.stats), identityOf(stats)),
-    );
-  };
-
-  for (const [i, { index, value: r }] of planned.entries()) {
-    const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
-    const key = keys[i] ?? target;
-    if (seenTargets.has(target) || (r.status !== 'noop' && sawSameEntry(r.plan, key))) {
-      slots[index] = { status: 'omitted' };
-      continue;
-    }
-    seenTargets.add(target);
-    if (r.status === 'noop') {
-      slots[index] = { status: 'settled', path: r.deleted, value: { deleted: true } };
-    } else {
-      plans.push({ plan: r.plan, index, key });
-    }
-  }
-
-  // One entry inside another would race the other's recursive delete, and
-  // accepting the parent would remove a child whose own prompt was skipped.
-  // Refuse both sides before any prompt or mutation.
-  const hits = nestedIndexes(plans.map(({ plan }) => plan.validPath));
-  const nested = new Set(plans.flatMap(({ index }, i) => (hits.has(i) ? [index] : [])));
-  if (nested.size > 0) {
-    for (const { plan, index } of plans) {
-      if (!nested.has(index)) continue;
-      slots[index] = {
-        status: 'failure',
-        path: plan.validPath,
-        error: Problem.invalidInput(
-          'Delete refused: this path contains or is inside another path in the batch. Delete the outer one alone.',
-          { path: plan.validPath },
-        ),
-      };
-    }
-    plans = plans.filter(({ index }) => !nested.has(index));
-  }
-
-  // Recursive non-empty directories need the client's approval. While one is
-  // due, the round returns input_required atomically (R14: nothing deleted
-  // yet, not even the non-pending items in the same call).
-  const confirmed = await confirm(
-    ctx,
-    'delete',
-    'delete',
-    plans.map(({ plan }) => ({
-      path: plan.validPath,
-      identity: plan.firstStats ? identityOf(plan.firstStats.stats) : UNKNOWN_IDENTITY,
-      required: plan.pending,
-      message: deletePrompt(plan),
-      warned: plan.holdsProtected,
-    })),
-  );
-  if (isInputRequiredResult(confirmed)) return confirmed;
-
-  // Phase 2 (mutation): execute deletions for every planned path.
-  for (const { plan, index } of plans) {
-    slots[index] = {
-      status: 'pending',
-      path: plan.validPath,
-      run: async (c) => {
-        const r = await executePlan(plan, c, confirmed);
-        if ('skipped' in r) return { deleted: false };
-        return { deleted: true };
+  const ready = await planBatch<string, DeletePlan, { deleted: boolean }>(
+    {
+      op: 'delete',
+      accept: 'delete',
+      items: args.paths,
+      pathOf: (inputPath) => inputPath,
+      plan: (inputPath) => planPath(inputPath, args, ctx.fs, ctx.signal),
+      slotPath: (plan) => plan.validPath,
+      landing: (plan) => plan.validPath,
+      // Duplicate paths collapse: results are keyed by path, so a repeated
+      // entry would emit two rows for one deletion and inflate `summary.total`.
+      duplicates: {
+        policy: 'collapse',
+        sameEntry: (plan, earlier) =>
+          plan.firstStats !== undefined &&
+          earlier.firstStats !== undefined &&
+          sameIdentity(identityOf(earlier.firstStats.stats), identityOf(plan.firstStats.stats)),
       },
-    };
-  }
-
-  for (let i = 0; i < paths.length; i++) {
-    slots[i] ??= {
-      status: 'failure',
-      path: paths[i] ?? '(unknown)',
-      error: Problem.fromUnknown(new Error('Unknown delete failure'), ErrorCode.UNKNOWN, paths[i]),
-    };
-  }
-
-  return executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
+      // One entry inside another would race the other's recursive delete, and
+      // accepting the parent would remove a child whose own prompt was skipped.
+      // Refuse both sides before any prompt or mutation.
+      refuse: (plans) => {
+        const hits = nestedIndexes(plans.map(({ plan }) => plan.validPath));
+        return Promise.resolve(
+          new Map(
+            plans.flatMap(({ plan, index }, i) =>
+              hits.has(i)
+                ? [
+                    [
+                      index,
+                      Problem.invalidInput(
+                        'Delete refused: this path contains or is inside another path in the batch. Delete the outer one alone.',
+                        { path: plan.validPath },
+                      ),
+                    ] as const,
+                  ]
+                : [],
+            ),
+          ),
+        );
+      },
+      // Recursive non-empty directories need the client's approval.
+      confirmItem: (plan) => ({
+        path: plan.validPath,
+        identity: plan.firstStats ? identityOf(plan.firstStats.stats) : UNKNOWN_IDENTITY,
+        required: plan.pending,
+        message: deletePrompt(plan),
+        warned: plan.holdsProtected,
+      }),
+      onRefusal: 'fail slot',
+      skipped: () => ({ deleted: false }),
+      run: (plan, _path, c) => executePlan(plan, c),
+    },
+    ctx,
+  );
+  if (isInputRequiredResult(ready)) return ready;
+  return ready.execute();
 }
 
 export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({

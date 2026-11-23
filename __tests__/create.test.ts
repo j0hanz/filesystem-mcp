@@ -449,7 +449,7 @@ describe('create body', () => {
     assert.strictEqual(await readFile(fresh, 'utf-8'), 'brand new\n');
   });
 
-  it('asks once about two spellings of one file; the skip is honored', async (t) => {
+  it('asks once about two spellings of one file: the second is refused, the skip is honored', async (t) => {
     const own = await createTestRoot();
     try {
       const file = join(own, 'alias-dedupe.txt');
@@ -476,7 +476,10 @@ describe('create body', () => {
       assert.strictEqual(asked.length, 1, 'two spellings of one file ask one question');
       assert.notStrictEqual(result.isError, true);
       assert.strictEqual(result.structured.files.length, 0, 'a skipped overwrite writes nothing');
-      assert.strictEqual(result.structured.skipped?.length, 2, 'both spellings report skipped');
+      assert.strictEqual(result.structured.skipped?.length, 1, 'the first spelling is skipped');
+      const failures = result.structured.failures ?? [];
+      assert.strictEqual(failures.length, 1, 'the second spelling is a duplicate');
+      assert.match(failures[0]?.error.message ?? '', /another entry in this batch already writes/);
       assert.strictEqual(await readFile(file, 'utf-8'), 'keep me\n');
     } finally {
       await cleanupTestRoot(own);
@@ -513,19 +516,19 @@ describe('create body', () => {
     }
   });
 
-  it('append followed by pending on one file through a linked folder refuses the second entry without prompting', async (t) => {
+  it('two appends to one file through a linked folder both land, unasked', async (t) => {
     const own = await createTestRoot();
     try {
-      const file = join(own, 'append-pending.txt');
-      await writeTestFile(own, 'append-pending.txt', 'head\n');
+      const file = join(own, 'append-twice.txt');
+      await writeTestFile(own, 'append-twice.txt', 'head\n');
       const alias = join(own, 'create-alias');
       if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
       let prompted = false;
       const result = await create(
         {
           files: [
-            { path: file, content: 'tail\n', append: true },
-            { path: join(alias, 'append-pending.txt'), content: 'clobber\n' },
+            { path: file, content: 'one\n', append: true },
+            { path: join(alias, 'append-twice.txt'), content: 'two\n', append: true },
           ],
         },
         {
@@ -537,153 +540,12 @@ describe('create body', () => {
         },
       );
 
-      assert.strictEqual(prompted, false, 'duplicate pending entry must fail before confirmation');
-      assert.strictEqual(result.structured.files.length, 1);
-      const failures = result.structured.failures ?? [];
-      assert.strictEqual(failures.length, 1);
-      assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
-      assert.match(failures[0]?.error.message ?? '', /another entry in this batch/);
-      assert.strictEqual(await readFile(file, 'utf-8'), 'head\ntail\n');
-    } finally {
-      await cleanupTestRoot(own);
-    }
-  });
-
-  it('approved pending entries landing on one file write only the first and refuse the second', async (t) => {
-    const own = await createTestRoot();
-    try {
-      const file = join(own, 'pending-approved.txt');
-      await writeTestFile(own, 'pending-approved.txt', 'old\n');
-      const alias = join(own, 'create-alias');
-      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
-      const result = await create(
-        {
-          files: [
-            { path: file, content: 'first\n' },
-            { path: join(alias, 'pending-approved.txt'), content: 'second\n' },
-          ],
-        },
-        {
-          fs: new GuardedFileSystem(await makeGuard([own])),
-          confirm: choose('overwrite'),
-        },
-      );
-
-      assert.strictEqual(result.structured.files.length, 1);
-      const failures = result.structured.failures ?? [];
-      assert.strictEqual(failures.length, 1);
-      assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
-      assert.match(failures[0]?.error.message ?? '', /another entry in this batch/);
-      assert.strictEqual(await readFile(file, 'utf-8'), 'first\n');
-    } finally {
-      await cleanupTestRoot(own);
-    }
-  });
-
-  const reverseOrder = async (
-    t: { skip: (msg: string) => void },
-    name: string,
-    firstItem: { content: string; append?: boolean; overwrite?: boolean },
-    secondItem: { content: string; append?: boolean; overwrite?: boolean },
-  ): Promise<{ result: CreateRun; asked: number; text: string } | undefined> => {
-    const own = await createTestRoot();
-    try {
-      const file = join(own, name);
-      await writeTestFile(own, name, 'old\n');
-      const alias = join(own, 'create-alias');
-      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return undefined;
-      let asked = 0;
-      const result = await create(
-        {
-          files: [
-            { path: file, ...firstItem },
-            { path: join(alias, name), ...secondItem },
-          ],
-        },
-        {
-          fs: new GuardedFileSystem(await makeGuard([own])),
-          confirm: () => {
-            asked++;
-            return { action: 'accept', content: { choice: 'overwrite' } };
-          },
-        },
-      );
-      return { result, asked, text: await readFile(file, 'utf-8') };
-    } finally {
-      await cleanupTestRoot(own);
-    }
-  };
-  const assertSecondRefused = (result: CreateRun): void => {
-    assert.strictEqual(result.structured.files.length, 1);
-    const failures = result.structured.failures ?? [];
-    assert.strictEqual(failures.length, 1);
-    assert.strictEqual(failures[0]?.error.code, ErrorCode.INVALID_INPUT);
-    assert.match(failures[0]?.error.message ?? '', /another entry in this batch/);
-  };
-
-  it('pending followed by append on one file through a linked folder: the append is refused', async (t) => {
-    const r = await reverseOrder(
-      t,
-      'pending-append.txt',
-      { content: 'first\n' },
-      { content: 'tail\n', append: true },
-    );
-    if (!r) return;
-    assert.strictEqual(r.asked, 1, 'only the pending entry asks');
-    assertSecondRefused(r.result);
-    assert.strictEqual(r.text, 'first\n');
-  });
-
-  it('overwrite followed by pending on one file through a linked folder: the pending entry is refused unasked', async (t) => {
-    const r = await reverseOrder(
-      t,
-      'ow-pending.txt',
-      { content: 'first\n', overwrite: true },
-      { content: 'second\n' },
-    );
-    if (!r) return;
-    assert.strictEqual(r.asked, 0, 'duplicate pending entry must fail before confirmation');
-    assertSecondRefused(r.result);
-    assert.strictEqual(r.text, 'first\n');
-  });
-
-  it('pending followed by overwrite on one file through a linked folder: the overwrite is refused', async (t) => {
-    const r = await reverseOrder(
-      t,
-      'pending-ow.txt',
-      { content: 'first\n' },
-      { content: 'second\n', overwrite: true },
-    );
-    if (!r) return;
-    assert.strictEqual(r.asked, 1);
-    assertSecondRefused(r.result);
-    assert.strictEqual(r.text, 'first\n');
-  });
-
-  it('two entries for one new file through a linked folder: the second is refused', async (t) => {
-    const own = await createTestRoot();
-    try {
-      const file = join(own, 'new.txt');
-      const alias = join(own, 'create-alias');
-      if (!(await trySymlink(own, alias, () => t.skip('symlinks not permitted')))) return;
-      const result = await create(
-        {
-          files: [
-            { path: file, content: 'A\n' },
-            { path: join(alias, 'new.txt'), content: 'B\n' },
-          ],
-        },
-        {
-          fs: new GuardedFileSystem(await makeGuard([own])),
-        },
-      );
-
-      assert.strictEqual(result.structured.files.length, 1);
-      const failuresA = result.structured.failures ?? [];
-      assert.strictEqual(failuresA.length, 1);
-      assert.strictEqual(failuresA[0]?.error.code, ErrorCode.INVALID_INPUT);
-      assert.match(failuresA[0]?.error.message ?? '', /another entry in this batch/);
-      assert.strictEqual(await readFile(file, 'utf-8'), 'A\n');
+      assert.strictEqual(prompted, false, 'an append destroys nothing');
+      assert.strictEqual(result.structured.files.length, 2);
+      assert.strictEqual((result.structured.failures ?? []).length, 0);
+      const text = await readFile(file, 'utf-8');
+      assert.ok(text.startsWith('head\n'));
+      assert.deepStrictEqual(text.split('\n').slice(1, 3).sort(), ['one', 'two']);
     } finally {
       await cleanupTestRoot(own);
     }
