@@ -20,7 +20,7 @@ A requested path that names an existing entry in another case or Unicode
 spelling; acting on it renames that entry rather than creating a second one.
 Whether case counts follows the directory that holds the entry, or its nearest
 existing ancestor when the entry or its parent is missing, never one flag for
-the whole server. A Batch treats two respellings of one entry as one item.
+the whole server. A Batch treats two respellings of one entry as duplicates.
 _Avoid_: spelling-only rename, case rename
 
 **Self-move**:
@@ -137,9 +137,11 @@ create (one tool), mkdir (one kind of Creation)
 A multi-item execution on a client's behalf that preserves the client's input
 order across all settled items. Pre-settled items (noops, duplicates, plan-time
 refusals) take their slots without mutation; pending items run concurrently under
-the call's concurrency and cancellation rules. On abort or deadline, finished
-items are preserved and unstarted items report the abort, so a retried call knows
-what already landed.
+the call's concurrency and cancellation rules. Two items that land on one entry
+are duplicates: the first proceeds and each later one fails, except that two
+appends both land, and in a Deletion respellings that name one entry collapse
+into one item. On abort or deadline, finished items are preserved and
+unstarted items report the abort, so a retried call knows what already landed.
 _Avoid_: parallel loop, bulk run, multi-op
 
 ## Undo
