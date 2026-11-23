@@ -6,20 +6,13 @@ import { normalize, resolve, sep } from 'node:path';
 import * as z from 'zod/v4';
 
 import { processInParallel } from '../core/concurrency.ts';
-import { confirm, type Confirmed } from '../core/confirmation.ts';
 import { ErrorCode, FsError, isRefusal, type Problem, rethrowIfAborted } from '../core/errors.ts';
 import { joinRoster, pathLabel } from '../core/fmt.ts';
 import type { TransferOp, TransferPlan } from '../core/fs.ts';
 import { isPathInsideDirectory, unicodeMatchKey } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
-import {
-  type BatchSlot,
-  cancelMessage,
-  executeBatchSlots,
-  failureLines,
-  toProblem,
-} from './batch.ts';
+import { failureLines, planBatch, toProblem } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
@@ -85,16 +78,6 @@ function pairFailure(
   };
 }
 
-/** The Confirmation's verdict on a pair, as the error that stops it. */
-function cancelled(
-  op: PairOp,
-  plan: TransferPlan,
-  verdict: Exclude<ReturnType<Confirmed['verdict']>, 'proceed' | 'skipped'>,
-): FsError {
-  const { destination } = plan.request;
-  return new FsError(ErrorCode.CANCELLED, cancelMessage(op, destination, verdict), destination);
-}
-
 /**
  * The source→destination sibling of `runOverPaths`: plan every pair, fail closed
  * on a duplicated destination, round-trip the overwrite confirmations as one
@@ -111,88 +94,101 @@ async function runTransfers(
   | { results: MoveItemResult[]; skipped: string[]; failures: MoveFailureItem[] }
   | InputRequiredResult
 > {
-  const slots = new Array<BatchSlot<TransferExecResult>>(items.length);
-
-  const { results: planned, errors: planErrors } = await processInParallel(
-    items,
-    async (
-      pair,
-      index,
-    ): Promise<
-      | IndexedPlan
-      | { readonly error: MoveFailureItem; readonly index: number }
-      | { readonly noop: true; readonly index: number }
-    > => {
-      try {
-        const plan = await ctx.fs.planTransfer(op, pair, { signal: ctx.signal });
-        if (plan.noop) return { noop: true, index };
-        return { plan, index };
-      } catch (error) {
-        rethrowIfAborted(error);
-        return { error: pairFailure(pair, error), index };
-      }
+  const ready = await planBatch<z.infer<typeof MoveItemSchema>, TransferPlan, TransferExecResult>(
+    {
+      op,
+      accept: 'overwrite',
+      items,
+      pathOf: (pair) => pair.source,
+      plan: async (pair) => {
+        try {
+          const plan = await ctx.fs.planTransfer(op, pair, { signal: ctx.signal });
+          if (plan.noop) return { status: 'settled', path: pair.source, value: { kind: 'noop' } };
+          return { status: 'plan', plan };
+        } catch (error) {
+          rethrowIfAborted(error);
+          return {
+            status: 'fail',
+            failure: { path: pair.source, error: pairFailure(pair, error).error },
+          };
+        }
+      },
+      slotPath: (plan) => plan.request.source,
+      // The guard keys each destination by the Entry it names, so two spellings
+      // of one missing name land on one file once the first move creates it
+      // (#101). Fail closed: a second source would silently clobber the first's
+      // freshly-written content under one shared overwrite confirmation.
+      landing: (plan) => plan.destination,
+      duplicates: {
+        policy: 'fail',
+        refuse: (plan) =>
+          pairFailure(
+            plan.request,
+            new FsError(
+              ErrorCode.INVALID_INPUT,
+              `${VERB[op]} cancelled: another entry in this batch already targets "${plan.request.destination}"`,
+              plan.request.destination,
+            ),
+          ).error,
+      },
+      refuse: (plans) => refuseAcrossPairs(plans, ctx, op),
+      // `overwrite` is copy-only: move has no confirmation bypass.
+      confirmItem: (plan) =>
+        overwrite || plan.existing === undefined
+          ? undefined
+          : {
+              path: plan.destination,
+              identity: plan.existing,
+              required: true,
+              message:
+                op === 'move'
+                  ? `"${plan.destination}" already exists. Overwrite it?`
+                  : `Destination "${plan.destination}" already exists. Overwrite it?`,
+            },
+      // The description promises that a declined overwrite cancels every pair.
+      onRefusal: 'fail call',
+      skipped: (plan) => ({ kind: 'skipped', destination: plan.request.destination }),
+      run: async (plan, _pair, c) => {
+        const moved = await c.fs.executeTransfer(plan, { createParents: true, signal: c.signal });
+        if (op === 'move') {
+          c.log('info', `move: ${plan.request.source} -> ${plan.request.destination}`, 'move');
+        }
+        return { kind: 'value', value: moved };
+      },
     },
-    PARALLEL_CONCURRENCY,
-    ctx.signal,
+    ctx,
   );
-  const firstPlanError = planErrors[0];
-  if (firstPlanError) throw firstPlanError.error;
+  if (isInputRequiredResult(ready)) return ready;
+  const batchRes = await ready.execute();
 
-  const candidates: IndexedPlan[] = [];
-  for (const { value } of planned) {
-    if ('error' in value) {
-      slots[value.index] = {
-        status: 'failure',
-        path: items[value.index]?.source ?? '',
-        error: value.error.error,
-      };
-    } else if ('noop' in value) {
-      slots[value.index] = {
-        status: 'settled',
-        path: items[value.index]?.source ?? '',
-        value: { kind: 'noop' },
-      };
-    } else {
-      candidates.push(value);
+  const results: MoveItemResult[] = [];
+  const skipped: string[] = [];
+  const failures: MoveFailureItem[] = [];
+  for (const [index, r] of batchRes.results.entries()) {
+    const item = items[index];
+    if (!item) continue;
+    if ('error' in r) {
+      failures.push(pairFailure(item, r.error));
+    } else if (r.value.kind === 'skipped') {
+      skipped.push(r.value.destination);
+    } else if (r.value.kind === 'value') {
+      results.push(r.value.value);
     }
   }
 
-  // Two sources targeting the same destination in one batch would otherwise
-  // collapse to a single shared overwrite confirmation and let the second
-  // one silently clobber the first's freshly-written content. Fail closed:
-  // only the first plan per destination proceeds; later ones targeting the
-  // same destination are reported as a per-item failure.
-  const seenDest = new Set<string>();
-  const ready: IndexedPlan[] = [];
-  // The guard keys each destination by the Entry it names, so two spellings of
-  // one missing name land on one file once the first move creates it (#101).
-  const destKeys =
-    candidates.length < 2
-      ? []
-      : await ctx.fs.pathGuard.entryKeys(
-          candidates.map((candidate) => candidate.plan.destination),
-          ctx.signal,
-        );
-  for (const [i, candidate] of candidates.entries()) {
-    const destKey = destKeys[i] ?? candidate.plan.destination;
-    if (seenDest.has(destKey)) {
-      slots[candidate.index] = {
-        status: 'failure',
-        path: candidate.plan.request.source,
-        error: pairFailure(
-          candidate.plan.request,
-          new FsError(
-            ErrorCode.INVALID_INPUT,
-            `${VERB[op]} cancelled: another entry in this batch already targets "${candidate.plan.request.destination}"`,
-            candidate.plan.request.destination,
-          ),
-        ).error,
-      };
-      continue;
-    }
-    seenDest.add(destKey);
-    ready.push(candidate);
-  }
+  return { results, skipped, failures };
+}
+
+/**
+ * Rules that span pairs, run before any prompt: overlapping pairs, then a
+ * directory merge each surviving pair would make. A refusal per index.
+ */
+async function refuseAcrossPairs(
+  plans: readonly IndexedPlan[],
+  ctx: ToolCtx,
+  op: PairOp,
+): Promise<Map<number, Problem>> {
+  const refused = new Map<number, Problem>();
 
   // One entry's (resolved) source overlapping another's destination means the
   // two race and a file is lost: a swap [A->B, B->A] or a chain [B->C, A->B].
@@ -208,8 +204,8 @@ async function runTransfers(
     return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
   };
   const overlapping = new Set<TransferPlan>();
-  for (const [i, a] of ready.entries()) {
-    for (const b of ready.slice(i + 1)) {
+  for (const [i, a] of plans.entries()) {
+    for (const b of plans.slice(i + 1)) {
       if (
         (op === 'move' &&
           (isPathInsideDirectory(a.plan.entry, b.plan.entry) ||
@@ -224,12 +220,11 @@ async function runTransfers(
     }
   }
   const independent: IndexedPlan[] = [];
-  for (const item of ready) {
+  for (const item of plans) {
     if (overlapping.has(item.plan)) {
-      slots[item.index] = {
-        status: 'failure',
-        path: item.plan.request.source,
-        error: pairFailure(
+      refused.set(
+        item.index,
+        pairFailure(
           item.plan.request,
           new FsError(
             ErrorCode.INVALID_INPUT,
@@ -237,7 +232,7 @@ async function runTransfers(
             item.plan.request.source,
           ),
         ).error,
-      };
+      );
       continue;
     }
     independent.push(item);
@@ -262,96 +257,10 @@ async function runTransfers(
   const firstMergeError = mergeErrors[0];
   if (firstMergeError) throw firstMergeError.error;
 
-  const safe: IndexedPlan[] = [];
   for (const { value } of mergeChecked) {
-    if ('error' in value) {
-      slots[value.index] = {
-        status: 'failure',
-        path: items[value.index]?.source ?? '',
-        error: value.error.error,
-      };
-    } else {
-      safe.push(value);
-    }
+    if ('error' in value) refused.set(value.index, value.error.error);
   }
-
-  // Round 1 returns input_required while an overwrite needs approval (R14).
-  // `overwrite` is copy-only: move has no confirmation bypass.
-  const confirmed = await confirm(
-    ctx,
-    op,
-    'overwrite',
-    overwrite
-      ? []
-      : safe.flatMap(({ plan }) =>
-          plan.existing === undefined
-            ? []
-            : [
-                {
-                  path: plan.destination,
-                  identity: plan.existing,
-                  required: true,
-                  message:
-                    op === 'move'
-                      ? `"${plan.destination}" already exists. Overwrite it?`
-                      : `Destination "${plan.destination}" already exists. Overwrite it?`,
-                },
-              ],
-        ),
-  );
-  if (isInputRequiredResult(confirmed)) return confirmed;
-
-  for (const { plan } of safe) {
-    const verdict = confirmed.verdict(plan.destination);
-    if (verdict !== 'proceed' && verdict !== 'skipped') {
-      throw cancelled(op, plan, verdict);
-    }
-  }
-
-  for (const { plan, index } of safe) {
-    const verdict = confirmed.verdict(plan.destination);
-    if (verdict === 'skipped') {
-      slots[index] = {
-        status: 'settled',
-        path: plan.request.source,
-        value: { kind: 'skipped', destination: plan.request.destination },
-      };
-    } else {
-      slots[index] = {
-        status: 'pending',
-        path: plan.request.source,
-        run: async (c) => {
-          const moved = await c.fs.executeTransfer(plan, {
-            createParents: true,
-            signal: c.signal,
-          });
-          if (op === 'move') {
-            c.log('info', `move: ${plan.request.source} -> ${plan.request.destination}`, 'move');
-          }
-          return { kind: 'value', value: moved };
-        },
-      };
-    }
-  }
-
-  const batchRes = await executeBatchSlots(slots, ctx, { defaultErrorCode: ErrorCode.UNKNOWN });
-
-  const results: MoveItemResult[] = [];
-  const skipped: string[] = [];
-  const failures: MoveFailureItem[] = [];
-  for (const [index, r] of batchRes.results.entries()) {
-    const item = items[index];
-    if (!item) continue;
-    if ('error' in r) {
-      failures.push(pairFailure(item, r.error));
-    } else if (r.value.kind === 'skipped') {
-      skipped.push(r.value.destination);
-    } else if (r.value.kind === 'value') {
-      results.push(r.value.value);
-    }
-  }
-
-  return { results, skipped, failures };
+  return refused;
 }
 
 /**
