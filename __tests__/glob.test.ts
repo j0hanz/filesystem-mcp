@@ -641,6 +641,40 @@ describe('scan walk', () => {
       await cleanupTestRoot(outside);
     }
   });
+
+  it('reads no folder the walk itself does not enter to find .gitignore rules', async (t) => {
+    // A pass over the whole tree before the walk could use up the deadline and
+    // end the scan with nothing found; the walk must find the rules as it goes.
+    const root = await createTestRoot();
+    const read: string[] = [];
+    const realReaddir = fsPromises.readdir;
+    t.mock.method(fsPromises, 'readdir', (...args: Parameters<typeof fsPromises.readdir>) => {
+      read.push(relative(root, String(args[0])).replaceAll('\\', '/'));
+      return realReaddir(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await writeFile(join(root, '.gitignore'), '*.log\n');
+      await writeFile(join(root, 'keep.txt'), 'x');
+      await mkdir(join(root, 'other', 'a', 'b'), { recursive: true });
+      await writeFile(join(root, 'other', 'a', '.gitignore'), 'keep.txt\n');
+      const seen = await walk({ cwd: root, pattern: 'keep.txt', skipIgnored: true });
+      assert.deepStrictEqual(seen, ['keep.txt']);
+      assert.ok(!read.some((dir) => dir.startsWith('other')), `walk pre-read ${read.join(', ')}`);
+      // Rules below the root still apply once the walk reaches them.
+      await writeFile(join(root, 'other', 'a', 'b', 'keep.txt'), 'x');
+      await writeFile(join(root, 'other', 'a', 'b', 'x.log'), 'x');
+      await writeFile(join(root, 'other', 'a', 'b', 'y.txt'), 'x');
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: '**/*', skipIgnored: true }), [
+        'keep.txt',
+        'other/a/b/y.txt',
+      ]);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await cleanupTestRoot(root);
+    }
+  });
 });
 
 describe('scan walk characterization', () => {

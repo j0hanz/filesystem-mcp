@@ -1,3 +1,4 @@
+import { lstatSync, readFileSync } from 'node:fs';
 import {
   glob as fsGlob,
   readFile as fsReadFile,
@@ -11,7 +12,7 @@ import { dirname, join, posix, relative, resolve } from 'node:path';
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
 
-import { processInParallel, withAbort } from './concurrency.ts';
+import { withAbort } from './concurrency.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -567,7 +568,6 @@ async function scanNamedFile<R>(
 
 /** A .gitignore past this size is not a .gitignore; skip it rather than read it. */
 const MAX_GITIGNORE_BYTES = MIB;
-const GLOB_BATCH_CONCURRENCY = 64;
 
 async function readGitignoreMatcher(
   absPath: string,
@@ -634,77 +634,88 @@ class GitignoreManager {
   /** Rules from directories above the walk root, farthest first; `prefix` re-bases a walk-relative path to that directory. */
   private ancestors: { prefix: string; matcher: Ignore }[] = [];
   private dirCache = new Map<string, boolean>();
+  /** Per folder: whether its own `.gitignore` (and those below it) are looked for. */
+  private searched = new Map<string, boolean>([['', true]]);
 
-  addMatcher(dir: string, matcher: Ignore): void {
-    this.matchers.set(dir, matcher);
+  private readonly root: string;
+  private readonly includeHidden: boolean;
+  private readonly pathGuard: Pick<PathGuard, 'isSensitive'> | undefined;
+
+  private constructor(
+    root: string,
+    includeHidden: boolean,
+    pathGuard?: Pick<PathGuard, 'isSensitive'>,
+  ) {
+    this.root = root;
+    this.includeHidden = includeHidden;
+    this.pathGuard = pathGuard;
   }
 
   addAncestorMatcher(prefix: string, matcher: Ignore): void {
     this.ancestors.push({ prefix, matcher });
   }
 
-  /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
+  /**
+   * Reads the ancestor and root rules now. A subfolder's `.gitignore` is read
+   * the first time a path below it is checked, so the walk itself finds the
+   * rules: no second pass over the tree before the first result.
+   */
   static async load(
     root: string,
     includeHidden: boolean,
     signal?: AbortSignal,
-    maxDepth?: number,
     ignoreCeiling?: string,
     pathGuard?: Pick<PathGuard, 'isSensitive'>,
-  ): Promise<GitignoreManager | null> {
+  ): Promise<GitignoreManager> {
     const resolvedRoot = resolve(root);
-    const manager = new GitignoreManager();
-    try {
-      if (ignoreCeiling !== undefined) {
-        await loadAncestorGitignores(resolvedRoot, ignoreCeiling, manager, signal);
-      }
-      let frontier: string[] = [''];
-      for (let depth = 0; frontier.length > 0; depth++) {
-        signal?.throwIfAborted();
-        const nextFrontier: string[] = [];
-        const canDescend = maxDepth === undefined || depth < maxDepth;
-        await processInParallel(
-          frontier,
-          async (dir) => {
-            const absDir = dir === '' ? resolvedRoot : join(resolvedRoot, dir);
-            if (!canDescend) {
-              const matcher = await readGitignoreMatcher(join(absDir, '.gitignore'), signal);
-              if (matcher) manager.addMatcher(dir, matcher);
-              return;
-            }
-            const entries = await readdir(absDir, { withFileTypes: true }).catch(() => undefined);
-            if (!entries) return;
-            const gitignoreEntry = entries.find(
-              (entry) => normalizeCaseForComparison(entry.name) === '.gitignore',
-            );
-            if (gitignoreEntry) {
-              const matcher = await readGitignoreMatcher(join(absDir, gitignoreEntry.name), signal);
-              if (matcher) manager.addMatcher(dir, matcher);
-            }
-            for (const entry of entries) {
-              if (!entry.isDirectory()) continue;
-              const name = entry.name;
-              if (!includeHidden && name.startsWith('.')) continue;
-              if (name === '.hg' || name === '.svn' || isDefaultExcludedName(name)) continue;
-              if (pathGuard?.isSensitive(join(absDir, name))) continue;
-              const childRel = dir === '' ? name : `${dir}/${name}`;
-              if (manager.isIgnored(childRel, true)) continue;
-              nextFrontier.push(childRel);
-            }
-          },
-          GLOB_BATCH_CONCURRENCY,
-          signal,
-        );
-        frontier = nextFrontier;
-      }
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      rethrowIfAborted(error);
-      Logger.warn(
-        `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
-      );
+    const manager = new GitignoreManager(resolvedRoot, includeHidden, pathGuard);
+    if (ignoreCeiling !== undefined) {
+      await loadAncestorGitignores(resolvedRoot, ignoreCeiling, manager, signal);
     }
-    return manager.matchers.size === 0 && manager.ancestors.length === 0 ? null : manager;
+    const rootMatcher = await readGitignoreMatcher(join(resolvedRoot, '.gitignore'), signal);
+    if (rootMatcher) manager.matchers.set('', rootMatcher);
+    return manager;
+  }
+
+  /**
+   * Loads `dir`'s `.gitignore` once; false when the folder is one whose rules
+   * are never looked for (hidden without includeHidden, a VCS or default-excluded
+   * folder, a sensitive folder, a link, or gone), and so neither are its children's.
+   * shortcut: sync lstat/read, because fs.glob's exclude callback is sync; one
+   * missing-file lstat per entered folder blocks the loop briefly, a slow network
+   * drive would feel it. Upgrade to a custom async walk if that shows up.
+   */
+  private enter(dir: string): boolean {
+    const known = this.searched.get(dir);
+    if (known !== undefined) return known;
+    const name = dir.slice(dir.lastIndexOf('/') + 1);
+    const absDir = join(this.root, dir);
+    let searched =
+      (this.includeHidden || !name.startsWith('.')) &&
+      name !== '.hg' &&
+      name !== '.svn' &&
+      !isDefaultExcludedName(name) &&
+      this.pathGuard?.isSensitive(absDir) !== true;
+    if (searched) {
+      const file = join(absDir, '.gitignore');
+      try {
+        if (!lstatSync(absDir).isDirectory()) {
+          searched = false;
+        } else {
+          // lstat, not stat: only a plain, small file is a rule set worth reading.
+          const info = lstatSync(file);
+          if (info.isFile() && info.size <= MAX_GITIGNORE_BYTES) {
+            this.matchers.set(dir, ignore().add(readFileSync(file, 'utf-8')));
+          }
+        }
+      } catch (error) {
+        if (!isNotFoundErrno(error)) {
+          Logger.warn(`Failed to read .gitignore at ${file}: ${formatUnknownErrorMessage(error)}`);
+        }
+      }
+    }
+    this.searched.set(dir, searched);
+    return searched;
   }
 
   isIgnored(relativePath: string, isDirectory: boolean): boolean {
@@ -712,8 +723,9 @@ class GitignoreManager {
     if (normalized === '' || normalized === '.') return false;
     const parts = normalized.split('/');
 
-    // 1. Check parent directories first
+    // 1. Check parent directories first, loading each one's rules once it is known not ignored
     let currentDir = '';
+    let searching = true;
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
       if (!part) continue;
@@ -722,6 +734,7 @@ class GitignoreManager {
       if (this.checkDir(currentDir)) {
         return true;
       }
+      if (searching) searching = this.enter(currentDir);
     }
 
     // 2. Check the file/directory itself
@@ -1201,14 +1214,7 @@ async function* walkEntries(
   const { maxDepth, signal } = options;
   const skipIgnored = !options.includeIgnored;
   const gitignoreMatcher = skipIgnored
-    ? await GitignoreManager.load(
-        cwd,
-        options.includeHidden,
-        signal,
-        maxDepth,
-        ceiling,
-        options.pathGuard,
-      )
+    ? await GitignoreManager.load(cwd, options.includeHidden, signal, ceiling, options.pathGuard)
     : null;
 
   const resolvedCwd = resolve(cwd);
