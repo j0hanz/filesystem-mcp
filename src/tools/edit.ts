@@ -34,7 +34,7 @@ const MAX_OLD_TEXT_CHARS = MIB;
 
 const EditSpecSchema = z.strictObject({
   oldText: nonBlankString('oldText')
-    .max(MAX_OLD_TEXT_CHARS, { message: 'oldText too long (max 1,048,576 chars)' })
+    .max(MAX_OLD_TEXT_CHARS, { error: 'oldText too long (max 1,048,576 chars)' })
     .describe(
       'Exact text to find. It must match exactly once, so include 3-5 lines of context. Several matches fail and list up to 5 line numbers.',
     )

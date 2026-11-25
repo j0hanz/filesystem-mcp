@@ -38,7 +38,7 @@ const CreateFileItemSchema = z.strictObject({
   content: z
     .string()
     .refine((val) => Buffer.byteLength(val, 'utf8') <= getMaxTextFileSize(), {
-      message: 'Content is over the text file size limit',
+      error: 'Content is over the text file size limit',
     })
     .describe('Full text to write, verbatim, as UTF-8.'),
   append: z

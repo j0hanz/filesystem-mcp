@@ -219,9 +219,7 @@ export function isSafeGlobSyntax(pattern: string): boolean {
 
 // ─── Schemas ───
 
-export const PositiveInt = z
-  .int({ message: 'Must be integer' })
-  .positive({ message: 'Must be > 0' });
+export const PositiveInt = z.int({ error: 'Must be integer' }).positive({ error: 'Must be > 0' });
 
 const MAX_PATH_LENGTH = 4096;
 
@@ -238,8 +236,8 @@ export function nonBlankString(label: string): z.ZodString {
   const message = `${label} cannot be empty or whitespace-only`;
   return z
     .string()
-    .min(1, { message, abort: true })
-    .refine((val) => !isBlank(val), { message });
+    .min(1, { error: message, abort: true })
+    .refine((val) => !isBlank(val), { error: message });
 }
 
 function refineSafeText(
@@ -267,8 +265,8 @@ const hasTraversalSegment = (val: string): boolean => val.split(/[\\/]/u).includ
 
 export const RequiredPath = z
   .string()
-  .min(1, { message: 'Path required' })
-  .max(MAX_PATH_LENGTH, { message: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
+  .min(1, { error: 'Path required' })
+  .max(MAX_PATH_LENGTH, { error: `Path too long (max ${MAX_PATH_LENGTH} chars)` })
   .superRefine(
     refineSafeText('Path', (val) =>
       hasTraversalSegment(val) ? 'Path cannot contain ".." segments' : undefined,
@@ -280,8 +278,8 @@ export const OptionalPath = RequiredPath.optional();
 
 export const SafeGlobPattern = z
   .string()
-  .min(1, { message: 'Pattern required' })
-  .max(1000, { message: 'Max 1000 chars' })
+  .min(1, { error: 'Pattern required' })
+  .max(1000, { error: 'Max 1000 chars' })
   .superRefine(
     refineSafeText('Pattern', (val) =>
       isSafeGlobSyntax(val)

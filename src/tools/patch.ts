@@ -28,7 +28,7 @@ const PatchInputSchema = z.strictObject({
   diff: z
     .string()
     .min(1)
-    .max(MAX_DIFF_CHARS, { message: 'diff too long (max 1,048,576 chars)' })
+    .max(MAX_DIFF_CHARS, { error: 'diff too long (max 1,048,576 chars)' })
     .describe(
       'Single-file unified diff, at least one @@ hunk, hunks in file order. Multi-file diffs are rejected; a leading BOM is ignored.',
     ),

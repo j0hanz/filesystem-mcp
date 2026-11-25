@@ -55,8 +55,8 @@ import { defineTool } from './define.ts';
 const MAX_LINE_NUMBER = 2_147_483_647;
 
 const rangeField = (description: string, count = false) => {
-  const field = z.int32().min(1, { message: 'Min: 1' });
-  return (count ? field.max(100000, { message: 'Max: 100,000' }) : field)
+  const field = z.int32().min(1, { error: 'Min: 1' });
+  return (count ? field.max(100000, { error: 'Max: 100,000' }) : field)
     .optional()
     .describe(description);
 };

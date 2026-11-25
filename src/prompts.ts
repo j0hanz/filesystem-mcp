@@ -31,7 +31,7 @@ export function registerPrompts(deps: PromptRegistrarDeps): void {
           // falls through to the not-found reply without reaching an interpreter.
           z
             .string()
-            .min(1, { message: 'Topic required' })
+            .min(1, { error: 'Topic required' })
             .describe(
               `Section to return (one of: ${topics.join(', ')}). Omit for all instructions.`,
             ),
