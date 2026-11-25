@@ -311,7 +311,7 @@ export function invalidCursor(): FsError {
 
 const MAX_SNAPSHOTS = 32;
 const MAX_SNAPSHOT_ITEMS = 200_000;
-const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
+export const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Short-lived snapshots of a completed query's full result set, so later pages

@@ -217,7 +217,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     "Symlinks report their own metadata, not the target's. " +
     '`path` gives one result; `paths` gives one per path, in input order. ' +
     'Returns per-path values or errors ({ code, message }), plus summary { total, succeeded, failed }. ' +
-    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), lineCount (text files up to 256 KiB, in calls of up to 20 paths), timestamps, permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), hardLinks (a file with other names; a write changes them all), mimeType, symlinkTarget.',
+    'Values hold name, path, type, size or entryCount (directories), tokenEstimate (files, bytes/4), lineCount (text files up to 256 KiB, in calls of up to 20 paths), timestamps (created resets when a tool rewrites the file, since writes replace it atomically), permissions (POSIX) or readOnly (Windows), isHidden (dot prefix), hardLinks (a file with other names; a write changes them all), mimeType, symlinkTarget.',
   input: StatInputSchema,
   readOnlyHint: true,
   deadline: true,

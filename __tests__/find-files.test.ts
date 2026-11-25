@@ -293,6 +293,17 @@ describe('find_files body', () => {
     assert.deepStrictEqual(await names(), ['omega.ts', 'alpha.ts']);
   });
 
+  it('sortBy name orders case-insensitively', async () => {
+    const dir = join(root, 'find_sort_case');
+    await writeTestFile(dir, 'README.md', '# r');
+    await writeTestFile(dir, 'data/ideas.md', '# i');
+    const { structured } = await find({ path: dir, pattern: '*.md', sortBy: 'name' });
+    assert.deepStrictEqual(
+      structured.results.map((entry) => entry.path),
+      ['find_sort_case/data/ideas.md', 'find_sort_case/README.md'],
+    );
+  });
+
   it("TC-FUNC-070: sortBy 'name' breaks ties deterministically by full path", async () => {
     const dir = join(root, 'find_sort_tie');
     await writeTestFile(dir, 'zzz/common.ts', '// z');

@@ -1,6 +1,7 @@
 import { getMaxTextFileSize } from './core/config.ts';
 import { formatByteSize } from './core/fmt.ts';
 import { MAX_OUTBOUND_RESULT_BYTES } from './core/outbound.ts';
+import { SNAPSHOT_TTL_MS } from './core/store.ts';
 import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from './core/util.ts';
 import {
   FIND_FILES,
@@ -66,7 +67,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'sensitive_paths: Sensitive files are denied by default: .env, *.pem, SSH private keys (*id_rsa*, *id_ed25519*), .netrc, .git-credentials.',
       `enforced_limits: max file size ${formatByteSize(getMaxTextFileSize(), true)} (also the total content cap of one create call), stdio responses up to ${formatByteSize(MAX_OUTBOUND_RESULT_BYTES)} once JSON-encoded (HTTP has no such limit), file search returns up to ${MAX_SEARCH_RESULTS} results, content search scans up to ${MAX_SEARCH_RESULTS} matches, paged by maxResults (default ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
       'ephemeral_results: When a result has a resource_link or a resourceUri (in structuredContent or _meta), call resources/read right away. Cached results expire after about 60 seconds, on eviction, or on restart.',
-      'pagination: nextCursor appears in the result text and in _meta, and its snapshot expires on the same ~60s clock. Send the printed Next page call as-is (the original arguments plus cursor). If a cursor is rejected, start again without one. resourceUri appears on the first page only.',
+      `pagination: nextCursor appears in the result text and in _meta. Its snapshot lasts about ${String(SNAPSHOT_TTL_MS / 60_000)} min after its last page is read. Send the printed Next page call as-is (the original arguments plus cursor). If a cursor is rejected, start again without one. resourceUri appears on the first page only and expires after about 60 seconds.`,
       '```',
     ].join('\n'),
     error_recovery: [
