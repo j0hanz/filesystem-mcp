@@ -197,6 +197,8 @@ function renderMarkdown(
   // Re-draw each missing ancestor as context so every entry stays locatable.
   const present = new Set(page.map((entry) => entry.relativePath));
   const entries = [...page];
+  // Ancestors drawn only as context belong to another page; the tree says so.
+  const continued = new Set<string>();
   for (const entry of page) {
     for (
       let dir = posix.dirname(entry.relativePath);
@@ -204,6 +206,7 @@ function renderMarkdown(
       dir = posix.dirname(dir)
     ) {
       present.add(dir);
+      continued.add(dir);
       entries.push({
         name: posix.basename(dir),
         relativePath: dir,
@@ -228,6 +231,7 @@ function renderMarkdown(
           (isLast ? ELBOW : TEE) +
           child.name +
           (child.type === 'directory' ? '/' : '') +
+          (continued.has(child.relativePath) ? ' (continued)' : '') +
           sizeText,
       );
       renderChildren(child.relativePath, prefix + (isLast ? INDENT : PIPE));
@@ -428,7 +432,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       // The tree is what the model reads, so position and the full-list URI ride
       // the text too — paging needs no second lookup. `pageTrailer` is the one
       // owner of that line, and it owes it on the last page as much as the first.
-      render: ({ page, metadata, trailer, resourceUri }) => {
+      render: ({ page, metadata, trailer, nextCursor, resourceUri }) => {
         const sizesLine =
           metadata.totalBytes !== undefined && args.includeSizes
             ? summaryLine(metadata, metadata.totalBytes)
@@ -440,6 +444,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         };
         const text =
           renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), [...page], renderOpts) +
+          // Pages run parent by parent, so a folder here can list its contents on a later page.
+          (nextCursor !== undefined
+            ? '\n\n// a folder shown without its contents may continue on the next page'
+            : '') +
           sizesLine +
           (sizesLine && trailer ? trailer.slice(1) : trailer) +
           (resourceUri !== undefined ? `\nfull tree at ${resourceUri}` : '');
