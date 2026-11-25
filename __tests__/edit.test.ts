@@ -456,6 +456,43 @@ describe('edit body', () => {
     }
   });
 
+  // Review: an unindented first oldText line matches after the file's indent,
+  // so that indent must be part of the match or line 1 of newText doubles it.
+  it('with ignoreWhitespace places an indented first line without doubling it', async () => {
+    const source = 'class A {\n    m() {\n        x();\n    }\n}\n';
+    const absolute = await writeTestFile(root, 'reindent/first-abs.js', source);
+    await edit({
+      path: absolute,
+      edits: [{ oldText: 'm() {\nx();', newText: '    m() {\n        y();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(absolute, 'utf-8'),
+      'class A {\n    m() {\n        y();\n    }\n}\n',
+    );
+
+    const relative = await writeTestFile(root, 'reindent/first-rel.js', source);
+    await edit({
+      path: relative,
+      edits: [{ oldText: 'm() {\nx();', newText: 'm() {\n  y();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(relative, 'utf-8'),
+      'class A {\n    m() {\n          y();\n    }\n}\n',
+    );
+  });
+
+  it('with ignoreWhitespace keeps every line of an absolute newText at one depth', async () => {
+    const file = await writeTestFile(root, 'reindent/same-depth.js', '  a();\n  b();\n');
+    await edit({
+      path: file,
+      edits: [{ oldText: 'a();\nb();', newText: '    a();\n    b();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(file, 'utf-8'), '    a();\n    b();\n');
+  });
+
   it('with ignoreWhitespace keeps relative newText relative', async () => {
     const file = await writeTestFile(
       root,

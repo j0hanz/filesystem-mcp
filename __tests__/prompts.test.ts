@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
 import { SNAPSHOT_TTL_MS } from '../src/core/store.ts';
-import { buildSectionsRecord, renderSections } from '../src/instructions.ts';
+import { buildSectionsRecord, INSTRUCTIONS_SUMMARY, renderSections } from '../src/instructions.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -15,6 +15,12 @@ import {
 // F4: the instructions once said cursors expire on a ~60s clock while the
 // page store kept them for 5 minutes; the text is now built from the constant.
 describe('instructions', () => {
+  // F3: most path params override RequiredPath's description, so the rule
+  // rides the server instructions every client shows.
+  it('tells every client that paths take no .. segments', () => {
+    assert.match(INSTRUCTIONS_SUMMARY, /no "\.\." segments/u);
+  });
+
   it('states the cursor lifetime the page store uses', () => {
     const minutes = SNAPSHOT_TTL_MS / 60_000;
     assert.match(

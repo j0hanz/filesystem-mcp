@@ -444,9 +444,10 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         };
         const text =
           renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), [...page], renderOpts) +
-          // Pages run parent by parent, so a folder here can list its contents on a later page.
-          (nextCursor !== undefined
-            ? '\n\n// a folder shown without its contents may continue on the next page'
+          // Pages run parent by parent, so a folder here can list more entries on a
+          // later page; at maxDepth 1 no folder's contents are listed at all.
+          (nextCursor !== undefined && args.maxDepth > 1
+            ? '\n\n// a folder on this page may list more entries on the next page'
             : '') +
           sizesLine +
           (sizesLine && trailer ? trailer.slice(1) : trailer) +

@@ -13,7 +13,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
       "listChanged": true
     }
   },
-  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
+  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments. For full guidance, read internal://instructions or run the get-help prompt.",
   "tools": [
     {
       "name": "create",
@@ -980,7 +980,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "get-help",
       "title": "Get Help",
-      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
+      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments.",
       "arguments": [
         {
           "name": "topic",
@@ -1030,7 +1030,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     }
   ],
   "help": {
-    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
+    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments.",
     "messages": [
       {
         "role": "user",
@@ -1065,7 +1065,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
       "listChanged": true
     }
   },
-  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths. For full guidance, read internal://instructions or run the get-help prompt.",
+  "instructions": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments. For full guidance, read internal://instructions or run the get-help prompt.",
   "tools": [
     {
       "name": "diff",
@@ -1536,7 +1536,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "get-help",
       "title": "Get Help",
-      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
+      "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments.",
       "arguments": [
         {
           "name": "topic",
@@ -1586,7 +1586,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     }
   ],
   "help": {
-    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.",
+    "description": "How to use the filesystem-mcp tools and their limits. Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no \\"..\\" segments.",
     "messages": [
       {
         "role": "user",

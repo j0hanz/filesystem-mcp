@@ -41,7 +41,7 @@ export const INSTRUCTIONS_URI = 'internal://instructions';
  */
 export const INSTRUCTIONS_SUMMARY =
   'How to use the filesystem-mcp tools and their limits. ' +
-  'Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths.';
+  'Call list_roots to see the configured or accepted roots. Find paths with list or find_files, check them with stat, then read. Never guess paths; paths take no ".." segments.';
 
 export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
   return {

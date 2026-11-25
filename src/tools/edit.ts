@@ -497,15 +497,26 @@ function reindentNewText(
   // kept as written, so the match's indent is not added a second time. Only a
   // deeper file indent can double up; a shallower one keeps the relative mapping.
   if (positional) {
-    const moved = lines.filter(counted).flatMap((line, k) => {
-      const base = from[k] ?? '';
-      const target = to[k] ?? '';
-      return base === target ? [] : [{ own: indentOf(line), base, target }];
-    });
-    const alreadyPlaced = moved.every(
-      ({ own, base, target }) => target.length > base.length && own.startsWith(target),
-    );
-    if (moved.length > 0 && alreadyPlaced) return newText;
+    const pairs = lines
+      .filter(counted)
+      .map((line, k) => ({ own: indentOf(line), base: from[k] ?? '', target: to[k] ?? '' }));
+    // A first line written at oldText's own indent mirrors oldText and says
+    // nothing about the rest; the later lines decide, and it is placed relatively.
+    const [head] = pairs;
+    const mirrorsHead = head !== undefined && pairs.length > 1 && head.own === head.base;
+    const judged = (mirrorsHead ? pairs.slice(1) : pairs).filter((p) => p.base !== p.target);
+    const alreadyPlaced =
+      judged.length > 0 &&
+      judged.every(
+        ({ own, base, target }) => target.length > base.length && own.startsWith(target),
+      );
+    if (alreadyPlaced) {
+      if (!mirrorsHead) return newText;
+      const headIndex = lines.findIndex(counted);
+      return lines
+        .map((line, i) => (i === headIndex ? head.target + line.slice(head.base.length) : line))
+        .join('\n');
+    }
   }
   // Indexed once, so a line finds its indent without scanning every one of `from`.
   const firstIndex = new Map<string, number>();
@@ -617,16 +628,28 @@ async function applyEdits(
     if (found.count > 1) throw ambiguousEditError(newContent, found, index, appliedEdits > 0);
 
     const end = first.startIndex + first.length;
+    // A flexible match starts after the indent of its first line; take that
+    // indent into the match so newText's first line is placed, not appended.
+    let start = first.startIndex;
+    if (flexible) {
+      let lineStart = start;
+      while (
+        lineStart > 0 &&
+        (newContent[lineStart - 1] === ' ' || newContent[lineStart - 1] === '\t')
+      )
+        lineStart -= 1;
+      if (lineStart === 0 || newContent[lineStart - 1] === '\n') start = lineStart;
+    }
     // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
     const replacement = flexible
       ? reindentNewText(
           newText,
           oldText,
-          newContent.slice(first.startIndex, end),
-          first.startIndex === 0 || newContent[first.startIndex - 1] === '\n',
+          newContent.slice(start, end),
+          start === 0 || newContent[start - 1] === '\n',
         )
       : newText;
-    newContent = newContent.slice(0, first.startIndex) + replacement + newContent.slice(end);
+    newContent = newContent.slice(0, start) + replacement + newContent.slice(end);
     appliedEdits += 1;
   }
 

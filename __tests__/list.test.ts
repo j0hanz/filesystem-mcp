@@ -106,8 +106,16 @@ describe('list body', () => {
 
   it('notes that a paged folder may continue', async () => {
     const pages = await pagedTree();
-    assert.match(pages[0]?.text ?? '', /may continue on the next page/u);
-    assert.doesNotMatch(pages.at(-1)?.text ?? '', /may continue on the next page/u);
+    assert.match(pages[0]?.text ?? '', /may list more entries on the next page/u);
+    assert.doesNotMatch(pages.at(-1)?.text ?? '', /may list more entries/u);
+  });
+
+  // At maxDepth 1 no folder's contents are listed, so no folder can continue.
+  it('omits the paging note at maxDepth 1', async () => {
+    for (const name of ['a', 'b', 'c']) await writeTestFile(root, `${name}.txt`, name);
+    const first = await list({ path: root, maxEntries: 1 });
+    assert.ok(first.structured.nextCursor);
+    assert.doesNotMatch(first.text ?? '', /\/\/ a folder/u);
   });
 
   it('keeps the full tree resource free of continued markers', async () => {
@@ -115,7 +123,7 @@ describe('list body', () => {
     const uri = first?.structured.resourceUri;
     assert.ok(uri);
     const full = JSON.parse(resourceStore.getEntry(uri).text) as { markdown: string };
-    assert.doesNotMatch(full.markdown, /\(continued\)|may continue/u);
+    assert.doesNotMatch(full.markdown, /\(continued\)|\/\/ a folder/u);
   });
 
   it('replays a second page from the same snapshot', async () => {
@@ -245,7 +253,7 @@ describe('list body', () => {
     const first = await list({ path: sub, maxDepth: 2, maxEntries: 4 });
     assert.match(
       first.text ?? '',
-      /^tree_page_dir\n├── a\/\n│ {3}├── a0\.txt\n│ {3}└── a1\.txt\n└── b\/\n\n\/\/ a folder shown without its contents may continue on the next page\n\n\/\/ showing 1-4 of 8/,
+      /^tree_page_dir\n├── a\/\n│ {3}├── a0\.txt\n│ {3}└── a1\.txt\n└── b\/\n\n\/\/ a folder on this page may list more entries on the next page\n\n\/\/ showing 1-4 of 8/,
     );
     const cursor = first.structured.nextCursor;
     assert.ok(cursor);
