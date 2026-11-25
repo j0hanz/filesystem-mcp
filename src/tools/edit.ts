@@ -89,7 +89,7 @@ const EditFileInputSchema = z
       'Include the unified diff in a live run. Cut at 20 KB per file.',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match. Tried automatically when the exact text has no match',
+      "Match oldText ignoring indentation and spacing, never across line breaks. newText indentation is read relative to oldText and moved onto the match, unless newText already carries the file's indentation. Tried automatically when the exact text has no match",
     ),
   })
   .superRefine((value, ctx) => {
@@ -493,6 +493,20 @@ function reindentNewText(
   const to = indents(matched);
   const lines = newText.split('\n');
   const positional = lines.filter(counted).length === from.length;
+  // newText already in the file's indentation (only oldText was flattened) is
+  // kept as written, so the match's indent is not added a second time. Only a
+  // deeper file indent can double up; a shallower one keeps the relative mapping.
+  if (positional) {
+    const moved = lines.filter(counted).flatMap((line, k) => {
+      const base = from[k] ?? '';
+      const target = to[k] ?? '';
+      return base === target ? [] : [{ own: indentOf(line), base, target }];
+    });
+    const alreadyPlaced = moved.every(
+      ({ own, base, target }) => target.length > base.length && own.startsWith(target),
+    );
+    if (moved.length > 0 && alreadyPlaced) return newText;
+  }
   // Indexed once, so a line finds its indent without scanning every one of `from`.
   const firstIndex = new Map<string, number>();
   for (const [k, ind] of from.entries()) if (!firstIndex.has(ind)) firstIndex.set(ind, k);

@@ -431,6 +431,72 @@ describe('edit body', () => {
     assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
   });
 
+  // F1: a caller that flattens oldText but copies the file's real indentation
+  // into newText must not get the file's indent added a second time.
+  it('with ignoreWhitespace keeps newText already at the file indentation', async () => {
+    const source = 'function search(term) {\n    const t = 1;\n    return t;\n}\n';
+    for (const ignoreWhitespace of [true, false]) {
+      const file = await writeTestFile(root, `reindent/abs-${String(ignoreWhitespace)}.js`, source);
+      const result = await edit({
+        path: file,
+        edits: [
+          {
+            oldText: 'function search(term) {\nconst t = 1;',
+            newText: 'function search(term) {\n    const t = 2;',
+          },
+        ],
+        ignoreWhitespace,
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(
+        await readFile(file, 'utf-8'),
+        'function search(term) {\n    const t = 2;\n    return t;\n}\n',
+        `ignoreWhitespace=${String(ignoreWhitespace)}`,
+      );
+    }
+  });
+
+  it('with ignoreWhitespace keeps relative newText relative', async () => {
+    const file = await writeTestFile(
+      root,
+      'reindent/rel.js',
+      'function search(term) {\n    const t = 1;\n    return t;\n}\n',
+    );
+    await edit({
+      path: file,
+      edits: [
+        {
+          oldText: 'function search(term) {\nconst t = 1;',
+          newText: 'function search(term) {\n  const t = 2;',
+        },
+      ],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'function search(term) {\n      const t = 2;\n    return t;\n}\n',
+    );
+  });
+
+  it('with ignoreWhitespace compares tab and space indentation literally', async () => {
+    const source = '\tif (x) {\n\t\ty();\n\t}\n';
+    const tabs = await writeTestFile(root, 'reindent/lit-tabs.js', source);
+    await edit({
+      path: tabs,
+      edits: [{ oldText: 'if (x) {\ny();\n}', newText: 'if (x) {\n\t\tz();\n\t}' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t}\n');
+
+    const spaces = await writeTestFile(root, 'reindent/lit-spaces.js', source);
+    await edit({
+      path: spaces,
+      edits: [{ oldText: 'if (x) {\ny();\n}', newText: 'if (x) {\n        z();\n    }' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(spaces, 'utf-8'), '\tif (x) {\n\t\t        z();\n\t    }\n');
+  });
+
   // A timing guard, not a regression catcher: the old quadratic code was also fast at 2000 lines.
   it('with ignoreWhitespace re-indents a 2000-line block well inside the deadline', async () => {
     const body = Array.from({ length: 2_000 }, (_, i) => `    v${String(i)} = ${String(i)};`);

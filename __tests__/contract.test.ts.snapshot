@@ -280,7 +280,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           },
           "ignoreWhitespace": {
             "default": false,
-            "description": "Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match. Tried automatically when the exact text has no match",
+            "description": "Match oldText ignoring indentation and spacing, never across line breaks. newText indentation is read relative to oldText and moved onto the match, unless newText already carries the file's indentation. Tried automatically when the exact text has no match",
             "type": "boolean"
           }
         },
