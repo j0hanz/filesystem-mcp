@@ -33,7 +33,7 @@ const EPOCH = new Date(0);
 
 const CreateFileItemSchema = z.strictObject({
   path: RequiredPath.describe(
-    'File path inside a writable root, absolute or relative to it; one entry per file.',
+    'File path inside a writable root, absolute or relative to it, with no ".." segments; one entry per file.',
   ),
   content: z
     .string()

@@ -18,7 +18,7 @@ describe('instructions', () => {
   it('states the cursor lifetime the page store uses', () => {
     const minutes = SNAPSHOT_TTL_MS / 60_000;
     assert.match(
-      buildSectionsRecord(false).constraints,
+      buildSectionsRecord(false)['constraints'] ?? '',
       new RegExp(`snapshot lasts about ${String(minutes)} min after its last page`, 'u'),
     );
   });

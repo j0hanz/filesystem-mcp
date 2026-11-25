@@ -34,7 +34,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "description": "File path inside a writable root, absolute or relative to it; one entry per file."
+                  "description": "File path inside a writable root, absolute or relative to it, with no \\"..\\" segments; one entry per file."
                 },
                 "content": {
                   "type": "string",

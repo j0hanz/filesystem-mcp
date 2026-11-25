@@ -89,7 +89,7 @@ describe('MCP Resources', () => {
         /content search scans up to 10000 matches, paged by maxResults \(default 500\)/,
       );
       assert.match(constraints, /ephemeral_results:/);
-      assert.match(constraints, /pagination: nextCursor appears in the result text and in _meta,/);
+      assert.match(constraints, /pagination: nextCursor appears in the result text and in _meta\./);
 
       // Verify error recovery content
       const errorRecovery = requiredSection(sections, 'error_recovery');
