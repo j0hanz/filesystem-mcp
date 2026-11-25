@@ -222,7 +222,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
       const only = structured.results[0];
       return {
         structured,
-        text: `delete: ${only?.path ?? ''} FAILED: ${only && 'error' in only ? only.error.message : 'unknown error'}`,
+        text: `delete: ${only?.path ?? ''} FAILED: ${only && 'error' in only ? `${only.error.code} ${only.error.message}` : 'unknown error'}`,
         isError,
       };
     }

@@ -723,7 +723,7 @@ function formatEditSummary(
   // structuredContent for the one message that can apply.
   const [only] = results;
   if (results.length === 1 && only && 'error' in only) {
-    return `edit: ${only.path} FAILED: ${only.error.message}${tag}`;
+    return `edit: ${only.path} FAILED: ${only.error.code} ${only.error.message}${tag}`;
   }
   const tokens = results.map((r) => {
     if ('error' in r) return `${basename(r.path)} FAILED`;

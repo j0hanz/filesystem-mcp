@@ -68,6 +68,11 @@ describe('delete body', () => {
     return dir;
   };
 
+  it('names the error code when the only path is missing', async () => {
+    const result = await del({ paths: [join(root, 'del_ghost.txt')] });
+    assert.match(result.text ?? '', /FAILED: NOT_FOUND /u);
+  });
+
   it('names at most 3 failed paths, with code and reason, in a partial batch', async () => {
     const good = await writeTestFile(root, 'del_partial_ok.txt', 'x');
     const missing = ['a', 'b', 'c', 'd'].map((n) => join(root, `del_partial_${n}.txt`));
@@ -706,7 +711,7 @@ describe('delete body', () => {
     const error = result.structured.results[0]?.error;
     assert.strictEqual(error?.code, 'CANCELLED');
     assert.match(error?.message ?? '', /declined by the user/);
-    assert.match(result.text ?? '', /FAILED: Delete cancelled/);
+    assert.match(result.text ?? '', /FAILED: CANCELLED Delete cancelled/u);
     await access(join(dir, 'sub', 'f.txt'));
   });
 

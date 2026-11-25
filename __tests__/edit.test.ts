@@ -50,6 +50,14 @@ describe('edit body', () => {
   const edit = async (args: EditArgs, options: Partial<ToolBodyOptions> = {}): Promise<EditRun> =>
     (await runToolBodyResult(EDIT, args, { fs, ...options })) as EditRun;
 
+  it('names the error code when the only file fails', async () => {
+    const result = await edit({
+      path: join(root, 'ghost.txt'),
+      edits: [{ oldText: 'a', newText: 'b' }],
+    });
+    assert.match(result.text ?? '', /FAILED: NOT_FOUND /u);
+  });
+
   it('a live edit with returnDiff appends the diff', async () => {
     const file = join(root, 'a.txt');
     await writeFile(file, 'one\ntwo\n');
