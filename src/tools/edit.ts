@@ -500,23 +500,15 @@ function reindentNewText(
     const pairs = lines
       .filter(counted)
       .map((line, k) => ({ own: indentOf(line), base: from[k] ?? '', target: to[k] ?? '' }));
-    // A first line written at oldText's own indent mirrors oldText and says
-    // nothing about the rest; the later lines decide, and it is placed relatively.
-    const [head] = pairs;
-    const mirrorsHead = head !== undefined && pairs.length > 1 && head.own === head.base;
-    const judged = (mirrorsHead ? pairs.slice(1) : pairs).filter((p) => p.base !== p.target);
+    // Every line decides, the first too: a flat first line over indented ones is
+    // a new nesting level, which only the relative mapping keeps.
+    const judged = pairs.filter((p) => p.base !== p.target);
     const alreadyPlaced =
       judged.length > 0 &&
       judged.every(
         ({ own, base, target }) => target.length > base.length && own.startsWith(target),
       );
-    if (alreadyPlaced) {
-      if (!mirrorsHead) return newText;
-      const headIndex = lines.findIndex(counted);
-      return lines
-        .map((line, i) => (i === headIndex ? head.target + line.slice(head.base.length) : line))
-        .join('\n');
-    }
+    if (alreadyPlaced) return newText;
   }
   // Indexed once, so a line finds its indent without scanning every one of `from`.
   const firstIndex = new Map<string, number>();
@@ -535,8 +527,9 @@ function reindentNewText(
       }
       const base = from[j];
       const target = to[j];
-      if (base === undefined || target === undefined || !own.startsWith(base)) return line;
-      return target + line.slice(base.length);
+      if (base === undefined || target === undefined) return line;
+      // A line shallower than oldText's still lands at the match's indent, not column 0.
+      return target + line.slice((own.startsWith(base) ? base : own).length);
     })
     .join('\n');
 }

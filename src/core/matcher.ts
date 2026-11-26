@@ -146,8 +146,8 @@ export function re2AbortError(path: string | undefined, cause: unknown): FsError
  * rather than bounded.
  *
  * RE2 rejects the constructs the tool schema documents as unsupported —
- * lookahead, lookbehind, backreferences — with its own {@link SyntaxError},
- * which the tool layer turns into a normal tool error. It always matches in
+ * lookahead, lookbehind, backreferences — with a SyntaxError, rethrown here as
+ * an {@link FsError} with code INVALID_INPUT. It always matches in
  * Unicode mode and requires the `u` flag to say so.
  *
  * Every compiled pattern owns memory in re2-wasm's fixed 16 MB heap, which

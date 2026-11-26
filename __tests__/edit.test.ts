@@ -520,7 +520,7 @@ describe('edit body', () => {
     const tabs = await writeTestFile(root, 'reindent/lit-tabs.js', source);
     await edit({
       path: tabs,
-      edits: [{ oldText: 'if (x) {\ny();\n}', newText: 'if (x) {\n\t\tz();\n\t}' }],
+      edits: [{ oldText: 'if (x) {\ny();\n}', newText: '\tif (x) {\n\t\tz();\n\t}' }],
       ignoreWhitespace: true,
     });
     assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t}\n');
@@ -532,6 +532,35 @@ describe('edit body', () => {
       ignoreWhitespace: true,
     });
     assert.strictEqual(await readFile(spaces, 'utf-8'), '\tif (x) {\n\t\t        z();\n\t    }\n');
+  });
+
+  // A flat first line with an indented second one is a new nesting level, not
+  // newText already at the file's indentation.
+  it('with ignoreWhitespace nests a line under a new block', async () => {
+    const file = await writeTestFile(root, 'reindent/nest.py', 'def f():\n    x = 1\n    y = 2\n');
+    await edit({
+      path: file,
+      edits: [{ oldText: 'x = 1\ny = 2', newText: 'if x:\n    y = 2' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(file, 'utf-8'), 'def f():\n    if x:\n        y = 2\n');
+  });
+
+  it('with ignoreWhitespace keeps a first line shallower than oldText at the file indent', async () => {
+    const file = await writeTestFile(
+      root,
+      'reindent/shallow-head.js',
+      'class A {\n    m() {\n        x();\n    }\n}\n',
+    );
+    await edit({
+      path: file,
+      edits: [{ oldText: '  m() {\nx();', newText: 'm() {\ny();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'class A {\n    m() {\n        y();\n    }\n}\n',
+    );
   });
 
   // A timing guard, not a regression catcher: the old quadratic code was also fast at 2000 lines.
