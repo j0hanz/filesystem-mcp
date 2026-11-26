@@ -528,9 +528,10 @@ describe('replace_text body', () => {
         isRegex: true,
         replacement: 'x',
       }),
-      (error: unknown) =>
-        error instanceof SyntaxError &&
-        error.message.endsWith('. Lookahead, lookbehind, and backreferences are not supported.'),
+      fsErrorMatcher(
+        ErrorCode.INVALID_INPUT,
+        /\. Lookahead, lookbehind, and backreferences are not supported\.$/u,
+      ),
     );
   });
 

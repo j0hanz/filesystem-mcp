@@ -55,6 +55,14 @@ describe('search_text body', () => {
     assert.strictEqual(create.mock.calls[0]?.arguments[0].weight, 7);
   });
 
+  it('refuses a lookahead regex with INVALID_INPUT', async () => {
+    await writeTestFile(root, 'lookahead/a.txt', 'foo1\n');
+    await assert.rejects(
+      search({ path: join(root, 'lookahead'), searchPattern: 'foo(?=\\d)', isRegex: true }),
+      fsErrorMatcher(ErrorCode.INVALID_INPUT, /invalid perl operator/u),
+    );
+  });
+
   it('exclude leaves a folder out of the search', async () => {
     await writeTestFile(root, 'src/a.ts', 'needle\n');
     await writeTestFile(root, 'vendor/b.ts', 'needle\n');

@@ -1216,11 +1216,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
           Record<string, SchemaNode> | undefined;
       assert.strictEqual(
         props('create')?.['files']?.items?.properties?.['path']?.description,
-        'File path inside a writable root, absolute or relative to it; one entry per file.',
+        'File path inside a writable root, absolute or relative to it, with no ".." segments; one entry per file.',
       );
       assert.strictEqual(
         props('stat')?.['paths']?.items?.description,
-        'File or directory path inside a root, absolute or relative to it.',
+        'File or directory path inside a root, absolute or relative to it. No ".." segments.',
       );
     } finally {
       await pair.close();

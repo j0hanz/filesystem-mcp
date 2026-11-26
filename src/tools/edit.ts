@@ -89,7 +89,7 @@ const EditFileInputSchema = z
       'Include the unified diff in a live run. Cut at 20 KB per file.',
     ),
     ignoreWhitespace: defaultFalseBoolean(
-      'Match oldText ignoring indentation and spacing, never across line breaks; newText is re-indented to the match. Tried automatically when the exact text has no match',
+      "Match oldText ignoring indentation and spacing, never across line breaks. newText indentation is read relative to oldText and moved onto the match, unless newText already carries the file's indentation. Tried automatically when the exact text has no match",
     ),
   })
   .superRefine((value, ctx) => {
@@ -493,6 +493,23 @@ function reindentNewText(
   const to = indents(matched);
   const lines = newText.split('\n');
   const positional = lines.filter(counted).length === from.length;
+  // newText already in the file's indentation (only oldText was flattened) is
+  // kept as written, so the match's indent is not added a second time. Only a
+  // deeper file indent can double up; a shallower one keeps the relative mapping.
+  if (positional) {
+    const pairs = lines
+      .filter(counted)
+      .map((line, k) => ({ own: indentOf(line), base: from[k] ?? '', target: to[k] ?? '' }));
+    // Every line decides, the first too: a flat first line over indented ones is
+    // a new nesting level, which only the relative mapping keeps.
+    const judged = pairs.filter((p) => p.base !== p.target);
+    const alreadyPlaced =
+      judged.length > 0 &&
+      judged.every(
+        ({ own, base, target }) => target.length > base.length && own.startsWith(target),
+      );
+    if (alreadyPlaced) return newText;
+  }
   // Indexed once, so a line finds its indent without scanning every one of `from`.
   const firstIndex = new Map<string, number>();
   for (const [k, ind] of from.entries()) if (!firstIndex.has(ind)) firstIndex.set(ind, k);
@@ -510,8 +527,9 @@ function reindentNewText(
       }
       const base = from[j];
       const target = to[j];
-      if (base === undefined || target === undefined || !own.startsWith(base)) return line;
-      return target + line.slice(base.length);
+      if (base === undefined || target === undefined) return line;
+      // A line shallower than oldText's still lands at the match's indent, not column 0.
+      return target + line.slice((own.startsWith(base) ? base : own).length);
     })
     .join('\n');
 }
@@ -603,16 +621,28 @@ async function applyEdits(
     if (found.count > 1) throw ambiguousEditError(newContent, found, index, appliedEdits > 0);
 
     const end = first.startIndex + first.length;
+    // A flexible match starts after the indent of its first line; take that
+    // indent into the match so newText's first line is placed, not appended.
+    let start = first.startIndex;
+    if (flexible) {
+      let lineStart = start;
+      while (
+        lineStart > 0 &&
+        (newContent[lineStart - 1] === ' ' || newContent[lineStart - 1] === '\t')
+      )
+        lineStart -= 1;
+      if (lineStart === 0 || newContent[lineStart - 1] === '\n') start = lineStart;
+    }
     // The flexible match absorbs the file's indentation, so newText is mapped back onto it.
     const replacement = flexible
       ? reindentNewText(
           newText,
           oldText,
-          newContent.slice(first.startIndex, end),
-          first.startIndex === 0 || newContent[first.startIndex - 1] === '\n',
+          newContent.slice(start, end),
+          start === 0 || newContent[start - 1] === '\n',
         )
       : newText;
-    newContent = newContent.slice(0, first.startIndex) + replacement + newContent.slice(end);
+    newContent = newContent.slice(0, start) + replacement + newContent.slice(end);
     appliedEdits += 1;
   }
 
@@ -723,7 +753,7 @@ function formatEditSummary(
   // structuredContent for the one message that can apply.
   const [only] = results;
   if (results.length === 1 && only && 'error' in only) {
-    return `edit: ${only.path} FAILED: ${only.error.message}${tag}`;
+    return `edit: ${only.path} FAILED: ${only.error.code} ${only.error.message}${tag}`;
   }
   const tokens = results.map((r) => {
     if ('error' in r) return `${basename(r.path)} FAILED`;

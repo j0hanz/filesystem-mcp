@@ -50,6 +50,14 @@ describe('edit body', () => {
   const edit = async (args: EditArgs, options: Partial<ToolBodyOptions> = {}): Promise<EditRun> =>
     (await runToolBodyResult(EDIT, args, { fs, ...options })) as EditRun;
 
+  it('names the error code when the only file fails', async () => {
+    const result = await edit({
+      path: join(root, 'ghost.txt'),
+      edits: [{ oldText: 'a', newText: 'b' }],
+    });
+    assert.match(result.text ?? '', /FAILED: NOT_FOUND /u);
+  });
+
   it('a live edit with returnDiff appends the diff', async () => {
     const file = join(root, 'a.txt');
     await writeFile(file, 'one\ntwo\n');
@@ -421,6 +429,138 @@ describe('edit body', () => {
     });
     assert.notStrictEqual(tabbed.isError, true);
     assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t\tw();\n\t}\n');
+  });
+
+  // F1: a caller that flattens oldText but copies the file's real indentation
+  // into newText must not get the file's indent added a second time.
+  it('with ignoreWhitespace keeps newText already at the file indentation', async () => {
+    const source = 'function search(term) {\n    const t = 1;\n    return t;\n}\n';
+    for (const ignoreWhitespace of [true, false]) {
+      const file = await writeTestFile(root, `reindent/abs-${String(ignoreWhitespace)}.js`, source);
+      const result = await edit({
+        path: file,
+        edits: [
+          {
+            oldText: 'function search(term) {\nconst t = 1;',
+            newText: 'function search(term) {\n    const t = 2;',
+          },
+        ],
+        ignoreWhitespace,
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(
+        await readFile(file, 'utf-8'),
+        'function search(term) {\n    const t = 2;\n    return t;\n}\n',
+        `ignoreWhitespace=${String(ignoreWhitespace)}`,
+      );
+    }
+  });
+
+  // Review: an unindented first oldText line matches after the file's indent,
+  // so that indent must be part of the match or line 1 of newText doubles it.
+  it('with ignoreWhitespace places an indented first line without doubling it', async () => {
+    const source = 'class A {\n    m() {\n        x();\n    }\n}\n';
+    const absolute = await writeTestFile(root, 'reindent/first-abs.js', source);
+    await edit({
+      path: absolute,
+      edits: [{ oldText: 'm() {\nx();', newText: '    m() {\n        y();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(absolute, 'utf-8'),
+      'class A {\n    m() {\n        y();\n    }\n}\n',
+    );
+
+    const relative = await writeTestFile(root, 'reindent/first-rel.js', source);
+    await edit({
+      path: relative,
+      edits: [{ oldText: 'm() {\nx();', newText: 'm() {\n  y();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(relative, 'utf-8'),
+      'class A {\n    m() {\n          y();\n    }\n}\n',
+    );
+  });
+
+  it('with ignoreWhitespace keeps every line of an absolute newText at one depth', async () => {
+    const file = await writeTestFile(root, 'reindent/same-depth.js', '  a();\n  b();\n');
+    await edit({
+      path: file,
+      edits: [{ oldText: 'a();\nb();', newText: '    a();\n    b();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(file, 'utf-8'), '    a();\n    b();\n');
+  });
+
+  it('with ignoreWhitespace keeps relative newText relative', async () => {
+    const file = await writeTestFile(
+      root,
+      'reindent/rel.js',
+      'function search(term) {\n    const t = 1;\n    return t;\n}\n',
+    );
+    await edit({
+      path: file,
+      edits: [
+        {
+          oldText: 'function search(term) {\nconst t = 1;',
+          newText: 'function search(term) {\n  const t = 2;',
+        },
+      ],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'function search(term) {\n      const t = 2;\n    return t;\n}\n',
+    );
+  });
+
+  it('with ignoreWhitespace compares tab and space indentation literally', async () => {
+    const source = '\tif (x) {\n\t\ty();\n\t}\n';
+    const tabs = await writeTestFile(root, 'reindent/lit-tabs.js', source);
+    await edit({
+      path: tabs,
+      edits: [{ oldText: 'if (x) {\ny();\n}', newText: '\tif (x) {\n\t\tz();\n\t}' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(tabs, 'utf-8'), '\tif (x) {\n\t\tz();\n\t}\n');
+
+    const spaces = await writeTestFile(root, 'reindent/lit-spaces.js', source);
+    await edit({
+      path: spaces,
+      edits: [{ oldText: 'if (x) {\ny();\n}', newText: 'if (x) {\n        z();\n    }' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(spaces, 'utf-8'), '\tif (x) {\n\t\t        z();\n\t    }\n');
+  });
+
+  // A flat first line with an indented second one is a new nesting level, not
+  // newText already at the file's indentation.
+  it('with ignoreWhitespace nests a line under a new block', async () => {
+    const file = await writeTestFile(root, 'reindent/nest.py', 'def f():\n    x = 1\n    y = 2\n');
+    await edit({
+      path: file,
+      edits: [{ oldText: 'x = 1\ny = 2', newText: 'if x:\n    y = 2' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(await readFile(file, 'utf-8'), 'def f():\n    if x:\n        y = 2\n');
+  });
+
+  it('with ignoreWhitespace keeps a first line shallower than oldText at the file indent', async () => {
+    const file = await writeTestFile(
+      root,
+      'reindent/shallow-head.js',
+      'class A {\n    m() {\n        x();\n    }\n}\n',
+    );
+    await edit({
+      path: file,
+      edits: [{ oldText: '  m() {\nx();', newText: 'm() {\ny();' }],
+      ignoreWhitespace: true,
+    });
+    assert.strictEqual(
+      await readFile(file, 'utf-8'),
+      'class A {\n    m() {\n        y();\n    }\n}\n',
+    );
   });
 
   // A timing guard, not a regression catcher: the old quadratic code was also fast at 2000 lines.

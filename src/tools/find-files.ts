@@ -43,7 +43,7 @@ const SearchFilesInputSchema = z.strictObject({
     .optional()
     .default('path')
     .describe(
-      'name: by file name across folders, ties by path. Sorts the first 10,000 kept matches before paging.',
+      'name: by file name across folders, case-insensitive, ties by path. Sorts the first 10,000 kept matches before paging.',
     ),
   maxDepth: MaxDepth,
   type: z

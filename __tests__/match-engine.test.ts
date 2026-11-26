@@ -285,7 +285,7 @@ describe('MatchEngine', () => {
     try {
       assert.throws(() => {
         bad.compile();
-      }, SyntaxError);
+      }, fsErrorMatcher(ErrorCode.INVALID_INPUT));
       literal.compile();
     } finally {
       bad.dispose();
